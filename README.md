@@ -30,8 +30,9 @@ uv run flackey start          # worker + web UI, until Ctrl-C; opens the UI in a
 uv run flackey start --no-browser
 ```
 
-The project was called cratedigger until the rename, so `crate` is kept as an
-alias for `flackey` — every command below works under either name.
+This project has been renamed twice (cratedigger → krater → flackey), and `crate`
+is kept as an alias for `flackey` because it is the one still in muscle memory —
+every command below works under either name.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
@@ -121,13 +122,14 @@ and can be deleted at any time.
 
 ## Where data lives
 
-- `~/Library/Application Support/Flackey/` on macOS; `~/.config/flackey/` elsewhere. Two renames are
-  behind us — the project was called cratedigger, and before the Mac-native move its data lived under
-  `~/.config` — so first launch looks for either older folder, newest first, and brings it across:
-  copied, verified file by file, and only then is the old one removed, with `cratedigger.sqlite` (and
-  its `-wal`/`-shm` sidecars) and `cratedigger.log` renamed by prefix on the way. If the copy is
-  incomplete both folders are kept and the failure is logged, never a half-migrated library.
-  Contains the sqlite database, `settings.json`
+- `~/Library/Application Support/Flackey/` on macOS; `~/.config/flackey/` elsewhere. The project has
+  been named cratedigger and krater before this, and before the Mac-native move its data lived under
+  `~/.config`, so first launch walks every one of those folders newest-first and brings the first it
+  finds across: copied, verified file by file, and only then is the old one removed, with
+  `<oldname>.sqlite` (and its `-wal`/`-shm` sidecars) and `<oldname>.log` renamed by prefix on the way.
+  If the copy is incomplete both folders are kept and the failure is logged, never a half-migrated
+  library. Absolute paths stored in the database are rebased on open, which is separate on purpose:
+  they outlive the folder they point at. Contains the sqlite database, `settings.json`
   (with the library folder and Telegram api id/hash), the Telethon session, tmp downloads, and spectrogram PNGs.
   `settings.json` is created from env vars and can be updated via the app; env vars always override it.
 - `~/Music/DJ Library/` — one folder per artist, plus `Playlists/*.m3u8`.
