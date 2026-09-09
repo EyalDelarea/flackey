@@ -32,7 +32,7 @@ class LogNotifier:
     """The GUI learns everything from the event stream; the worker's messages only go to the log."""
 
     def __init__(self) -> None:
-        self.log = logging.getLogger("krater.worker")
+        self.log = logging.getLogger("flackey.worker")
 
     async def send(self, text: str, buttons: list[Button] | None = None) -> None:
         self.log.info(text.replace("\n", " | "))

@@ -1,4 +1,4 @@
-# Krater Core Implementation Plan
+# Flackey Core Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,13 +8,13 @@
 
 **Tech Stack:** Python 3.12, uv, Telethon 1.44, aiogram 3, FastAPI + uvicorn, curl_cffi, httpx, yt-dlp, mutagen, rapidfuzz, numpy, typer, pydantic-settings, pytest + pytest-asyncio, ffmpeg/ffprobe (Homebrew).
 
-**Spec:** `docs/superpowers/specs/2026-09-03-krater-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-03-flackey-design.md`
 **Source bot protocol:** `docs/source-bot-protocol.md`
 
 ## Global Constraints
 
 - Python 3.12 exactly (`requires-python = ">=3.12,<3.13"`), managed by uv. Run everything as `uv run ...`.
-- Configuration only from `.env` via `krater.config.Settings`; never read `os.environ` elsewhere.
+- Configuration only from `.env` via `flackey.config.Settings`; never read `os.environ` elsewhere.
 - Secrets (`.env`, `*.session`) are git-ignored; never print them, never commit them.
 - Library root default `~/Music/DJ Library`; layout `<Genre>/<Label>/<Artist> - <Title> (<Mix Name>).<ext>`; files are never moved after filing.
 - Quality floor: MP3 must probe ≥ 320 kbps and show spectral content to ≥ 18 000 Hz; FLAC/WAV/AIFF must show content ≥ 20 000 Hz; anything else is rejected and deleted, with the rejection record and spectrogram PNG kept.
@@ -30,7 +30,7 @@
 
 ```
 pyproject.toml
-src/krater/
+src/flackey/
   __init__.py
   config.py        Settings (pydantic-settings) loaded from .env
   models.py        dataclasses + enums shared by all modules
@@ -60,7 +60,7 @@ tests/
   test_config.py test_store.py test_identify.py test_catalog.py test_deezer.py
   test_match.py test_verify.py test_tag.py test_library.py test_export.py
   test_source_parsers.py test_worker.py test_inbox.py test_web.py test_cli.py
-  live/test_source_live.py   opt-in, hits the real source bot (KRATER_LIVE=1)
+  live/test_source_live.py   opt-in, hits the real source bot (FLACKEY_LIVE=1)
 web/dist/index.html   placeholder until the UI plan builds the React bundle here
 Dockerfile
 README.md
@@ -72,17 +72,17 @@ uv.lock          created by `uv sync` in Task 1 and committed; the Dockerfile co
 ### Task 1: Project skeleton, settings, models
 
 **Files:**
-- Create: `pyproject.toml`, `src/krater/__init__.py`, `src/krater/config.py`, `src/krater/models.py`, `tests/__init__.py` (empty), `tests/conftest.py`, `tests/test_config.py`, `tests/test_models.py`, `web/dist/index.html` (placeholder)
+- Create: `pyproject.toml`, `src/flackey/__init__.py`, `src/flackey/config.py`, `src/flackey/models.py`, `tests/__init__.py` (empty), `tests/conftest.py`, `tests/test_config.py`, `tests/test_models.py`, `web/dist/index.html` (placeholder)
 
 **Interfaces:**
-- Produces: `Settings` with fields `telegram_api_id: int`, `telegram_api_hash: str`, `inbox_bot_token: str`, `owner_telegram_id: int`, `source_bot_username: str`, `library_root: Path`, `web_port: int`, `data_dir: Path` (default `~/.config/krater`), and `def load_settings(env_file: Path | None = None) -> Settings`.
+- Produces: `Settings` with fields `telegram_api_id: int`, `telegram_api_hash: str`, `inbox_bot_token: str`, `owner_telegram_id: int`, `source_bot_username: str`, `library_root: Path`, `web_port: int`, `data_dir: Path` (default `~/.config/flackey`), and `def load_settings(env_file: Path | None = None) -> Settings`.
 - Produces: `models.RequestKind`, `models.RequestState`, `models.Query`, `models.Candidate`, `models.CatalogTrack`, `models.Verdict`, `models.Track`, `models.Request` (exact definitions in Step 3).
 
 - [ ] **Step 1: Write pyproject.toml**
 
 ```toml
 [project]
-name = "krater"
+name = "flackey"
 version = "0.1.0"
 description = "Personal DJ library builder: Telegram inbox -> verified, tagged tracks -> Rekordbox"
 requires-python = ">=3.12,<3.13"
@@ -102,7 +102,7 @@ dependencies = [
 ]
 
 [project.scripts]
-crate = "krater.cli:app"
+crate = "flackey.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "respx>=0.21", "ruff>=0.6"]
@@ -112,7 +112,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/krater"]
+packages = ["src/flackey"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -122,7 +122,7 @@ testpaths = ["tests"]
 line-length = 100
 ```
 
-Create an empty `src/krater/__init__.py` containing `__version__ = "0.1.0"`.
+Create an empty `src/flackey/__init__.py` containing `__version__ = "0.1.0"`.
 
 - [ ] **Step 2: Write the failing settings test**
 
@@ -130,7 +130,7 @@ Create an empty `src/krater/__init__.py` containing `__version__ = "0.1.0"`.
 
 ```python
 from pathlib import Path
-from krater.config import load_settings
+from flackey.config import load_settings
 
 
 def test_load_settings_from_env_file(tmp_path: Path):
@@ -145,17 +145,17 @@ def test_load_settings_from_env_file(tmp_path: Path):
     assert s.owner_telegram_id == 42
     assert s.web_port == 9000
     assert s.library_root == Path("~/Music/DJ Library").expanduser()
-    assert s.data_dir == Path("~/.config/krater").expanduser()
+    assert s.data_dir == Path("~/.config/flackey").expanduser()
 ```
 
 - [ ] **Step 3: Run it to verify it fails**
 
 Run: `uv run pytest tests/test_config.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'krater.config'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'flackey.config'`
 
 - [ ] **Step 4: Write config.py and models.py**
 
-`src/krater/config.py`:
+`src/flackey/config.py`:
 
 ```python
 from pathlib import Path
@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     source_bot_username: str = "DeezerMusicBot"
     library_root: Path = Path("~/Music/DJ Library")
     web_port: int = 8765
-    data_dir: Path = Path("~/.config/krater")
+    data_dir: Path = Path("~/.config/flackey")
 
     @field_validator("library_root", "data_dir", mode="after")
     @classmethod
@@ -183,7 +183,7 @@ class Settings(BaseSettings):
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "krater.sqlite"
+        return self.data_dir / "flackey.sqlite"
 
     @property
     def session_path(self) -> Path:
@@ -208,7 +208,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
     return Settings(_env_file=env_file)
 ```
 
-`src/krater/models.py`:
+`src/flackey/models.py`:
 
 ```python
 from __future__ import annotations
@@ -427,7 +427,7 @@ requires_ffmpeg = pytest.mark.skipif(not has_ffmpeg(), reason="ffmpeg not instal
 `web/dist/index.html` (placeholder so the static mount in Task 14, the Dockerfile in Task 15, and `crate start` all work before the UI plan builds the React bundle):
 
 ```html
-<h1>krater</h1><p>UI not built yet. API at <a href="/api/health">/api/health</a>.</p>
+<h1>flackey</h1><p>UI not built yet. API at <a href="/api/health">/api/health</a>.</p>
 ```
 
 `.gitignore` already handles this (committed with the plan revision): `/dist/` and `web/dist/*` with `!web/dist/index.html`. Git cannot re-include a file under an ignored *directory*, which is why the patterns end in `/*` and `/dist/` is anchored to the root. `git add web/dist/index.html` must succeed; if it says "paths are ignored" the patterns were changed back.
@@ -435,7 +435,7 @@ requires_ffmpeg = pytest.mark.skipif(not has_ffmpeg(), reason="ffmpeg not instal
 `tests/test_models.py`:
 
 ```python
-from krater.models import CatalogTrack, Query
+from flackey.models import CatalogTrack, Query
 
 
 def test_query_search_text_prefers_structured_fields():
@@ -470,7 +470,7 @@ git commit -m "feat(core): project skeleton, settings, shared models"
 ### Task 2: SQLite store
 
 **Files:**
-- Create: `src/krater/store.py`, `tests/test_store.py`
+- Create: `src/flackey/store.py`, `tests/test_store.py`
 
 **Interfaces:**
 - Consumes: `models.*`
@@ -505,8 +505,8 @@ from pathlib import Path
 
 import pytest
 
-from krater.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
-from krater.store import Store
+from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
+from flackey.store import Store
 
 
 @pytest.fixture
@@ -644,7 +644,7 @@ def test_settings(store: Store):
 - [ ] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/test_store.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'krater.store'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'flackey.store'`
 
 - [ ] **Step 3: Write store.py**
 
@@ -999,7 +999,7 @@ Expected: 11 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/store.py tests/test_store.py
+git add src/flackey/store.py tests/test_store.py
 git commit -m "feat(store): sqlite schema and repository"
 ```
 
@@ -1008,7 +1008,7 @@ git commit -m "feat(store): sqlite schema and repository"
 ### Task 3: Identify inputs (classification, text parsing, YouTube expansion)
 
 **Files:**
-- Create: `src/krater/identify.py`, `tests/test_identify.py`
+- Create: `src/flackey/identify.py`, `tests/test_identify.py`
 
 **Interfaces:**
 - Consumes: `models.Query`, `models.RequestKind`
@@ -1028,10 +1028,10 @@ git commit -m "feat(store): sqlite schema and repository"
 ```python
 import pytest
 
-from krater.identify import (
+from flackey.identify import (
     classify, parse_text, parse_version, parse_youtube_title, parse_ytdlp_json,
 )
-from krater.models import RequestKind
+from flackey.models import RequestKind
 
 
 @pytest.mark.parametrize("text,kind", [
@@ -1303,7 +1303,7 @@ Expected: all PASS. The `(feat. Someone)` case must stay in the title because "f
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/identify.py tests/test_identify.py
+git add src/flackey/identify.py tests/test_identify.py
 git commit -m "feat(identify): classify inputs, parse titles, expand YouTube playlists"
 ```
 
@@ -1312,7 +1312,7 @@ git commit -m "feat(identify): classify inputs, parse titles, expand YouTube pla
 ### Task 4: Beatport catalog
 
 **Files:**
-- Create: `src/krater/catalog.py`, `tests/test_catalog.py`
+- Create: `src/flackey/catalog.py`, `tests/test_catalog.py`
 - Uses fixture: `tests/fixtures/beatport_search_astral.html` (already committed; 12 real track records embedded in a `__NEXT_DATA__` script tag)
 
 **Interfaces:**
@@ -1332,8 +1332,8 @@ from pathlib import Path
 
 import pytest
 
-from krater.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
-from krater.models import Query
+from flackey.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
+from flackey.models import Query
 
 
 @pytest.fixture
@@ -1566,7 +1566,7 @@ Expected: 9 PASS. If `test_best_match_prefers_original_mix_and_exact_title` pick
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/catalog.py tests/test_catalog.py
+git add src/flackey/catalog.py tests/test_catalog.py
 git commit -m "feat(catalog): beatport search page parser and best-match selection"
 ```
 
@@ -1575,7 +1575,7 @@ git commit -m "feat(catalog): beatport search page parser and best-match selecti
 ### Task 5: Deezer public API client
 
 **Files:**
-- Create: `src/krater/deezer.py`, `tests/test_deezer.py`
+- Create: `src/flackey/deezer.py`, `tests/test_deezer.py`
 
 **Interfaces:**
 - Produces:
@@ -1592,7 +1592,7 @@ import httpx
 import pytest
 import respx
 
-from krater.deezer import DeezerApi, DeezerError, parse_track_json
+from flackey.deezer import DeezerApi, DeezerError, parse_track_json
 
 SAMPLE = {"id": 1754956977, "isrc": "UKU932231081", "title": "Into the Void", "title_short": "Into the Void",
           "title_version": "", "duration": 442, "release_date": "2022-06-03",
@@ -1708,7 +1708,7 @@ Expected: 5 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/deezer.py tests/test_deezer.py
+git add src/flackey/deezer.py tests/test_deezer.py
 git commit -m "feat(deezer): public api client for isrc and duration"
 ```
 
@@ -1717,7 +1717,7 @@ git commit -m "feat(deezer): public api client for isrc and duration"
 ### Task 6: Confidence scoring and decision
 
 **Files:**
-- Create: `src/krater/match.py`, `tests/test_match.py`
+- Create: `src/flackey/match.py`, `tests/test_match.py`
 
 **Interfaces:**
 - Consumes: `models.Query`, `models.Candidate`, `models.CatalogTrack`, `identify.parse_version`
@@ -1736,8 +1736,8 @@ Scoring, exactly as the spec's table: artist 25, title 25, version 20, duration 
 `tests/test_match.py`:
 
 ```python
-from krater.match import THRESHOLD, candidate_version, decide, score_candidate
-from krater.models import Candidate, CatalogTrack, Query
+from flackey.match import THRESHOLD, candidate_version, decide, score_candidate
+from flackey.models import Candidate, CatalogTrack, Query
 
 CT = CatalogTrack(id=16552105, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="L", genre="G", duration_ms=442816)
@@ -1978,7 +1978,7 @@ Expected: 15 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/match.py tests/test_match.py
+git add src/flackey/match.py tests/test_match.py
 git commit -m "feat(match): confidence scoring and auto/park decision"
 ```
 
@@ -1987,7 +1987,7 @@ git commit -m "feat(match): confidence scoring and auto/park decision"
 ### Task 7: Quality verification (bitrate + spectral cutoff + spectrogram)
 
 **Files:**
-- Create: `src/krater/verify.py`, `tests/test_verify.py`
+- Create: `src/flackey/verify.py`, `tests/test_verify.py`
 
 **Interfaces:**
 - Consumes: `models.Verdict`
@@ -2024,7 +2024,7 @@ from pathlib import Path
 
 import pytest
 
-from krater.verify import probe, spectral_cutoff_hz, spectrogram_png, verify
+from flackey.verify import probe, spectral_cutoff_hz, spectrogram_png, verify
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -2290,7 +2290,7 @@ Run: `uv run pytest tests/test_verify.py -v`
 Expected: 9 PASS. If a cutoff test fails, do not tune constants blind: dump the band levels with
 
 ```
-uv run python -c "from pathlib import Path; from krater.verify import band_levels_db; import sys
+uv run python -c "from pathlib import Path; from flackey.verify import band_levels_db; import sys
 hz, db = band_levels_db(Path(sys.argv[1])); print(*(f'{int(h)}:{d:.0f}' for h, d in zip(hz, db) if h >= 14000))" <file>
 ```
 
@@ -2299,7 +2299,7 @@ and look at where the level falls. Expected shapes: white/pink 320 falls by ~60 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/verify.py tests/test_verify.py
+git add src/flackey/verify.py tests/test_verify.py
 git commit -m "feat(verify): bitrate probe, spectral cutoff detection, spectrogram"
 ```
 
@@ -2308,7 +2308,7 @@ git commit -m "feat(verify): bitrate probe, spectral cutoff detection, spectrogr
 ### Task 8: Tagging with artwork
 
 **Files:**
-- Create: `src/krater/tag.py`, `tests/test_tag.py`
+- Create: `src/flackey/tag.py`, `tests/test_tag.py`
 
 **Interfaces:**
 - Consumes: `models.CatalogTrack`, `models.Verdict`
@@ -2316,7 +2316,7 @@ git commit -m "feat(verify): bitrate probe, spectral cutoff detection, spectrogr
   - `write_tags(path: Path, catalog: CatalogTrack, verdict: Verdict, artwork: bytes | None, artwork_mime: str = "image/jpeg") -> None` for `.mp3`, `.wav`, `.aiff`/`.aif` (ID3v2.4, via mutagen `ID3`, `WAVE`, `AIFF`) and `.flac` (Vorbis comments + picture), i.e. every format `verify` can pass. Other extensions raise `TagError`.
   - `read_tags(path: Path) -> dict[str, str]` returns a flat dict with keys `title, artist, album, albumartist, genre, label, catalognumber, date, year, isrc, bpm, key, mix, comment, has_artwork` for tests and the UI.
   - `async fetch_artwork(url: str, client: httpx.AsyncClient | None = None) -> bytes | None` GET with 20 s timeout; returns None on any failure (artwork is optional).
-  - `comment_for(verdict: Verdict, catalog: CatalogTrack) -> str` = `krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105` (the exact spec §7 form; for lossless: `verified flac`). Task 10 reuses it so the ID3 comment and the rekordbox.xml comment are identical.
+  - `comment_for(verdict: Verdict, catalog: CatalogTrack) -> str` = `flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105` (the exact spec §7 form; for lossless: `verified flac`). Task 10 reuses it so the ID3 comment and the rekordbox.xml comment are identical.
 
 Title written is `"<Title> (<Mix Name>)"` unless the mix is an original mix, then just `"<Title>"`. Rekordbox shows the title tag verbatim, and DJs expect the remix name in it.
 
@@ -2330,8 +2330,8 @@ from pathlib import Path
 
 import pytest
 
-from krater.models import CatalogTrack, Verdict
-from krater.tag import TagError, comment_for, read_tags, write_tags
+from flackey.models import CatalogTrack, Verdict
+from flackey.tag import TagError, comment_for, read_tags, write_tags
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -2366,7 +2366,7 @@ def test_write_and_read_tags(tmp_path: Path, ext: str):
     assert t["catalognumber"] == "SACTEC169" and t["date"] == "2022-06-03" and t["year"] == "2022"
     assert t["isrc"] == "UKU932231081" and t["bpm"] == "142" and t["key"] == "A Major"
     assert t["mix"] == "Original Mix" and t["has_artwork"] == "yes"
-    assert t["comment"] == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105"
+    assert t["comment"] == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105"
 
 
 def test_remix_goes_into_title(tmp_path: Path):
@@ -2393,7 +2393,7 @@ def test_unsupported_extension(tmp_path: Path):
 
 
 def test_comment_for():
-    assert comment_for(V, CT) == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105"
+    assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2433,7 +2433,7 @@ def display_title(catalog: CatalogTrack) -> str:
 
 def comment_for(verdict: Verdict, catalog: CatalogTrack) -> str:
     kind = f"verified {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"verified {verdict.fmt}"
-    return f"krater: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
+    return f"flackey: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
 
 
 def _values(catalog: CatalogTrack, verdict: Verdict) -> dict[str, str]:
@@ -2599,7 +2599,7 @@ Expected: 8 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/tag.py tests/test_tag.py
+git add src/flackey/tag.py tests/test_tag.py
 git commit -m "feat(tag): id3 and vorbis tagging with beatport metadata and artwork"
 ```
 
@@ -2608,7 +2608,7 @@ git commit -m "feat(tag): id3 and vorbis tagging with beatport metadata and artw
 ### Task 9: Library paths, filing, duplicate detection
 
 **Files:**
-- Create: `src/krater/library.py`, `tests/test_library.py`
+- Create: `src/flackey/library.py`, `tests/test_library.py`
 
 **Interfaces:**
 - Consumes: `store.Store`, `models.CatalogTrack`, `models.Candidate`, `models.Track`
@@ -2627,9 +2627,9 @@ from pathlib import Path
 
 import pytest
 
-from krater.library import file_track, final_path, find_duplicate, sanitize
-from krater.models import Candidate, CatalogTrack
-from krater.store import Store
+from flackey.library import file_track, final_path, find_duplicate, sanitize
+from flackey.models import Candidate, CatalogTrack
+from flackey.store import Store
 
 CT = CatalogTrack(id=1, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="Sacred Technology", genre="Psy-Trance", duration_ms=442816)
@@ -2747,7 +2747,7 @@ Expected: 11 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/library.py tests/test_library.py
+git add src/flackey/library.py tests/test_library.py
 git commit -m "feat(library): final paths, atomic filing, duplicate detection"
 ```
 
@@ -2756,7 +2756,7 @@ git commit -m "feat(library): final paths, atomic filing, duplicate detection"
 ### Task 10: M3U8 playlist export
 
 **Files:**
-- Create: `src/krater/export.py`, `tests/test_export.py`
+- Create: `src/flackey/export.py`, `tests/test_export.py`
 
 **Interfaces:**
 - Consumes: `store.Store` (`list_playlists`, `get_playlist`, `get_track`), `models.Playlist`, `models.Track`
@@ -2776,9 +2776,9 @@ Why M3U8 and not `rekordbox.xml`: spec §8. Rekordbox's XML bridge refreshes an 
 ```python
 from pathlib import Path
 
-from krater.export import PLAYLIST_DIR, build_m3u8, playlist_filenames, write_playlists
-from krater.models import Playlist, Track
-from krater.store import Store
+from flackey.export import PLAYLIST_DIR, build_m3u8, playlist_filenames, write_playlists
+from flackey.models import Playlist, Track
+from flackey.store import Store
 
 
 def _track(tid: int, path: str, artist: str = "A", title: str = "T", duration_s: int | None = 442) -> Track:
@@ -2910,7 +2910,7 @@ Expected: 3 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/export.py tests/test_export.py
+git add src/flackey/export.py tests/test_export.py
 git commit -m "feat(export): m3u8 playlist files for rekordbox import"
 ```
 
@@ -2919,7 +2919,7 @@ git commit -m "feat(export): m3u8 playlist files for rekordbox import"
 ### Task 11: Source interface and @DeezerMusicBot driver
 
 **Files:**
-- Create: `src/krater/source/__init__.py`, `src/krater/source/base.py`, `src/krater/source/deezer_bot.py`, `tests/test_source_parsers.py`
+- Create: `src/flackey/source/__init__.py`, `src/flackey/source/base.py`, `src/flackey/source/deezer_bot.py`, `tests/test_source_parsers.py`
 - Read: `docs/source-bot-protocol.md`
 
 **Interfaces:**
@@ -2938,7 +2938,7 @@ Telethon specifics: use `client.conversation(bot_username, timeout=...)` with `c
 `tests/test_source_parsers.py`:
 
 ```python
-from krater.source.deezer_bot import ButtonInfo, parse_result_menu
+from flackey.source.deezer_bot import ButtonInfo, parse_result_menu
 
 MENU = [
     [ButtonInfo("1. Astral Projection - Into the Void", "dz_track:1754956977:send")],
@@ -2988,7 +2988,7 @@ Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write the source package**
 
-`src/krater/source/__init__.py`:
+`src/flackey/source/__init__.py`:
 
 ```python
 from .base import Source, SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
@@ -2996,7 +2996,7 @@ from .base import Source, SourceError, SourceNotFound, SourceTimeout, SourceUnau
 __all__ = ["Source", "SourceError", "SourceNotFound", "SourceTimeout", "SourceUnauthorized"]
 ```
 
-`src/krater/source/base.py`:
+`src/flackey/source/base.py`:
 
 ```python
 from __future__ import annotations
@@ -3031,7 +3031,7 @@ class Source(Protocol):
     async def fetch(self, cand: Candidate, dest_dir: Path) -> Path: ...
 ```
 
-`src/krater/source/deezer_bot.py`:
+`src/flackey/source/deezer_bot.py`:
 
 ```python
 from __future__ import annotations
@@ -3196,7 +3196,7 @@ Expected: 4 PASS
 
 - [ ] **Step 5: Live smoke test (opt-in, run once now)**
 
-Create the directory `tests/live/` (no `__init__.py`) and `tests/live/test_source_live.py` (skipped unless `KRATER_LIVE=1`). Because `pyproject.toml` sets `testpaths = ["tests"]`, this file is collected on every ordinary `uv run pytest` and skipped by the marker; that is intended. When it does run it sends a real message from the owner's Telegram account to the source bot and downloads about 17 MB.
+Create the directory `tests/live/` (no `__init__.py`) and `tests/live/test_source_live.py` (skipped unless `FLACKEY_LIVE=1`). Because `pyproject.toml` sets `testpaths = ["tests"]`, this file is collected on every ordinary `uv run pytest` and skipped by the marker; that is intended. When it does run it sends a real message from the owner's Telegram account to the source bot and downloads about 17 MB.
 
 ```python
 import os
@@ -3204,15 +3204,15 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.environ.get("KRATER_LIVE") != "1", reason="live test")
+pytestmark = pytest.mark.skipif(os.environ.get("FLACKEY_LIVE") != "1", reason="live test")
 
 
 async def test_search_and_fetch_astral(tmp_path: Path):
     from telethon import TelegramClient
-    from krater.config import load_settings
-    from krater.deezer import DeezerApi
-    from krater.models import Query
-    from krater.source.deezer_bot import DeezerBotSource
+    from flackey.config import load_settings
+    from flackey.deezer import DeezerApi
+    from flackey.models import Query
+    from flackey.source.deezer_bot import DeezerBotSource
 
     s = load_settings(Path(".env"))
     client = TelegramClient(str(s.session_path), s.telegram_api_id, s.telegram_api_hash)
@@ -3234,12 +3234,12 @@ import os
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.environ.get("KRATER_LIVE") != "1", reason="live test")
+pytestmark = pytest.mark.skipif(os.environ.get("FLACKEY_LIVE") != "1", reason="live test")
 
 
 async def test_beatport_search_still_parses():
-    from krater.catalog import BeatportCatalog, best_match
-    from krater.models import Query
+    from flackey.catalog import BeatportCatalog, best_match
+    from flackey.models import Query
 
     q = Query(raw="astral projection into the void")
     tracks = await BeatportCatalog().search(q)
@@ -3247,13 +3247,13 @@ async def test_beatport_search_still_parses():
     assert best_match(q, tracks).id == 16552105
 ```
 
-Run: `KRATER_LIVE=1 uv run pytest tests/live -v`
+Run: `FLACKEY_LIVE=1 uv run pytest tests/live -v`
 Expected: 2 PASS in under 60 s. If the bot's reply shape differs from `docs/source-bot-protocol.md`, update the doc and the parser, not the test expectations.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/source tests/test_source_parsers.py tests/live
+git add src/flackey/source tests/test_source_parsers.py tests/live
 git commit -m "feat(source): telethon driver for the deezer source bot"
 ```
 
@@ -3262,7 +3262,7 @@ git commit -m "feat(source): telethon driver for the deezer source bot"
 ### Task 12: Notifier protocol and the pipeline worker
 
 **Files:**
-- Create: `src/krater/notify.py`, `src/krater/worker.py`, `tests/test_worker.py`
+- Create: `src/flackey/notify.py`, `src/flackey/worker.py`, `tests/test_worker.py`
 
 **Interfaces:**
 - Consumes: everything from Tasks 2 to 11.
@@ -3303,13 +3303,13 @@ from pathlib import Path
 
 import pytest
 
-from krater.catalog import CatalogUnavailable
-from krater.config import Settings
-from krater.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.source import SourceNotFound, SourceTimeout, SourceUnauthorized
-from krater.store import Store
-from krater.worker import Worker
+from flackey.catalog import CatalogUnavailable
+from flackey.config import Settings
+from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
+from flackey.store import Store
+from flackey.worker import Worker
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -3900,7 +3900,7 @@ Expected: 17 PASS. `test_happy_path` depends on the fake source producing a 3 s 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/notify.py src/krater/worker.py tests/test_worker.py
+git add src/flackey/notify.py src/flackey/worker.py tests/test_worker.py
 git commit -m "feat(worker): end-to-end pipeline with review, retries, duplicates"
 ```
 
@@ -3909,7 +3909,7 @@ git commit -m "feat(worker): end-to-end pipeline with review, retries, duplicate
 ### Task 13: Telegram inbox bot and notifier
 
 **Files:**
-- Create: `src/krater/inbox.py`, `tests/test_inbox.py`
+- Create: `src/flackey/inbox.py`, `tests/test_inbox.py`
 
 **Interfaces:**
 - Consumes: `store.Store`, `identify.classify/parse_text/parse_youtube_title/fetch_youtube/YouTubeError`, `worker.Worker.choose/cancel`, `notify.Button`, `library.find_duplicate`
@@ -3936,13 +3936,13 @@ from pathlib import Path
 
 import pytest
 
-from krater.config import Settings
-from krater.identify import YouTubeEntry, YouTubeError
-from krater.inbox import Inbox
-from krater.models import RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.store import Store
-from krater.worker import Worker
+from flackey.config import Settings
+from flackey.identify import YouTubeEntry, YouTubeError
+from flackey.inbox import Inbox
+from flackey.models import RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.store import Store
+from flackey.worker import Worker
 
 OWNER = 123456789
 
@@ -4058,7 +4058,7 @@ async def test_position_counts_in_flight_requests(inbox):
 
 async def test_callbacks(inbox):
     ib, store = inbox
-    from krater.models import Candidate
+    from flackey.models import Candidate
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.AWAITING_REVIEW)
     c = store.add_candidates(rid, [Candidate(source="s", source_ref="r", artist="A", title="T", rank=1)])[0]
@@ -4072,7 +4072,7 @@ async def test_callbacks(inbox):
 
 async def test_stale_callback_buttons(inbox):
     ib, store = inbox
-    from krater.models import Candidate
+    from flackey.models import Candidate
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.AWAITING_REVIEW)
     c = store.add_candidates(rid, [Candidate(source="s", source_ref="r", artist="A", title="T", rank=1)])[0]
@@ -4234,7 +4234,7 @@ Expected: 11 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/inbox.py tests/test_inbox.py
+git add src/flackey/inbox.py tests/test_inbox.py
 git commit -m "feat(inbox): telegram bot handlers, playlist expansion, review callbacks"
 ```
 
@@ -4243,7 +4243,7 @@ git commit -m "feat(inbox): telegram bot handlers, playlist expansion, review ca
 ### Task 14: JSON API for the UI
 
 **Files:**
-- Create: `src/krater/web.py`, `tests/test_web.py`
+- Create: `src/flackey/web.py`, `tests/test_web.py`
 
 **Interfaces:**
 - Consumes: `store.Store`, `worker.Worker.choose/cancel`, `config.Settings`
@@ -4273,12 +4273,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from krater.config import Settings
-from krater.models import Candidate, CatalogTrack, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.store import Store
-from krater.web import create_app
-from krater.worker import Worker
+from flackey.config import Settings
+from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.store import Store
+from flackey.web import create_app
+from flackey.worker import Worker
 
 
 class DummySource:
@@ -4451,7 +4451,7 @@ def to_dict(obj: Any) -> Any:
 
 def create_app(store: Store, worker: Worker, settings: Settings, ui_dir: Path | None = None,
                status: dict | None = None) -> FastAPI:
-    app = FastAPI(title="krater", version=__version__)
+    app = FastAPI(title="flackey", version=__version__)
     app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
     status = status if status is not None else {}
 
@@ -4561,7 +4561,7 @@ Expected: 8 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/web.py tests/test_web.py
+git add src/flackey/web.py tests/test_web.py
 git commit -m "feat(web): json api for queue, review, rejections, library, stats"
 ```
 
@@ -4570,7 +4570,7 @@ git commit -m "feat(web): json api for queue, review, rejections, library, stats
 ### Task 15: CLI, process wiring, Dockerfile, README, first live run
 
 **Files:**
-- Create: `src/krater/cli.py`, `src/krater/app.py`, `tests/test_cli.py`, `Dockerfile`, `.dockerignore`
+- Create: `src/flackey/cli.py`, `src/flackey/app.py`, `tests/test_cli.py`, `Dockerfile`, `.dockerignore`
 - Modify: `README.md`
 
 **Interfaces:**
@@ -4591,9 +4591,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from krater.cli import app
-from krater.models import RequestKind
-from krater.store import Store
+from flackey.cli import app
+from flackey.models import RequestKind
+from flackey.store import Store
 
 runner = CliRunner()
 
@@ -4607,7 +4607,7 @@ def _env(tmp_path: Path) -> Path:
 
 def test_status_and_export(tmp_path: Path):
     env = _env(tmp_path)
-    store = Store(tmp_path / "data" / "krater.sqlite")
+    store = Store(tmp_path / "data" / "flackey.sqlite")
     store.add_request("q", RequestKind.TEXT)
     r = runner.invoke(app, ["--env", str(env), "status"])
     assert r.exit_code == 0 and "queued: 1" in r.output and "tracks: 0" in r.output
@@ -4623,7 +4623,7 @@ def test_add_enqueues_text(tmp_path: Path):
     env = _env(tmp_path)
     r = runner.invoke(app, ["--env", str(env), "add", "Astral Projection - Into the Void"])
     assert r.exit_code == 0 and "Queued #1" in r.output
-    assert Store(tmp_path / "data" / "krater.sqlite").get_request(1).query_artist == "Astral Projection"
+    assert Store(tmp_path / "data" / "flackey.sqlite").get_request(1).query_artist == "Astral Projection"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -4633,7 +4633,7 @@ Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write app.py and cli.py**
 
-`src/krater/app.py`:
+`src/flackey/app.py`:
 
 ```python
 from __future__ import annotations
@@ -4701,7 +4701,7 @@ async def run(settings: Settings, open_browser: bool = True) -> None:
             webbrowser.open(f"http://localhost:{settings.web_port}")
         await task
 
-    log.info("krater started: bot polling%s", ", worker running" if status["telegram_authorized"] else "")
+    log.info("flackey started: bot polling%s", ", worker running" if status["telegram_authorized"] else "")
     try:
         async with asyncio.TaskGroup() as tg:  # one failing or cancelled task cancels the rest
             tg.create_task(dp.start_polling(bot, handle_signals=False))
@@ -4717,7 +4717,7 @@ async def run(settings: Settings, open_browser: bool = True) -> None:
 
 `asyncio.run` turns `SIGINT` into a `CancelledError` inside the task group, which cancels all three tasks before the `finally` closes the sessions; `cli.start` catches the resulting `KeyboardInterrupt`.
 
-`src/krater/cli.py`:
+`src/flackey/cli.py`:
 
 ```python
 from __future__ import annotations
@@ -4731,7 +4731,7 @@ import typer
 
 from .config import Settings, load_settings
 
-app = typer.Typer(name="crate", help="Krater: Telegram inbox -> verified DJ library", no_args_is_help=True)
+app = typer.Typer(name="crate", help="Flackey: Telegram inbox -> verified DJ library", no_args_is_help=True)
 _state: dict = {}
 
 
@@ -4843,8 +4843,8 @@ Expected: 2 PASS
 
 ```dockerfile
 # Secrets are not baked in (.dockerignore drops .env). Run with:
-#   docker run --env-file .env -v krater-data:/data -v /path/to/library:/library -p 8765:8765 krater
-# and log in once beforehand with `docker run --env-file .env -it -v krater-data:/data krater uv run crate login`.
+#   docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 8765:8765 flackey
+# and log in once beforehand with `docker run --env-file .env -it -v flackey-data:/data flackey uv run crate login`.
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -4874,7 +4874,7 @@ data
 
 `web/dist/index.html` already exists from Task 1, so `COPY web/dist` works before the UI plan runs.
 
-Verify: `docker build -t krater .` succeeds (skip if Docker is not installed on the Mac; note it in the commit message).
+Verify: `docker build -t flackey .` succeeds (skip if Docker is not installed on the Mac; note it in the commit message).
 
 - [ ] **Step 6: Full test run**
 
@@ -4884,10 +4884,10 @@ Expected: every test passes; live tests skipped.
 - [ ] **Step 7: First live run**
 
 1. `uv run crate status` prints zeros.
-2. `uv run crate start` in one terminal. Expect the log line `krater started` and the browser opening the placeholder page.
+2. `uv run crate start` in one terminal. Expect the log line `flackey started` and the browser opening the placeholder page.
 3. From the phone, send `@digcrate_bot` the text `Astral Projection - Into the Void`. Expect `Queued #1 (position 1)` within a second and a `Done: Astral Projection – Into the Void (Original Mix) · 7:22 · genuine 320 kbps ... · 142 BPM · A Major · Psy-Trance / Sacred Technology · 100%` within a minute.
-4. Confirm the file at `~/Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3`, run `uv run python -c "from pathlib import Path; from krater.tag import read_tags; print(read_tags(Path.home()/'Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3'))"` and check the tags. The comment must read `krater: verified 320 kbps · cutoff 20.2 kHz · beatport 16552105` (20 250 Hz was measured on this exact file on 2026-09-03; anything between 19 500 and 20 500 is fine, anything lower means the cliff detector or the download changed).
-4b. Real-music sanity check of the verifier on the same file: `uv run python -c "from pathlib import Path; from krater.verify import spectral_cutoff_hz; print(spectral_cutoff_hz(Path.home()/'Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3'))"` prints a value in that same range. This is the only check of the algorithm against music rather than noise, so do not skip it.
+4. Confirm the file at `~/Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3`, run `uv run python -c "from pathlib import Path; from flackey.tag import read_tags; print(read_tags(Path.home()/'Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3'))"` and check the tags. The comment must read `flackey: verified 320 kbps · cutoff 20.2 kHz · beatport 16552105` (20 250 Hz was measured on this exact file on 2026-09-03; anything between 19 500 and 20 500 is fine, anything lower means the cliff detector or the download changed).
+4b. Real-music sanity check of the verifier on the same file: `uv run python -c "from pathlib import Path; from flackey.verify import spectral_cutoff_hz; print(spectral_cutoff_hz(Path.home()/'Music/DJ Library/Psy-Trance/Sacred Technology/Astral Projection - Into the Void.mp3'))"` prints a value in that same range. This is the only check of the algorithm against music rather than noise, so do not skip it.
 5. Send the same text again. Expect `Already in library: ...`.
 6. Send a YouTube Music playlist link with 3 to 5 tracks. Expect the `Queued k of n` reply and one `Done`/`Review needed`/`Not available` per track.
 7. Drag `~/Music/DJ Library/Psy-Trance` into the Rekordbox collection and confirm the track shows the Beatport tags and artwork. Then File → Import → Playlist, choose `~/Music/DJ Library/Playlists/<name>.m3u8` and confirm the playlist appears with its tracks. Set a hot cue on the track, re-import the same M3U8, and confirm the cue survived: that is the reason there is no rekordbox.xml (spec §8).
@@ -4895,12 +4895,12 @@ Expected: every test passes; live tests skipped.
 
 - [ ] **Step 8: README**
 
-Replace `README.md` with: what it does (three sentences), requirements (macOS, Homebrew ffmpeg and yt-dlp, uv, Python 3.12), setup (`cp .env.example .env`, fill values, `uv sync`, `uv run crate login`), usage (`uv run crate start`, message the bot, `crate add`, `crate status`, `crate export`), the Rekordbox import steps from Step 7.7 and why there is no rekordbox.xml (spec §8), the 24-hour note (Telegram keeps unread bot messages for 24 hours while the program is off), what happens when the Telegram session expires (the UI banner, then `crate login`), where data lives (`~/.config/krater`, `~/Music/DJ Library`), a Docker section with the two `docker run --env-file .env ...` commands from the Dockerfile header, and links to the spec, the plan, and the protocol doc.
+Replace `README.md` with: what it does (three sentences), requirements (macOS, Homebrew ffmpeg and yt-dlp, uv, Python 3.12), setup (`cp .env.example .env`, fill values, `uv sync`, `uv run crate login`), usage (`uv run crate start`, message the bot, `crate add`, `crate status`, `crate export`), the Rekordbox import steps from Step 7.7 and why there is no rekordbox.xml (spec §8), the 24-hour note (Telegram keeps unread bot messages for 24 hours while the program is off), what happens when the Telegram session expires (the UI banner, then `crate login`), where data lives (`~/.config/flackey`, `~/Music/DJ Library`), a Docker section with the two `docker run --env-file .env ...` commands from the Dockerfile header, and links to the spec, the plan, and the protocol doc.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/krater/app.py src/krater/cli.py tests/test_cli.py Dockerfile .dockerignore README.md docs/source-bot-protocol.md
+git add src/flackey/app.py src/flackey/cli.py tests/test_cli.py Dockerfile .dockerignore README.md docs/source-bot-protocol.md
 git commit -m "feat(cli): crate start/status/export/add/login, docker image, readme"
 ```
 

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from krater.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
-from krater.store import Store
+from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
+from flackey.store import Store
 
 
 @pytest.fixture
@@ -174,7 +174,7 @@ def test_settings(store: Store):
 
 
 def test_listeners_fire_on_request_track_and_bulk_changes(tmp_path):
-    from krater.models import RequestKind, RequestState
+    from flackey.models import RequestKind, RequestState
     store = Store(tmp_path / "s.sqlite")
     seen = []
     store.listeners.append(lambda kind, oid: seen.append((kind, oid)))
@@ -188,7 +188,7 @@ def test_listeners_fire_on_request_track_and_bulk_changes(tmp_path):
 
 
 def test_rejection_for_request_and_playlist_tracks(tmp_path):
-    from krater.models import RequestKind
+    from flackey.models import RequestKind
     store = Store(tmp_path / "s.sqlite")
     rid = store.add_request("q", RequestKind.TEXT)
     assert store.get_rejection_for_request(rid) is None

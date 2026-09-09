@@ -4,7 +4,7 @@ import WelcomeStep from './WelcomeStep'
 it('shows the pitch, the rig with four spinning decks, and Get started', () => {
   const onStart = vi.fn()
   const { container } = render(<WelcomeStep onStart={onStart} />)
-  expect(screen.getByText('Krater')).toBeInTheDocument()
+  expect(screen.getByText('Flackey')).toBeInTheDocument()
   expect(screen.getByText(/Paste a YouTube link\. Get the best copy that exists/)).toBeInTheDocument()
   expect(container.querySelectorAll('.ring')).toHaveLength(4)
   expect(container.querySelectorAll('.screen')).toHaveLength(4)

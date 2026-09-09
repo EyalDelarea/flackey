@@ -33,7 +33,7 @@ class TagError(Exception):
 
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
     kind = f"verified {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"verified {verdict.fmt}"
-    return (f"krater: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
+    return (f"flackey: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
             f" · via {source_label(source)}")
 
 

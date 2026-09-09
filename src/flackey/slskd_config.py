@@ -1,6 +1,6 @@
-"""krater owns the slskd sidecar's configuration file, so the user never has to open or edit
+"""flackey owns the slskd sidecar's configuration file, so the user never has to open or edit
 slskd.yml by hand. The file holds three secrets -- the Soulseek password, the slskd web UI password,
-and the API key krater generates for itself -- and is created 0600 from the moment it exists."""
+and the API key flackey generates for itself -- and is created 0600 from the moment it exists."""
 from __future__ import annotations
 
 import logging
@@ -12,13 +12,13 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-KRATER_WEB_USERNAME = "krater"
+FLACKEY_WEB_USERNAME = "flackey"
 # The name of our entry inside slskd's own config file -- not a Python identifier, a key in a third-party
-# document that already exists on disk. Renaming it without carrying the old one across would leave
+# document that already exists on disk. Renaming it without carrying the old ones across would leave
 # `read_api_key` finding nothing, which turns the lossless provider off with no error anywhere; hence both
-# the fallback below and the rewrite in `repoint_slskd_config`.
-API_KEY_NAME = "krater"
-LEGACY_API_KEY_NAME = "cratedigger"
+# the fallback below and the rewrite in `repoint_slskd_config`. Newest generation first.
+API_KEY_NAME = "flackey"
+LEGACY_API_KEY_NAMES = ("krater", "cratedigger")
 WEB_PORT = 5030
 WEB_IP_ADDRESS = "127.0.0.1"
 API_KEY_CIDR = "127.0.0.1/32"
@@ -59,12 +59,12 @@ def _load_or_none(path: Path) -> dict | None:
 
 
 def read_api_key(data_dir: Path) -> str | None:
-    """The krater API key from the managed config, or None when there is no config, it cannot be
+    """The flackey API key from the managed config, or None when there is no config, it cannot be
     parsed, or it holds no key. Never raises, never logs the value."""
     data = _load_or_none(config_path(data_dir))
     if data is None:
         return None
-    for name in (API_KEY_NAME, LEGACY_API_KEY_NAME):
+    for name in (API_KEY_NAME, *LEGACY_API_KEY_NAMES):
         try:
             key = data["web"]["authentication"]["api_keys"][name]["key"]
         except (KeyError, TypeError):
@@ -102,7 +102,7 @@ def _submapping(parent: dict, key: str, path: Path) -> dict:
 
 def write_credentials(data_dir: Path, username: str, password: str) -> str:
     """Create or update the managed slskd.yml with these Soulseek credentials and return the
-    krater API key -- generated on the first write, preserved on every later one. Raises
+    flackey API key -- generated on the first write, preserved on every later one. Raises
     SlskdConfigError on invalid input or an unwritable path."""
     username = username.strip()
     if not username:
@@ -131,18 +131,18 @@ def write_credentials(data_dir: Path, username: str, password: str) -> str:
     web.setdefault("ip_address", WEB_IP_ADDRESS)
     # `ip_address` binds the HTTP listener only: slskd's HTTPS listener has its own settings and stays on
     # 0.0.0.0, so with just the two lines above the sidecar's web UI answered from the LAN on 5031
-    # (measured 2026-09-09: HTTP 200 from this machine's own LAN address, while 5030 and krater's
-    # own 8765 refused). Nothing here needs HTTPS -- the only client is krater over loopback -- so
+    # (measured 2026-09-09: HTTP 200 from this machine's own LAN address, while 5030 and flackey's
+    # own 8765 refused). Nothing here needs HTTPS -- the only client is flackey over loopback -- so
     # the listener is turned off outright. Forced, not setdefault: a config written before this fix must
     # be corrected on the next credential write, not left as it is.
     _submapping(web, "https", path)["disabled"] = True
     auth = _submapping(web, "authentication", path)
-    auth.setdefault("username", KRATER_WEB_USERNAME)
+    auth.setdefault("username", FLACKEY_WEB_USERNAME)
     if not auth.get("password"):
         auth["password"] = secrets.token_urlsafe(24)
     api_keys = _submapping(auth, "api_keys", path)
-    if API_KEY_NAME not in api_keys and LEGACY_API_KEY_NAME in api_keys:
-        api_keys[API_KEY_NAME] = api_keys.pop(LEGACY_API_KEY_NAME)   # the rename, if the migration missed it
+    if API_KEY_NAME not in api_keys and (older := _legacy_key_name(api_keys)):
+        api_keys[API_KEY_NAME] = api_keys.pop(older)   # the rename, if the migration missed it
     key_entry = _submapping(api_keys, API_KEY_NAME, path)
     if not key_entry.get("key"):
         key_entry["key"] = secrets.token_hex(32)  # slskd requires at least 16 characters
@@ -200,16 +200,22 @@ def repoint_slskd_config(old_data_dir: Path, new_data_dir: Path) -> None:
         api_keys = config["web"]["authentication"]["api_keys"]
     except (KeyError, TypeError):
         api_keys = None
-    if isinstance(api_keys, dict) and LEGACY_API_KEY_NAME in api_keys and API_KEY_NAME not in api_keys:
-        api_keys[API_KEY_NAME] = api_keys.pop(LEGACY_API_KEY_NAME)
+    if isinstance(api_keys, dict) and API_KEY_NAME not in api_keys and (older := _legacy_key_name(api_keys)):
+        api_keys[API_KEY_NAME] = api_keys.pop(older)
         changed = True
-        log.info("slskd api key entry renamed to %s", API_KEY_NAME)   # the name, never the key
+        log.info("slskd api key entry renamed from %s to %s", older, API_KEY_NAME)   # names, never the key
     if not changed:
         return
     try:
         _atomic_write(path, config)
     except SlskdConfigError as e:
         log.error("could not update %s after the rename: %s", path, e)
+
+
+def _legacy_key_name(api_keys: dict) -> str | None:
+    """The newest older-generation api_keys entry present, or None. Newest first so a config that somehow
+    carries two of them is adopted forward from the most recent, not the most ancient."""
+    return next((name for name in LEGACY_API_KEY_NAMES if name in api_keys), None)
 
 
 def _moved_under(value: object, old: Path, new: Path) -> str | None:

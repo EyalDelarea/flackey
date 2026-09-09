@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from krater.events import EventBus, Status, format_sse
+from flackey.events import EventBus, Status, format_sse
 
 
 async def test_publish_reaches_every_subscriber_and_unsubscribe_stops_it():
@@ -42,7 +42,7 @@ def test_format_sse():
 async def test_close_ends_every_open_stream():
     """Ctrl-C hangs otherwise: uvicorn's shutdown awaits Server.wait_closed(), which on Python 3.12 waits for
     every open connection, and an SSE stream never ends on its own."""
-    from krater.web.stream import event_stream
+    from flackey.web.stream import event_stream
 
     bus = EventBus()
     seen = []

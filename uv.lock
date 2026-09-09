@@ -252,7 +252,7 @@ wheels = [
 ]
 
 [[package]]
-name = "krater"
+name = "flackey"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

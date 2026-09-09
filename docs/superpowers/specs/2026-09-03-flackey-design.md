@@ -1,11 +1,11 @@
-# Krater — Design Spec
+# Flackey — Design Spec
 
 Date: 2026-09-03
 Status: Approved by owner after brainstorming and grilling session
 
 ## 1. Purpose
 
-Krater turns "I like this track" into a verified, correctly tagged audio
+Flackey turns "I like this track" into a verified, correctly tagged audio
 file in a permanent DJ library on the owner's Mac, ready for import into
 Rekordbox. It is a personal tool for one user.
 
@@ -209,7 +209,7 @@ recorded fixtures.
 - `LIBRARY_ROOT`: default `~/Music/DJ Library`.
 - `WEB_PORT`: default 8765.
 
-The Telethon session file lives in `~/.config/krater/` with mode 600 and
+The Telethon session file lives in `~/.config/flackey/` with mode 600 and
 is never committed.
 
 ### 4.4 Lifecycle
@@ -289,7 +289,7 @@ album (Beatport release name), album artist, genre (Beatport genre), label
 (publisher), catalog number, release year and date, mix name (in the title
 suffix and as a custom field), ISRC, BPM, initial key (classical notation
 such as `A Major`, which Rekordbox can display as Camelot), comment
-`krater: verified 320 kbps · cutoff 19.8 kHz · beatport <id>`, and the
+`flackey: verified 320 kbps · cutoff 19.8 kHz · beatport <id>`, and the
 Beatport artwork embedded at 1400 px.
 
 Final path:
@@ -354,9 +354,9 @@ import).
 ## 11. Repository layout
 
 ```
-krater/
+flackey/
   pyproject.toml          # uv-managed, Python 3.12
-  src/krater/        # modules listed in 4.1
+  src/flackey/        # modules listed in 4.1
   web/                    # React + TypeScript + Vite
   tests/
   docs/superpowers/specs/ # this file and successors

@@ -9,7 +9,7 @@ import typer
 from .config import Settings, load_settings, migrate_legacy_data_dir
 from .logsetup import configure_logging
 
-app = typer.Typer(name="krater", help="Krater: paste Deezer links, get verified, tagged tracks for Rekordbox",
+app = typer.Typer(name="flackey", help="Flackey: paste Deezer links, get verified, tagged tracks for Rekordbox",
                   no_args_is_help=True)
 _state: dict = {}
 
@@ -30,7 +30,7 @@ def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (defa
 @app.command()
 def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve only; open http://localhost:8765 yourself"),
           browser: bool = typer.Option(False, "--browser", help="Open the system browser instead of the app window")) -> None:
-    """Run the worker and open the Krater window; stops when the window closes or on Ctrl-C."""
+    """Run the worker and open the Flackey window; stops when the window closes or on Ctrl-C."""
     from .app import run
 
     try:

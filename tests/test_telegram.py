@@ -8,7 +8,7 @@ from telethon.errors import (
     SessionPasswordNeededError,
 )
 
-from krater.telegram import LoginError, TelegramLogin, mask_phone
+from flackey.telegram import LoginError, TelegramLogin, mask_phone
 
 
 class FakeQR:

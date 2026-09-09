@@ -7,16 +7,16 @@ from pathlib import Path
 import httpx
 import pytest
 
-from krater import worker as worker_mod
-from krater.config import Settings
-from krater.convert import ConvertError
-from krater.fingerprint import FingerprintResult
-from krater.lossless import LosslessFile
-from krater.models import CatalogTrack, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.source import LosslessError, SourceTimeout, TransferProgress
-from krater.store import Store
-from krater.worker import Worker, format_line
+from flackey import worker as worker_mod
+from flackey.config import Settings
+from flackey.convert import ConvertError
+from flackey.fingerprint import FingerprintResult
+from flackey.lossless import LosslessFile
+from flackey.models import CatalogTrack, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.source import LosslessError, SourceTimeout, TransferProgress
+from flackey.store import Store
+from flackey.worker import Worker, format_line
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
 
@@ -68,7 +68,7 @@ class FakeProvider:
         self.searches, self.downloaded, self.cancelled, self.rescans = [], [], 0, 0
 
     async def health(self):
-        return {"status": self.health_status, "username": "krater-dj"}
+        return {"status": self.health_status, "username": "flackey-dj"}
 
     async def search(self, text, *, wait_s, on_raw=None):
         self.searches.append(text)
@@ -164,7 +164,7 @@ async def test_hit_files_wav_with_evidence_done_line_and_raw_record(lenv):
     done = notifier.sent[-1][0]
     assert "WAV 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
     assert store.stats()["by_source"] == {"soulseek": 1}
-    assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "krater-dj"}
+    assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "flackey-dj"}
 
 
 async def test_no_pick_falls_back_to_deezer(lenv):
@@ -503,7 +503,7 @@ async def test_lossless_is_off_without_a_key_or_providers(lenv, tmp_path: Path):
 
 
 def test_format_line():
-    from krater.models import Verdict
+    from flackey.models import Verdict
     assert format_line(Verdict(True, "mp3", 320, 19500, "r"), "deezer_bot", None) == "MP3 320 kbps via Deezer"
     v = Verdict(True, "aiff", 1411, 22050, "r", bit_depth=16, sample_rate=44100)
     assert format_line(v, "soulseek", "flac") == "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek"
@@ -593,7 +593,7 @@ async def test_with_the_provider_off_a_deezer_file_is_not_blamed_on_soulseek(len
 def test_miss_reasons_match_the_ui():
     """The row badge in web/src/presentation.ts renders the same sentences. Two copies in two languages
     drift silently, so pin them here rather than plumb a static string table through the API."""
-    from krater.models import ATTEMPT_OUTCOMES, MISS_REASON
+    from flackey.models import ATTEMPT_OUTCOMES, MISS_REASON
     ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
     assert set(MISS_REASON) == set(ATTEMPT_OUTCOMES) - {"filed"}, "every non-filed outcome needs a reason"
     for outcome, reason in MISS_REASON.items():
@@ -604,7 +604,7 @@ async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv
     """The bar is driven by SSE, not by polling, so setting the dict is only half the path. `Status` is a
     dict subclass that publishes on __setitem__ -- if the worker is ever handed a plain dict (or a Status
     with no bus) the tests above still pass while the bar sits frozen at 0% for the whole download."""
-    from krater.events import EventBus, Status
+    from flackey.events import EventBus, Status
     _, store, _, _, _, _ = lenv
     bus = EventBus()
     w = make(lenv, status=Status(bus, telegram_authorized=True))

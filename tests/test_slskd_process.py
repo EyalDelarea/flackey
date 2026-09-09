@@ -5,9 +5,9 @@ import httpx
 import pytest
 import respx
 
-from krater import slskd_process
-from krater.slskd_binary import SlskdBinaryError
-from krater.slskd_process import SlskdProcess
+from flackey import slskd_process
+from flackey.slskd_binary import SlskdBinaryError
+from flackey.slskd_process import SlskdProcess
 
 BASE = "http://slskd.test/api/v0"
 

@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from krater.library import file_track, final_path, find_duplicate, sanitize
-from krater.models import Candidate, CatalogTrack
-from krater.store import Store
+from flackey.library import file_track, final_path, find_duplicate, sanitize
+from flackey.models import Candidate, CatalogTrack
+from flackey.store import Store
 
 CT = CatalogTrack(id=1, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="Sacred Technology", genre="Psy-Trance", duration_ms=442816)
@@ -87,7 +87,7 @@ def test_find_duplicate_drops_rows_whose_file_is_gone(tmp_path: Path):
 
 
 def test_prune_missing_tracks_removes_rows_and_playlist_membership(tmp_path: Path):
-    from krater.library import prune_missing_tracks
+    from flackey.library import prune_missing_tracks
     store = Store(tmp_path / "s.sqlite")
     kept = tmp_path / "kept.mp3"; kept.write_bytes(b"x")
     a = _add(store, kept); b = _add(store, tmp_path / "gone.mp3", title="Other")

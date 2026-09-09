@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from telethon.errors import UnauthorizedError
 
-from krater.models import Candidate
-from krater.source.base import SourceTimeout, SourceUnauthorized
-from krater.source.deezer_bot import DeezerBotSource
+from flackey.models import Candidate
+from flackey.source.base import SourceTimeout, SourceUnauthorized
+from flackey.source.deezer_bot import DeezerBotSource
 
 
 class FakeDocument:

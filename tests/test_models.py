@@ -1,6 +1,6 @@
 import pytest
 
-from krater.models import CatalogTrack, Query, norm
+from flackey.models import CatalogTrack, Query, norm
 
 
 def test_query_search_text_prefers_structured_fields():

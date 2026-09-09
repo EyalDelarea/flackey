@@ -195,7 +195,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
 
     url = f"http://localhost:{settings.web_port}"
 
-    log.info("krater started%s", ", worker running" if status["telegram_authorized"] else "")
+    log.info("flackey started%s", ", worker running" if status["telegram_authorized"] else "")
     try:
         await run_until_server_stops(serve(server, url, handle), supervise_worker(worker, status),
                                      close_streams_on_exit(server, bus))

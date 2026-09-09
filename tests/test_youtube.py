@@ -1,4 +1,4 @@
-from krater.youtube import parse_ytdlp_json
+from flackey.youtube import parse_ytdlp_json
 
 
 def test_parse_ytdlp_playlist_json():

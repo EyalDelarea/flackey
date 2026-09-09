@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from krater.export import build_m3u8, playlist_names, write_playlist, write_playlists
-from krater.models import Playlist, Track
-from krater.store import Store
+from flackey.export import build_m3u8, playlist_names, write_playlist, write_playlists
+from flackey.models import Playlist, Track
+from flackey.store import Store
 
 
 def _track(tid: int, path: str, artist: str = "A", title: str = "T", duration_s: int | None = 442) -> Track:

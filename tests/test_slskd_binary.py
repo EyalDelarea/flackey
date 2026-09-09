@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from krater import slskd_binary
-from krater.slskd_binary import (
+from flackey import slskd_binary
+from flackey.slskd_binary import (
     SlskdBinaryError,
     binary_path,
     download_url,

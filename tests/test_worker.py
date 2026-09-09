@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from krater.catalog import CatalogUnavailable
-from krater.config import Settings
-from krater.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.source import SourceNotFound, SourceTimeout, SourceUnauthorized
-from krater.store import Store
-from krater.worker import Worker
+from flackey.catalog import CatalogUnavailable
+from flackey.config import Settings
+from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
+from flackey.store import Store
+from flackey.worker import Worker
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -110,7 +110,7 @@ async def test_process_survives_a_request_removed_while_notifying(env, caplog):
     between the terminal-state commit and the awaited notifier.send() that follows it. The trailing re-fetch
     at the end of process() must tolerate the row being gone instead of letting KeyError escape run_forever()."""
     settings, store, _ = env
-    caplog.set_level(logging.DEBUG, logger="krater.worker")
+    caplog.set_level(logging.DEBUG, logger="flackey.worker")
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     rid = store.add_request(TEXT, RequestKind.TEXT)
 
@@ -133,7 +133,7 @@ async def test_process_survives_a_request_removed_while_notifying(env, caplog):
 
 async def test_worker_logs_state_transitions(env, caplog):
     _, store, _ = env
-    caplog.set_level(logging.DEBUG, logger="krater.worker")
+    caplog.set_level(logging.DEBUG, logger="flackey.worker")
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
@@ -144,7 +144,7 @@ async def test_worker_logs_state_transitions(env, caplog):
 async def test_worker_logs_parking_for_review(env, caplog):
     """A transition that used to go straight through store.update_request (no DEBUG line) now does too."""
     _, store, _ = env
-    caplog.set_level(logging.DEBUG, logger="krater.worker")
+    caplog.set_level(logging.DEBUG, logger="flackey.worker")
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)

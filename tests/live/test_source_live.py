@@ -3,16 +3,16 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.environ.get("KRATER_LIVE") != "1", reason="live test")
+pytestmark = pytest.mark.skipif(os.environ.get("FLACKEY_LIVE") != "1", reason="live test")
 
 
 async def test_search_and_fetch_astral(tmp_path: Path):
     from telethon import TelegramClient
 
-    from krater.config import load_settings
-    from krater.deezer import DeezerApi
-    from krater.models import Query
-    from krater.source.deezer_bot import DeezerBotSource
+    from flackey.config import load_settings
+    from flackey.deezer import DeezerApi
+    from flackey.models import Query
+    from flackey.source.deezer_bot import DeezerBotSource
 
     s = load_settings(Path(".env"))
     client = TelegramClient(str(s.session_path), s.telegram_api_id, s.telegram_api_hash)

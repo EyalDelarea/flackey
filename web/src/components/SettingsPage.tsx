@@ -7,7 +7,7 @@ import Banner from './Banner'
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
 
 const PORT_ROWS: [keyof NonNullable<AppSettings['ports']>, string][] = [
-  ['app', 'Krater itself'], ['sidecar', 'the Soulseek helper'], ['soulseek_listen', 'incoming Soulseek transfers'],
+  ['app', 'Flackey itself'], ['sidecar', 'the Soulseek helper'], ['soulseek_listen', 'incoming Soulseek transfers'],
 ]
 
 /* Same two questions the sidebar keeps apart: `enabled` means credentials are saved, `provider.status`
@@ -140,12 +140,12 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
         {lossless?.enabled && s.ranking && <div className="srow"><div className="srow-body"><div className="k">How copies are ranked</div>
           <div className="v">Files a peer offers must match on length (±{s.ranking.duration_tolerance_s}s) and
             title ({s.ranking.title_ratio}% or closer){s.ranking.require_artist ? ', and name the artist' : ''}.
-            Survivors are ordered by quality, then by who can send now. Krater tries up to {s.ranking.max_picks} of
+            Survivors are ordered by quality, then by who can send now. Flackey tries up to {s.ranking.max_picks} of
             them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div>
           </div></div>}
       </div>
       <div className="group">
-        <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Krater {s.version}</div></div></div>
+        <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Flackey {s.version}</div></div></div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
           <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
       </div>

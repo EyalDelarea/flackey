@@ -7,8 +7,8 @@ import httpx
 import pytest
 import respx
 
-from krater import fingerprint as fp
-from krater.fingerprint import FPS, FingerprintError, check, compare, fingerprint
+from flackey import fingerprint as fp
+from flackey.fingerprint import FPS, FingerprintError, check, compare, fingerprint
 from tests.conftest import requires_ffmpeg, requires_fpcalc
 
 

@@ -1,7 +1,7 @@
 import json
 
-from krater.config import Settings
-from krater.lossless import (
+from flackey.config import Settings
+from flackey.lossless import (
     RANKERS,
     LosslessFile,
     PickPolicy,
@@ -13,7 +13,7 @@ from krater.lossless import (
     reference_for,
     search_text,
 )
-from krater.models import Candidate, CatalogTrack
+from flackey.models import Candidate, CatalogTrack
 
 REF = Reference(artist="Hallucinogen", title="Orphic Thrench", mix_name="Original Mix", duration_s=442, deezer_id=6025986)
 

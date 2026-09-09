@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from krater.config import Settings
-from krater.inbox import NOT_A_LINK, YT_FAIL, BadLink, Inbox
-from krater.models import RequestKind, RequestState
-from krater.store import Store
-from krater.youtube import YouTubeEntry, YouTubeError
+from flackey.config import Settings
+from flackey.inbox import NOT_A_LINK, YT_FAIL, BadLink, Inbox
+from flackey.models import RequestKind, RequestState
+from flackey.store import Store
+from flackey.youtube import YouTubeEntry, YouTubeError
 
 
 @pytest.fixture

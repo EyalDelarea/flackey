@@ -48,7 +48,7 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 def _host_port(url: str) -> tuple[str, int]:
     """The sidecar's host and port off its own URL rather than assumed, so this stays true for an owner
-    who moved it -- including one pointing krater at slskd on another machine."""
+    who moved it -- including one pointing flackey at slskd on another machine."""
     rest = url.split("://", 1)[-1].split("/", 1)[0]
     host, _, tail = rest.rpartition(":")
     if not host:
@@ -133,7 +133,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         # the shared library -- that is how Soulseek works, and it cannot be loopback.
         return {"library_root": str(settings.library_root), "data_dir": str(settings.data_dir),
                 "version": __version__, "telegram_configured": settings.telegram_configured,
-                "log_path": str(settings.data_dir / "krater.log"),
+                "log_path": str(settings.data_dir / "flackey.log"),
                 "soulseek_enabled": settings.soulseek_enabled, "slskd_url": settings.slskd_url,
                 "slskd_downloads_dir": str(settings.slskd_downloads),
                 "lossless_filing_format": settings.lossless_filing_format,
@@ -208,10 +208,10 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     async def post_soulseek_setup(body: dict) -> dict:
         """Write the given Soulseek credentials into the managed slskd.yml and keep the resulting API
         key in memory only -- never handed to `save_settings`, so it still lives in exactly one place,
-        the 0600 slskd.yml. `restart_required` is always true: krater builds its provider list and
+        the 0600 slskd.yml. `restart_required` is always true: flackey builds its provider list and
         starts the slskd sidecar (if installed) once at startup (`build_providers` / `SlskdProcess.start`
         in app.py, around line 120) and does not restart either on a credential change, so credentials
-        written here take effect the next time krater starts, not on this already-running process."""
+        written here take effect the next time flackey starts, not on this already-running process."""
         username = str(body.get("username") or "")
         password = str(body.get("password") or "")
         try:
@@ -232,7 +232,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         """Sign in again with the credentials already saved. The status line is not a place to be stuck:
         if it says "signing in" and stays there, this is the action that does something about it."""
         if link is None:
-            raise HTTPException(409, "Soulseek can't be reconnected on this build. Restart krater.")
+            raise HTTPException(409, "Soulseek can't be reconnected on this build. Restart flackey.")
         if not settings.soulseek_enabled:
             raise HTTPException(409, "No Soulseek account is saved yet.")
         return link.start_connect()

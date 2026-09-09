@@ -8,7 +8,7 @@ const makeLive = (over: { settings: AppSettings; health: Health }) =>
 
 const mockSetSettings = vi.fn()
 const mockRefresh = vi.fn()
-const live = { settings: { library_root: '/Users/me/Music/DJ Library', data_dir: '/Users/me/Library/Application Support/Krater', version: '0.1.0', telegram_configured: true, log_path: '/Users/me/Library/Application Support/Krater/krater.log' },
+const live = { settings: { library_root: '/Users/me/Music/DJ Library', data_dir: '/Users/me/Library/Application Support/Flackey', version: '0.1.0', telegram_configured: true, log_path: '/Users/me/Library/Application Support/Flackey/flackey.log' },
   health: { ok: true, version: '0.1.0', telegram_authorized: true, worker_running: true, setup_done: true }, setSettings: mockSetSettings, refresh: mockRefresh } as never
 
 beforeEach(() => {
@@ -21,12 +21,12 @@ beforeEach(() => {
 })
 
 it('shows the four cards and saves a new folder', async () => {
-  const result = { library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/krater.log' }
+  const result = { library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/flackey.log' }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   expect(screen.getByText('/Users/me/Music/DJ Library')).toBeInTheDocument()
-  expect(screen.getByText('Krater 0.1.0')).toBeInTheDocument()
-  expect(screen.getByText(/Application Support\/Krater/)).toBeInTheDocument()
+  expect(screen.getByText('Flackey 0.1.0')).toBeInTheDocument()
+  expect(screen.getByText(/Application Support\/Flackey/)).toBeInTheDocument()
   fireEvent.click(screen.getByText('Change'))
   fireEvent.change(screen.getByDisplayValue('/Users/me/Music/DJ Library'), { target: { value: '/tmp/new' } })
   fireEvent.click(screen.getByText('Save'))
@@ -82,7 +82,7 @@ it('shows logs when Show logs is clicked', async () => {
   vi.spyOn(api, 'reveal').mockResolvedValue({ ok: true })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   fireEvent.click(screen.getByText('Show logs'))
-  await waitFor(() => expect(api.reveal).toHaveBeenCalledWith('/Users/me/Library/Application Support/Krater/krater.log'))
+  await waitFor(() => expect(api.reveal).toHaveBeenCalledWith('/Users/me/Library/Application Support/Flackey/flackey.log'))
 })
 
 it('shows error banner when Show logs fails', async () => {
@@ -121,7 +121,7 @@ it('fills the field when Choose… returns a path', async () => {
 describe('the Soulseek panel', () => {
   const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
     library_root: '/tmp/lib', data_dir: '/tmp/data', version: '0.1.0', telegram_configured: true,
-    log_path: '/tmp/data/krater.log', soulseek_enabled: true, lossless_filing_format: 'wav',
+    log_path: '/tmp/data/flackey.log', soulseek_enabled: true, lossless_filing_format: 'wav',
     filing_formats: ['aiff', 'wav', 'flac'],
     ports: {
       app: { port: 8765, host: '127.0.0.1', public: false },
@@ -152,7 +152,7 @@ describe('the Soulseek panel', () => {
   it('says only the Soulseek transfer port is reachable from outside this Mac', () => {
     show(lossless())
     expect(screen.getByText(/50300 — incoming Soulseek transfers · open to other Soulseek users/)).toBeInTheDocument()
-    expect(screen.getByText(/8765 — Krater itself · this Mac only/)).toBeInTheDocument()
+    expect(screen.getByText(/8765 — Flackey itself · this Mac only/)).toBeInTheDocument()
     expect(screen.getByText(/5030 — the Soulseek helper · this Mac only/)).toBeInTheDocument()
   })
 

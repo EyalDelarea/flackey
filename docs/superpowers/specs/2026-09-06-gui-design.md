@@ -1,4 +1,4 @@
-# Krater GUI — Design Spec
+# Flackey GUI — Design Spec
 
 Status: decisions agreed 2026-09-06; visual design chosen the same day. The owner picked the
 "dark pro-audio" mockups made in Claude Design
@@ -6,12 +6,12 @@ Status: decisions agreed 2026-09-06; visual design chosen the same day. The owne
 values, and copy are recorded in `docs/superpowers/design/gui/DESIGN.md`; the screens below
 describe behaviour and defer to that file for looks.
 Supersedes section 3.5 (Web UI) and the Telegram inbox parts of sections 3.1, 3.3, 4.3 and 4.4
-of `2026-09-03-krater-design.md`. Everything else in that spec stands.
+of `2026-09-03-flackey-design.md`. Everything else in that spec stands.
 
 ## 1. Purpose
 
 Replace the Telegram inbox bot with a desktop GUI, so that a friend with no technical
-background can install Krater on their Mac, connect it to Telegram, paste YouTube links,
+background can install Flackey on their Mac, connect it to Telegram, paste YouTube links,
 and at every moment understand what is happening to each track, where the files went, and
 what to click next.
 
@@ -41,7 +41,7 @@ what to click next.
 - **Settings:** `settings.json` in the app data folder holds the library folder and the Telegram
   api id/hash; the API reads and writes it so the setup screen can save the folder. Environment
   variables and `.env` still override every key, for development and Docker. The data folder
-  moves from `~/.config/krater/` to `~/Library/Application Support/Krater/` on macOS
+  moves from `~/.config/flackey/` to `~/Library/Application Support/Flackey/` on macOS
   (the Mac-native place the mockup shows) and is migrated on first launch if the old one exists;
   `DATA_DIR` still overrides it, so Docker is unaffected.
 - **Notifications:** the `Notifier` port stays (the worker still describes what it did) but the only

@@ -1,4 +1,4 @@
-"""Throwaway spike: search slskd for every track already in the krater library and measure
+"""Throwaway spike: search slskd for every track already in the flackey library and measure
 responsiveness and lossless availability. Writes probe_search.json (raw) and probe_search.md (table)."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import httpx
 from rapidfuzz import fuzz
 
 HERE = Path(__file__).parent
-APP = Path.home() / "Library/Application Support/Krater/slskd"
+APP = Path.home() / "Library/Application Support/Flackey/slskd"
 KEY = (APP / "api_key").read_text().strip()
 BASE = "http://127.0.0.1:5030/api/v0"
 H = {"X-API-Key": KEY}

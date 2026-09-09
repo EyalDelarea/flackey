@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from krater.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
-from krater.models import CatalogTrack, Query
+from flackey.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
+from flackey.models import CatalogTrack, Query
 
 
 @pytest.fixture

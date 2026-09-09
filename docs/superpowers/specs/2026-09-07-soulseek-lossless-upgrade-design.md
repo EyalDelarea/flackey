@@ -20,7 +20,7 @@ the owner sees exactly what they see today.
 
 ## 2. Decisions already taken (owner, 2026-09-07)
 
-- slskd runs as a separately managed sidecar on the Mac; krater talks to its REST API.
+- slskd runs as a separately managed sidecar on the Mac; flackey talks to its REST API.
 - Soulseek is tried first, silently; no prompt to the owner. On any miss, the Deezer MP3.
 - 60 s cap to first byte, then a total transfer cap. Both are settings.
 - The whole DJ Library is shared read-only through slskd (the owner accepts uploading).
@@ -487,7 +487,7 @@ replayed. `fpcalc` comes from Homebrew's chromaprint; if it is missing the check
 - Peer metadata is discarded: conversion runs with `-vn -map 0:a` so embedded pictures and
   foreign tags are dropped, and tags are written fresh from Beatport. When the filing format is
   FLAC, `write_tags` clears existing Vorbis comments and pictures first.
-- Network exposure is slskd's, not krater's: its API is bound to loopback with a key, the
+- Network exposure is slskd's, not flackey's: its API is bound to loopback with a key, the
   share is read-only and limited to the library folder, and the Soulseek listening port only
   speaks the Soulseek protocol.
 - The slskd downloads directory is treated as untrusted scratch space: nothing there is indexed,
@@ -505,7 +505,7 @@ completed (responses, files, elapsed), pick (summary from the report), enqueue (
 first byte (elapsed), transfer state changes (state, percent, speed), completed (elapsed, average
 speed), verify (cutoff), fingerprint (score, offset), convert (format, elapsed), outcome. Every
 slskd HTTP call is logged at DEBUG with method, path, status and elapsed ms; the API key never
-appears. These go to the existing `krater.log`.
+appears. These go to the existing `flackey.log`.
 
 ### 17.2 Attempt timeline in the store
 

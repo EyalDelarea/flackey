@@ -1,4 +1,4 @@
-# Soulseek as an audio source for krater (research, 2026-09-06)
+# Soulseek as an audio source for flackey (research, 2026-09-06)
 
 Question: can the Soulseek network (https://www.slsknet.org/) be added as an audio source next to
 the Telegram/Deezer bot, how does it work, would it deliver better audio formats, and what are the
@@ -56,7 +56,7 @@ UNVERIFIED there and here.
 
 ## 3. Client options (A §4)
 
-| Client | Shape | Fit for krater |
+| Client | Shape | Fit for flackey |
 |---|---|---|
 | `aioslsk` | Python asyncio library, `pip install`, GPL-3.0, PyPI 1.6.3 (2026-01), pushed 2026-08 | Best fit: same process and event loop, no GTK, optional UPnP, can declare a share directory, ships a mock server for tests |
 | `slskd` | C#/.NET daemon, REST API with API key, Docker image and native macOS binaries, AGPL-3.0, v0.26.0 (2026-07) | Solid fallback if an always-on external service over HTTP is preferred; needs a second process/container, no UPnP |
@@ -94,7 +94,7 @@ Two production tools solve this problem and document their heuristics:
   (`flac 24/192, flac 16/44.1, flac, mp3 320, mp3`), and filters on peer upload speed and queue
   length.
 
-For krater this maps to: duration pre-filter against the Beatport/Deezer duration before
+For flackey this maps to: duration pre-filter against the Beatport/Deezer duration before
 spending a download slot, rank by format preference plus peer health, and keep the post-download
 spectral verification as the final gate. Coverage of edits, bootlegs and unofficial remixes is
 plausibly better on Soulseek because unlicensed material cannot appear on Deezer or Beatport at
@@ -126,7 +126,7 @@ all; this is reasoned opinion, not measured (B §5).
 
 Already in place, no change needed:
 
-- `Source` protocol in `src/krater/source/base.py` is source-agnostic.
+- `Source` protocol in `src/flackey/source/base.py` is source-agnostic.
 - `verify.py`, `tag.py` (Vorbis comments and artwork for FLAC) and `library.py` handle FLAC, WAV
   and AIFF end to end.
 - The `candidates` table already has a `source` column; per-candidate provenance works today.
@@ -592,7 +592,7 @@ alone if any sharing/network-citizenship requirement matters. Do not use museek+
 
 # Appendix B: audio quality and matching (agent report)
 
-## B. Soulseek as an audio source for krater — research findings
+## B. Soulseek as an audio source for flackey — research findings
 
 Scope: would adding Soulseek as a source get better audio than the current Deezer-via-Telegram-bot 320 kbps MP3 path, and how reliably could a known track (identified via yt-dlp metadata, matched on Beatport) be matched to a Soulseek search result. Research only — no code changes proposed here.
 
@@ -645,13 +645,13 @@ Primary source: the Soulseek protocol as documented by the Nicotine+ project (th
   - "one of the loudest complaints is about fake lossless files and sketchy hi-fi claims" — https://houdinimagazine.net/july/the-rundown-soulseek (opinion/community reputation, not measured)
   - "Many files downloaded from Soulseek cannot be trusted, with supposedly lossless or 320kbps files often turning out to be upconverted low-bitrate ... rips" — https://vibesdj.io/dj-tools/audio-quality-checker (vendor blog for a DJ audio-quality-checker tool; treat as opinion/marketing, not data)
   - https://miseryconfusion.com/blog/2025/07/09/dont-get-fooled-by-fake-lossless-files-again/ — independent blog making the same claim; again anecdotal.
-- **How the existing spectral-cutoff check would catch it**: the krater verification module already implements exactly the right kind of check for this, and it is format-agnostic (I read `/Users/delarea/Desktop/code/krater/src/krater/verify.py` directly, not a web source, to confirm this):
+- **How the existing spectral-cutoff check would catch it**: the flackey verification module already implements exactly the right kind of check for this, and it is format-agnostic (I read `/Users/delarea/Desktop/code/flackey/src/flackey/verify.py` directly, not a web source, to confirm this):
   - `spectral_cutoff_hz()` decodes the middle 60 s of audio to PCM regardless of container/codec, computes power in 250 Hz bands from 8 kHz up, and finds the highest frequency where level drops ≥20 dB within 500 Hz (`CLIFF_DB = 20`, `CLIFF_SEARCH_FROM_HZ = 8_000`) — the signature of a lossy encoder's brick-wall lowpass, since "natural music rolls off gradually... and never makes such a step" (comment in the source).
   - `verify()` applies `MIN_MP3_CUTOFF = 18_000` Hz for MP3 and `MIN_LOSSLESS_CUTOFF = 20_000` Hz for FLAC/WAV/AIFF, and explicitly reports `"lossless container but cutoff {cutoff} Hz: lossy source"` when a FLAC/WAV/AIFF fails the lossless threshold — this is precisely the "FLAC transcoded from MP3 shows a 16–19 kHz cutoff" case the task asked about, and it is already handled today, before adding Soulseek as a source.
   - Because the check works on decoded audio rather than trusting self-reported container/bitrate/sample-rate metadata, it is inherently more robust than metadata-based filters (the kind Soulseek search results themselves expose, see §1) — which is important because those metadata fields (bitrate, sample rate) are exactly what a faker/re-encoder controls and can spoof.
 - **What dedicated fake-lossless tools do, for comparison**:
-  - `FakeFLac-Lossless-audio-checker` (https://github.com/Haki-22/FakeFLac-Lossless-audio-checker): compares the file's spectrogram against a spectrogram of a simulated lossy re-encode of the same file, rather than using one fixed kHz threshold; explicitly notes "there is no absolute way to do this without the original audio file" — i.e., no free/open tool claims certainty, only heuristics, which matches the krater approach of picking a defensible fixed cutoff rather than claiming perfect detection.
-  - `penthy` (https://github.com/gioypi/penthy): a CNN trained on 128×128 px spectrogram crops of the 16.2–22 kHz band, ~90% claimed accuracy distinguishing FLAC-from-MP3 vs. genuine lossless, but explicitly documents its blind spot: **"MP3 files with high bitrates (320kbps) may contain enough high frequencies to fool penthy,"** and it does not claim to detect upsampling or transcodes from non-MP3 sources. Project is marked discontinued. This is a useful data point: even ML approaches struggle exactly where krater's fixed 18 kHz/20 kHz thresholds are also weakest (a genuine 320 kbps MP3 re-packaged as "FLAC" without further degradation can sit right at the boundary) — no tool, including krater's, fully solves this class of fake.
+  - `FakeFLac-Lossless-audio-checker` (https://github.com/Haki-22/FakeFLac-Lossless-audio-checker): compares the file's spectrogram against a spectrogram of a simulated lossy re-encode of the same file, rather than using one fixed kHz threshold; explicitly notes "there is no absolute way to do this without the original audio file" — i.e., no free/open tool claims certainty, only heuristics, which matches the flackey approach of picking a defensible fixed cutoff rather than claiming perfect detection.
+  - `penthy` (https://github.com/gioypi/penthy): a CNN trained on 128×128 px spectrogram crops of the 16.2–22 kHz band, ~90% claimed accuracy distinguishing FLAC-from-MP3 vs. genuine lossless, but explicitly documents its blind spot: **"MP3 files with high bitrates (320kbps) may contain enough high frequencies to fool penthy,"** and it does not claim to detect upsampling or transcodes from non-MP3 sources. Project is marked discontinued. This is a useful data point: even ML approaches struggle exactly where flackey's fixed 18 kHz/20 kHz thresholds are also weakest (a genuine 320 kbps MP3 re-packaged as "FLAC" without further degradation can sit right at the boundary) — no tool, including flackey's, fully solves this class of fake.
 - **Gap not covered by spectral-cutoff checks (flagging for completeness, not proposing a fix)**: "fake 24-bit"/fake hi-res files — a 16-bit source zero-padded or dithered into a 24-bit container — is a bit-depth fake, not a frequency-domain fake, and a cutoff check alone won't catch it. **UNVERIFIED**: I did not find a primary-source, well-established open-source technique for this specific check (some audiophile-forum discussion of inspecting the statistical distribution of the least-significant bits exists, but nothing rising to a citable, reputable standard was found).
 
 ### 4. Matching a known track to a Soulseek result
@@ -672,21 +672,21 @@ Two real-world tools automate exactly this "known track → Soulseek result" mat
 - **Ranking heuristics** — a documented two-tier system, quoted from the README:
   - Required conditions **filter** candidates; defaults: `format = mp3,flac,ogg,m4a,opus,wav,aac,alac` and `length-tol = 3` (seconds) — i.e., duration must match within 3 seconds when both source and file duration are known, otherwise the file is not even considered.
   - Preferred conditions **rank** (never filter) the survivors; defaults: `pref-format = mp3`, `pref-length-tol = 3`, `pref-min-bitrate = 200`, `pref-max-bitrate = 2500`, `pref-max-samplerate = 48000`, `pref-strict-title = true`, `pref-strict-album = true`.
-  - Explicit statement of the tool's philosophy: **"The default settings favor recall over precision: when the correct file is available in results, it will almost always be ranked first. The tradeoff is that if it's absent and something else loosely passes the filters, that something else gets downloaded."** This is an important design warning for an automated pipeline: without a hard post-download verification step (which krater already has via `verify.py` and Beatport tag-matching), a permissive ranking system can silently accept the wrong file.
+  - Explicit statement of the tool's philosophy: **"The default settings favor recall over precision: when the correct file is available in results, it will almost always be ranked first. The tradeoff is that if it's absent and something else loosely passes the filters, that something else gets downloaded."** This is an important design warning for an automated pipeline: without a hard post-download verification step (which flackey already has via `verify.py` and Beatport tag-matching), a permissive ranking system can silently accept the wrong file.
   - Reliability caveat about metadata itself, quoted: "because the standard Soulseek client does not broadcast the bitrate, enabling `--strict-conditions` and setting a `--min-bitrate` will make [it] ignore all files shared by users with the standard client" — confirms §1's point that not all attributes are populated by all peers/clients, and being too strict on them silently shrinks the candidate pool.
   - Album/folder ranking: folders are ranked by "quality coverage" (e.g., "A folder with 9 FLAC files and 1 MP3 is preferred over a mostly-MP3 folder"), with `--strict-album-quality` to require every file in a folder to pass.
   - Peer-quality signals actually used: `--fails-to-downrank`/`--fails-to-ignore` (penalize/ban unreliable uploaders after N failures) and `--fast-search-min-up-speed` (minimum upload speed, default 1, used only in fast-search mode). **Notably, despite the protocol exposing `queue length` and `slotfree` per §1, this tool's public option list does not document any ranking or filtering on queue length or free-slot status** — a gap relative to what the protocol makes available for free.
 
-**soularr** (https://github.com/mrusse/soularr) — bridges Lidarr (a music-library manager) to `slskd` (a Soulseek daemon), i.e., solves the same "known track from a metadata source → best Soulseek result" problem krater would face, for whole albums. From its README/example config (fetched directly):
+**soularr** (https://github.com/mrusse/soularr) — bridges Lidarr (a music-library manager) to `slskd` (a Soulseek daemon), i.e., solves the same "known track from a metadata source → best Soulseek result" problem flackey would face, for whole albums. From its README/example config (fetched directly):
 
 - `minimum_filename_match_ratio = 0.8` — **the closest documented analogue to "how do you match a known track to a Soulseek filename"**: a fuzzy string-similarity ratio (0–1) between the expected (Lidarr-sourced) track name and the candidate Soulseek filename; results below the ratio are rejected.
 - `allowed_filetypes = flac 24/192,flac 16/44.1,flac,mp3 320,mp3` — an explicit, ordered format-and-quality preference list (most to least preferred), directly usable as a model for ranking Soulseek results against a Deezer-320/Beatport-verified baseline.
 - `minimum_peer_upload_speed` (bits/sec, default 0) and `maximum_peer_queue` (default 50) — **this tool does explicitly filter on the peer metrics from §1** (upload speed and queue length), unlike slsk-batchdl's public options.
 - `title_blacklist` / `search_blacklist` — case-insensitive word-blacklists to strip junk from titles and from the outgoing search query respectively (the closest documented analogue to stripping "(Original Mix)"/"feat."/promo tags before searching).
 - `ignored_users` — a manual uploader blocklist, a cruder analogue to slsk-batchdl's automatic `--fails-to-downrank`.
-- `accepted_formats` / `accepted_countries` / `use_most_common_tracknum` — release-level matching against MusicBrainz-sourced metadata (Lidarr's backing database), directly analogous to krater matching against Beatport metadata (label/catalogue/tracklist) before accepting a file.
+- `accepted_formats` / `accepted_countries` / `use_most_common_tracknum` — release-level matching against MusicBrainz-sourced metadata (Lidarr's backing database), directly analogous to flackey matching against Beatport metadata (label/catalogue/tracklist) before accepting a file.
 
-**Synthesis for krater's use case**: the combination that emerges from both tools — (a) strip "feat."/parenthetical mix-and-official-video noise before querying, (b) try progressively looser queries (title+artist → title only) if the strict query returns nothing, (c) hard-filter candidates on duration match against the already-known Beatport/Deezer duration with a small tolerance (~3s, matching slsk-batchdl's default `length-tol`), (d) rank survivors by an explicit format/quality preference list (mirroring soularr's `allowed_filetypes` ordering) plus peer health (queue length, free slot, upload speed — both protocol fields are real and at least one production tool, soularr, uses them), and (e) never skip the existing post-download spectral verification, since both tools' own docs warn that ranking is a recall-favoring heuristic, not a guarantee.
+**Synthesis for flackey's use case**: the combination that emerges from both tools — (a) strip "feat."/parenthetical mix-and-official-video noise before querying, (b) try progressively looser queries (title+artist → title only) if the strict query returns nothing, (c) hard-filter candidates on duration match against the already-known Beatport/Deezer duration with a small tolerance (~3s, matching slsk-batchdl's default `length-tol`), (d) rank survivors by an explicit format/quality preference list (mirroring soularr's `allowed_filetypes` ordering) plus peer health (queue length, free slot, upload speed — both protocol fields are real and at least one production tool, soularr, uses them), and (e) never skip the existing post-download spectral verification, since both tools' own docs warn that ranking is a recall-favoring heuristic, not a guarantee.
 
 ### 5. Coverage for electronic/DJ music (Beatport-only releases, promos, edits, bootlegs)
 
@@ -702,7 +702,7 @@ Two real-world tools automate exactly this "known track → Soulseek result" mat
 
 - **slsk-batchdl/sockseek**: default behavior is to **skip already-downloaded tracks** (`--no-skip-existing` is the flag to disable this, implying skip-on-exists is the default), matching existing files by `--skip-mode-output-dir name|tag|index` (default `index`). It does **not** automatically re-fetch a better version by default. It offers an explicit opt-in path to keep upgrading: `--skip-check-pref-cond` — quoted from its own wishlist example config — "keep searching for a flac version of ... [an album] even after an mp3 version has been downloaded, make it check the local version" via this flag. **UNVERIFIED**: the README does not document whether this then deletes/overwrites the old lower-quality file or simply adds a second copy alongside it — I could not find explicit wording either way.
 - **soularr / Lidarr** (the album-manager side of that pipeline) uses a different, more mature model: Lidarr's quality-profile system has an explicit cutoff ("Upgrade Until") and an "Upgrades Allowed" toggle; per search-engine-relayed documentation of https://wiki.servarr.com/lidarr/faq (direct fetch returned only a JS shell, so this is relayed rather than directly quoted — flagging as lower-confidence sourcing, though this cutoff/upgrade mechanism is widely documented as standard behavior shared across the whole *arr family — Sonarr/Radarr/Lidarr): once a lower-quality file is below the profile's cutoff, the app keeps treating the item as "wanted" (soularr's own `search_source = cutoff_unmet` config option directly exposes this Lidarr concept) and **replaces** the file in place with a better one when found, rather than accumulating duplicates.
-- **Takeaway for krater**: the more disciplined pattern (Lidarr's) is upgrade-in-place with an explicit quality cutoff and a "still wanted until cutoff met" state, not simply keeping both copies; the simpler pattern (sockseek) is opt-in re-search with no documented automatic cleanup of the old file, which would need to be handled by whatever calls it.
+- **Takeaway for flackey**: the more disciplined pattern (Lidarr's) is upgrade-in-place with an explicit quality cutoff and a "still wanted until cutoff met" state, not simply keeping both copies; the simpler pattern (sockseek) is opt-in re-search with no documented automatic cleanup of the old file, which would need to be handled by whatever calls it.
 
 ---
 
@@ -711,13 +711,13 @@ Two real-world tools automate exactly this "known track → Soulseek result" mat
 - **Yes, Soulseek can deliver strictly better audio than the current path in principle**: the protocol confirms FLAC (16- and 24-bit), WAV, AIFF, and WavPack circulate alongside MP3, and FLAC 24-bit exceeds even Deezer's own ceiling (Deezer HiFi tops out at 16-bit/44.1 kHz FLAC per Deezer's own support docs) — but this is a *ceiling*, not a guarantee for any given track; availability is per-track and per-uploader, unlike Deezer's uniform, licensed 320/HiFi catalog.
 - **The quality upside only matters if the DJ's hardware and workflow can use it**: FLAC is fully supported by Rekordbox software but only by newer CDJ hardware (CDJ-3000/XDJ-1000MK2-class); older CDJ-2000-class club units cannot play FLAC at all — so the format upgrade is real for a Rekordbox/laptop workflow but conditional in a booth with older CDJs.
 - **How reliably it can be matched automatically**: reasonably reliably, based on patterns two real production tools already use — hard-filter on duration match (±3s is the standard default in slsk-batchdl), fuzzy-match filename against the known title (soularr's `minimum_filename_match_ratio = 0.8` is the closest documented precedent), strip "feat."/parenthetical mix tags before querying, and fall back to looser queries (title-only, artist-optional) when the strict query returns nothing. Both tools' own documentation warns their default ranking "favors recall over precision" — i.e., matching alone is not proof of correctness.
-- **The existing verification layer is already most of what's needed for the "fake lossless" risk**: krater's `spectral_cutoff_hz()`/`verify()` in `verify.py` is format-agnostic (works on decoded PCM, not on self-reported container/bitrate metadata) and already flags a FLAC/WAV/AIFF whose real content cuts off below 20 kHz as "lossless container but ... lossy source" — this is precisely the fake-FLAC-from-MP3 case the task asked about, and no code change is required to catch the common case.
+- **The existing verification layer is already most of what's needed for the "fake lossless" risk**: flackey's `spectral_cutoff_hz()`/`verify()` in `verify.py` is format-agnostic (works on decoded PCM, not on self-reported container/bitrate metadata) and already flags a FLAC/WAV/AIFF whose real content cuts off below 20 kHz as "lossless container but ... lossy source" — this is precisely the fake-FLAC-from-MP3 case the task asked about, and no code change is required to catch the common case.
 - **What the verification/matching layer should add, specifically for a Soulseek source** (research-derived, not implemented here):
   - A duration cross-check against the already-known Beatport/Deezer duration (small tolerance, ~3s) *before* spending a download slot, mirroring slsk-batchdl's `length-tol`.
   - Use of the protocol's peer-quality fields (`slotfree`, `avgspeed`, `queue length`) to prefer healthier sources — soularr does this (`minimum_peer_upload_speed`, `maximum_peer_queue`); slsk-batchdl's public options notably do not rank on queue length/free slot despite the protocol exposing them, so this would be a genuine improvement over the more popular tool's default behavior.
   - Explicit awareness that MP3-format results on Soulseek typically report bitrate/VBR while FLAC/WAV results typically report only sample-rate/bit-depth (near-never bitrate) — any quality-preference logic needs a format-conditional attribute schema, not one shared shape.
-  - No built-in defense against a "fake 24-bit" (bit-depth-only) fake was found in any tool researched — this remains an open gap for both krater's current checker and every public tool surveyed (**UNVERIFIED** whether any reputable open-source technique for it exists at all).
-  - A duplicate/upgrade policy decision: krater would need to decide explicitly between the two documented models found — "search again if a better format shows up later, delete/replace the old file" (Lidarr's cutoff/upgrade model) versus "leave the existing file alone unless manually told to re-search" (sockseek's default) — neither tool's docs describe a fully automatic, safe in-place replace-and-verify flow, so this would need custom logic either way.
+  - No built-in defense against a "fake 24-bit" (bit-depth-only) fake was found in any tool researched — this remains an open gap for both flackey's current checker and every public tool surveyed (**UNVERIFIED** whether any reputable open-source technique for it exists at all).
+  - A duplicate/upgrade policy decision: flackey would need to decide explicitly between the two documented models found — "search again if a better format shows up later, delete/replace the old file" (Lidarr's cutoff/upgrade model) versus "leave the existing file alone unless manually told to re-search" (sockseek's default) — neither tool's docs describe a fully automatic, safe in-place replace-and-verify flow, so this would need custom logic either way.
 - **Coverage for the DJ-specific tail (edits/remixes/bootlegs) is plausibly better on Soulseek** than on Deezer/Beatport, because unlicensed/uncleared material structurally cannot appear on either commercial platform — but this is reasoned opinion from Beatport's own exclusivity rules plus community reputation sources, not a measured comparison; mark as **opinion, moderately well-supported**.
 - **Overall**: Soulseek is a plausible *second-tier fallback source* for tracks the Deezer-backed Telegram bot can't find (exactly the edits/remixes/bootlegs the user flagged), with real format upside (lossless, sometimes 24-bit) conditional on booth hardware — but it trades Deezer's uniform licensed-catalog reliability for a noisier, unlabeled, uncurated pool that needs the duration/filename matching heuristics in §4 on the way in and the existing spectral verification (plus the still-open fake-bit-depth gap) on the way out.
 
@@ -725,12 +725,12 @@ Two real-world tools automate exactly this "known track → Soulseek result" mat
 
 # Appendix C: implications and codebase fit (agent report)
 
-## C. Soulseek as a krater audio source — Part 3: Implications & Codebase Fit
+## C. Soulseek as a flackey audio source — Part 3: Implications & Codebase Fit
 
 Scope note: two sibling reports cover the wire protocol/tooling comparison (slskd vs
 aioslsk) and audio-quality/matching mechanics. This report covers **A. implications**
 (rules, legal, operational, privacy) and **B. codebase fit** (how it would slot into
-krater as it exists today). Everything under Part A is sourced from primary
+flackey as it exists today). Everything under Part A is sourced from primary
 pages (slsknet.org, Nicotine+'s own repo, slskd's own docs/repo) unless marked
 `UNVERIFIED` or explicitly flagged as opinion/inference. Everything under Part B is
 read directly from the files named in the task, with line numbers.
@@ -756,7 +756,7 @@ and on enforcement:
 
 The rules also explicitly ban "automated clients (robot/bot), combinations of such,
 or scripts otherwise failing to implement the full range of Soulseek features" from
-connecting to the server (same page). This is directly relevant: krater would
+connecting to the server (same page). This is directly relevant: flackey would
 be an automated client. slskd and aioslsk are widely used non-official clients and
 the community broadly tolerates headless/automated Soulseek clients (slskd has
 thousands of GitHub stars and forum threads about running it 24/7), but the letter
@@ -790,7 +790,7 @@ gap. Nicotine+ (the most popular open-source Soulseek client) ships an official
 Community-made *stricter* forks exist and are popular (auto-ban/auto-ignore
 variants: "DELEECH", "Ban-SoulseekLeechers", "Anti-Leecher-for-Nicotine", etc. — all
 third-party GitHub projects, not official). **Practical implication:** running with
-zero shares will get krater's Soulseek identity messaged, and on a meaningful
+zero shares will get flackey's Soulseek identity messaged, and on a meaningful
 minority of peers (those running an anti-leech plugin) auto-banned/ignored, which
 degrades download success over time as more peers refuse it.
 
@@ -862,7 +862,7 @@ some torrent trackers use don't exist here.
   port-forwarding/UPnP is an unsolved friction point for non-trivial network setups
   (VPN, CGNAT, etc.).
 - **Always-on:** slskd is designed to run as a long-lived daemon (Docker or native
-  binary) with a web UI and REST API, matching krater's own "must stay running
+  binary) with a web UI and REST API, matching flackey's own "must stay running
   on the Mac" model (README.md:37-42 — `crate start` runs until Ctrl-C). Confirmed
   via GitHub Releases API that slskd v0.26.0 ships native macOS binaries for both
   architectures — `slskd-0.26.0-osx-arm64.zip` and `slskd-0.26.0-osx-x64.zip`
@@ -874,15 +874,15 @@ some torrent trackers use don't exist here.
   builds and maintains its own share index/cache for whatever directories are
   configured, "cache can be stored in memory or on disk, with configurable worker
   threads for scanning" — this is a second, independent index of (part of)
-  krater's library, separate from krater's own SQLite `tracks` table
-  (`src/krater/store.py:42-49`). If the owner points slskd at the DJ library
-  folder to share it, every new file krater writes needs slskd's share cache
+  flackey's library, separate from flackey's own SQLite `tracks` table
+  (`src/flackey/store.py:42-49`). If the owner points slskd at the DJ library
+  folder to share it, every new file flackey writes needs slskd's share cache
   to be refreshed (rescanned) before other peers can see/download it — an
-  additional moving part krater's worker doesn't currently manage.
+  additional moving part flackey's worker doesn't currently manage.
 - **Account/password storage:** slskd stores its own web-UI credentials
   (default `slskd`/`slskd`, meant to be changed) and the Soulseek network
-  username/password in its own YAML/env config, separate from krater's `.env`
-  (`src/krater/config.py:7-20`, which currently only holds Telegram
+  username/password in its own YAML/env config, separate from flackey's `.env`
+  (`src/flackey/config.py:7-20`, which currently only holds Telegram
   credentials and paths). slskd's docs note it masks passwords when serializing
   config to JSON/YAML, but the plaintext still lives on disk somewhere
   (https://github.com/slskd/slskd/blob/master/docs/config.md).
@@ -890,8 +890,8 @@ some torrent trackers use don't exist here.
   Soulseek server (it's a single, volunteer/community-run infrastructure, unlike
   Deezer's commercial CDN behind `@DeezerMusicBot`) — `UNVERIFIED` as to actual
   historical downtime, but structurally it is a smaller, less redundant
-  operation than Deezer's, and krater's own error-handling section already
-  budgets for "source unavailable" (design spec §9, `docs/superpowers/specs/2026-09-03-krater-design.md:329-331`).
+  operation than Deezer's, and flackey's own error-handling section already
+  budgets for "source unavailable" (design spec §9, `docs/superpowers/specs/2026-09-03-flackey-design.md:329-331`).
 - **Single-account/single-login limitation — confirmed, not UNVERIFIED.** aioslsk's
   protocol documentation states the server's behavior on a duplicate login
   explicitly: if a peer with that username is already connected, the server sends
@@ -901,13 +901,13 @@ some torrent trackers use don't exist here.
   runs Nicotine+/another Soulseek client under the same account elsewhere, starting
   slskd (or aioslsk) under that same username would silently kick the other
   session, and vice versa. Using a second, dedicated Soulseek account for
-  krater avoids this but then has zero reputation/history on the network,
+  flackey avoids this but then has zero reputation/history on the network,
   which interacts with A1 (a fresh, unshared account is exactly the leech profile
   peers are suspicious of).
 - **Running Telegram + Soulseek from the same machine:** no protocol conflict —
   they're independent network stacks. The practical interaction is inside
-  krater's own process model: `app.py` currently wires one `Source`
-  (`DeezerBotSource`) into one `Worker` (`src/krater/app.py:59,67`); adding
+  flackey's own process model: `app.py` currently wires one `Source`
+  (`DeezerBotSource`) into one `Worker` (`src/flackey/app.py:59,67`); adding
   Soulseek means either a second source object tried in sequence inside the worker,
   or a second `Worker`-like pipeline, both of which are today a single-`asyncio`-
   loop, single-process design (see B4).
@@ -926,16 +926,16 @@ some torrent trackers use don't exist here.
 - **slskd web UI / API exposure:** slskd's own config docs are explicit that its
   REST API key should not be used without HTTPS ("using API key authentication
   without HTTPS is **NOT RECOMMENDED**", docs/config.md) and that default web UI
-  creds (`slskd`/`slskd`) must be changed. This matters directly for krater:
-  krater's own `Settings.web_host` defaults to loopback specifically *because*
+  creds (`slskd`/`slskd`) must be changed. This matters directly for flackey:
+  flackey's own `Settings.web_host` defaults to loopback specifically *because*
   "the JSON API is unauthenticated and must never bind 0.0.0.0 outside a container"
-  (`src/krater/config.py:17-19`); slskd's API is authenticated but the same
+  (`src/flackey/config.py:17-19`); slskd's API is authenticated but the same
   discipline (don't expose it outside loopback/the container network without TLS)
   would need to be carried over if slskd is added as a sidecar, since its port
-  (5030/5031) would be a second HTTP surface next to krater's own 8765.
+  (5030/5031) would be a second HTTP surface next to flackey's own 8765.
 - **Credential handling:** the Soulseek account password lives in slskd's config,
-  a second secret store outside krater's existing `.env`
-  (`src/krater/config.py:1-20`), which currently holds only Telegram secrets
+  a second secret store outside flackey's existing `.env`
+  (`src/flackey/config.py:1-20`), which currently holds only Telegram secrets
   under `pydantic-settings`. Whether the owner wants a second `.env`-style file, a
   section merged into the existing one, or Docker secrets is an open decision (see
   B6).
@@ -947,7 +947,7 @@ some torrent trackers use don't exist here.
 #### B1. Current `Source` protocol, and which `Candidate`/`Query` fields Soulseek could and couldn't fill
 
 The `Source` protocol is a two-method `Protocol` (structural typing, not
-inheritance) at `src/krater/source/base.py:25-30`:
+inheritance) at `src/flackey/source/base.py:25-30`:
 
 ```python
 class Source(Protocol):
@@ -960,13 +960,13 @@ plus three exception types (`SourceNotFound`, `SourceTimeout`,
 `SourceUnauthorized`) a source is expected to raise (`base.py:9-22`). This is
 already source-agnostic by design — the spec explicitly calls this out: "Direct
 Deezer subscription client (the source interface is designed for it)" is listed as
-deferred-but-anticipated (`docs/superpowers/specs/2026-09-03-krater-design.md:41`),
+deferred-but-anticipated (`docs/superpowers/specs/2026-09-03-flackey-design.md:41`),
 and the module table says `source` and `catalog` "are the two modules expected to
 break due to external changes, so they contain no business logic" (same file,
 line 176-178). A Soulseek source fits this shape mechanically without protocol
 changes.
 
-`Query` (`src/krater/models.py:57-71`) has `raw`, `artist`, `title`,
+`Query` (`src/flackey/models.py:57-71`) has `raw`, `artist`, `title`,
 `version`, `duration_s`, and a `search_text()` helper. A Soulseek search would use
 `search_text()` unchanged (it already falls back to `self.raw` when
 artist/title aren't known, `models.py:71`), exactly like `DeezerBotSource.search`
@@ -978,7 +978,7 @@ does today (`source/deezer_bot.py:95`).
 |---|---|---|
 | `source` | `"deezer_bot"` (`deezer_bot.py:51`) | trivial: `"soulseek"` |
 | `source_ref` | the button's callback data, used later to re-click it (`deezer_bot.py:51,126,136`) | a Soulseek search result has no persistent server-side handle to "click" later — `source_ref` would have to be something like `f"{username}\x00{filename}"` (the pair slskd/aioslsk actually need to start a download), a real change in what `source_ref` *means* for this source (see below) |
-| `artist` / `title` | parsed from the bot's button label `"<n>. <Artist> - <Title>"`, then overwritten by the real Deezer API metadata in `_enrich` (`deezer_bot.py:47-52, 79-90`) | Soulseek gives only a **raw filename and folder path** (e.g. `Astral Projection - Into The Void (Original Mix).flac` inside some arbitrary shared folder) — there is no structured artist/title from the network itself; krater would have to parse it, which is a genuinely new piece of logic (closest existing analog is `identify.parse_text`/`parse_version`, used today only on the *inbound request* text, not on a source's results) |
+| `artist` / `title` | parsed from the bot's button label `"<n>. <Artist> - <Title>"`, then overwritten by the real Deezer API metadata in `_enrich` (`deezer_bot.py:47-52, 79-90`) | Soulseek gives only a **raw filename and folder path** (e.g. `Astral Projection - Into The Void (Original Mix).flac` inside some arbitrary shared folder) — there is no structured artist/title from the network itself; flackey would have to parse it, which is a genuinely new piece of logic (closest existing analog is `identify.parse_text`/`parse_version`, used today only on the *inbound request* text, not on a source's results) |
 | `mix_name` | Deezer's `title_version` (`deezer_bot.py:89`) | same problem as title: has to be regex-parsed out of a filename, not handed to you |
 | `duration_s` | Deezer API (`deezer_bot.py:84`) | Soulseek search responses do include a duration field in the protocol (per general Soulseek protocol knowledge — `UNVERIFIED` against this task's own source list, since duration reporting depends on the peer's client correctly filling it) |
 | `deezer_id` | the Deezer numeric id (`deezer_bot.py:52`) | **no equivalent** — Soulseek has no per-file catalog id; this field would simply stay `None` for Soulseek candidates |
@@ -1125,7 +1125,7 @@ through it for the existing Deezer-bot source per `EXT_BY_MIME`,
   per-attempt state handling (`_retry_or_fail`, chosen-candidate persistence,
   parked/awaiting-review flow), a composite `Source` wrapper is the smaller,
   more surgical change and keeps `worker.py` source-agnostic exactly as the design
-  spec's module table intends (`docs/superpowers/specs/2026-09-03-krater-design.md:165-166`:
+  spec's module table intends (`docs/superpowers/specs/2026-09-03-flackey-design.md:165-166`:
   "Abstract `Source` interface... v1 implementation `DeezerBotSource`").
 - **Store/DB, "does the requests table record the source?"**: no. Looking at the
   actual schema (`store.py:23-64`), `requests` has no `source` column at all
@@ -1134,7 +1134,7 @@ through it for the existing Deezer-bot source per `EXT_BY_MIME`,
   because a single request can already collect candidates from multiple logical
   sources conceptually (the Deezer bot's own menu even distinguishes Deezer vs.
   SoundCloud vs. VK internally, `docs/source-bot-protocol.md:15-16`, though today
-  krater only ever keeps `dz_track:` ones, `source/deezer_bot.py:16`). So
+  flackey only ever keeps `dz_track:` ones, `source/deezer_bot.py:16`). So
   **per-candidate source tracking already exists**; a Soulseek candidate would
   just write `source="soulseek"` into that existing column, no migration needed
   there. What's *not* tracked anywhere is which source a **filed track**
@@ -1183,13 +1183,13 @@ today** — only the single Dockerfile plus manual `docker run` instructions in
 `README.md:93-105`.
 
 - **If slskd is chosen** (separate always-on REST service): it needs to run as its
-  own container (or native macOS process) alongside krater's — the current
+  own container (or native macOS process) alongside flackey's — the current
   single-Dockerfile setup has no multi-service orchestration at all, so this is a
   net-new piece of infrastructure: either a `docker-compose.yml` (currently
-  absent) defining both `krater` and `slskd` services sharing a Docker
-  network (so krater's HTTP client can reach `http://slskd:5030`), or running
+  absent) defining both `flackey` and `slskd` services sharing a Docker
+  network (so flackey's HTTP client can reach `http://slskd:5030`), or running
   slskd natively on the Mac outside Docker (its own macOS binaries exist, see A3)
-  while krater stays containerized or not. Either way, new ports need
+  while flackey stays containerized or not. Either way, new ports need
   exposing/mapping for slskd specifically: its web UI (5030/5031) and its
   Soulseek listening port (default 50300, must be forwarded on the router for good
   connectivity per A3) — none of which the current `EXPOSE 8765` /
@@ -1295,4 +1295,4 @@ available, this is scoped to the codebase-integration slice only):
   requests are surfaced/waited on; whether to backfill existing MP3s with
   Soulseek FLACs later (not supported by today's dedupe-keeps-existing-file
   logic); which client to run; and whether to reuse an existing personal
-  Soulseek account or create a dedicated one for krater.
+  Soulseek account or create a dedicated one for flackey.

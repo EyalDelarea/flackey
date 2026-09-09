@@ -2,9 +2,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from krater.cli import app
-from krater.models import RequestKind
-from krater.store import Store
+from flackey.cli import app
+from flackey.models import RequestKind
+from flackey.store import Store
 
 runner = CliRunner()
 
@@ -18,7 +18,7 @@ def _env(tmp_path: Path) -> Path:
 
 def test_status_and_export(tmp_path: Path):
     env = _env(tmp_path)
-    store = Store(tmp_path / "data" / "krater.sqlite")
+    store = Store(tmp_path / "data" / "flackey.sqlite")
     store.add_request("q", RequestKind.TEXT)
     r = runner.invoke(app, ["--env", str(env), "status"])
     assert r.exit_code == 0 and "queued: 1" in r.output and "tracks: 0" in r.output
@@ -34,13 +34,13 @@ def test_add_rejects_plain_text(tmp_path: Path):
     env = _env(tmp_path)
     r = runner.invoke(app, ["--env", str(env), "add", "Astral Projection - Into the Void"])
     assert r.exit_code == 0 and "YouTube" in r.output
-    assert Store(tmp_path / "data" / "krater.sqlite").list_requests() == []
+    assert Store(tmp_path / "data" / "flackey.sqlite").list_requests() == []
 
 
 def test_start_without_browser_does_not_need_pywebview(tmp_path: Path, monkeypatch):
     import sys
 
-    import krater.app as app_mod
+    import flackey.app as app_mod
 
     calls = []
 
@@ -54,7 +54,7 @@ def test_start_without_browser_does_not_need_pywebview(tmp_path: Path, monkeypat
 
 
 def test_start_opens_the_desktop_window_by_default(tmp_path: Path, monkeypatch):
-    import krater.desktop as desktop
+    import flackey.desktop as desktop
 
     opened = []
     monkeypatch.setattr(desktop, "run_in_window", lambda settings: opened.append(settings.web_port))
@@ -66,11 +66,11 @@ def test_lossless_replay_diffs_the_pick_under_the_current_policy(tmp_path: Path,
     import json
     import shutil
 
-    from krater.lossless import PickPolicy, Reference, pick
-    from krater.source.slskd import parse_response
+    from flackey.lossless import PickPolicy, Reference, pick
+    from flackey.source.slskd import parse_response
 
     env = _env(tmp_path)
-    store = Store(tmp_path / "data" / "krater.sqlite")
+    store = Store(tmp_path / "data" / "flackey.sqlite")
     rid = store.add_request("hallucinogen orphic thrench", RequestKind.TEXT)
     responses = json.loads((fixtures / "slskd" / "responses_completed.json").read_text())
     files = [f for r in responses for f in parse_response(r)]
@@ -99,10 +99,10 @@ def test_lossless_replay_diffs_the_pick_under_the_current_policy(tmp_path: Path,
 def test_lossless_replay_reports_a_structurally_malformed_responses_file(tmp_path: Path):
     import json
 
-    from krater.lossless import PickPolicy, Reference, pick
+    from flackey.lossless import PickPolicy, Reference, pick
 
     env = _env(tmp_path)
-    store = Store(tmp_path / "data" / "krater.sqlite")
+    store = Store(tmp_path / "data" / "flackey.sqlite")
     rid = store.add_request("q", RequestKind.TEXT)
     report = pick([], Reference("A", "T", "Original Mix", 100, 1), PickPolicy())
     aid = store.add_attempt(rid, "soulseek", "q")

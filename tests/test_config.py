@@ -3,7 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from krater.config import (
+from flackey.config import (
     XDG_DATA_DIR,
     Settings,
     default_data_dir,
@@ -28,7 +28,7 @@ def test_load_settings_from_env_file(tmp_path: Path):
 
 def test_default_data_dir_is_mac_native_on_darwin():
     if sys.platform == "darwin":
-        assert default_data_dir() == Path("~/Library/Application Support/Krater").expanduser()
+        assert default_data_dir() == Path("~/Library/Application Support/Flackey").expanduser()
     else:
         assert default_data_dir() == XDG_DATA_DIR.expanduser()
 
@@ -77,13 +77,13 @@ def _legacy(tmp_path: Path, monkeypatch, name: str = "legacy") -> tuple[Path, Pa
     """A populated old-name data folder and the new folder it should end up in."""
     legacy, new = tmp_path / name, tmp_path / "new"
     (legacy / "spectrograms").mkdir(parents=True)
-    (legacy / "krater.sqlite").write_text("db")            # already-current name: carried across as is
-    (legacy / "cratedigger.sqlite").write_text("old-db")   # old name: renamed on the way
-    (legacy / "cratedigger.sqlite-wal").write_text("wal")
-    (legacy / "cratedigger.log").write_text("log")
+    (legacy / "krater.sqlite").write_text("old-db")        # previous name: renamed on the way
+    (legacy / "krater.sqlite-wal").write_text("wal")
+    (legacy / "krater.log").write_text("log")
+    (legacy / "notes.txt").write_text("kept")              # no generation prefix: carried across as is
     (legacy / "spectrograms" / "1.png").write_bytes(b"png")
-    monkeypatch.setattr("krater.config.legacy_data_dirs", lambda: (legacy,))
-    monkeypatch.setattr("krater.config.default_data_dir", lambda: new)
+    monkeypatch.setattr("flackey.config.legacy_data_dirs", lambda: (legacy,))
+    monkeypatch.setattr("flackey.config.default_data_dir", lambda: new)
     return legacy, new
 
 
@@ -91,9 +91,10 @@ def test_migrate_legacy_data_dir_copies_everything_then_removes_the_old_folder(t
     legacy, new = _legacy(tmp_path, monkeypatch)
     s = Settings(_env_file=None, data_dir=new)
     assert migrate_legacy_data_dir(s) is True
-    assert (new / "krater.sqlite").read_text() == "old-db"   # the old name won: it is the same database
-    assert (new / "krater.sqlite-wal").read_text() == "wal"
-    assert (new / "krater.log").read_text() == "log"
+    assert (new / "flackey.sqlite").read_text() == "old-db"   # renamed, and it is the same database
+    assert (new / "flackey.sqlite-wal").read_text() == "wal"
+    assert (new / "flackey.log").read_text() == "log"
+    assert (new / "notes.txt").read_text() == "kept"          # untouched: it carries no generation prefix
     assert (new / "spectrograms" / "1.png").read_bytes() == b"png"
     assert not legacy.exists()
     assert migrate_legacy_data_dir(s) is False               # nothing left to move
@@ -106,9 +107,9 @@ def test_migrate_walks_every_legacy_folder_and_takes_the_first_that_exists(tmp_p
     older = tmp_path / "older"
     older.mkdir()
     (older / "cratedigger.sqlite").write_text("ancient")
-    monkeypatch.setattr("krater.config.legacy_data_dirs", lambda: (tmp_path / "absent", newer, older))
+    monkeypatch.setattr("flackey.config.legacy_data_dirs", lambda: (tmp_path / "absent", newer, older))
     assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
-    assert (new / "krater.sqlite").read_text() == "old-db"
+    assert (new / "flackey.sqlite").read_text() == "old-db"
     assert older.exists() and not newer.exists()
 
 
@@ -125,7 +126,7 @@ def test_a_failed_copy_keeps_the_old_folder_and_leaves_no_half_written_new_one(t
     def boom(*_a, **_kw):
         raise OSError("disk full")
 
-    monkeypatch.setattr("krater.config.shutil.copytree", boom)
+    monkeypatch.setattr("flackey.config.shutil.copytree", boom)
     s = Settings(_env_file=None, data_dir=new)
     assert migrate_legacy_data_dir(s) is False
     assert legacy.exists() and not new.exists()              # not crashed, not half-moved
@@ -142,30 +143,47 @@ def test_an_incomplete_copy_keeps_both_folders_rather_than_deleting_the_source(t
         # the outermost call has finished copying and is the one to damage.
         out = real(src, dst, *a, **kw)
         if Path(dst) == new:
-            (Path(out) / "krater.sqlite").write_text("")     # a short file the size check must catch
+            (Path(out) / "krater.sqlite").write_text("")      # a short file the size check must catch
         return out
 
-    monkeypatch.setattr("krater.config.shutil.copytree", truncating)
+    monkeypatch.setattr("flackey.config.shutil.copytree", truncating)
     assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is False
-    assert legacy.exists() and (legacy / "krater.sqlite").read_text() == "db"
-    assert (new / "cratedigger.sqlite").exists()             # left verbatim, un-renamed, for inspection
+    assert legacy.exists() and (legacy / "krater.sqlite").read_text() == "old-db"
+    assert (new / "krater.sqlite").exists()                  # left verbatim, un-renamed, for inspection
+
+
+def test_two_generations_of_the_same_database_are_never_collapsed_onto_one_name(tmp_path: Path, monkeypatch):
+    # `krater.sqlite` and `cratedigger.sqlite` both want to become `flackey.sqlite`. `Path.rename`
+    # overwrites silently on POSIX, so the older code lost one of them -- and worse, could pair one
+    # database's `-wal` with the other's main file, which SQLite either refuses to open or reads as
+    # corruption. The newest generation takes the name; the older keeps its own and is left for a human.
+    legacy, new = _legacy(tmp_path, monkeypatch)
+    (legacy / "cratedigger.sqlite").write_text("ancient-db")
+    (legacy / "cratedigger.sqlite-wal").write_text("ancient-wal")
+    assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
+    assert (new / "flackey.sqlite").read_text() == "old-db"        # krater won: it is the newer generation
+    assert (new / "flackey.sqlite-wal").read_text() == "wal"       # and its own wal came with it
+    assert (new / "cratedigger.sqlite").read_text() == "ancient-db"    # not renamed, and not destroyed
+    assert (new / "cratedigger.sqlite-wal").read_text() == "ancient-wal"
 
 
 def test_the_app_bundle_is_not_carried_across(tmp_path: Path, monkeypatch):
     # It is rebuilt from the running venv on every launch and holds an absolute-path pyvenv.cfg, so a
     # copy is only a stale bundle under the wrong name.
     legacy, new = _legacy(tmp_path, monkeypatch)
-    (legacy / "Cratedigger.app" / "Contents" / "MacOS").mkdir(parents=True)
-    (legacy / "Cratedigger.app" / "Contents" / "MacOS" / "Cratedigger").write_text("exe")
+    for older in ("Krater.app", "Cratedigger.app"):          # every generation's bundle, not only the newest
+        (legacy / older / "Contents" / "MacOS").mkdir(parents=True)
+        (legacy / older / "Contents" / "MacOS" / older[:-4]).write_text("exe")
     assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
-    assert not (new / "Cratedigger.app").exists() and not (new / "Krater.app").exists()
+    assert not (new / "Krater.app").exists() and not (new / "Cratedigger.app").exists()
+    assert not (new / "Flackey.app").exists()
 
 
 def test_settings_migrates_legacy_data_dir_before_creating_it(tmp_path: Path, monkeypatch):
-    # Every `krater` entry point (`status`, `export`, `add`, `login`, not just `start`) must migrate before
+    # Every `flackey` entry point (`status`, `export`, `add`, `login`, not just `start`) must migrate before
     # anything creates the new data_dir, or the migration becomes a permanent no-op the moment any of
     # them runs first.
-    from krater.cli import _settings, _state
+    from flackey.cli import _settings, _state
 
     legacy, new = _legacy(tmp_path, monkeypatch)
     env = tmp_path / ".env"
@@ -175,7 +193,7 @@ def test_settings_migrates_legacy_data_dir_before_creating_it(tmp_path: Path, mo
     assert not new.exists()  # the default-shaped data dir is absent before this call
     s = _settings()
     assert s.data_dir == new
-    assert (new / "krater.sqlite").read_text() == "old-db" and not legacy.exists()
+    assert (new / "flackey.sqlite").read_text() == "old-db" and not legacy.exists()
 
 
 def test_load_settings_ignores_a_settings_file_with_an_invalid_value(tmp_path: Path):
@@ -237,7 +255,7 @@ def test_filing_format_is_validated(tmp_path: Path):
 
 
 def test_load_settings_falls_back_to_the_self_generated_slskd_key(tmp_path: Path):
-    from krater.slskd_config import write_credentials
+    from flackey.slskd_config import write_credentials
 
     data_dir = tmp_path / "data"
     generated = write_credentials(data_dir, "digger", "not-a-real-password")
@@ -246,7 +264,7 @@ def test_load_settings_falls_back_to_the_self_generated_slskd_key(tmp_path: Path
 
 
 def test_load_settings_prefers_an_explicitly_configured_key_over_the_generated_one(tmp_path: Path):
-    from krater.slskd_config import write_credentials
+    from flackey.slskd_config import write_credentials
 
     data_dir = tmp_path / "data"
     write_credentials(data_dir, "digger", "not-a-real-password")

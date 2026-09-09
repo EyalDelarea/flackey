@@ -30,21 +30,21 @@ Recorded fixtures already on the branch (do not regenerate): `tests/fixtures/sls
 
 | File | Status | Responsibility |
 |---|---|---|
-| `src/krater/config.py` | modify | new settings, `soulseek_enabled`, `lossless_enabled`, derived dirs, generalised path saving |
-| `src/krater/models.py` | modify | `Verdict.bit_depth/sample_rate`, `Track.source/source_fmt/bit_depth/sample_rate`, `Request.fetch_source`, new `LosslessAttempt`, `Evidence` |
-| `src/krater/verify.py` | modify | `Probe.bit_depth`; verdicts carry bit depth and sample rate |
-| `src/krater/store.py` | modify | `_ensure_column`, new columns, `lossless_attempts` and `track_evidence` tables and methods |
-| `src/krater/lossless.py` | create | pure gate: `LosslessFile`, `Reference`, `PickPolicy`, rules, rankers, `pick`, `PickReport` JSON |
-| `src/krater/source/lossless.py` | create | `LosslessProvider` protocol, `TransferProgress`, `LosslessError`, `LosslessUnavailable` |
-| `src/krater/source/slskd.py` | create | `SlskdClient` (HTTP) and `SoulseekProvider` |
-| `src/krater/convert.py` | create | `to_format` via ffmpeg |
-| `src/krater/fingerprint.py` | create | `fpcalc` wrapper, `compare`, Deezer preview fetch, `check` |
-| `src/krater/deezer.py` | modify | `DeezerTrack.preview_url` |
-| `src/krater/attempts.py` | create | `AttemptRecorder` (timeline, raw files, row updates), `prune_raw` |
-| `src/krater/worker.py` | modify | `_try_lossless`, verdict pass-through, Done line, start-up cancel, daily maintenance |
-| `src/krater/web/__init__.py`, `web/library.py`, `web/lossless.py` | modify/create | health fields, attempt in request bundle, format block on tracks, `/api/lossless/attempts` |
-| `src/krater/cli.py` | modify | `crate lossless replay <request id>` |
-| `src/krater/app.py` | modify | build the provider from settings, pass it and an `httpx.AsyncClient` to the worker |
+| `src/flackey/config.py` | modify | new settings, `soulseek_enabled`, `lossless_enabled`, derived dirs, generalised path saving |
+| `src/flackey/models.py` | modify | `Verdict.bit_depth/sample_rate`, `Track.source/source_fmt/bit_depth/sample_rate`, `Request.fetch_source`, new `LosslessAttempt`, `Evidence` |
+| `src/flackey/verify.py` | modify | `Probe.bit_depth`; verdicts carry bit depth and sample rate |
+| `src/flackey/store.py` | modify | `_ensure_column`, new columns, `lossless_attempts` and `track_evidence` tables and methods |
+| `src/flackey/lossless.py` | create | pure gate: `LosslessFile`, `Reference`, `PickPolicy`, rules, rankers, `pick`, `PickReport` JSON |
+| `src/flackey/source/lossless.py` | create | `LosslessProvider` protocol, `TransferProgress`, `LosslessError`, `LosslessUnavailable` |
+| `src/flackey/source/slskd.py` | create | `SlskdClient` (HTTP) and `SoulseekProvider` |
+| `src/flackey/convert.py` | create | `to_format` via ffmpeg |
+| `src/flackey/fingerprint.py` | create | `fpcalc` wrapper, `compare`, Deezer preview fetch, `check` |
+| `src/flackey/deezer.py` | modify | `DeezerTrack.preview_url` |
+| `src/flackey/attempts.py` | create | `AttemptRecorder` (timeline, raw files, row updates), `prune_raw` |
+| `src/flackey/worker.py` | modify | `_try_lossless`, verdict pass-through, Done line, start-up cancel, daily maintenance |
+| `src/flackey/web/__init__.py`, `web/library.py`, `web/lossless.py` | modify/create | health fields, attempt in request bundle, format block on tracks, `/api/lossless/attempts` |
+| `src/flackey/cli.py` | modify | `crate lossless replay <request id>` |
+| `src/flackey/app.py` | modify | build the provider from settings, pass it and an `httpx.AsyncClient` to the worker |
 | `pyproject.toml`, `.env.example`, `README.md` | modify | layers, keys, sidecar setup |
 
 ## Shared interfaces (exact names used across tasks)
@@ -105,7 +105,7 @@ add_track(..., source="deezer_bot", source_fmt=None, bit_depth=None, sample_rate
 ### Task 1: Settings
 
 **Files:**
-- Modify: `src/krater/config.py`
+- Modify: `src/flackey/config.py`
 - Test: `tests/test_config.py`
 
 **Interfaces:**
@@ -168,7 +168,7 @@ Expected: 4 failures, `AttributeError: 'Settings' object has no attribute 'souls
 
 - [ ] **Step 3: Implement the settings**
 
-In `src/krater/config.py`:
+In `src/flackey/config.py`:
 
 ```python
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
@@ -242,7 +242,7 @@ Expected: all pass. Remove the throwaway `or True` assertion line from `test_dow
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/config.py tests/test_config.py
+git add src/flackey/config.py tests/test_config.py
 git commit -m "feat(config): slskd and lossless settings; soulseek is on only when an API key is set"
 ```
 
@@ -251,7 +251,7 @@ git commit -m "feat(config): slskd and lossless settings; soulseek is on only wh
 ### Task 2: Bit depth and sample rate in probe and verdicts
 
 **Files:**
-- Modify: `src/krater/models.py` (`Verdict`), `src/krater/verify.py` (`Probe`, `probe`, `verify`)
+- Modify: `src/flackey/models.py` (`Verdict`), `src/flackey/verify.py` (`Probe`, `probe`, `verify`)
 - Test: `tests/test_verify.py`
 
 **Interfaces:**
@@ -328,7 +328,7 @@ Expected: all pass (the tag and worker tests construct `Verdict` positionally or
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/models.py src/krater/verify.py tests/test_verify.py
+git add src/flackey/models.py src/flackey/verify.py tests/test_verify.py
 git commit -m "feat(verify): probe and verdict carry bit depth and sample rate"
 ```
 
@@ -337,7 +337,7 @@ git commit -m "feat(verify): probe and verdict carry bit depth and sample rate"
 ### Task 3: Store: migration helper, new columns, attempts and evidence tables
 
 **Files:**
-- Modify: `src/krater/models.py` (`Track`, `Request`, new `LosslessAttempt`, `Evidence`), `src/krater/store.py`
+- Modify: `src/flackey/models.py` (`Track`, `Request`, new `LosslessAttempt`, `Evidence`), `src/flackey/store.py`
 - Test: `tests/test_store.py`
 
 **Interfaces:**
@@ -601,7 +601,7 @@ Expected: all pass. `test_web` bundles serialise `Request` and `Track` through `
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/models.py src/krater/store.py tests/test_store.py
+git add src/flackey/models.py src/flackey/store.py tests/test_store.py
 git commit -m "feat(store): first column migration, track source columns, lossless attempts and evidence tables"
 ```
 
@@ -610,7 +610,7 @@ git commit -m "feat(store): first column migration, track source columns, lossle
 ### Task 4: The gate: `lossless.py` domain module
 
 **Files:**
-- Create: `src/krater/lossless.py`
+- Create: `src/flackey/lossless.py`
 - Test: `tests/test_lossless.py`
 
 **Interfaces:**
@@ -626,12 +626,12 @@ Create `tests/test_lossless.py`:
 ```python
 import json
 
-from krater.config import Settings
-from krater.lossless import (
+from flackey.config import Settings
+from flackey.lossless import (
     RANKERS, LosslessFile, PickPolicy, PickReport, Reference, file_title, pick, policy_from_settings,
     reference_for, search_text,
 )
-from krater.models import Candidate, CatalogTrack
+from flackey.models import Candidate, CatalogTrack
 
 REF = Reference(artist="Hallucinogen", title="Orphic Thrench", mix_name="Original Mix", duration_s=442, deezer_id=6025986)
 
@@ -759,11 +759,11 @@ def test_policy_from_settings(tmp_path):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_lossless.py -q`
-Expected: `ModuleNotFoundError: No module named 'krater.lossless'`.
+Expected: `ModuleNotFoundError: No module named 'flackey.lossless'`.
 
 - [ ] **Step 3: Implement the module**
 
-Create `src/krater/lossless.py`:
+Create `src/flackey/lossless.py`:
 
 ```python
 """The gate that turns a provider's search results into one pick, with a report that explains every
@@ -1044,7 +1044,7 @@ Expected: all pass. If `test_version_rule_both_directions` fails on the "(1997 M
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/lossless.py tests/test_lossless.py
+git add src/flackey/lossless.py tests/test_lossless.py
 git commit -m "feat(lossless): rule-pipeline gate with rankers and a replayable pick report"
 ```
 
@@ -1053,8 +1053,8 @@ git commit -m "feat(lossless): rule-pipeline gate with rankers and a replayable 
 ### Task 5: Provider protocol and the slskd adapter
 
 **Files:**
-- Create: `src/krater/source/lossless.py`, `src/krater/source/slskd.py`
-- Modify: `src/krater/source/__init__.py` (re-export the new names)
+- Create: `src/flackey/source/lossless.py`, `src/flackey/source/slskd.py`
+- Modify: `src/flackey/source/__init__.py` (re-export the new names)
 - Test: `tests/test_slskd.py` (uses `tests/fixtures/slskd/*.json`)
 
 **Interfaces:**
@@ -1074,8 +1074,8 @@ import httpx
 import pytest
 import respx
 
-from krater.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
-from krater.source.slskd import SlskdClient, SoulseekProvider, local_path_for, parse_response
+from flackey.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
+from flackey.source.slskd import SlskdClient, SoulseekProvider, local_path_for, parse_response
 
 BASE = "http://slskd.test/api/v0"
 
@@ -1118,7 +1118,7 @@ def test_parse_response_derives_extension_and_peer_fields(fixtures: Path):
 
 
 def test_local_path_is_derived_and_contained(tmp_path: Path):
-    from krater.lossless import LosslessFile
+    from flackey.lossless import LosslessFile
     base = dict(provider="soulseek", username="u", extension="flac", size=1, length_s=1, bitrate_kbps=None,
                 sample_rate=None, bit_depth=None, has_free_slot=True, upload_speed_bps=0, queue_length=0)
     f = LosslessFile(path="Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac", **base)
@@ -1138,7 +1138,7 @@ def test_local_path_is_derived_and_contained(tmp_path: Path):
 async def test_health_reports_login_state_and_unreachable(provider, fixtures: Path):
     p, _, _ = provider
     respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=load(fixtures, "application.json")))
-    assert await p.health() == {"status": "ok", "username": "krater-dj"}
+    assert await p.health() == {"status": "ok", "username": "flackey-dj"}
     app = load(fixtures, "application.json")
     app["server"]["isLoggedIn"] = False
     respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=app))
@@ -1199,7 +1199,7 @@ def transfer(state: str, done: int, size: int = 51223918, username: str = "login
 
 
 def flac_file(size: int = 51223918):
-    from krater.lossless import LosslessFile
+    from flackey.lossless import LosslessFile
     return LosslessFile(provider="soulseek", username="loginty", extension="flac", size=size, length_s=442,
                         path="Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac",
                         bitrate_kbps=None, sample_rate=44100, bit_depth=16, has_free_slot=True,
@@ -1279,11 +1279,11 @@ async def test_cancel_all_and_rescan(provider):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_slskd.py -q`
-Expected: `ModuleNotFoundError: No module named 'krater.source.lossless'`.
+Expected: `ModuleNotFoundError: No module named 'flackey.source.lossless'`.
 
 - [ ] **Step 3: Implement the protocol module**
 
-Create `src/krater/source/lossless.py`:
+Create `src/flackey/source/lossless.py`:
 
 ```python
 """What the worker talks to when it asks a network for a lossless file (spec §5.1). One implementation today
@@ -1341,7 +1341,7 @@ class LosslessProvider(Protocol):
     async def rescan_shares(self) -> None: ...
 ```
 
-Add to `src/krater/source/__init__.py`:
+Add to `src/flackey/source/__init__.py`:
 
 ```python
 from .lossless import LosslessError, LosslessProvider, LosslessUnavailable, TransferProgress
@@ -1351,7 +1351,7 @@ and extend `__all__` with those four names.
 
 - [ ] **Step 4: Implement the slskd adapter**
 
-Create `src/krater/source/slskd.py`:
+Create `src/flackey/source/slskd.py`:
 
 ```python
 """slskd REST adapter (spec §7): a thin HTTP client and the first LosslessProvider. Facts about the API that
@@ -1563,7 +1563,7 @@ Expected: all pass. `pytest-asyncio` is configured in `pyproject.toml` (`asyncio
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/source/lossless.py src/krater/source/slskd.py src/krater/source/__init__.py tests/test_slskd.py tests/fixtures/slskd
+git add src/flackey/source/lossless.py src/flackey/source/slskd.py src/flackey/source/__init__.py tests/test_slskd.py tests/fixtures/slskd
 git commit -m "feat(source): lossless provider protocol and the slskd adapter with caps, containment and fixtures"
 ```
 
@@ -1572,7 +1572,7 @@ git commit -m "feat(source): lossless provider protocol and the slskd adapter wi
 ### Task 6: Conversion: `convert.py`
 
 **Files:**
-- Create: `src/krater/convert.py`
+- Create: `src/flackey/convert.py`
 - Test: `tests/test_convert.py`
 
 **Interfaces:**
@@ -1594,8 +1594,8 @@ from pathlib import Path
 import pytest
 from mutagen.flac import FLAC, Picture
 
-from krater.convert import ConvertError, to_format
-from krater.verify import probe
+from flackey.convert import ConvertError, to_format
+from flackey.verify import probe
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -1667,11 +1667,11 @@ def test_bad_input_raises(tmp_path: Path):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_convert.py -q`
-Expected: `ModuleNotFoundError: No module named 'krater.convert'`.
+Expected: `ModuleNotFoundError: No module named 'flackey.convert'`.
 
 - [ ] **Step 3: Implement**
 
-Create `src/krater/convert.py`:
+Create `src/flackey/convert.py`:
 
 ```python
 """Lossless-to-lossless conversion for filing (spec §9). Audio only, metadata dropped, PCM at the source
@@ -1724,7 +1724,7 @@ Expected: 4 passed. If `test_aiff_has_identical_audio_and_no_foreign_metadata` f
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/convert.py tests/test_convert.py
+git add src/flackey/convert.py tests/test_convert.py
 git commit -m "feat(convert): lossless to AIFF/WAV with metadata dropped and PCM proven identical"
 ```
 
@@ -1733,8 +1733,8 @@ git commit -m "feat(convert): lossless to AIFF/WAV with metadata dropped and PCM
 ### Task 7: Same-recording check: `fingerprint.py` and the Deezer preview URL
 
 **Files:**
-- Create: `src/krater/fingerprint.py`
-- Modify: `src/krater/deezer.py` (`DeezerTrack.preview_url`, `parse_track_json`), `tests/conftest.py` (`requires_fpcalc`)
+- Create: `src/flackey/fingerprint.py`
+- Modify: `src/flackey/deezer.py` (`DeezerTrack.preview_url`, `parse_track_json`), `tests/conftest.py` (`requires_fpcalc`)
 - Test: `tests/test_fingerprint.py`, `tests/test_deezer.py`
 
 **Interfaces:**
@@ -1776,8 +1776,8 @@ import httpx
 import pytest
 import respx
 
-from krater import fingerprint as fp
-from krater.fingerprint import FPS, FingerprintError, FingerprintResult, check, compare, fingerprint
+from flackey import fingerprint as fp
+from flackey.fingerprint import FPS, FingerprintError, FingerprintResult, check, compare, fingerprint
 from tests.conftest import requires_ffmpeg, requires_fpcalc
 
 
@@ -1889,11 +1889,11 @@ async def test_check_is_skipped_when_fpcalc_fails(tmp_path: Path, fake_fpcalc, m
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_fingerprint.py tests/test_deezer.py -q`
-Expected: import errors for `krater.fingerprint` and `requires_fpcalc`; `test_parse_track_json_keeps_preview_url` fails with `AttributeError: preview_url`.
+Expected: import errors for `flackey.fingerprint` and `requires_fpcalc`; `test_parse_track_json_keeps_preview_url` fails with `AttributeError: preview_url`.
 
 - [ ] **Step 3: Implement the Deezer change**
 
-In `src/krater/deezer.py`, add a trailing field to `DeezerTrack`:
+In `src/flackey/deezer.py`, add a trailing field to `DeezerTrack`:
 
 ```python
     preview_url: str | None = None
@@ -1903,7 +1903,7 @@ and in `parse_track_json` add `preview_url=data.get("preview") or None,` to the 
 
 - [ ] **Step 4: Implement the module**
 
-Create `src/krater/fingerprint.py`:
+Create `src/flackey/fingerprint.py`:
 
 ```python
 """Same-recording check (spec §16.1): Chromaprint raw fingerprints of the Deezer 30 s preview slid along the
@@ -2055,7 +2055,7 @@ Expected: all pass; the real-fpcalc test is skipped on a machine without `fpcalc
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/fingerprint.py src/krater/deezer.py tests/conftest.py tests/test_fingerprint.py tests/test_deezer.py tests/fixtures/fingerprints.json
+git add src/flackey/fingerprint.py src/flackey/deezer.py tests/conftest.py tests/test_fingerprint.py tests/test_deezer.py tests/fixtures/fingerprints.json
 git commit -m "feat(fingerprint): Chromaprint same-recording check against the Deezer preview"
 ```
 
@@ -2064,7 +2064,7 @@ git commit -m "feat(fingerprint): Chromaprint same-recording check against the D
 ### Task 8: The attempt record: `attempts.py`
 
 **Files:**
-- Create: `src/krater/attempts.py`
+- Create: `src/flackey/attempts.py`
 - Test: `tests/test_attempts.py`
 
 **Interfaces:**
@@ -2086,9 +2086,9 @@ from pathlib import Path
 
 import pytest
 
-from krater.attempts import AttemptRecorder, prune_raw, raw_size_bytes
-from krater.models import RequestKind
-from krater.store import Store
+from flackey.attempts import AttemptRecorder, prune_raw, raw_size_bytes
+from flackey.models import RequestKind
+from flackey.store import Store
 
 
 @pytest.fixture
@@ -2109,7 +2109,7 @@ class Clock:
 def test_recorder_creates_row_and_folder_and_writes_timeline(store: Store, tmp_path: Path, caplog):
     clock = Clock()
     raw = tmp_path / "raw"
-    with caplog.at_level(logging.INFO, logger="krater.attempts"):
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
         rec = AttemptRecorder(store, raw, 1, "soulseek", "Hallucinogen Orphic Thrench", clock=clock)
         clock.t += 1.5
         rec.event("search_completed", responses=12, files=40)
@@ -2135,7 +2135,7 @@ def test_finish_validates_outcome_and_copies_columns(store: Store, tmp_path: Pat
     clock = Clock()
     rec = AttemptRecorder(store, tmp_path / "raw", 1, "soulseek", "q", clock=clock)
     clock.t += 3
-    with caplog.at_level(logging.INFO, logger="krater.attempts"):
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
         rec.finish("filed", first_byte_ms=800, fingerprint={"status": "matched", "score": 0.98},
                    spectrogram_path="/tmp/s.png", report={"summary": "3 files"})
     row = store.get_attempt(rec.id)
@@ -2172,11 +2172,11 @@ def test_prune_raw_removes_old_folders_only(tmp_path: Path):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_attempts.py -q`
-Expected: `ModuleNotFoundError: No module named 'krater.attempts'`.
+Expected: `ModuleNotFoundError: No module named 'flackey.attempts'`.
 
 - [ ] **Step 3: Implement**
 
-Create `src/krater/attempts.py`:
+Create `src/flackey/attempts.py`:
 
 ```python
 """The record of one lossless attempt (spec §17): log lines, a timeline persisted on every event, raw provider
@@ -2267,7 +2267,7 @@ Expected: 5 passed. If `test_raw_write_failure_does_not_break_the_attempt` fails
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/attempts.py tests/test_attempts.py
+git add src/flackey/attempts.py tests/test_attempts.py
 git commit -m "feat(attempts): attempt recorder with timeline, raw provider objects and daily pruning"
 ```
 
@@ -2276,7 +2276,7 @@ git commit -m "feat(attempts): attempt recorder with timeline, raw provider obje
 ### Task 9: The worker step `_try_lossless`
 
 **Files:**
-- Modify: `src/krater/worker.py`, `src/krater/tag.py` (`comment_for`/`write_tags` gain `source`), `src/krater/models.py` (`source_label`)
+- Modify: `src/flackey/worker.py`, `src/flackey/tag.py` (`comment_for`/`write_tags` gain `source`), `src/flackey/models.py` (`source_label`)
 - Test: `tests/test_worker_lossless.py` (new file; the existing `tests/test_worker.py` keeps passing), `tests/test_tag.py` (two expected strings)
 
 **Interfaces:**
@@ -2290,9 +2290,9 @@ Spec §5 (flow), §8 (caps), §9 (conversion inside the attempt, FLAC deleted af
 Update the two expected comment strings in `tests/test_tag.py` (lines 52 and 81) to end with ` · via Deezer`:
 
 ```python
-    assert t["comment"] == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
+    assert t["comment"] == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
     ...
-    assert comment_for(V, CT) == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
+    assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 ```
 
 Create `tests/test_worker_lossless.py`:
@@ -2307,16 +2307,16 @@ from pathlib import Path
 import httpx
 import pytest
 
-from krater.config import Settings
-from krater.convert import ConvertError
-from krater.fingerprint import FingerprintResult
-from krater.lossless import LosslessFile
-from krater.models import CatalogTrack, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.source import LosslessError, SourceTimeout, TransferProgress
-from krater.store import Store
-from krater import worker as worker_mod
-from krater.worker import Worker, format_line
+from flackey.config import Settings
+from flackey.convert import ConvertError
+from flackey.fingerprint import FingerprintResult
+from flackey.lossless import LosslessFile
+from flackey.models import CatalogTrack, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.source import LosslessError, SourceTimeout, TransferProgress
+from flackey.store import Store
+from flackey import worker as worker_mod
+from flackey.worker import Worker, format_line
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
 
@@ -2365,7 +2365,7 @@ class FakeProvider:
         self.searches, self.downloaded, self.cancelled, self.rescans = [], [], 0, 0
 
     async def health(self):
-        return {"status": self.health_status, "username": "krater-dj"}
+        return {"status": self.health_status, "username": "flackey-dj"}
 
     async def search(self, text, *, wait_s, on_raw=None):
         self.searches.append(text)
@@ -2461,7 +2461,7 @@ async def test_hit_files_aiff_with_evidence_done_line_and_raw_record(lenv):
     done = notifier.sent[-1][0]
     assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
     assert store.stats()["by_source"] == {"soulseek": 1}
-    assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "krater-dj"}
+    assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "flackey-dj"}
 
 
 async def test_no_pick_falls_back_to_deezer(lenv):
@@ -2666,7 +2666,7 @@ async def test_lossless_is_off_without_a_key_or_providers(lenv, tmp_path: Path):
 
 
 def test_format_line():
-    from krater.models import Verdict
+    from flackey.models import Verdict
     assert format_line(Verdict(True, "mp3", 320, 19500, "r"), "deezer_bot", None) == "MP3 320 kbps via Deezer"
     v = Verdict(True, "aiff", 1411, 22050, "r", bit_depth=16, sample_rate=44100)
     assert format_line(v, "soulseek", "flac") == "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek"
@@ -2682,7 +2682,7 @@ Expected: `ImportError: cannot import name 'format_line'` and the two comment-st
 
 - [ ] **Step 3: `models.source_label` and the tag comment**
 
-In `src/krater/models.py`, near the top-level helpers:
+In `src/flackey/models.py`, near the top-level helpers:
 
 ```python
 SOURCE_LABELS = {"deezer_bot": "Deezer", "soulseek": "Soulseek"}
@@ -2693,12 +2693,12 @@ def source_label(name: str) -> str:
     return SOURCE_LABELS.get(name, name)
 ```
 
-In `src/krater/tag.py`:
+In `src/flackey/tag.py`:
 
 ```python
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
     kind = f"verified {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"verified {verdict.fmt}"
-    return (f"krater: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
+    return (f"flackey: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
             f" · via {source_label(source)}")
 ```
 
@@ -2706,7 +2706,7 @@ def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_b
 
 - [ ] **Step 4: Implement the worker changes**
 
-Imports at the top of `src/krater/worker.py` (add to the existing ones):
+Imports at the top of `src/flackey/worker.py` (add to the existing ones):
 
 ```python
 import shutil
@@ -3029,7 +3029,7 @@ The attempt itself:
         return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id), "filed"
 ```
 
-`rec.query` and `rec.provider` are attributes set in `AttemptRecorder.__init__` (Task 8). `LosslessError`, `LosslessProvider`, `TransferProgress` are re-exported by `krater.source` (Task 5).
+`rec.query` and `rec.provider` are attributes set in `AttemptRecorder.__init__` (Task 8). `LosslessError`, `LosslessProvider`, `TransferProgress` are re-exported by `flackey.source` (Task 5).
 
 - [ ] **Step 5: Run the tests**
 
@@ -3042,7 +3042,7 @@ Expected: all pass. Likely first failures and their causes:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/krater/worker.py src/krater/tag.py src/krater/models.py tests/test_worker_lossless.py tests/test_tag.py tests/test_worker.py
+git add src/flackey/worker.py src/flackey/tag.py src/flackey/models.py tests/test_worker_lossless.py tests/test_tag.py tests/test_worker.py
 git commit -m "feat(worker): try a lossless provider before Deezer, with attempt records, evidence rows and a format line"
 ```
 
@@ -3051,8 +3051,8 @@ git commit -m "feat(worker): try a lossless provider before Deezer, with attempt
 ### Task 10: Web: health, attempts endpoint, request and track bundles, settings
 
 **Files:**
-- Modify: `src/krater/web/__init__.py` (health, `Bundles.request/track`), `src/krater/web/library.py` (settings, tools), `src/krater/web/requests.py` (attempt spectrogram unlink), `src/krater/store.py` (`delete_request`/`delete_requests` also drop attempt rows; `delete_attempts_for_request` not needed)
-- Create: `src/krater/web/lossless.py`
+- Modify: `src/flackey/web/__init__.py` (health, `Bundles.request/track`), `src/flackey/web/library.py` (settings, tools), `src/flackey/web/requests.py` (attempt spectrogram unlink), `src/flackey/store.py` (`delete_request`/`delete_requests` also drop attempt rows; `delete_attempts_for_request` not needed)
+- Create: `src/flackey/web/lossless.py`
 - Test: `tests/test_web.py`
 
 **Interfaces:**
@@ -3066,7 +3066,7 @@ In `tests/test_web.py`, change `test_health` to:
 ```python
 def test_health(client):
     c, _, _ = client
-    from krater.fingerprint import fpcalc_available
+    from flackey.fingerprint import fpcalc_available
     assert c.get("/api/health").json() == {"ok": True, "version": "0.1.0", "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
@@ -3161,9 +3161,9 @@ Expected: `test_health` fails on the missing `lossless` key; the new tests fail 
 
 - [ ] **Step 3: Implement**
 
-`src/krater/store.py`: in `delete_request` and `delete_requests`, add `DELETE FROM lossless_attempts WHERE request_id=?` (and the `IN (sub)` form) next to the candidates and rejections deletes. Update both docstrings ("candidates, rejections and lossless attempts").
+`src/flackey/store.py`: in `delete_request` and `delete_requests`, add `DELETE FROM lossless_attempts WHERE request_id=?` (and the `IN (sub)` form) next to the candidates and rejections deletes. Update both docstrings ("candidates, rejections and lossless attempts").
 
-`src/krater/web/__init__.py`:
+`src/flackey/web/__init__.py`:
 
 ```python
 from ..attempts import raw_size_bytes
@@ -3208,7 +3208,7 @@ Import `Verdict` from `..models`. Health:
 
 and `app.include_router(lossless.router(store))` next to the other routers (add `lossless` to the local import line).
 
-Create `src/krater/web/lossless.py`:
+Create `src/flackey/web/lossless.py`:
 
 ```python
 from __future__ import annotations
@@ -3250,15 +3250,15 @@ def router(store: Store) -> APIRouter:
     return r
 ```
 
-`src/krater/web/requests.py`: `unlink_spectrogram` already takes any object with `spectrogram_path`; in `delete` and `clear_failed`, also fetch `store.get_attempt_for_request(rid)` before deleting and call `unlink_spectrogram(attempt)` after.
+`src/flackey/web/requests.py`: `unlink_spectrogram` already takes any object with `spectrogram_path`; in `delete` and `clear_failed`, also fetch `store.get_attempt_for_request(rid)` before deleting and call `unlink_spectrogram(attempt)` after.
 
-`src/krater/web/library.py`:
+`src/flackey/web/library.py`:
 
 ```python
     def settings_out() -> dict:
         return {"library_root": str(settings.library_root), "data_dir": str(settings.data_dir),
                 "version": __version__, "telegram_configured": settings.telegram_configured,
-                "log_path": str(settings.data_dir / "krater.log"),
+                "log_path": str(settings.data_dir / "flackey.log"),
                 "soulseek_enabled": settings.soulseek_enabled, "slskd_url": settings.slskd_url,
                 "slskd_downloads_dir": str(settings.slskd_downloads),
                 "lossless_filing_format": settings.lossless_filing_format}
@@ -3289,7 +3289,7 @@ Expected: all pass. If `test_lossless_attempts_endpoint_lists_counts_and_medians
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/web src/krater/store.py tests/test_web.py
+git add src/flackey/web src/flackey/store.py tests/test_web.py
 git commit -m "feat(web): lossless health, attempts endpoint, attempt and format in bundles, sidecar settings without the key"
 ```
 
@@ -3298,7 +3298,7 @@ git commit -m "feat(web): lossless health, attempts endpoint, attempt and format
 ### Task 11: CLI: `crate lossless replay`
 
 **Files:**
-- Modify: `src/krater/cli.py`
+- Modify: `src/flackey/cli.py`
 - Test: `tests/test_cli.py`
 
 **Interfaces:**
@@ -3316,11 +3316,11 @@ def test_lossless_replay_diffs_the_pick_under_the_current_policy(tmp_path: Path,
     import json
     import shutil
 
-    from krater.lossless import PickPolicy, Reference, pick
-    from krater.source.slskd import parse_response
+    from flackey.lossless import PickPolicy, Reference, pick
+    from flackey.source.slskd import parse_response
 
     env = _env(tmp_path)
-    store = Store(tmp_path / "data" / "krater.sqlite")
+    store = Store(tmp_path / "data" / "flackey.sqlite")
     rid = store.add_request("hallucinogen orphic thrench", RequestKind.TEXT)
     responses = json.loads((fixtures / "slskd" / "responses_completed.json").read_text())
     files = [f for r in responses for f in parse_response(r)]
@@ -3355,7 +3355,7 @@ Expected: exit code 2 from typer (`No such command 'lossless'`).
 
 - [ ] **Step 3: Implement**
 
-In `src/krater/cli.py`:
+In `src/flackey/cli.py`:
 
 ```python
 lossless_app = typer.Typer(help="Lossless-upgrade tools (Soulseek through slskd)", no_args_is_help=True)
@@ -3412,7 +3412,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/cli.py tests/test_cli.py
+git add src/flackey/cli.py tests/test_cli.py
 git commit -m "feat(cli): crate lossless replay diffs a stored pick against the current policy"
 ```
 
@@ -3421,7 +3421,7 @@ git commit -m "feat(cli): crate lossless replay diffs a stored pick against the 
 ### Task 12: Wiring, layers, env example, README
 
 **Files:**
-- Modify: `src/krater/app.py`, `pyproject.toml`, `.env.example`, `README.md`, `src/krater/logsetup.py` (banner line)
+- Modify: `src/flackey/app.py`, `pyproject.toml`, `.env.example`, `README.md`, `src/flackey/logsetup.py` (banner line)
 - Test: `tests/test_app.py`, `tests/test_logsetup.py`
 
 **Interfaces:**
@@ -3436,9 +3436,9 @@ Append to `tests/test_app.py`:
 def test_build_providers_follows_the_api_key_and_never_logs_it(tmp_path, caplog):
     import httpx
 
-    from krater.app import build_providers
-    from krater.config import Settings
-    from krater.source.slskd import SoulseekProvider
+    from flackey.app import build_providers
+    from flackey.config import Settings
+    from flackey.source.slskd import SoulseekProvider
 
     caplog.set_level("DEBUG")
     http = httpx.AsyncClient()
@@ -3455,8 +3455,8 @@ Append to `tests/test_logsetup.py` (look at how the existing banner test builds 
 
 ```python
 def test_banner_says_whether_soulseek_is_on_without_the_key(tmp_path, caplog):
-    from krater.config import Settings
-    from krater.logsetup import log_startup_banner
+    from flackey.config import Settings
+    from flackey.logsetup import log_startup_banner
 
     caplog.set_level("INFO")
     log_startup_banner(Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="very-secret-key"), "0.1.0")
@@ -3470,13 +3470,13 @@ Expected: `ImportError: cannot import name 'build_providers'` and the banner ass
 
 - [ ] **Step 3: Implement**
 
-`src/krater/logsetup.py`, in `log_startup_banner` after the telegram line:
+`src/flackey/logsetup.py`, in `log_startup_banner` after the telegram line:
 
 ```python
     log.info("soulseek: %s", "yes" if settings.soulseek_enabled else "no")
 ```
 
-`src/krater/app.py`:
+`src/flackey/app.py`:
 
 ```python
 from .source.lossless import LosslessProvider
@@ -3527,7 +3527,7 @@ layers = [
 # The key is also accepted from settings.json (slskd_api_key). Never commit it.
 # SLSKD_URL=http://127.0.0.1:5030
 # SLSKD_API_KEY=
-# SLSKD_DOWNLOADS_DIR=~/Library/Application Support/Krater/slskd/downloads
+# SLSKD_DOWNLOADS_DIR=~/Library/Application Support/Flackey/slskd/downloads
 # LOSSLESS_FILING_FORMAT=aiff        # aiff (default; Rekordbox reads all tags), wav (loses label/artwork), flac
 # LOSSLESS_SEARCH_WAIT_S=30
 # LOSSLESS_FIRST_BYTE_S=60
@@ -3553,7 +3553,7 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
 `MP3 320 kbps via Deezer`.
 
 1. `brew install chromaprint` (for `fpcalc`; without it the recording check is skipped and shown as such).
-2. Download the slskd release for macOS, put it in `~/Library/Application Support/Krater/slskd/` with a
+2. Download the slskd release for macOS, put it in `~/Library/Application Support/Flackey/slskd/` with a
    `slskd.yml` like:
 
    ```yaml
@@ -3561,7 +3561,7 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
      port: 5030
      authentication:
        api_keys:
-         krater: { key: "<random 32+ chars>", role: readwrite }
+         flackey: { key: "<random 32+ chars>", role: readwrite }
    soulseek:
      username: <your soulseek account>
      password: <its password>
@@ -3569,10 +3569,10 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
    shares:
      directories: ["~/Music/DJ Library"]
    directories:
-     downloads: ~/Library/Application Support/Krater/slskd/downloads
+     downloads: ~/Library/Application Support/Flackey/slskd/downloads
    ```
 
-   Start it with `./slskd --app-dir "~/Library/Application Support/Krater/slskd"`. Sharing your library is
+   Start it with `./slskd --app-dir "~/Library/Application Support/Flackey/slskd"`. Sharing your library is
    what makes peers serve you; forward TCP 50300 on the router so they can reach it (searching works without).
 3. Put the same key in `.env` as `SLSKD_API_KEY=` (or in `settings.json` as `slskd_api_key`). Restart.
 4. `/api/health` shows `lossless.provider.status` (`ok`, `not_logged_in`, `unreachable`), whether `fpcalc` is
@@ -3595,12 +3595,12 @@ uv run ruff check src tests
 uv run lint-imports
 ```
 
-Expected: all tests pass (fpcalc-dependent ones skip where it is missing), no ruff findings, import-linter reports the contract kept. If `lint-imports` names `krater.attempts -> krater.store` as a violation, the `attempts` line is missing or in the wrong place in `pyproject.toml`.
+Expected: all tests pass (fpcalc-dependent ones skip where it is missing), no ruff findings, import-linter reports the contract kept. If `lint-imports` names `flackey.attempts -> flackey.store` as a violation, the `attempts` line is missing or in the wrong place in `pyproject.toml`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/krater/app.py src/krater/logsetup.py pyproject.toml .env.example README.md tests/test_app.py tests/test_logsetup.py
+git add src/flackey/app.py src/flackey/logsetup.py pyproject.toml .env.example README.md tests/test_app.py tests/test_logsetup.py
 git commit -m "feat(app): build the Soulseek provider from settings; layers, env example and README for the lossless upgrade"
 ```
 

@@ -1,4 +1,4 @@
-// What the page knows about the window it lives in. Set by src/krater/desktop.py: the launcher adds
+// What the page knows about the window it lives in. Set by src/flackey/desktop.py: the launcher adds
 // `?titlebar=inset` on macOS and exposes `window.pywebview.api.resize`. In a plain browser both are absent.
 type Bridge = { api?: { resize: (width: number, height: number) => unknown } }
 const bridge = () => (window as Window & { pywebview?: Bridge }).pywebview

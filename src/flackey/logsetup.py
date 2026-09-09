@@ -9,7 +9,7 @@ import platform
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-LOG_FILE = "krater.log"
+LOG_FILE = "flackey.log"
 MAX_BYTES = 2_000_000
 BACKUPS = 5
 FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s"
@@ -17,11 +17,11 @@ DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 # Third-party loggers that are far too chatty at DEBUG; capped at INFO regardless of --verbose.
 _QUIET_LOGGERS = ("telethon", "httpx", "httpcore", "uvicorn", "uvicorn.error", "uvicorn.access", "asyncio")
-_INSTALLED_ATTR = "_krater_handler"
+_INSTALLED_ATTR = "_flackey_handler"
 
 
 def configure_logging(data_dir: Path, *, verbose: bool = False) -> Path:
-    """Console at INFO (DEBUG with --verbose); the file in the data folder always at DEBUG for krater.*
+    """Console at INFO (DEBUG with --verbose); the file in the data folder always at DEBUG for flackey.*
     and INFO for everything else (telethon, httpx, uvicorn are far too chatty at DEBUG). Returns the log path."""
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
@@ -55,7 +55,7 @@ def configure_logging(data_dir: Path, *, verbose: bool = False) -> Path:
 def log_startup_banner(settings, version: str) -> None:
     """One INFO line per fact a bug report needs. Never the api id/hash or a phone number."""
     log = logging.getLogger(__name__)
-    log.info("krater version: %s", version)
+    log.info("flackey version: %s", version)
     log.info("platform: %s", platform.platform())
     log.info("python: %s", platform.python_version())
     log.info("data dir: %s", settings.data_dir)

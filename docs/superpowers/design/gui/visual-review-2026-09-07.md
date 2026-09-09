@@ -15,7 +15,7 @@ plus one capture of the real pywebview window).
 | Download | `download-light.png` | `download-dark.png` | Toolbar, grouped inset rows, empty state. |
 | Library | `library-light.png` | `library-dark.png` | Table header, alternating rows, selection uses the accent tokens. |
 | Settings | `settings-light.png` | `settings-dark.png` | System Settings style grouped rows. |
-| Real window | — | `real-window-dark.png` | pywebview window on macOS: inset traffic lights over the sidebar strip, no title text, Dock icon and `Krater` app menu confirmed. |
+| Real window | — | `real-window-dark.png` | pywebview window on macOS: inset traffic lights over the sidebar strip, no title text, Dock icon and `Flackey` app menu confirmed. |
 
 ## HIG items applied
 

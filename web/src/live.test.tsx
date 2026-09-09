@@ -14,7 +14,7 @@ class FakeEventSource {
   constructor(_url: string) { FakeEventSource.last = this }
 }
 
-const settings: AppSettings = { library_root: '/lib', data_dir: '/data', version: '0.1.0', telegram_configured: true, log_path: '/data/krater.log' }
+const settings: AppSettings = { library_root: '/lib', data_dir: '/data', version: '0.1.0', telegram_configured: true, log_path: '/data/flackey.log' }
 const stats: Stats = { tracks: 0, bytes: 0, playlists: 0, rejections: 0, library_root: '/lib', playlist_dir: '/lib/Playlists', requests_by_state: {} }
 const health: Health = { ok: true, version: '0.1.0', telegram_authorized: true, worker_running: true, setup_done: true,
   lossless: { enabled: true, provider: null, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }
@@ -41,7 +41,7 @@ beforeEach(() => {
 it('surfaces a plain-words error when the API is unreachable, and clears it on retry', async () => {
   const healthSpy = vi.spyOn(api, 'health').mockRejectedValueOnce(new Error('network down'))
   render(<Harness />)
-  await waitFor(() => expect(screen.getByText("Can't reach Krater. Is `crate start` running?")).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `crate start` running?")).toBeInTheDocument())
   expect(screen.getByText('no-health')).toBeInTheDocument()
   expect(screen.getByText('loaded')).toBeInTheDocument()
 
@@ -63,7 +63,7 @@ it('refresh() rethrows on failure so a caller (e.g. the setup screen) can react'
     try { await liveRef.current!.refresh() } catch (e) { caught = e }
   })
   expect((caught as Error)?.message).toBe('network down')
-  await waitFor(() => expect(screen.getByText("Can't reach Krater. Is `crate start` running?")).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `crate start` running?")).toBeInTheDocument())
 })
 
 

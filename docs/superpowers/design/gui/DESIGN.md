@@ -1,7 +1,7 @@
-# Krater GUI — visual design record
+# Flackey GUI — visual design record
 
 Source of truth: the owner's Claude Design project "Dark Pro-Audio Mockups",
-file `Krater Mockups.dc.html`
+file `Flackey Mockups.dc.html`
 (https://claude.ai/design/p/5c58f04e-9bb6-48ec-b641-b26820e343e6). Chosen 2026-09-06.
 Every value below was read from that file's source, not eyeballed. A capture of the main
 screen sits beside this file as `screen-download.jpg`; open the project link for the rest.
@@ -85,7 +85,7 @@ match percentages, the setup stepper, the `queued` tag and column headers.
 | Error banner (in content) | margin-top 14, radius 10, padding 11 14, 8px dot, text 12.5px, "Try now" button |
 | Signed-out banner (under title bar) | padding 12 18, amber wash + bottom border, "Reconnect" primary button 8 18 radius 8 |
 | Settings card | max-width 640, radius 10, padding 16 18, gap 12 between cards |
-| Setup window | 760×600, title "Welcome to Krater"; content centred, gap 24–26; stepper `1 Folder · 2 Telegram · 3 Ready` in mono, current amber, done green with ✓ |
+| Setup window | 760×600, title "Welcome to Flackey"; content centred, gap 24–26; stepper `1 Folder · 2 Telegram · 3 Ready` in mono, current amber, done green with ✓ |
 | Setup folder well | min-width 440, radius 10, padding 14 18, folder glyph 34×26 amber gradient, path in mono 500 13px |
 | QR | 216×216 on `#f4f2ec`, radius 12, padding 14, Telegram badge 44px centred; "refreshes every 30 seconds" under it |
 
@@ -168,13 +168,13 @@ LABEL · YEAR · KBPS. Row: artwork 36; title 13px 600 with version 11.5px muted
 
 Title "Settings" 20px. Cards, max-width 640: "Library folder" / mono path / "Change";
 "Telegram" / green dot "Connected as +31 6 •••• ••42" / "Sign out"; "App version" /
-"Krater 1.0.3 — up to date" / "Check for updates"; "App data" / mono
-`~/Library/Application Support/Krater` / "Show in Finder".
+"Flackey 1.0.3 — up to date" / "Check for updates"; "App data" / mono
+`~/Library/Application Support/Flackey` / "Show in Finder".
 
 ## Deviations to decide during implementation
 
-- The mockup moves app data to `~/Library/Application Support/Krater`; the code today
-  uses `~/.config/krater`. The Mac-native path is the better fit for a packaged app.
+- The mockup moves app data to `~/Library/Application Support/Flackey`; the code today
+  uses `~/.config/flackey`. The Mac-native path is the better fit for a packaged app.
 - "Check for updates" implies an update channel that does not exist yet; ship the card
   without the button until there is one.
 - The Beatport banner copy says 30 seconds; the worker's real backoff decides the number.

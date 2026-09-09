@@ -13,7 +13,7 @@ export function nextZoom(current: number, direction: 'in' | 'out' | 'reset'): nu
 export function installZoom(): () => void {
   const loadZoom = () => {
     try {
-      const saved = localStorage.getItem('krater.zoom')
+      const saved = localStorage.getItem('flackey.zoom')
       if (saved) {
         const zoom = parseFloat(saved)
         document.documentElement.style.zoom = zoom.toString()
@@ -37,7 +37,7 @@ export function installZoom(): () => void {
     document.documentElement.style.zoom = next.toString()
 
     try {
-      localStorage.setItem('krater.zoom', next.toString())
+      localStorage.setItem('flackey.zoom', next.toString())
     } catch {}
   }
 

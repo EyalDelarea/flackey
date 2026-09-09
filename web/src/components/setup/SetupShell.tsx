@@ -5,7 +5,7 @@ const NAMES = ['Folder', 'Telegram', 'Soulseek', 'Ready']
 
 export default function SetupShell({ step, children, onBack, hint, inset = false }: { step: 1 | 2 | 3 | 4; children: ReactNode; onBack?: () => void; hint?: string; inset?: boolean }) {
   return (<div className={`setup${inset ? ' inset' : ''}`}>
-    <div className="setup-title pywebview-drag-region">Welcome to Krater</div>
+    <div className="setup-title pywebview-drag-region">Welcome to Flackey</div>
     <div className="setup-body">
       <div className="stepper">{NAMES.map((n, i) => {
         const k = i + 1; const state = k < step ? 'done' : k === step ? 'cur' : 'next'

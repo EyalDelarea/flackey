@@ -1,4 +1,4 @@
-"""Bring Soulseek up on an already-running krater, so the setup wizard can tell the owner whether
+"""Bring Soulseek up on an already-running flackey, so the setup wizard can tell the owner whether
 their account actually works instead of asking them to restart and find out.
 
 Soulseek has no separate registration step: a username is claimed by signing in with it, and an unused

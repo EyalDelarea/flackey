@@ -11,7 +11,7 @@ it('marks steps done, current and next', () => {
   expect(steps[2]).not.toHaveClass('done')
   expect(steps[2]).not.toHaveClass('cur')
   expect(screen.getByText('Soulseek')).toBeInTheDocument()
-  expect(screen.getByText('Welcome to Krater')).toBeInTheDocument()
+  expect(screen.getByText('Welcome to Flackey')).toBeInTheDocument()
   expect(screen.getByText('body')).toBeInTheDocument()
 })
 

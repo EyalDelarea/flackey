@@ -1,12 +1,12 @@
 import pytest
 
-from krater.identify import (
+from flackey.identify import (
     classify,
     parse_text,
     parse_version,
     parse_youtube_title,
 )
-from krater.models import RequestKind
+from flackey.models import RequestKind
 
 
 @pytest.mark.parametrize("text,kind", [

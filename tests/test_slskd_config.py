@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from krater.slskd_config import (
+from flackey.slskd_config import (
     SlskdConfigError,
     config_path,
     read_api_key,
@@ -26,10 +26,10 @@ def test_fresh_write_produces_the_full_template_at_mode_0600(tmp_path: Path):
     assert data["web"]["port"] == 5030
     assert data["web"]["ip_address"] == "127.0.0.1"
     assert data["web"]["https"]["disabled"] is True
-    assert data["web"]["authentication"]["username"] == "krater"
+    assert data["web"]["authentication"]["username"] == "flackey"
     assert data["web"]["authentication"]["password"]  # generated, non-empty
-    assert data["web"]["authentication"]["api_keys"]["krater"]["key"] == key
-    assert data["web"]["authentication"]["api_keys"]["krater"]["cidr"] == "127.0.0.1/32"
+    assert data["web"]["authentication"]["api_keys"]["flackey"]["key"] == key
+    assert data["web"]["authentication"]["api_keys"]["flackey"]["cidr"] == "127.0.0.1/32"
     assert data["soulseek"]["username"] == "digger"
     assert data["soulseek"]["password"] == "not-a-real-password"
     assert data["soulseek"]["listen_port"] == 50300
@@ -62,7 +62,7 @@ def test_second_write_preserves_generated_secrets_and_other_keys(tmp_path: Path)
 
     after = yaml.safe_load(path.read_text())
     assert after["web"]["authentication"]["password"] == web_password_before
-    assert after["web"]["authentication"]["api_keys"]["krater"]["key"] == key1
+    assert after["web"]["authentication"]["api_keys"]["flackey"]["key"] == key1
     assert after["web"]["port"] == 5030
     assert after["soulseek"]["listen_port"] == 50300
     assert after["directories"]["downloads"] == str(tmp_path / "slskd" / "downloads")
@@ -80,7 +80,7 @@ def test_write_fills_missing_secrets_on_a_hand_written_file(tmp_path: Path):
     assert path.stat().st_mode & 0o777 == 0o600
     data = yaml.safe_load(path.read_text())
     assert data["web"]["authentication"]["password"]
-    assert data["web"]["authentication"]["api_keys"]["krater"]["key"] == key
+    assert data["web"]["authentication"]["api_keys"]["flackey"]["key"] == key
 
 
 def test_write_fills_missing_secrets_when_web_section_is_a_bare_key(tmp_path: Path):
@@ -91,7 +91,7 @@ def test_write_fills_missing_secrets_when_web_section_is_a_bare_key(tmp_path: Pa
     path.write_text("web:\nsoulseek:\n  username: old\n")
     key = write_credentials(tmp_path, "digger", "not-a-real-password")
     data = yaml.safe_load(path.read_text())
-    assert data["web"]["authentication"]["api_keys"]["krater"]["key"] == key
+    assert data["web"]["authentication"]["api_keys"]["flackey"]["key"] == key
 
 
 @pytest.mark.parametrize("content", ["- a\n- list\n", "just a string\n"])

@@ -90,7 +90,7 @@ class TelegramLogin:
     async def start_qr(self) -> dict:
         if not self.configured:
             log.error("Telegram credentials missing: add telegram_api_id/telegram_api_hash to settings.json")
-            raise LoginError("This copy of Krater isn't set up to connect to Telegram yet.")
+            raise LoginError("This copy of Flackey isn't set up to connect to Telegram yet.")
         self._cancel_qr()  # one live QR at a time
         if not self.client.is_connected():
             # Telethon disconnects on its own when Telegram drops the session (AuthKeyUnregistered); a QR

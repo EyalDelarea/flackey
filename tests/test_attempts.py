@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from krater.attempts import AttemptRecorder, prune_raw, raw_size_bytes
-from krater.models import RequestKind
-from krater.store import Store
+from flackey.attempts import AttemptRecorder, prune_raw, raw_size_bytes
+from flackey.models import RequestKind
+from flackey.store import Store
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ class Clock:
 def test_recorder_creates_row_and_folder_and_writes_timeline(store: Store, tmp_path: Path, caplog):
     clock = Clock()
     raw = tmp_path / "raw"
-    with caplog.at_level(logging.INFO, logger="krater.attempts"):
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
         rec = AttemptRecorder(store, raw, 1, "soulseek", "Hallucinogen Orphic Thrench", clock=clock)
         clock.t += 1.5
         rec.event("search_completed", responses=12, files=40)
@@ -54,7 +54,7 @@ def test_finish_validates_outcome_and_copies_columns(store: Store, tmp_path: Pat
     clock = Clock()
     rec = AttemptRecorder(store, tmp_path / "raw", 1, "soulseek", "q", clock=clock)
     clock.t += 3
-    with caplog.at_level(logging.INFO, logger="krater.attempts"):
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
         rec.finish("filed", first_byte_ms=800, fingerprint={"status": "matched", "score": 0.98},
                    spectrogram_path="/tmp/s.png", report={"summary": "3 files"})
     row = store.get_attempt(rec.id)

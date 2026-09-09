@@ -1,4 +1,4 @@
-# Krater
+# Flackey
 
 Personal DJ library builder with a dark, pro-audio-style desktop GUI. Paste a
 YouTube or YouTube Music link into the app; a worker running on the Mac finds
@@ -20,23 +20,23 @@ label are in the tags.
 cp .env.example .env   # fill in TELEGRAM_API_ID, TELEGRAM_API_HASH
 uv sync
 npm --prefix web install
-npm --prefix web run build   # builds web/dist, which krater start serves
+npm --prefix web run build   # builds web/dist, which flackey start serves
 ```
 
 ## Usage
 
 ```bash
-uv run krater start          # worker + web UI, until Ctrl-C; opens the UI in a browser
-uv run krater start --no-browser
+uv run flackey start          # worker + web UI, until Ctrl-C; opens the UI in a browser
+uv run flackey start --no-browser
 ```
 
 The project was called cratedigger until the rename, so `crate` is kept as an
-alias for `krater` — every command below works under either name.
+alias for `flackey` — every command below works under either name.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
 phone number instead) — this authorizes your own Telegram account, via
-Telethon, as the account that talks to the source bot. `uv run krater login`
+Telethon, as the account that talks to the source bot. `uv run flackey login`
 is an optional, terminal-only way to do that same sign-in instead of the
 setup screen; neither path stores the two-step verification password.
 
@@ -44,9 +44,9 @@ Then paste a YouTube or YouTube Music track/playlist link into the UI.
 Plain text is refused and queues nothing. Useful companions:
 
 ```bash
-uv run krater add "https://music.youtube.com/watch?v=…"   # enqueue from the Mac, no phone needed
-uv run krater status                                     # queue counts and library size
-uv run krater export                                     # rewrite every M3U8 playlist file
+uv run flackey add "https://music.youtube.com/watch?v=…"   # enqueue from the Mac, no phone needed
+uv run flackey status                                     # queue counts and library size
+uv run flackey export                                     # rewrite every M3U8 playlist file
 ```
 
 ## Rekordbox import
@@ -64,18 +64,18 @@ careless drag destructive. Instead:
    Re-importing the same file after new tracks are added is also safe: cues
    set on tracks already in the collection are preserved.
 
-See `docs/superpowers/specs/2026-09-03-krater-design.md` section 8 for
+See `docs/superpowers/specs/2026-09-03-flackey-design.md` section 8 for
 the full reasoning.
 
 ## Notes on Telegram behaviour
 
 - **Session expiry**: if the owner's Telethon session goes missing or
-  expires, `krater start` does not exit — the web UI keeps running so links
+  expires, `flackey start` does not exit — the web UI keeps running so links
   still queue, but the worker pauses. `/api/health` reports
   `telegram_authorized: false`, and the UI shows an amber "Telegram signed
   out" banner with a Reconnect button. Reconnecting takes you through the
   same sign-in screen as first-time setup (QR code or phone number), without
-  restarting `krater start`; the worker resumes automatically once you're
+  restarting `flackey start`; the worker resumes automatically once you're
   signed back in.
 
 ## Lossless via Soulseek
@@ -88,7 +88,7 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
 `MP3 320 kbps via Deezer`.
 
 1. `brew install chromaprint` (for `fpcalc`; without it the recording check is skipped and shown as such).
-2. Download the slskd release for macOS, put it in `~/Library/Application Support/Krater/slskd/` with a
+2. Download the slskd release for macOS, put it in `~/Library/Application Support/Flackey/slskd/` with a
    `slskd.yml` like:
 
    ```yaml
@@ -96,7 +96,7 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
      port: 5030
      authentication:
        api_keys:
-         krater: { key: "<random 32+ chars>", role: readwrite }
+         flackey: { key: "<random 32+ chars>", role: readwrite }
    soulseek:
      username: <your soulseek account>
      password: <its password>
@@ -104,10 +104,10 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
    shares:
      directories: ["~/Music/DJ Library"]
    directories:
-     downloads: ~/Library/Application Support/Krater/slskd/downloads
+     downloads: ~/Library/Application Support/Flackey/slskd/downloads
    ```
 
-   Start it with `./slskd --app-dir "~/Library/Application Support/Krater/slskd"`. Sharing your library is
+   Start it with `./slskd --app-dir "~/Library/Application Support/Flackey/slskd"`. Sharing your library is
    what makes peers serve you; forward TCP 50300 on the router so they can reach it (searching works without).
 3. Put the same key in `.env` as `SLSKD_API_KEY=` (or in `settings.json` as `slskd_api_key`). Restart.
 4. `/api/health` shows `lossless.provider.status` (`ok`, `not_logged_in`, `unreachable`), whether `fpcalc` is
@@ -115,13 +115,13 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
 
 Every attempt is recorded: `GET /api/lossless/attempts`, the attempt block on a request, and the raw slskd
 responses under `<data dir>/lossless/attempts/<id>/` (pruned after `LOSSLESS_KEEP_RAW_DAYS`, default 30).
-`krater lossless replay <request id>` re-runs the pick under the current settings and shows what changed.
+`flackey lossless replay <request id>` re-runs the pick under the current settings and shows what changed.
 A transfer cancelled by a cap can still complete on slskd's side; such files stay in slskd's downloads folder
 and can be deleted at any time.
 
 ## Where data lives
 
-- `~/Library/Application Support/Krater/` on macOS; `~/.config/krater/` elsewhere. Two renames are
+- `~/Library/Application Support/Flackey/` on macOS; `~/.config/flackey/` elsewhere. Two renames are
   behind us — the project was called cratedigger, and before the Mac-native move its data lived under
   `~/.config` — so first launch looks for either older folder, newest first, and brings it across:
   copied, verified file by file, and only then is the old one removed, with `cratedigger.sqlite` (and
@@ -135,33 +135,33 @@ and can be deleted at any time.
 ## Docker
 
 ```bash
-docker build -t krater .
-docker run --env-file .env -v krater-data:/data -v /path/to/library:/library -p 8765:8765 krater
+docker build -t flackey .
+docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 8765:8765 flackey
 ```
 
 Open `http://localhost:8765` and sign in to Telegram from the setup screen
 (QR code or phone number). The Telethon session is stored in the `/data`
-volume, so this only needs to happen once. `uv run krater login` also works
+volume, so this only needs to happen once. `uv run flackey login` also works
 as a terminal-only alternative, run once beforehand:
 
 ```bash
-docker run --env-file .env -it -v krater-data:/data krater uv run krater login
+docker run --env-file .env -it -v flackey-data:/data flackey uv run flackey login
 ```
 
 ## Development
 
 ```bash
 npm --prefix web install
-npm --prefix web run build    # needed once before krater start
+npm --prefix web run build    # needed once before flackey start
 uv run pytest -q
 uv run ruff check src tests
 uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.toml for the exact contract
 ```
 
-`krater start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
+`flackey start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
 
 ## More
 
-- Design spec: `docs/superpowers/specs/2026-09-03-krater-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-09-03-krater-core.md`
+- Design spec: `docs/superpowers/specs/2026-09-03-flackey-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-09-03-flackey-core.md`
 - Source bot protocol notes: `docs/source-bot-protocol.md`

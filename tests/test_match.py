@@ -1,5 +1,5 @@
-from krater.match import THRESHOLD, candidate_version, decide, score_candidate
-from krater.models import Candidate, CatalogTrack, Query
+from flackey.match import THRESHOLD, candidate_version, decide, score_candidate
+from flackey.models import Candidate, CatalogTrack, Query
 
 CT = CatalogTrack(id=16552105, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="L", genre="G", duration_ms=442816)

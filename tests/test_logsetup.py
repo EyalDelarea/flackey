@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from krater.config import Settings
-from krater.logsetup import configure_logging, log_startup_banner
+from flackey.config import Settings
+from flackey.logsetup import configure_logging, log_startup_banner
 
 _THIRD_PARTY_LOGGERS = ("telethon", "httpx", "httpcore", "uvicorn", "uvicorn.error", "uvicorn.access", "asyncio")
-LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} DEBUG   krater\.x: hello$")
+LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} DEBUG   flackey\.x: hello$")
 
 
 @pytest.fixture(autouse=True)
@@ -33,21 +33,21 @@ def _restore_logging():
 
 def test_configure_logging_creates_the_log_file(tmp_path: Path):
     log_path = configure_logging(tmp_path)
-    assert log_path == tmp_path / "krater.log"
+    assert log_path == tmp_path / "flackey.log"
     assert log_path.exists()
 
 
-def test_krater_logger_lands_in_the_file_at_debug_with_a_timestamp(tmp_path: Path):
+def test_flackey_logger_lands_in_the_file_at_debug_with_a_timestamp(tmp_path: Path):
     configure_logging(tmp_path)
-    logging.getLogger("krater.x").debug("hello")
-    lines = (tmp_path / "krater.log").read_text(encoding="utf-8").splitlines()
+    logging.getLogger("flackey.x").debug("hello")
+    lines = (tmp_path / "flackey.log").read_text(encoding="utf-8").splitlines()
     assert any(LINE_RE.match(line) for line in lines), lines
 
 
 def test_third_party_debug_noise_does_not_land_in_the_file(tmp_path: Path):
     configure_logging(tmp_path)
     logging.getLogger("telethon").debug("noise")
-    assert "noise" not in (tmp_path / "krater.log").read_text(encoding="utf-8")
+    assert "noise" not in (tmp_path / "flackey.log").read_text(encoding="utf-8")
 
 
 def test_configure_logging_twice_leaves_one_file_handler(tmp_path: Path):
@@ -70,8 +70,8 @@ def test_banner_never_logs_the_api_hash(tmp_path: Path):
 
 
 def test_banner_says_whether_soulseek_is_on_without_the_key(tmp_path, caplog):
-    from krater.config import Settings
-    from krater.logsetup import log_startup_banner
+    from flackey.config import Settings
+    from flackey.logsetup import log_startup_banner
 
     caplog.set_level("INFO")
     log_startup_banner(Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="very-secret-key"), "0.1.0")

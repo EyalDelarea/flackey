@@ -43,7 +43,7 @@ export default function ReadyStep({ libraryRoot, onStart, error, soulseekPending
         account saved during this wizard does not take effect on the process that is already running.
         Say so plainly rather than letting the user wonder why nothing lossless ever arrives. */}
     {soulseekPending && <div className="hint-row">Soulseek is saved. It starts looking for lossless copies the
-      next time you open krater.</div>}
+      next time you open flackey.</div>}
     <button className="btn-primary lg" onClick={start} disabled={!tools || busy}>Start digging</button>
     {err && <div className="err">{err}</div>}
     {error && <div className="err">{error}</div>}

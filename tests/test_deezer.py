@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from krater.deezer import DeezerApi, DeezerError, parse_track_json
+from flackey.deezer import DeezerApi, DeezerError, parse_track_json
 
 SAMPLE = {"id": 1754956977, "isrc": "UKU932231081", "title": "Into the Void", "title_short": "Into the Void",
           "title_version": "", "duration": 442, "release_date": "2022-06-03",

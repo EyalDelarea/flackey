@@ -13,18 +13,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .slskd_config import read_api_key, repoint_slskd_config
 
 log = logging.getLogger(__name__)
-XDG_DATA_DIR = Path("~/.config/krater")
-# Two renames are behind us: the project was called cratedigger, and before the Mac-native move its data
-# lived under ~/.config. Both folders can still be on a machine, so `migrate_legacy_data_dir` walks them
-# newest first rather than knowing about one. Never derive these from the current name -- that is exactly
-# the bug where the migration looks for its own destination, finds nothing, and orphans the library.
-LEGACY_APP_DIR_NAME = "Cratedigger"
-LEGACY_XDG_DIR = Path("~/.config/cratedigger")
-LEGACY_FILE_PREFIX = "cratedigger"     # cratedigger.sqlite, its -wal/-shm sidecars, cratedigger.log
-FILE_PREFIX = "krater"
+XDG_DATA_DIR = Path("~/.config/flackey")
+# Every name this project has shipped under, newest first. Two renames are behind us -- cratedigger, then
+# krater -- and before the Mac-native move the data lived under ~/.config, so a machine can still be
+# carrying any of these folders. `migrate_legacy_data_dir` walks them in order and takes the first that
+# exists. Never derive them from the current name: that is exactly the bug where the migration looks for
+# its own destination, finds nothing, and orphans the library. A third rename costs one entry per tuple.
+LEGACY_APP_DIR_NAMES = ("Krater", "Cratedigger")
+LEGACY_XDG_DIRS = (Path("~/.config/krater"), Path("~/.config/cratedigger"))
+LEGACY_FILE_PREFIXES = ("krater", "cratedigger")   # <name>.sqlite, its -wal/-shm sidecars, <name>.log
+FILE_PREFIX = "flackey"
 # Rebuilt from the running venv on every launch (see desktop.build_bundle) and carries an absolute-path
-# pyvenv.cfg, so copying it would only carry a stale bundle under the wrong name across.
-SKIP_ON_MIGRATE = (f"{LEGACY_APP_DIR_NAME}.app",)
+# pyvenv.cfg, so copying one would only carry a stale bundle under the wrong name across. Every
+# generation's bundle is skipped, not only the newest.
+SKIP_ON_MIGRATE = tuple(f"{name}.app" for name in LEGACY_APP_DIR_NAMES)
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
@@ -33,16 +35,17 @@ FILING_FORMATS = ("aiff", "wav", "flac")
 
 def default_data_dir() -> Path:
     if sys.platform == "darwin":
-        return Path("~/Library/Application Support/Krater").expanduser()
+        return Path("~/Library/Application Support/Flackey").expanduser()
     return XDG_DATA_DIR.expanduser()
 
 
 def legacy_data_dirs() -> tuple[Path, ...]:
     """Every folder an earlier version kept its data in, newest first."""
-    xdg = LEGACY_XDG_DIR.expanduser()
+    xdg = tuple(p.expanduser() for p in LEGACY_XDG_DIRS)
     if sys.platform != "darwin":
-        return (xdg,)
-    return (Path("~/Library/Application Support").expanduser() / LEGACY_APP_DIR_NAME, xdg)
+        return xdg
+    support = Path("~/Library/Application Support").expanduser()
+    return tuple(support / name for name in LEGACY_APP_DIR_NAMES) + xdg
 
 
 class Settings(BaseSettings):
@@ -120,7 +123,10 @@ class Settings(BaseSettings):
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "krater.sqlite"
+        # Derived, never spelled out: this is the live database name, and a rename that updates the
+        # legacy prefixes but misses a literal here starts the app on an empty database with the real
+        # library orphaned beside it under the old name.
+        return self.data_dir / f"{FILE_PREFIX}.sqlite"
 
     @property
     def session_path(self) -> Path:
@@ -151,7 +157,7 @@ def _read_settings_file(path: Path) -> dict:
 
 def load_settings(env_file: Path | None = None) -> Settings:
     """Precedence: environment > .env > settings.json in the data folder > defaults. When nothing in
-    that chain set an API key, fall back to the one krater already generated for itself in the
+    that chain set an API key, fall back to the one flackey already generated for itself in the
     managed slskd.yml (see slskd_config.write_credentials) -- that file is the key's only copy."""
     if env_file is None:
         # `./.env` when run from the repo root; otherwise the repo's own .env, so `crate` works from any cwd
@@ -255,9 +261,22 @@ def _sizes(root: Path) -> dict[str, int]:
 
 
 def _rename_legacy_files(root: Path) -> None:
-    """`cratedigger.sqlite`, its `-wal` and `-shm` sidecars and `cratedigger.log` all carry the old name.
-    Renamed by prefix so the sqlite trio stays consistent: SQLite finds its write-ahead log by the
-    `<database name>-wal` convention, so renaming the database on its own would strand the pages in it."""
-    for p in sorted(root.iterdir()):
-        if p.is_file() and p.name.startswith(LEGACY_FILE_PREFIX):
-            p.rename(root / (FILE_PREFIX + p.name[len(LEGACY_FILE_PREFIX):]))
+    """`krater.sqlite` / `cratedigger.sqlite`, their `-wal` and `-shm` sidecars and the matching `.log` all
+    carry an older name. Renamed by prefix so the sqlite trio stays consistent: SQLite finds its
+    write-ahead log by the `<database name>-wal` convention, so renaming the database on its own would
+    strand the pages in it.
+
+    Newest generation first, and a rename whose destination already exists is skipped rather than taken.
+    A folder holding both `krater.sqlite` and `cratedigger.sqlite` has two databases wanting the same new
+    name: `Path.rename` overwrites silently on POSIX, and pairing one database's `-wal` with another's
+    main file is how you get something SQLite refuses to open. Skipping loses nothing -- the older file
+    stays under its own name, where it can still be recovered by hand."""
+    for prefix in LEGACY_FILE_PREFIXES:
+        for p in sorted(root.iterdir()):
+            if not p.is_file() or not p.name.startswith(prefix):
+                continue
+            dest = root / (FILE_PREFIX + p.name[len(prefix):])
+            if dest.exists():
+                log.warning("not renaming %s: %s already exists", p.name, dest.name)
+                continue
+            p.rename(dest)

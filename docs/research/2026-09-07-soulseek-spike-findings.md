@@ -7,10 +7,10 @@ was asked for the 20 tracks already in the library. Scripts and raw output are i
 
 ## Setup that was done
 
-- slskd 0.26.0, native arm64 binary, lives in `~/Library/Application Support/Krater/slskd/`
+- slskd 0.26.0, native arm64 binary, lives in `~/Library/Application Support/Flackey/slskd/`
   (binary, `slskd.yml`, `api_key`, `downloads/`, `incomplete/`, `slskd.log`, `data/`). Started by
   hand with `./slskd --app-dir <that folder>`; nothing auto-starts it yet.
-- Fresh Soulseek account `krater-dj` (`krater` was already taken: the server answers
+- Fresh Soulseek account `flackey-dj` (`flackey` was already taken: the server answers
   "invalid username or password" for a taken name). Password and API key were generated and exist
   only in `slskd.yml`, which is mode 600 and outside the repo.
 - Shares: `~/Music/DJ Library` read-only. slskd scanned it in 90 ms: 14 directories, 23 files.
@@ -78,7 +78,7 @@ Observations:
 ## Download probe
 
 Six of the best picks were enqueued at once (five with a free slot and empty queue, one with 26
-in queue), then polled every 2 s. Each finished file was run through `krater.verify.verify`.
+in queue), then polled every 2 s. Each finished file was run through `flackey.verify.verify`.
 
 | # | Track | Peer | Queue | Transfer states (s) | Done in | Speed | verify | fmt/bitrate/cutoff | reason |
 |---|---|---|---|---|---|---|---|---|---|
@@ -127,13 +127,13 @@ Observations:
 ## Conversion and Rekordbox check (same day, later)
 
 Question: does converting the downloaded FLAC to AIFF (the filing format the owner chose) and tagging it
-with krater's own tag code harm the audio, and does Rekordbox treat the result like the MP3s it
+with flackey's own tag code harm the audio, and does Rekordbox treat the result like the MP3s it
 already knows?
 
 Method (throwaway script, scratchpad only): for each of the six downloaded FLACs, decode to raw PCM and
 hash it, convert with `ffmpeg -vn -map 0:a -c:a pcm_s16be` (`pcm_s24be` for the one 24-bit master),
-write Beatport tags plus artwork through `krater.tag.write_tags`, then decode and hash again.
-One track was also written as WAV. The 13 files were staged in `~/Music/Krater Soulseek Test`
+write Beatport tags plus artwork through `flackey.tag.write_tags`, then decode and hash again.
+One track was also written as WAV. The 13 files were staged in `~/Music/Flackey Soulseek Test`
 and imported into Rekordbox 7 by hand; the results were read back from Rekordbox's `master.db` with
 pyrekordbox, next to the library MP3s of the same six tracks.
 
@@ -179,7 +179,7 @@ tagging. AIFF is about 1.5x the FLAC size.
 - Astral Projection differs from the MP3 (100.04 vs 99.88 BPM, 469 vs 471 s) because the Soulseek file
   is a different master of the track, not because of the conversion: the FLAC and its AIFF agree exactly.
   The 1.4 s gap sits inside the 3 s duration tolerance.
-- AIFF carries title, artist, album, label, genre, year, artwork and the krater comment into
+- AIFF carries title, artist, album, label, genre, year, artwork and the flackey comment into
   Rekordbox exactly like the MP3. The WAV lost label, artwork and comment and got a genre from elsewhere:
   Rekordbox reads RIFF INFO from WAV, not the ID3 chunk. This confirms AIFF over WAV.
 - Rekordbox shows FLAC as "VBR" with bitrate 0 (cosmetic) and the 24-bit AIFF as 2116 kbps; both

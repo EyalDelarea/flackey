@@ -1,6 +1,6 @@
 import asyncio
 
-from krater.app import supervise_worker
+from flackey.app import supervise_worker
 
 
 async def test_supervisor_starts_the_worker_when_telegram_becomes_authorized():
@@ -43,8 +43,8 @@ async def test_supervisor_keeps_running_after_worker_crash():
 
 
 async def test_streams_close_once_the_server_is_told_to_exit():
-    from krater.app import close_streams_on_exit
-    from krater.events import EventBus
+    from flackey.app import close_streams_on_exit
+    from flackey.events import EventBus
 
     class FakeServer:
         should_exit = False
@@ -61,7 +61,7 @@ async def test_streams_close_once_the_server_is_told_to_exit():
 
 async def test_background_loops_stop_when_the_server_returns():
     """Ctrl-C makes uvicorn's serve() return; the supervisor loop is endless and must be cancelled with it."""
-    from krater.app import run_until_server_stops
+    from flackey.app import run_until_server_stops
 
     async def serve():
         await asyncio.sleep(0.01)
@@ -74,7 +74,7 @@ async def test_background_loops_stop_when_the_server_returns():
 
 
 async def test_serve_publishes_the_url_once_the_server_is_listening():
-    from krater.app import ServerHandle, serve
+    from flackey.app import ServerHandle, serve
 
     class FakeServer:
         started = False
@@ -96,7 +96,7 @@ async def test_serve_publishes_the_url_once_the_server_is_listening():
 
 
 async def test_serve_reports_a_startup_failure_through_the_handle():
-    from krater.app import ServerHandle, serve
+    from flackey.app import ServerHandle, serve
 
     class FailingServer:
         started = False
@@ -118,12 +118,12 @@ async def test_serve_reports_a_startup_failure_through_the_handle():
 async def test_run_wakes_a_waiting_thread_even_when_startup_fails_before_the_server_exists():
     from unittest.mock import patch
 
-    from krater.app import ServerHandle, run
+    from flackey.app import ServerHandle, run
 
     handle = ServerHandle()
 
     # Simulate startup failure before server exists by raising from migrate_legacy_data_dir
-    with patch("krater.app.migrate_legacy_data_dir", side_effect=RuntimeError("boom")):
+    with patch("flackey.app.migrate_legacy_data_dir", side_effect=RuntimeError("boom")):
         try:
             await run(object(), handle=handle)  # type: ignore
         except RuntimeError as e:
@@ -138,9 +138,9 @@ async def test_run_wakes_a_waiting_thread_even_when_startup_fails_before_the_ser
 def test_build_providers_follows_the_api_key_and_never_logs_it(tmp_path, caplog):
     import httpx
 
-    from krater.app import build_providers
-    from krater.config import Settings
-    from krater.source.slskd import SoulseekProvider
+    from flackey.app import build_providers
+    from flackey.config import Settings
+    from flackey.source.slskd import SoulseekProvider
 
     caplog.set_level("DEBUG")
     http = httpx.AsyncClient()

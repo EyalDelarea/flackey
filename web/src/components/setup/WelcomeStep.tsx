@@ -35,7 +35,7 @@ export default function WelcomeStep({ onStart }: { onStart: () => void }) {
         {METERS.map((x, i) => <div key={i} className="meter" style={{ left: `${x}%`, animationDelay: `${(i * -0.12).toFixed(2)}s` }} />)}
       </div>
       <div className="pitch">
-        <h1>Krater</h1>
+        <h1>Flackey</h1>
         <p className="lead">Paste a YouTube link. Get the best copy that exists — lossless where Soulseek has it — tagged and filed where Rekordbox will find it.</p>
       </div>
       <div className="cta">

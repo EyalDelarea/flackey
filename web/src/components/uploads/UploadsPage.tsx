@@ -17,7 +17,7 @@ export default function UploadsPage({ inset }: { inset: boolean }) {
   const [feed, setFeed] = useState<UploadFeed | null>(null)
   const [error, setError] = useState<string | null>(null)
   const load = useCallback(async () => {
-    try { setFeed(await api.uploads()); setError(null) } catch { setError("Can't reach Krater.") }
+    try { setFeed(await api.uploads()); setError(null) } catch { setError("Can't reach Flackey.") }
   }, [])
   useEffect(() => {
     load().catch(() => undefined)

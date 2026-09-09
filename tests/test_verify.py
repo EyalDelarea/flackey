@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from krater.verify import probe, spectral_cutoff_hz, spectrogram_png, verify
+from flackey.verify import probe, spectral_cutoff_hz, spectrogram_png, verify
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg

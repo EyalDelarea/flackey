@@ -5,9 +5,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from krater.config import Settings
-from krater.slskd_binary import SlskdBinaryError
-from krater.soulseek_link import TAKEN_HINT, SoulseekLink
+from flackey.config import Settings
+from flackey.slskd_binary import SlskdBinaryError
+from flackey.soulseek_link import TAKEN_HINT, SoulseekLink
 
 
 class Clock:

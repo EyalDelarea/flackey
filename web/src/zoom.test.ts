@@ -49,7 +49,7 @@ describe('installZoom', () => {
   })
 
   it('loads zoom from localStorage on install', () => {
-    localStorage.setItem('krater.zoom', '1.5')
+    localStorage.setItem('flackey.zoom', '1.5')
     const uninstall = installZoom()
     expect(document.documentElement.style.zoom).toBe('1.5')
     uninstall()
@@ -85,7 +85,7 @@ describe('installZoom', () => {
     const uninstall = installZoom()
     const e = new KeyboardEvent('keydown', { key: '=', metaKey: true })
     document.dispatchEvent(e)
-    expect(localStorage.getItem('krater.zoom')).toBe('1.1')
+    expect(localStorage.getItem('flackey.zoom')).toBe('1.1')
     uninstall()
   })
 

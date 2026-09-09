@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from krater.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
-from krater.source.slskd import SlskdClient, SoulseekProvider, local_path_for, parse_response
+from flackey.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
+from flackey.source.slskd import SlskdClient, SoulseekProvider, local_path_for, parse_response
 
 BASE = "http://slskd.test/api/v0"
 
@@ -50,7 +50,7 @@ def test_parse_response_derives_extension_and_peer_fields(fixtures: Path):
 
 
 def test_local_path_is_derived_and_contained(tmp_path: Path):
-    from krater.lossless import LosslessFile
+    from flackey.lossless import LosslessFile
     base = {"provider": "soulseek", "username": "u", "extension": "flac", "size": 1, "length_s": 1,
             "bitrate_kbps": None, "sample_rate": None, "bit_depth": None, "has_free_slot": True,
             "upload_speed_bps": 0, "queue_length": 0}
@@ -71,7 +71,7 @@ def test_local_path_is_derived_and_contained(tmp_path: Path):
 async def test_health_reports_login_state_and_unreachable(provider, fixtures: Path):
     p, _, _ = provider
     respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=load(fixtures, "application.json")))
-    assert await p.health() == {"status": "ok", "username": "krater-dj"}
+    assert await p.health() == {"status": "ok", "username": "flackey-dj"}
     app = load(fixtures, "application.json")
     app["server"]["isLoggedIn"] = False
     respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=app))
@@ -132,7 +132,7 @@ def transfer(state: str, done: int, size: int = 51223918, username: str = "login
 
 
 def flac_file(size: int = 51223918):
-    from krater.lossless import LosslessFile
+    from flackey.lossless import LosslessFile
     return LosslessFile(provider="soulseek", username="loginty", extension="flac", size=size, length_s=442,
                         path="Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac",
                         bitrate_kbps=None, sample_rate=44100, bit_depth=16, has_free_slot=True,

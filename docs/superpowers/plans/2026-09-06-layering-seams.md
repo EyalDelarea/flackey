@@ -4,7 +4,7 @@
 
 **Goal:** Fix the four misplaced seams the layout audit found, and make the module tiering an enforced rule, without moving the package into subfolders.
 
-**Architecture:** Keep `src/krater/` flat. Move naming logic onto the model, split yt-dlp I/O out of the pure parser, put the Telegram notifier in its own module beside the Notifier port, then add an import-linter "layers" contract that pins the order cli → app → web/inbox → worker → adapters → domain → leaves.
+**Architecture:** Keep `src/flackey/` flat. Move naming logic onto the model, split yt-dlp I/O out of the pure parser, put the Telegram notifier in its own module beside the Notifier port, then add an import-linter "layers" contract that pins the order cli → app → web/inbox → worker → adapters → domain → leaves.
 
 **Tech Stack:** Python 3.12, uv, pytest (asyncio_mode=auto), ruff, import-linter (new dev dependency).
 
@@ -13,8 +13,8 @@
 ## Global Constraints
 
 - No behavior changes. Every existing test keeps passing; tests are only moved or re-pointed at new import paths.
-- Package stays flat: no new subpackages under `src/krater/`.
-- `crate = "krater.cli:app"` in `pyproject.toml` and `UI_DIR` in `app.py` are untouched.
+- Package stays flat: no new subpackages under `src/flackey/`.
+- `crate = "flackey.cli:app"` in `pyproject.toml` and `UI_DIR` in `app.py` are untouched.
 - Run tests with `uv run pytest -q` (must pass) and `uv run ruff check src tests`. Ruff has 40 pre-existing errors at baseline (RUF059, I001 and friends); the rule is "no new ruff errors": the total must not rise above 40, and no error may point at a line you added or moved. Where a step below says "ruff clean", read it as this rule.
 - Commit after each task. Conventional-commit prefix, body ends with the session trailers already configured for this repo.
 
@@ -23,9 +23,9 @@
 ### Task 1: `display_title` becomes a `CatalogTrack` property
 
 **Files:**
-- Modify: `src/krater/models.py:77-101` (CatalogTrack dataclass)
-- Modify: `src/krater/tag.py:1-40` (remove `_is_original`, `display_title`; use the property)
-- Modify: `src/krater/library.py:8-24` (drop the tag import; use the property)
+- Modify: `src/flackey/models.py:77-101` (CatalogTrack dataclass)
+- Modify: `src/flackey/tag.py:1-40` (remove `_is_original`, `display_title`; use the property)
+- Modify: `src/flackey/library.py:8-24` (drop the tag import; use the property)
 - Modify: `tests/test_tag.py:8-16, 88-98` (remove import and the moved test)
 - Test: `tests/test_models.py`
 
@@ -39,7 +39,7 @@ Append to the end of the file:
 ```python
 import pytest
 
-from krater.models import CatalogTrack
+from flackey.models import CatalogTrack
 
 
 def _ct(mix: str) -> CatalogTrack:
@@ -91,7 +91,7 @@ Remove the line `from .tag import display_title`. In `final_path`, change `sanit
 
 - [ ] **Step 7: Remove the moved test from `tests/test_tag.py`**
 
-Delete `display_title,` from the `from krater.tag import (...)` block and delete the whole `test_display_title_word_boundary_original` function (the parametrize decorator plus the function, lines 88-98).
+Delete `display_title,` from the `from flackey.tag import (...)` block and delete the whole `test_display_title_word_boundary_original` function (the parametrize decorator plus the function, lines 88-98).
 
 - [ ] **Step 8: Run the full suite and ruff**
 
@@ -101,7 +101,7 @@ Expected: all tests pass, ruff clean. `grep -rn display_title src tests` should 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/krater/models.py src/krater/tag.py src/krater/library.py tests/test_models.py tests/test_tag.py
+git add src/flackey/models.py src/flackey/tag.py src/flackey/library.py tests/test_models.py tests/test_tag.py
 git commit -m "refactor(models): make display_title a CatalogTrack property so library stops importing tag"
 ```
 
@@ -110,29 +110,29 @@ git commit -m "refactor(models): make display_title a CatalogTrack property so l
 ### Task 2: Split yt-dlp I/O out of `identify.py` into `youtube.py`
 
 **Files:**
-- Create: `src/krater/youtube.py`
-- Modify: `src/krater/identify.py:1-34, 129-161`
-- Modify: `src/krater/inbox.py:10`
+- Create: `src/flackey/youtube.py`
+- Modify: `src/flackey/identify.py:1-34, 129-161`
+- Modify: `src/flackey/inbox.py:10`
 - Modify: `tests/test_identify.py:3-5, 93-115`
 - Modify: `tests/test_inbox.py:6`
 - Create: `tests/test_youtube.py`
 
 **Interfaces:**
-- Produces: module `krater.youtube` exporting `YouTubeError`, `YouTubeEntry`, `parse_ytdlp_json(data: dict) -> tuple[str, list[YouTubeEntry]]`, `YOUTUBE_FETCH_TIMEOUT_S`, `async fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]`. Same signatures as today.
-- `krater.identify` keeps only `classify`, `parse_version`, `parse_text`, `parse_youtube_title` and their private helpers.
+- Produces: module `flackey.youtube` exporting `YouTubeError`, `YouTubeEntry`, `parse_ytdlp_json(data: dict) -> tuple[str, list[YouTubeEntry]]`, `YOUTUBE_FETCH_TIMEOUT_S`, `async fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]`. Same signatures as today.
+- `flackey.identify` keeps only `classify`, `parse_version`, `parse_text`, `parse_youtube_title` and their private helpers.
 
 - [ ] **Step 1: Create `tests/test_youtube.py` by moving the two ytdlp tests**
 
 Cut `test_parse_ytdlp_playlist_json` and `test_parse_ytdlp_video_json` (lines 93-115) out of `tests/test_identify.py` and paste them into a new `tests/test_youtube.py` with this header:
 
 ```python
-from krater.youtube import parse_ytdlp_json
+from flackey.youtube import parse_ytdlp_json
 ```
 
 In `tests/test_identify.py`, remove `parse_ytdlp_json,` from the import block so it reads:
 
 ```python
-from krater.identify import (
+from flackey.identify import (
     classify, parse_text, parse_version, parse_youtube_title,
 )
 ```
@@ -140,9 +140,9 @@ from krater.identify import (
 - [ ] **Step 2: Run the new test file to verify it fails**
 
 Run: `uv run pytest tests/test_youtube.py -q`
-Expected: FAIL with `ModuleNotFoundError: No module named 'krater.youtube'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'flackey.youtube'`
 
-- [ ] **Step 3: Create `src/krater/youtube.py`**
+- [ ] **Step 3: Create `src/flackey/youtube.py`**
 
 Move these verbatim from `identify.py`: the `YouTubeError` class, the `YouTubeEntry` dataclass, `parse_ytdlp_json`, `YOUTUBE_FETCH_TIMEOUT_S`, and `fetch_youtube`. The new file is:
 
@@ -224,17 +224,17 @@ from .youtube import YouTubeEntry, YouTubeError, fetch_youtube
 
 - [ ] **Step 6: Re-point `tests/test_inbox.py`**
 
-Replace line 6 `from krater.identify import YouTubeEntry, YouTubeError` with `from krater.youtube import YouTubeEntry, YouTubeError`.
+Replace line 6 `from flackey.identify import YouTubeEntry, YouTubeError` with `from flackey.youtube import YouTubeEntry, YouTubeError`.
 
 - [ ] **Step 7: Run the full suite and ruff**
 
 Run: `uv run pytest -q && uv run ruff check src tests`
-Expected: all tests pass, ruff clean. `grep -rn "yt-dlp\|subprocess\|asyncio" src/krater/identify.py` prints nothing.
+Expected: all tests pass, ruff clean. `grep -rn "yt-dlp\|subprocess\|asyncio" src/flackey/identify.py` prints nothing.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/krater/youtube.py src/krater/identify.py src/krater/inbox.py tests/test_youtube.py tests/test_identify.py tests/test_inbox.py
+git add src/flackey/youtube.py src/flackey/identify.py src/flackey/inbox.py tests/test_youtube.py tests/test_identify.py tests/test_inbox.py
 git commit -m "refactor(identify): move yt-dlp fetch into youtube.py so identify is pure parsing"
 ```
 
@@ -243,20 +243,20 @@ git commit -m "refactor(identify): move yt-dlp fetch into youtube.py so identify
 ### Task 3: Move `TelegramNotifier` into `telegram_notify.py`
 
 **Files:**
-- Create: `src/krater/telegram_notify.py`
-- Modify: `src/krater/inbox.py:1-14, 103-116`
-- Modify: `src/krater/app.py:15, 53`
+- Create: `src/flackey/telegram_notify.py`
+- Modify: `src/flackey/inbox.py:1-14, 103-116`
+- Modify: `src/flackey/app.py:15, 53`
 - Test: `tests/test_telegram_notify.py` (new)
 
 **Interfaces:**
-- Produces: `krater.telegram_notify.TelegramNotifier(bot: aiogram.Bot, owner_id: int)` with `async send(text: str, buttons: list[Button] | None = None) -> None`. Identical behavior to today's class at `inbox.py:103`.
+- Produces: `flackey.telegram_notify.TelegramNotifier(bot: aiogram.Bot, owner_id: int)` with `async send(text: str, buttons: list[Button] | None = None) -> None`. Identical behavior to today's class at `inbox.py:103`.
 - Rationale: the Notifier Protocol and its in-memory fakes stay pure in `notify.py`. The adapter gets its own module, mirroring `source/base.py` + `source/deezer_bot.py`. `notify.py` does not import aiogram, so `worker.py` and `cli.py` keep a light import graph.
 
 - [ ] **Step 1: Write the failing test `tests/test_telegram_notify.py`**
 
 ```python
-from krater.notify import Button
-from krater.telegram_notify import TelegramNotifier
+from flackey.notify import Button
+from flackey.telegram_notify import TelegramNotifier
 
 
 class FakeBot:
@@ -291,9 +291,9 @@ async def test_send_failure_is_swallowed():
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `uv run pytest tests/test_telegram_notify.py -q`
-Expected: FAIL with `ModuleNotFoundError: No module named 'krater.telegram_notify'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'flackey.telegram_notify'`
 
-- [ ] **Step 3: Create `src/krater/telegram_notify.py`**
+- [ ] **Step 3: Create `src/flackey/telegram_notify.py`**
 
 ```python
 from __future__ import annotations
@@ -330,7 +330,7 @@ Expected: 3 passed
 
 - [ ] **Step 5: Delete the class from `inbox.py` and prune imports**
 
-Delete `class TelegramNotifier` (lines 103-116). Remove `from .notify import Button` and drop `InlineKeyboardButton, InlineKeyboardMarkup` from the `aiogram.types` import if nothing else in `inbox.py` uses them. Check with `grep -n "InlineKeyboard\|Button" src/krater/inbox.py` and keep whatever is still referenced.
+Delete `class TelegramNotifier` (lines 103-116). Remove `from .notify import Button` and drop `InlineKeyboardButton, InlineKeyboardMarkup` from the `aiogram.types` import if nothing else in `inbox.py` uses them. Check with `grep -n "InlineKeyboard\|Button" src/flackey/inbox.py` and keep whatever is still referenced.
 
 - [ ] **Step 6: Re-point `app.py`**
 
@@ -351,7 +351,7 @@ Expected: all pass, ruff clean. `grep -rn TelegramNotifier src tests` shows only
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/krater/telegram_notify.py src/krater/inbox.py src/krater/app.py tests/test_telegram_notify.py
+git add src/flackey/telegram_notify.py src/flackey/inbox.py src/flackey/app.py tests/test_telegram_notify.py
 git commit -m "refactor(notify): move TelegramNotifier out of inbox into its own adapter module"
 ```
 
@@ -377,19 +377,19 @@ Append to `pyproject.toml`:
 
 ```toml
 [tool.importlinter]
-root_package = "krater"
+root_package = "flackey"
 
 [[tool.importlinter.contracts]]
 name = "cli -> app -> surfaces -> worker -> adapters -> domain -> leaves"
 type = "layers"
 layers = [
-  "krater.models",
-  "krater.cli",
+  "flackey.models",
+  "flackey.cli",
 ]
 ```
 
 Run: `uv run lint-imports`
-Expected: FAIL, reporting that `krater.cli` imports `krater.models` (via config) against the declared order. This confirms the tool sees the package. If it reports "no packages found", check that `uv sync` has installed the project in editable mode and rerun.
+Expected: FAIL, reporting that `flackey.cli` imports `flackey.models` (via config) against the declared order. This confirms the tool sees the package. If it reports "no packages found", check that `uv sync` has installed the project in editable mode and rerun.
 
 - [ ] **Step 3: Replace with the real contract**
 
@@ -397,13 +397,13 @@ Replace the `layers` list with:
 
 ```toml
 layers = [
-  "krater.cli",
-  "krater.app",
-  "krater.web : krater.inbox",
-  "krater.worker",
-  "krater.telegram_notify : krater.library : krater.export : krater.tag : krater.verify : krater.store : krater.catalog : krater.deezer : krater.youtube : krater.source",
-  "krater.match : krater.identify",
-  "krater.notify : krater.config : krater.models",
+  "flackey.cli",
+  "flackey.app",
+  "flackey.web : flackey.inbox",
+  "flackey.worker",
+  "flackey.telegram_notify : flackey.library : flackey.export : flackey.tag : flackey.verify : flackey.store : flackey.catalog : flackey.deezer : flackey.youtube : flackey.source",
+  "flackey.match : flackey.identify",
+  "flackey.notify : flackey.config : flackey.models",
 ]
 ```
 

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from mutagen.flac import FLAC, Picture
 
-from krater.convert import ConvertError, to_format
-from krater.verify import probe
+from flackey.convert import ConvertError, to_format
+from flackey.verify import probe
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg

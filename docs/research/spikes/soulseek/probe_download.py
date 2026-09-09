@@ -1,5 +1,5 @@
 """Throwaway spike: enqueue the best lossless result for a handful of tracks, time the transfers,
-then run krater's verify() on the files. Reads probe_search_run1.json, writes probe_download.md."""
+then run flackey's verify() on the files. Reads probe_search_run1.json, writes probe_download.md."""
 from __future__ import annotations
 
 import json
@@ -11,10 +11,10 @@ from pathlib import Path
 import httpx
 from probe_search import classify, queries, run_search
 
-from krater.verify import VerifyError, verify
+from flackey.verify import VerifyError, verify
 
 HERE = Path(__file__).parent
-APP = Path.home() / "Library/Application Support/Krater/slskd"
+APP = Path.home() / "Library/Application Support/Flackey/slskd"
 KEY = (APP / "api_key").read_text().strip()
 BASE = "http://127.0.0.1:5030/api/v0"
 H = {"X-API-Key": KEY}

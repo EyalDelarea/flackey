@@ -5,11 +5,11 @@ import types
 
 import pytest
 
-from krater.app import ServerHandle
+from flackey.app import ServerHandle
 
 
 def test_wait_for_server_returns_the_url():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     h = ServerHandle(url="http://localhost:8765")
     h.started.set()
@@ -17,7 +17,7 @@ def test_wait_for_server_returns_the_url():
 
 
 def test_wait_for_server_raises_the_startup_error():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     h = ServerHandle(error=OSError("port taken"))
     h.started.set()
@@ -26,14 +26,14 @@ def test_wait_for_server_raises_the_startup_error():
 
 
 def test_wait_for_server_times_out_as_a_runtime_error():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     with pytest.raises(RuntimeError):
         wait_for_server(ServerHandle(), timeout_s=0.05)
 
 
 def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
-    import krater.desktop as desktop
+    import flackey.desktop as desktop
 
     async def fake_run(settings, open_browser=True, handle=None):
         handle.url = "http://localhost:1"
@@ -49,7 +49,7 @@ def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
 
 
 def test_window_api_resize_forwards_to_the_window():
-    from krater.desktop import WindowApi
+    from flackey.desktop import WindowApi
 
     class W:
         calls = []
@@ -65,7 +65,7 @@ def test_window_api_resize_forwards_to_the_window():
 
 
 def test_inset_titlebar_needs_a_native_handle():
-    from krater.desktop import inset_titlebar
+    from flackey.desktop import inset_titlebar
 
     class NoNative:
         native = None
@@ -74,14 +74,14 @@ def test_inset_titlebar_needs_a_native_handle():
 
 
 def test_system_is_dark_is_false_off_macos(monkeypatch):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.system_is_dark() is False
 
 
 def test_app_icon_asset_is_a_1024_square_png():
-    from krater.desktop import APP_ICON
+    from flackey.desktop import APP_ICON
 
     data = APP_ICON.read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
@@ -90,14 +90,14 @@ def test_app_icon_asset_is_a_1024_square_png():
 
 
 def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(desktop, "APP_ICON", tmp_path / "missing.png")
     assert desktop.app_icon() is None
 
 
 def test_set_app_name_is_false_off_macos(monkeypatch):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.set_app_name() is False
@@ -121,7 +121,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
     `windows["window"]` is the FakeWindow created by `create_window` (once run_in_window has
     run), `started` records the kwargs passed to `webview.start`, and `handle` is the
     ServerHandle the fake `start_server_thread` hands back."""
-    from krater import desktop
+    from flackey import desktop
 
     windows: dict[str, FakeWindow] = {}
     started: dict[str, object] = {}
@@ -148,7 +148,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
 
 
 def test_run_in_window_hands_the_dock_icon_to_pywebview(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     _, started, _ = _install_fake_webview(monkeypatch, tmp_path)
     desktop.run_in_window(settings=object())
@@ -156,7 +156,7 @@ def test_run_in_window_hands_the_dock_icon_to_pywebview(monkeypatch, tmp_path):
 
 
 def test_run_in_window_opens_the_native_layout(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "darwin")
     windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
@@ -172,7 +172,7 @@ def test_run_in_window_opens_the_native_layout(monkeypatch, tmp_path):
 
 
 def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
@@ -185,7 +185,7 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
 
 
 def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     windows, _, handle = _install_fake_webview(monkeypatch, tmp_path)
     desktop.run_in_window(settings=object())
@@ -199,7 +199,7 @@ def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):
 
 
 def test_run_in_window_refuses_without_a_ui_build(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     _, started, _ = _install_fake_webview(monkeypatch, tmp_path)
     monkeypatch.setattr(desktop, "UI_DIR", tmp_path / "missing")
@@ -210,7 +210,7 @@ def test_run_in_window_refuses_without_a_ui_build(monkeypatch, tmp_path):
 
 
 def test_inset_titlebar_applies_the_native_style(monkeypatch):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "darwin")
     calls = []
@@ -282,23 +282,23 @@ def _fake_venv(monkeypatch, tmp_path):
 
 
 def test_build_bundle_lays_out_an_app_around_a_copy_of_the_interpreter(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     venv, base = _fake_venv(monkeypatch, tmp_path)
     settings = types.SimpleNamespace(data_dir=tmp_path / "data")
     exe = desktop.build_bundle(settings)
-    contents = tmp_path / "data" / "Krater.app" / "Contents"
-    assert exe == contents / "MacOS" / "Krater"
+    contents = tmp_path / "data" / "Flackey.app" / "Contents"
+    assert exe == contents / "MacOS" / "Flackey"
     assert exe.read_bytes() == base.read_bytes()
     assert exe.stat().st_mode & 0o111
-    assert "<string>Krater</string>" in (contents / "Info.plist").read_text()
-    assert "<string>app.krater</string>" in (contents / "Info.plist").read_text()
+    assert "<string>Flackey</string>" in (contents / "Info.plist").read_text()
+    assert "<string>app.flackey</string>" in (contents / "Info.plist").read_text()
     assert (contents / "pyvenv.cfg").read_text() == "home = /nowhere/bin\n"
     assert (contents / "lib").resolve() == (venv / "lib").resolve()
 
 
 def test_build_bundle_refreshes_a_stale_interpreter_copy(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     _, base = _fake_venv(monkeypatch, tmp_path)
     settings = types.SimpleNamespace(data_dir=tmp_path / "data")
@@ -309,14 +309,14 @@ def test_build_bundle_refreshes_a_stale_interpreter_copy(monkeypatch, tmp_path):
 
 
 def test_build_bundle_is_none_outside_a_venv(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "prefix", str(tmp_path))  # no pyvenv.cfg here
     assert desktop.build_bundle(types.SimpleNamespace(data_dir=tmp_path / "data")) is None
 
 
 def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     _fake_venv(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "platform", "darwin")
@@ -326,13 +326,13 @@ def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop.os, "execve", lambda path, argv, env: calls.append((path, argv, env)))
     desktop.relaunch_bundled(types.SimpleNamespace(data_dir=tmp_path / "data"))
     (path, argv, env), = calls
-    assert path.endswith("Krater.app/Contents/MacOS/Krater")
-    assert argv == [path, "-c", "from krater.cli import app; app()", "--env", "x.env", "start"]
+    assert path.endswith("Flackey.app/Contents/MacOS/Flackey")
+    assert argv == [path, "-c", "from flackey.cli import app; app()", "--env", "x.env", "start"]
     assert env[desktop.BUNDLED_ENV] == "1"
 
 
 def test_relaunch_bundled_is_false_when_already_bundled_or_off_macos(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     _fake_venv(monkeypatch, tmp_path)
     monkeypatch.setattr(desktop.os, "execve", lambda *a: pytest.fail("must not exec"))

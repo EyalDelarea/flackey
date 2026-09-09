@@ -1,4 +1,4 @@
-from krater.source.deezer_bot import ButtonInfo, parse_result_menu
+from flackey.source.deezer_bot import ButtonInfo, parse_result_menu
 
 MENU = [
     [ButtonInfo("1. Astral Projection - Into the Void", "dz_track:1754956977:send")],

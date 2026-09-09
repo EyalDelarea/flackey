@@ -92,9 +92,9 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
 
   return (<>
     <h1>{configured ? 'Your Soulseek account' : 'Create a Soulseek account'}</h1>
-    <p className="lead">Soulseek is where krater finds lossless copies of the tracks you queue. There is
+    <p className="lead">Soulseek is where flackey finds lossless copies of the tracks you queue. There is
       no sign-up form — pick any name and password, and if nobody is using that name it becomes yours the
-      moment it signs in. Krater keeps the password to itself and only uses it to sign in for you.</p>
+      moment it signs in. Flackey keeps the password to itself and only uses it to sign in for you.</p>
     {configured && !connect && <div className="hint-row">A Soulseek account is already saved.</div>}
     <div className="fields">
       <div className="field">
@@ -121,6 +121,6 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
       <button className="btn-link" onClick={onSkip}>Skip for now</button>
     </div>
     {err && <div className="err">{err}</div>}
-    <div className="footnote">Optional — krater keeps working on Deezer alone if you skip this.</div>
+    <div className="footnote">Optional — flackey keeps working on Deezer alone if you skip this.</div>
   </>)
 }

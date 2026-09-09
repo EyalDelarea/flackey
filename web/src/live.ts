@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats } from './api'
 
-export const UNREACHABLE = "Can't reach Krater. Is `crate start` running?"
+export const UNREACHABLE = "Can't reach Flackey. Is `crate start` running?"
 
 export interface Live {
   health: Health | null; bundles: Map<number, Bundle>; playlists: Playlist[]; stats: Stats | null; settings: AppSettings | null

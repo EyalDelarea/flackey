@@ -1,7 +1,7 @@
 import asyncio
 
-from krater.events import EventBus
-from krater.web.stream import event_stream
+from flackey.events import EventBus
+from flackey.web.stream import event_stream
 
 
 async def test_stream_sends_initial_then_published_then_heartbeat():

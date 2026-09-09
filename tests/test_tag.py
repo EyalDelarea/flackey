@@ -5,8 +5,8 @@ import httpx
 import pytest
 from mutagen.id3 import ID3
 
-from krater.models import CatalogTrack, Verdict
-from krater.tag import (
+from flackey.models import CatalogTrack, Verdict
+from flackey.tag import (
     TagError,
     comment_for,
     fetch_artwork,
@@ -49,7 +49,7 @@ def test_write_and_read_tags(tmp_path: Path, ext: str):
     # D minor track); Rekordbox analyzes both on import
     assert t["bpm"] == "" and t["key"] == ""
     assert t["mix"] == "Original Mix" and t["has_artwork"] == "yes"
-    assert t["comment"] == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
+    assert t["comment"] == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 
 
 @requires_ffmpeg
@@ -78,7 +78,7 @@ def test_unsupported_extension(tmp_path: Path):
 
 
 def test_comment_for():
-    assert comment_for(V, CT) == "krater: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
+    assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 
 
 @requires_ffmpeg

@@ -25,10 +25,10 @@ INSET_FLAG = "?titlebar=inset"
 _NS_FULL_SIZE_CONTENT_VIEW = 1 << 15  # NSWindowStyleMaskFullSizeContentView
 _NS_WINDOW_TITLE_HIDDEN = 1           # NSWindowTitleHidden
 
-APP_NAME = "Krater"
+APP_NAME = "Flackey"
 APP_ICON = Path(__file__).with_name("assets") / "app-icon.png"
-BUNDLE_ID = "app.krater"
-BUNDLED_ENV = "KRATER_BUNDLED"  # set on the re-exec'd process so it does not bundle itself again
+BUNDLE_ID = "app.flackey"
+BUNDLED_ENV = "FLACKEY_BUNDLED"  # set on the re-exec'd process so it does not bundle itself again
 _INFO_PLIST = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -47,7 +47,7 @@ _INFO_PLIST = f"""<?xml version="1.0" encoding="UTF-8"?>
 def build_bundle(settings: Settings) -> Path | None:
     """The Dock names an unbundled process after its executable ("python3.12"), whatever the info
     dictionary says, because LaunchServices reads the name from the bundle on disk. So build a minimal
-    `Krater.app` in the data dir around a copy of the interpreter: `Contents/pyvenv.cfg` (copied
+    `Flackey.app` in the data dir around a copy of the interpreter: `Contents/pyvenv.cfg` (copied
     from this venv) makes Python treat `Contents/` as the venv, and `Contents/lib` links to the venv's
     lib so the same site-packages load. Rebuilt on every launch so it follows the venv it was started
     from. Returns the bundle's executable, or None when this interpreter is not a venv or the copy
@@ -80,7 +80,7 @@ def build_bundle(settings: Settings) -> Path | None:
 
 
 def relaunch_bundled(settings: Settings) -> bool:
-    """Exec this process again through the app bundle so the Dock and menu bar say Krater. Never
+    """Exec this process again through the app bundle so the Dock and menu bar say Flackey. Never
     returns on success (the process is replaced). False off macOS, when already running bundled, or when
     the bundle cannot be built."""
     if sys.platform != "darwin" or os.environ.get(BUNDLED_ENV):
@@ -89,7 +89,7 @@ def relaunch_bundled(settings: Settings) -> bool:
     if exe is None:
         return False
     env = {**os.environ, BUNDLED_ENV: "1"}
-    os.execve(str(exe), [str(exe), "-c", "from krater.cli import app; app()", *sys.argv[1:]], env)
+    os.execve(str(exe), [str(exe), "-c", "from flackey.cli import app; app()", *sys.argv[1:]], env)
     return True  # pragma: no cover - execve does not return
 
 
@@ -156,7 +156,7 @@ def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHan
         finally:
             handle.started.set()
 
-    thread = threading.Thread(target=target, name="krater-server", daemon=True)
+    thread = threading.Thread(target=target, name="flackey-server", daemon=True)
     thread.start()
     return thread, handle
 
@@ -216,7 +216,7 @@ def run_in_window(settings: Settings) -> None:
     inset = sys.platform == "darwin"
     api = WindowApi()
     window = webview.create_window(
-        "Krater", url + (INSET_FLAG if inset else ""), js_api=api,
+        "Flackey", url + (INSET_FLAG if inset else ""), js_api=api,
         width=MAIN_SIZE[0], height=MAIN_SIZE[1], min_size=MIN_SIZE,
         # Opaque on purpose: this is what the window shows until `inset_titlebar` turns the background
         # clear on `shown`, and it is what stops a white/black flash before the page paints. Passing

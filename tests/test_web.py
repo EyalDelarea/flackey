@@ -7,15 +7,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from krater.config import Settings
-from krater.events import EventBus, Status
-from krater.inbox import Inbox
-from krater.models import Candidate, CatalogTrack, RequestKind, RequestState
-from krater.notify import MemoryNotifier
-from krater.store import Store
-from krater.web import create_app
-from krater.worker import Worker
-from krater.youtube import YouTubeEntry, YouTubeError
+from flackey.config import Settings
+from flackey.events import EventBus, Status
+from flackey.inbox import Inbox
+from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
+from flackey.store import Store
+from flackey.web import create_app
+from flackey.worker import Worker
+from flackey.youtube import YouTubeEntry, YouTubeError
 
 
 class DummySource:
@@ -66,7 +66,7 @@ def client_with_worker(tmp_path: Path):
 
 def test_health(client):
     c, _, _ = client
-    from krater.fingerprint import fpcalc_available
+    from flackey.fingerprint import fpcalc_available
     assert c.get("/api/health").json() == {"ok": True, "version": "0.1.0", "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
@@ -258,7 +258,7 @@ async def test_events_endpoint_streams_status_first():
     # on its own (it awaits the whole call before returning, and this one never returns). Call the
     # route's endpoint directly instead; the SSE wire format itself is pinned byte-for-byte in
     # tests/test_stream.py, so this only needs to prove `stream.router` wires it up correctly.
-    from krater.web.stream import router
+    from flackey.web.stream import router
 
     bus = EventBus()
     status = Status(bus, telegram_authorized=True, worker_running=False, setup_done=False)
@@ -339,7 +339,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
     s = c.get("/api/settings").json()
     assert s == {"library_root": str(settings.library_root), "data_dir": str(settings.data_dir),
                  "version": "0.1.0", "telegram_configured": True,
-                 "log_path": str(settings.data_dir / "krater.log"),
+                 "log_path": str(settings.data_dir / "flackey.log"),
                  "soulseek_enabled": False, "slskd_url": settings.slskd_url,
                  "slskd_downloads_dir": str(settings.slskd_downloads),
                  "lossless_filing_format": settings.lossless_filing_format,
@@ -389,12 +389,12 @@ def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
 
 
 def test_reveal_in_finder_uses_open_dash_r_for_files_and_directories(tmp_path: Path, monkeypatch):
-    from krater.web.library import reveal_in_finder
+    from flackey.web.library import reveal_in_finder
 
     calls = []
-    monkeypatch.setattr("krater.web.library.subprocess.Popen",
+    monkeypatch.setattr("flackey.web.library.subprocess.Popen",
                         lambda cmd, **kw: calls.append(cmd))
-    monkeypatch.setattr("krater.web.library.sys.platform", "darwin")
+    monkeypatch.setattr("flackey.web.library.sys.platform", "darwin")
     f = tmp_path / "x.mp3"
     f.write_bytes(b"x")
     d = tmp_path / "a_dir"
@@ -461,7 +461,7 @@ def test_setup_soulseek_post_writes_the_key_only_into_the_managed_slskd_yml(clie
     c, _, settings = client
     c.post("/api/setup/soulseek", json={"username": "digger", "password": "not-a-real-password"})
     assert not settings.settings_path.exists()
-    from krater.slskd_config import read_api_key
+    from flackey.slskd_config import read_api_key
     assert read_api_key(settings.data_dir) == settings.slskd_api_key
 
 
@@ -515,7 +515,7 @@ class _FakeInstall:
             if on_progress:
                 on_progress(done, total)
         if self.fail:
-            from krater.slskd_binary import SlskdBinaryError
+            from flackey.slskd_binary import SlskdBinaryError
             raise SlskdBinaryError(self.fail)
         return data_dir / "slskd" / "bin" / "slskd"
 
@@ -532,7 +532,7 @@ def slskd_client(client, monkeypatch):
 
 def test_setup_slskd_reports_nothing_installed_and_nothing_running(slskd_client):
     c, _, _ = slskd_client
-    from krater.slskd_binary import SLSKD_VERSION
+    from flackey.slskd_binary import SLSKD_VERSION
     assert c.get("/api/setup/slskd").json() == {"installed": False, "running": False,
                                                 "version": SLSKD_VERSION}
 
@@ -540,7 +540,7 @@ def test_setup_slskd_reports_nothing_installed_and_nothing_running(slskd_client)
 def test_post_setup_slskd_installs_in_the_background_and_progress_follows_it(slskd_client, monkeypatch):
     c, _, settings = slskd_client
     fake = _FakeInstall(chunks=[(10, 100), (100, 100)])
-    monkeypatch.setattr("krater.web.library.install_slskd", fake)
+    monkeypatch.setattr("flackey.web.library.install_slskd", fake)
 
     assert c.get("/api/setup/slskd/progress").json()["state"] == "idle"
     assert c.post("/api/setup/slskd").json() == {"state": "downloading"}
@@ -552,7 +552,7 @@ def test_post_setup_slskd_installs_in_the_background_and_progress_follows_it(sls
 
 def test_post_setup_slskd_surfaces_a_failed_install_as_plain_text(slskd_client, monkeypatch):
     c, _, _ = slskd_client
-    monkeypatch.setattr("krater.web.library.install_slskd",
+    monkeypatch.setattr("flackey.web.library.install_slskd",
                         _FakeInstall(fail="downloaded archive failed SHA-256 verification"))
     c.post("/api/setup/slskd")
     progress = c.get("/api/setup/slskd/progress").json()
@@ -562,13 +562,13 @@ def test_post_setup_slskd_surfaces_a_failed_install_as_plain_text(slskd_client, 
 
 def test_post_setup_slskd_does_not_download_again_when_it_is_already_installed(slskd_client, monkeypatch):
     c, _, settings = slskd_client
-    from krater.slskd_binary import binary_path
+    from flackey.slskd_binary import binary_path
     binary = binary_path(settings.data_dir)
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     fake = _FakeInstall()
-    monkeypatch.setattr("krater.web.library.install_slskd", fake)
+    monkeypatch.setattr("flackey.web.library.install_slskd", fake)
 
     assert c.post("/api/setup/slskd").json() == {"state": "done"}
     assert fake.calls == []
@@ -589,7 +589,7 @@ class FakeLogin:
         return "waiting" if qr_id == "q1" else "unknown"
 
     async def password(self, pw):
-        from krater.telegram import LoginError
+        from flackey.telegram import LoginError
         if pw == "bad":
             raise LoginError("Wrong password. Try again.")
         self.authorized = True
@@ -606,7 +606,7 @@ class FakeLogin:
 
 
 def test_telegram_routes(tmp_path):
-    from krater.events import Status
+    from flackey.events import Status
     status = Status(None, telegram_authorized=True, worker_running=True, setup_done=True)
     login = FakeLogin()
     app, _, _ = make(tmp_path, status=status, login=login)
@@ -629,7 +629,7 @@ def test_telegram_routes_without_a_login_service(client):
 
 
 def test_telegram_route_failure_becomes_a_plain_words_503(tmp_path):
-    from krater.events import Status
+    from flackey.events import Status
 
     class BrokenLogin(FakeLogin):
         async def start_qr(self):
@@ -647,7 +647,7 @@ def test_telegram_status_survives_a_client_that_was_never_connected(tmp_path):
     # is deliberately never connected. TelegramLogin.status() short-circuits on `not configured` before
     # touching the client (see tests/test_telegram.py), so this proves the route-level effect: the setup
     # screen's first call must not 500 because of a client that would raise if it were ever called.
-    from krater.telegram import TelegramLogin
+    from flackey.telegram import TelegramLogin
 
     class Disconnected:
         async def is_user_authorized(self):
@@ -706,7 +706,7 @@ def test_pick_folder_available_reflects_platform(tmp_path, monkeypatch):
 
 
 def test_choose_folder_with_valid_path(monkeypatch, tmp_path):
-    from krater.web.pick import choose_folder
+    from flackey.web.pick import choose_folder
     def mock_run(*args, **kwargs):
         class Result:
             returncode = 0
@@ -719,7 +719,7 @@ def test_choose_folder_with_valid_path(monkeypatch, tmp_path):
 
 
 def test_choose_folder_when_cancelled(monkeypatch):
-    from krater.web.pick import choose_folder
+    from flackey.web.pick import choose_folder
     def mock_run(*args, **kwargs):
         class Result:
             returncode = 1
@@ -732,7 +732,7 @@ def test_choose_folder_when_cancelled(monkeypatch):
 
 
 def test_choose_folder_on_error(monkeypatch):
-    from krater.web.pick import choose_folder
+    from flackey.web.pick import choose_folder
     def mock_run(*args, **kwargs):
         class Result:
             returncode = 1
@@ -748,7 +748,7 @@ def test_choose_folder_on_error(monkeypatch):
 
 
 def test_choose_folder_escapes_quotes_and_backslashes(monkeypatch):
-    from krater.web.pick import choose_folder
+    from flackey.web.pick import choose_folder
     captured_cmd = []
     def mock_run(cmd, **kwargs):
         captured_cmd.append(cmd)
@@ -827,7 +827,7 @@ def test_uploads_endpoint_reports_who_is_pulling_from_the_shared_library(client_
 def test_uploads_endpoint_is_calm_when_soulseek_is_off_or_the_sidecar_is_down(client_with_worker):
     """Two different "nothing to show" cases the page must tell apart: no provider configured at all, and a
     provider that cannot be reached right now. Neither is an error status - the tab still renders."""
-    from krater.source.lossless import LosslessUnavailable
+    from flackey.source.lossless import LosslessUnavailable
 
     c, worker = client_with_worker
     worker.providers = []
@@ -928,7 +928,7 @@ def test_reported_ports_are_read_from_this_install_not_assumed(tmp_path: Path, u
 
 
 def test_the_listen_port_comes_from_the_managed_config_when_one_exists(tmp_path: Path):
-    from krater.slskd_config import config_path
+    from flackey.slskd_config import config_path
     app, _, settings = make(tmp_path)
     assert TestClient(app).get("/api/settings").json()["ports"]["soulseek_listen"]["port"] == 50300
     p = config_path(settings.data_dir)
@@ -969,4 +969,4 @@ def test_reconnect_without_a_link_says_so_rather_than_pretending(tmp_path: Path)
     app, _, settings = make(tmp_path)
     settings.slskd_api_key = "k"
     r = TestClient(app).post("/api/setup/soulseek/connect")
-    assert r.status_code == 409 and "Restart krater" in r.json()["detail"]
+    assert r.status_code == 409 and "Restart flackey" in r.json()["detail"]

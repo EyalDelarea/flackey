@@ -1,4 +1,4 @@
-# Krater native Mac UI — Design Spec
+# Flackey native Mac UI — Design Spec
 
 Status: decided 2026-09-07 with the owner. Supersedes the *looks* half of
 `2026-09-06-gui-design.md` (section 4 and `docs/superpowers/design/gui/DESIGN.md`) and pulls
@@ -62,7 +62,7 @@ in the app is the Welcome rig.
 
 ## 4. Window and shell
 
-- `crate start` creates one pywebview window, title "Krater", 1100×720, minimum 900×560,
+- `crate start` creates one pywebview window, title "Flackey", 1100×720, minimum 900×560,
   `background_color` matching the window token so nothing flashes white or black. The setup
   and Welcome screens resize the same window to 720×540 and back.
 - Server thread: `run()` in `app.py` moves to a daemon thread; the main thread calls
@@ -82,7 +82,7 @@ in the app is the Welcome rig.
 
 ### 5.1 Welcome (new; 720×540; first launch only)
 
-Illustration 560px wide, centred, then "Krater" 34px, one sentence ("Paste a YouTube link.
+Illustration 560px wide, centred, then "Flackey" 34px, one sentence ("Paste a YouTube link.
 Get the real 320, tagged and filed where Rekordbox will find it."), a primary "Get started",
 and an 11px note "Two minutes: pick a folder, connect Telegram." Get started goes to Setup step
 1. Shown when `setup_done` is false and the user has not passed it this session; Reconnect
@@ -107,7 +107,7 @@ light and dark mode; the same filter is harmless on a transparent original.
 
 ### 5.2 Setup (720×540, three steps)
 
-Same window, standard title "Welcome to Krater". A three-step indicator centred at the top
+Same window, standard title "Welcome to Flackey". A three-step indicator centred at the top
 (16px numbered discs: done = green with a check, current = blue, next = grey). Content
 grid as in the mockup: QR on the left, instructions on the right, the two-step-password box in
 an orange-bordered group when Telegram asks, "Use phone number instead" as a link, the honesty
@@ -155,7 +155,7 @@ Reconnect), App version, App data (path + Show in Finder + Show logs). Max width
 - `web/src/components/library/TrackTable.tsx`: header, alternating rows, selection.
 - `web/src/components/SettingsPage.tsx`: grouped rows.
 - `web/public/welcome-rig.*`: the illustration.
-- `src/krater/app.py`, `cli.py`: pywebview window, server thread, `--no-browser` path.
+- `src/flackey/app.py`, `cli.py`: pywebview window, server thread, `--no-browser` path.
 - `pyproject.toml`: `pywebview>=6.2` dependency.
 
 ## 7. Testing

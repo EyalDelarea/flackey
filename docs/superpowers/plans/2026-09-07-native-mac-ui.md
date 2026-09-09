@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Krater look and open like a native Mac app: a pywebview window started by `crate start`, and the React UI restyled to the system font, system light/dark tokens, a vibrancy sidebar, grouped lists, and a new animated Welcome screen.
+**Goal:** Make Flackey look and open like a native Mac app: a pywebview window started by `crate start`, and the React UI restyled to the system font, system light/dark tokens, a vibrancy sidebar, grouped lists, and a new animated Welcome screen.
 
 **Architecture:** The FastAPI/uvicorn server keeps running inside `app.run()`, now on a daemon thread; the main thread owns the pywebview (WKWebView) window and stops the server when the window closes. The page learns it is inside the native window from a `?titlebar=inset` query flag and asks the window to resize through `window.pywebview.api`. The frontend keeps every behaviour and API call; only markup classes, CSS and one presentation field change, plus a new Welcome step in the setup flow.
 
@@ -19,16 +19,16 @@
 - No fake title bar or traffic lights in the real page. The only drag strip is the 52px one reserved when the `?titlebar=inset` flag is present.
 - Motion: transitions on state changes only (120–200ms). The Welcome rig is the single non-user-triggered animation; every animation is off under `prefers-reduced-motion: reduce`.
 - Tests: all existing Vitest and pytest suites keep passing; behaviour tests are updated, never deleted. Run Python tests with `uv run pytest -q --ignore=tests/live` (baseline: 247 passed) and frontend tests with `npm --prefix web test` (baseline: 62 passed). Import layers are checked with `uv run lint-imports` (exhaustive contract: every new module must be added to `[[tool.importlinter.contracts]]` layers in `pyproject.toml`).
-- Git: this worktree's shell hook refuses compound commands and anything it cannot prove is not git. Write scripts with the Write tool and run them plainly; run git as `/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui <args>` one command per call. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Git: this worktree's shell hook refuses compound commands and anything it cannot prove is not git. Write scripts with the Write tool and run them plainly; run git as `/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui <args>` one command per call. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - The frontend build (`npm --prefix web run build`) type-checks with `tsc --noEmit`; a task is not done while it fails.
 
 ## File map
 
 | File | Responsibility |
 |---|---|
-| `src/krater/app.py` | `ServerHandle` + module-level `serve()` (Task 1); `run()` accepts a handle |
-| `src/krater/desktop.py` (new) | Server thread, pywebview window, inset title bar, `WindowApi.resize`, dark detection (Task 2) |
-| `src/krater/cli.py` | `start` opens the window by default; `--no-browser` / `--browser` keep the old paths (Task 2) |
+| `src/flackey/app.py` | `ServerHandle` + module-level `serve()` (Task 1); `run()` accepts a handle |
+| `src/flackey/desktop.py` (new) | Server thread, pywebview window, inset title bar, `WindowApi.resize`, dark detection (Task 2) |
+| `src/flackey/cli.py` | `start` opens the window by default; `--no-browser` / `--browser` keep the old paths (Task 2) |
 | `web/index.html` | Google Fonts removed (Task 3) |
 | `web/src/theme.css` | Tokens (light + dark), base, buttons, fields, groups (Task 3) |
 | `web/src/platform.ts` (new) | `insetTitlebar()`, `requestWindowSize()` (Task 3) |
@@ -41,7 +41,7 @@
 | `web/src/components/SettingsPage.tsx` | Grouped rows (Task 7) |
 | `web/src/components/setup/SetupShell.tsx`, `FolderStep.tsx`, `TelegramStep.tsx`, `ReadyStep.tsx` | Stepper, bottom bar, restyle (Task 8) |
 | `web/src/components/setup/WelcomeStep.tsx` (new), `web/public/welcome-rig.jpg` (new) | Animated Welcome (Task 9) |
-| `src/krater/assets/app-icon.png` (new), `web/public/icon.svg` + `icon.png` (new), `web/index.html`, `desktop.py` | Dock icon, menu-bar name, favicon (Task 11) |
+| `src/flackey/assets/app-icon.png` (new), `web/public/icon.svg` + `icon.png` (new), `web/index.html`, `desktop.py` | Dock icon, menu-bar name, favicon (Task 11) |
 
 Until a screen's task runs, that screen is unstyled (Task 4 replaces `app.css`). That is expected between tasks; every task's tests are behavioural.
 
@@ -50,7 +50,7 @@ Until a screen's task runs, that screen is unstyled (Task 4 replaces `app.css`).
 ### Task 1: `ServerHandle` and a module-level `serve()` in `app.py`
 
 **Files:**
-- Modify: `src/krater/app.py` (the `serve_and_open` closure inside `run()`, lines 108–124, and `run()`'s signature/finally)
+- Modify: `src/flackey/app.py` (the `serve_and_open` closure inside `run()`, lines 108–124, and `run()`'s signature/finally)
 - Test: `tests/test_app.py`
 
 **Interfaces:**
@@ -62,7 +62,7 @@ Append to `tests/test_app.py`:
 
 ```python
 async def test_serve_publishes_the_url_once_the_server_is_listening():
-    from krater.app import ServerHandle, serve
+    from flackey.app import ServerHandle, serve
 
     class FakeServer:
         started = False
@@ -84,7 +84,7 @@ async def test_serve_publishes_the_url_once_the_server_is_listening():
 
 
 async def test_serve_reports_a_startup_failure_through_the_handle():
-    from krater.app import ServerHandle, serve
+    from flackey.app import ServerHandle, serve
 
     class FailingServer:
         started = False
@@ -110,7 +110,7 @@ Expected: 2 failures with `ImportError: cannot import name 'ServerHandle'`.
 
 - [ ] **Step 3: Implement `ServerHandle` and `serve()`**
 
-In `src/krater/app.py` add the imports `import threading`, `from collections.abc import Callable, Coroutine` (replace the existing `Coroutine` import line) and `from dataclasses import dataclass, field`. Add after `WEB_SERVER_START_TIMEOUT_S = 30`:
+In `src/flackey/app.py` add the imports `import threading`, `from collections.abc import Callable, Coroutine` (replace the existing `Coroutine` import line) and `from dataclasses import dataclass, field`. Add after `WEB_SERVER_START_TIMEOUT_S = 30`:
 
 ```python
 @dataclass
@@ -175,8 +175,8 @@ Run: `uv run pytest -q tests/test_app.py` → all pass. Then `uv run pytest -q -
 - [ ] **Step 5: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add src/krater/app.py tests/test_app.py
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "refactor(app): ServerHandle lets another thread learn the URL and stop the server"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add src/flackey/app.py tests/test_app.py
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "refactor(app): ServerHandle lets another thread learn the URL and stop the server"
 ```
 
 ---
@@ -184,12 +184,12 @@ Run: `uv run pytest -q tests/test_app.py` → all pass. Then `uv run pytest -q -
 ### Task 2: `desktop.py` window and the `crate start` window path
 
 **Files:**
-- Create: `src/krater/desktop.py`
-- Modify: `src/krater/cli.py` (`start` command, lines 31–40), `pyproject.toml` (`layers` list)
+- Create: `src/flackey/desktop.py`
+- Modify: `src/flackey/cli.py` (`start` command, lines 31–40), `pyproject.toml` (`layers` list)
 - Test: `tests/test_desktop.py` (new), `tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: `ServerHandle`, `serve`, `run`, `WEB_SERVER_START_TIMEOUT_S` from `krater.app` (Task 1).
+- Consumes: `ServerHandle`, `serve`, `run`, `WEB_SERVER_START_TIMEOUT_S` from `flackey.app` (Task 1).
 - Produces: `run_in_window(settings) -> None`, `start_server_thread(settings) -> tuple[threading.Thread, ServerHandle]`, `wait_for_server(handle, timeout_s) -> str`, `inset_titlebar(window) -> bool`, `system_is_dark() -> bool`, `class WindowApi` with `resize(width, height)`. The page (Task 3) relies on: URL suffix `?titlebar=inset` on macOS, and `window.pywebview.api.resize(w, h)`.
 
 Facts verified against the installed pywebview 6.2.1 (`.venv/lib/python3.12/site-packages/webview/`): `frameless=True` hides the traffic lights (cocoa.py lines 701–707), so it is not the inset look; `window.native` is the `NSWindow` (cocoa.py line 595, set before `shown` fires); `create_window` accepts `js_api`, `min_size`, `background_color`, `transparent`, `vibrancy`; event handlers with zero parameters are called with no arguments (event.py line 40); `js_api` exposes public callables and skips names starting with `_` (util.py line 193); uvicorn only installs signal handlers on the main thread (server.py line 325), so `asyncio.run(run(...))` in a daemon thread is fine.
@@ -204,11 +204,11 @@ import sys
 
 import pytest
 
-from krater.app import ServerHandle
+from flackey.app import ServerHandle
 
 
 def test_wait_for_server_returns_the_url():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     h = ServerHandle(url="http://localhost:8765")
     h.started.set()
@@ -216,7 +216,7 @@ def test_wait_for_server_returns_the_url():
 
 
 def test_wait_for_server_raises_the_startup_error():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     h = ServerHandle(error=OSError("port taken"))
     h.started.set()
@@ -225,14 +225,14 @@ def test_wait_for_server_raises_the_startup_error():
 
 
 def test_wait_for_server_times_out_as_a_runtime_error():
-    from krater.desktop import wait_for_server
+    from flackey.desktop import wait_for_server
 
     with pytest.raises(RuntimeError):
         wait_for_server(ServerHandle(), timeout_s=0.05)
 
 
 def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
-    import krater.desktop as desktop
+    import flackey.desktop as desktop
 
     async def fake_run(settings, open_browser=True, handle=None):
         handle.url = "http://localhost:1"
@@ -248,7 +248,7 @@ def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
 
 
 def test_window_api_resize_forwards_to_the_window():
-    from krater.desktop import WindowApi
+    from flackey.desktop import WindowApi
 
     class W:
         calls = []
@@ -264,7 +264,7 @@ def test_window_api_resize_forwards_to_the_window():
 
 
 def test_inset_titlebar_needs_a_native_handle():
-    from krater.desktop import inset_titlebar
+    from flackey.desktop import inset_titlebar
 
     class NoNative:
         native = None
@@ -273,7 +273,7 @@ def test_inset_titlebar_needs_a_native_handle():
 
 
 def test_system_is_dark_is_false_off_macos(monkeypatch):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.system_is_dark() is False
@@ -285,7 +285,7 @@ Append to `tests/test_cli.py`:
 def test_start_without_browser_does_not_need_pywebview(tmp_path: Path, monkeypatch):
     import sys
 
-    import krater.app as app_mod
+    import flackey.app as app_mod
 
     calls = []
 
@@ -299,7 +299,7 @@ def test_start_without_browser_does_not_need_pywebview(tmp_path: Path, monkeypat
 
 
 def test_start_opens_the_desktop_window_by_default(tmp_path: Path, monkeypatch):
-    import krater.desktop as desktop
+    import flackey.desktop as desktop
 
     opened = []
     monkeypatch.setattr(desktop, "run_in_window", lambda settings: opened.append(settings.web_port))
@@ -310,7 +310,7 @@ def test_start_opens_the_desktop_window_by_default(tmp_path: Path, monkeypatch):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_desktop.py tests/test_cli.py`
-Expected: `ModuleNotFoundError: No module named 'krater.desktop'` and the two CLI tests fail.
+Expected: `ModuleNotFoundError: No module named 'flackey.desktop'` and the two CLI tests fail.
 
 - [ ] **Step 3: Write `desktop.py`**
 
@@ -378,7 +378,7 @@ def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHan
         finally:
             handle.started.set()
 
-    thread = threading.Thread(target=target, name="krater-server", daemon=True)
+    thread = threading.Thread(target=target, name="flackey-server", daemon=True)
     thread.start()
     return thread, handle
 
@@ -420,7 +420,7 @@ def run_in_window(settings: Settings) -> None:
     inset = sys.platform == "darwin"
     api = WindowApi()
     window = webview.create_window(
-        "Krater", url + (INSET_FLAG if inset else ""), js_api=api,
+        "Flackey", url + (INSET_FLAG if inset else ""), js_api=api,
         width=MAIN_SIZE[0], height=MAIN_SIZE[1], min_size=MIN_SIZE,
         background_color=DARK_WINDOW if system_is_dark() else LIGHT_WINDOW,
         transparent=inset, vibrancy=inset)
@@ -439,13 +439,13 @@ def run_in_window(settings: Settings) -> None:
 
 - [ ] **Step 4: Update the CLI and import layers**
 
-In `src/krater/cli.py` replace the `start` command:
+In `src/flackey/cli.py` replace the `start` command:
 
 ```python
 @app.command()
 def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve only; open http://localhost:8765 yourself"),
           browser: bool = typer.Option(False, "--browser", help="Open the system browser instead of the app window")) -> None:
-    """Run the worker and open the Krater window; stops when the window closes or on Ctrl-C."""
+    """Run the worker and open the Flackey window; stops when the window closes or on Ctrl-C."""
     from .app import run
 
     try:
@@ -468,13 +468,13 @@ Run: `uv run pytest -q --ignore=tests/live` → 258 passed. `uv run lint-imports
 
 - [ ] **Step 6: Smoke the window by hand (macOS only, 20 seconds)**
 
-Write `/private/tmp/claude-501/-Users-delarea-Desktop-code-krater/e7b1cfad-5520-4bc1-8db2-a843f9bda47c/scratchpad/smoke.env` containing `TELEGRAM_API_ID=1`, `TELEGRAM_API_HASH=h`, `LIBRARY_ROOT=<scratchpad>/smoke/lib`, `DATA_DIR=<scratchpad>/smoke/data`, `WEB_PORT=8766` (one per line, absolute paths). Run `npm --prefix web run build` once so `web/dist` exists, then `uv run crate --env <that file> start` in the background with a 25 s timeout. Expected: a 1100×720 window titled Krater appears showing the app; closing it makes the command print `stopped` and exit. Kill it if it hangs (`pkill -f "crate --env"`) and note what happened in the report; do not spend more than one retry on this.
+Write `/private/tmp/claude-501/-Users-delarea-Desktop-code-flackey/e7b1cfad-5520-4bc1-8db2-a843f9bda47c/scratchpad/smoke.env` containing `TELEGRAM_API_ID=1`, `TELEGRAM_API_HASH=h`, `LIBRARY_ROOT=<scratchpad>/smoke/lib`, `DATA_DIR=<scratchpad>/smoke/data`, `WEB_PORT=8766` (one per line, absolute paths). Run `npm --prefix web run build` once so `web/dist` exists, then `uv run crate --env <that file> start` in the background with a 25 s timeout. Expected: a 1100×720 window titled Flackey appears showing the app; closing it makes the command print `stopped` and exit. Kill it if it hangs (`pkill -f "crate --env"`) and note what happened in the report; do not spend more than one retry on this.
 
 - [ ] **Step 7: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add src/krater/desktop.py src/krater/cli.py pyproject.toml uv.lock tests/test_desktop.py tests/test_cli.py
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(desktop): crate start opens a pywebview window; server runs on a thread"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add src/flackey/desktop.py src/flackey/cli.py pyproject.toml uv.lock tests/test_desktop.py tests/test_cli.py
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(desktop): crate start opens a pywebview window; server runs on a thread"
 ```
 
 ---
@@ -531,7 +531,7 @@ Run: `npm --prefix web test -- platform` → fails: cannot find module `./platfo
 `web/src/platform.ts`:
 
 ```ts
-// What the page knows about the window it lives in. Set by src/krater/desktop.py: the launcher adds
+// What the page knows about the window it lives in. Set by src/flackey/desktop.py: the launcher adds
 // `?titlebar=inset` on macOS and exposes `window.pywebview.api.resize`. In a plain browser both are absent.
 type Bridge = { api?: { resize: (width: number, height: number) => unknown } }
 const bridge = () => (window as Window & { pywebview?: Bridge }).pywebview
@@ -640,8 +640,8 @@ Run: `npm --prefix web test` → 65 passed (62 + 3). `npm --prefix web run build
 - [ ] **Step 6: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/index.html web/src/theme.css web/src/main.tsx web/src/platform.ts web/src/platform.test.ts web/src/components/Icon.tsx
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): system-font tokens for light and dark, platform bridge, stroke icons"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/index.html web/src/theme.css web/src/main.tsx web/src/platform.ts web/src/platform.test.ts web/src/components/Icon.tsx
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): system-font tokens for light and dark, platform bridge, stroke icons"
 ```
 
 ---
@@ -770,8 +770,8 @@ Run: `npm --prefix web test` → 67 passed. `npm --prefix web run build` → suc
 - [ ] **Step 6: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/src/app.css web/src/App.tsx web/src/components/Shell.tsx web/src/components/Sidebar.tsx web/src/components/Banner.tsx web/src/components/Shell.test.tsx
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): native shell with vibrancy sidebar, drag strip behind the inset title bar, window sizing"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/src/app.css web/src/App.tsx web/src/components/Shell.tsx web/src/components/Sidebar.tsx web/src/components/Banner.tsx web/src/components/Shell.test.tsx
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): native shell with vibrancy sidebar, drag strip behind the inset title bar, window sizing"
 ```
 
 ---
@@ -952,8 +952,8 @@ Run: `npm --prefix web test` → 68 passed. `npm --prefix web run build` → suc
 - [ ] **Step 7: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/src/presentation.ts web/src/presentation.test.ts web/src/components/download web/src/app.css
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): Download as toolbar plus inset grouped lists; verified badge on filed rows"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/src/presentation.ts web/src/presentation.test.ts web/src/components/download web/src/app.css
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): Download as toolbar plus inset grouped lists; verified badge on filed rows"
 ```
 
 ---
@@ -1135,8 +1135,8 @@ Run: `npm --prefix web test` → 69 passed. `npm --prefix web run build` → suc
 - [ ] **Step 6: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/src/components/library web/src/app.css
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): Library table with header, alternating rows, selection and hover reveal"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/src/components/library web/src/app.css
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): Library table with header, alternating rows, selection and hover reveal"
 ```
 
 ---
@@ -1145,7 +1145,7 @@ Run: `npm --prefix web test` → 69 passed. `npm --prefix web run build` → suc
 
 **Files:**
 - Modify: `web/src/components/SettingsPage.tsx`, `web/src/app.css` (append)
-- Test: `web/src/components/SettingsPage.test.tsx` (must pass unchanged: it finds `Change`, `Save`, `Cancel`, `Choose…`, `Show in Finder`, `Show logs`, `Sign out`, `Dismiss`, the path, `Krater 0.1.0`, the Telegram line)
+- Test: `web/src/components/SettingsPage.test.tsx` (must pass unchanged: it finds `Change`, `Save`, `Cancel`, `Choose…`, `Show in Finder`, `Show logs`, `Sign out`, `Dismiss`, the path, `Flackey 0.1.0`, the Telegram line)
 
 - [ ] **Step 1: Run the existing test to confirm the baseline passes**
 
@@ -1175,7 +1175,7 @@ Keep every hook, handler and error state in `SettingsPage.tsx`; replace only the
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
       </div>
       <div className="group">
-        <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Krater {s.version}</div></div></div>
+        <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Flackey {s.version}</div></div></div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
           <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
       </div>
@@ -1206,8 +1206,8 @@ Run: `npm --prefix web test` → 69 passed. `npm --prefix web run build` → suc
 - [ ] **Step 5: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/src/components/SettingsPage.tsx web/src/app.css
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): Settings as System Settings style grouped rows"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/src/components/SettingsPage.tsx web/src/app.css
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): Settings as System Settings style grouped rows"
 ```
 
 ---
@@ -1237,7 +1237,7 @@ it('marks steps done, current and next', () => {
   expect(steps[1]).toHaveClass('cur')
   expect(steps[2]).not.toHaveClass('done')
   expect(steps[2]).not.toHaveClass('cur')
-  expect(screen.getByText('Welcome to Krater')).toBeInTheDocument()
+  expect(screen.getByText('Welcome to Flackey')).toBeInTheDocument()
   expect(screen.getByText('body')).toBeInTheDocument()
 })
 
@@ -1262,7 +1262,7 @@ import Icon from '../Icon'
 const NAMES = ['Folder', 'Telegram', 'Ready']
 export default function SetupShell({ step, children, onBack, hint }: { step: 1 | 2 | 3; children: ReactNode; onBack?: () => void; hint?: string }) {
   return (<div className="setup">
-    <div className="setup-title pywebview-drag-region">Welcome to Krater</div>
+    <div className="setup-title pywebview-drag-region">Welcome to Flackey</div>
     <div className="setup-body">
       <div className="stepper">{NAMES.map((n, i) => {
         const k = i + 1; const state = k < step ? 'done' : k === step ? 'cur' : 'next'
@@ -1362,8 +1362,8 @@ Run: `npm --prefix web test` → 71 passed. `npm --prefix web run build` → suc
 - [ ] **Step 8: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/src/components/setup web/src/App.tsx web/src/app.css
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): setup window with numbered stepper, bottom bar and native fields"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/src/components/setup web/src/App.tsx web/src/app.css
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): setup window with numbered stepper, bottom bar and native fields"
 ```
 
 ---
@@ -1389,7 +1389,7 @@ import WelcomeStep from './WelcomeStep'
 it('shows the pitch, the rig with four spinning decks, and Get started', () => {
   const onStart = vi.fn()
   const { container } = render(<WelcomeStep onStart={onStart} />)
-  expect(screen.getByText('Krater')).toBeInTheDocument()
+  expect(screen.getByText('Flackey')).toBeInTheDocument()
   expect(screen.getByText('Paste a YouTube link. Get the real 320, tagged and filed where Rekordbox will find it.')).toBeInTheDocument()
   expect(container.querySelectorAll('.ring')).toHaveLength(4)
   expect(container.querySelectorAll('.screen')).toHaveLength(4)
@@ -1444,7 +1444,7 @@ export default function WelcomeStep({ onStart }: { onStart: () => void }) {
         {METERS.map((x, i) => <div key={i} className="meter" style={{ left: `${x}%`, animationDelay: `${(i * -0.12).toFixed(2)}s` }} />)}
       </div>
       <div className="pitch">
-        <h1>Krater</h1>
+        <h1>Flackey</h1>
         <p className="lead">Paste a YouTube link. Get the real 320, tagged and filed where Rekordbox will find it.</p>
       </div>
       <div className="cta">
@@ -1501,8 +1501,8 @@ Run: `npm --prefix web test` → 72 passed. `npm --prefix web run build` → suc
 - [ ] **Step 7: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add web/public/welcome-rig.jpg web/src/components/setup/WelcomeStep.tsx web/src/components/setup/WelcomeStep.test.tsx web/src/App.tsx web/src/app.css
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(ui): Welcome screen with the animated DJ rig before setup"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add web/public/welcome-rig.jpg web/src/components/setup/WelcomeStep.tsx web/src/components/setup/WelcomeStep.test.tsx web/src/App.tsx web/src/app.css
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(ui): Welcome screen with the animated DJ rig before setup"
 ```
 
 ---
@@ -1527,7 +1527,7 @@ Check that each ring sits on its jog wheel and each waveform on its screen; adju
 
 - [ ] **Step 4: Launch the real window once**
 
-`uv run crate --env <scratchpad>/smoke.env start` — confirm the Dock shows the crate-and-record icon and the menu bar says Krater (Task 11), traffic lights sit over the sidebar with the 52px strip, the sidebar shows vibrancy, resizing to 720×540 happens on the Welcome/setup screens and back to 1100×720 after setup, and closing the window prints `stopped`. If the transparent window misbehaves, set `transparent=False, vibrancy=False` in `desktop.py`.
+`uv run crate --env <scratchpad>/smoke.env start` — confirm the Dock shows the crate-and-record icon and the menu bar says Flackey (Task 11), traffic lights sit over the sidebar with the 52px strip, the sidebar shows vibrancy, resizing to 720×540 happens on the Welcome/setup screens and back to 1100×720 after setup, and closing the window prints `stopped`. If the transparent window misbehaves, set `transparent=False, vibrancy=False` in `desktop.py`.
 
 - [ ] **Step 5: Update the spec's asset note, run both suites, commit**
 
@@ -1542,25 +1542,25 @@ An unbundled Python process shows a blank document in the Dock and "Python" in t
 Design sources (committed): `docs/superpowers/design/gui/app-icon.png` (1024×1024 RGBA, transparent margins, rendered from `app-icon-source.html`), `docs/superpowers/design/gui/icon.svg` (64×64 favicon), `docs/superpowers/design/gui/icon.png` (256×256 tile).
 
 **Files:**
-- Create: `src/krater/assets/app-icon.png` (copy of `docs/superpowers/design/gui/app-icon.png`), `web/public/icon.svg` (copy of `docs/superpowers/design/gui/icon.svg`), `web/public/icon.png` (copy of `docs/superpowers/design/gui/icon.png`), `web/src/favicon.test.ts`
-- Modify: `src/krater/desktop.py`, `web/index.html`
+- Create: `src/flackey/assets/app-icon.png` (copy of `docs/superpowers/design/gui/app-icon.png`), `web/public/icon.svg` (copy of `docs/superpowers/design/gui/icon.svg`), `web/public/icon.png` (copy of `docs/superpowers/design/gui/icon.png`), `web/src/favicon.test.ts`
+- Modify: `src/flackey/desktop.py`, `web/index.html`
 - Test: `tests/test_desktop.py` (append)
 
 **Interfaces:**
 - Consumes: `run_in_window`, `start_server_thread`, `ServerHandle` (Task 2).
-- Produces: `APP_NAME = "Krater"`, `APP_ICON: Path`, `app_icon() -> str | None`, `set_app_name(name: str = APP_NAME) -> bool` in `desktop.py`.
+- Produces: `APP_NAME = "Flackey"`, `APP_ICON: Path`, `app_icon() -> str | None`, `set_app_name(name: str = APP_NAME) -> bool` in `desktop.py`.
 
-Hatch's wheel target packages the whole `src/krater` directory, so the PNG ships with no `pyproject.toml` change.
+Hatch's wheel target packages the whole `src/flackey` directory, so the PNG ships with no `pyproject.toml` change.
 
 - [ ] **Step 1: Copy the assets**
 
 ```
-cp docs/superpowers/design/gui/app-icon.png src/krater/assets/app-icon.png
+cp docs/superpowers/design/gui/app-icon.png src/flackey/assets/app-icon.png
 cp docs/superpowers/design/gui/icon.svg web/public/icon.svg
 cp docs/superpowers/design/gui/icon.png web/public/icon.png
 ```
 
-(create `src/krater/assets/` first; `web/public/` exists since Task 9.)
+(create `src/flackey/assets/` first; `web/public/` exists since Task 9.)
 
 - [ ] **Step 2: Write the failing Python tests**
 
@@ -1568,7 +1568,7 @@ Append to `tests/test_desktop.py`:
 
 ```python
 def test_app_icon_asset_is_a_1024_square_png():
-    from krater.desktop import APP_ICON
+    from flackey.desktop import APP_ICON
 
     data = APP_ICON.read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
@@ -1577,14 +1577,14 @@ def test_app_icon_asset_is_a_1024_square_png():
 
 
 def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(desktop, "APP_ICON", tmp_path / "missing.png")
     assert desktop.app_icon() is None
 
 
 def test_set_app_name_is_false_off_macos(monkeypatch):
-    from krater import desktop
+    from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.set_app_name() is False
@@ -1594,7 +1594,7 @@ def test_run_in_window_hands_the_dock_icon_to_pywebview(monkeypatch):
     import threading
     import types
 
-    from krater import desktop
+    from flackey import desktop
 
     class Hook:
         def __iadd__(self, fn):
@@ -1629,7 +1629,7 @@ Expected: the four new tests fail (`ImportError`/`AttributeError` on `APP_ICON`,
 Add `from pathlib import Path` to the imports. After `_NS_WINDOW_TITLE_HIDDEN = 1` add:
 
 ```python
-APP_NAME = "Krater"
+APP_NAME = "Flackey"
 APP_ICON = Path(__file__).with_name("assets") / "app-icon.png"
 
 
@@ -1689,7 +1689,7 @@ Expected: FAIL on the first `toContain`.
 
 - [ ] **Step 7: Link the favicons**
 
-In `web/index.html`, directly after the `<title>Krater</title>` line, add:
+In `web/index.html`, directly after the `<title>Flackey</title>` line, add:
 
 ```html
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
@@ -1701,6 +1701,6 @@ Run: `npm --prefix web test -- favicon` (PASS), then `npm --prefix web test` (pr
 - [ ] **Step 8: Commit**
 
 ```
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui add src/krater/assets/app-icon.png src/krater/desktop.py tests/test_desktop.py web/public/icon.svg web/public/icon.png web/index.html web/src/favicon.test.ts
-/usr/bin/git -C /Users/delarea/Desktop/code/krater/.claude/worktrees/native-mac-ui commit -m "feat(desktop): app icon in the Dock, app name in the menu bar, favicon"
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui add src/flackey/assets/app-icon.png src/flackey/desktop.py tests/test_desktop.py web/public/icon.svg web/public/icon.png web/index.html web/src/favicon.test.ts
+/usr/bin/git -C /Users/delarea/Desktop/code/flackey/.claude/worktrees/native-mac-ui commit -m "feat(desktop): app icon in the Dock, app name in the menu bar, favicon"
 ```
