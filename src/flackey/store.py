@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 
+from .config import legacy_data_dirs
 from .models import (
     INFLIGHT_STATES,
     TERMINAL_STATES,
@@ -81,7 +82,7 @@ CREATE INDEX IF NOT EXISTS track_evidence_track ON track_evidence(track_id);
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 norm = models_norm  # one normaliser for store, match and catalog (spec §5.1)
@@ -102,6 +103,7 @@ class Store:
         self._ensure_column("tracks", "sample_rate", "INTEGER")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._renormalize()
+        self._repoint_legacy_paths(path.parent)
         self.listeners: list[Callable[[str, int], None]] = []
 
     def _emit(self, kind: str, oid: int) -> None:
@@ -120,6 +122,33 @@ class Store:
         rows = self.conn.execute("SELECT id, artist, title, mix_name FROM tracks").fetchall()
         self.conn.executemany("UPDATE tracks SET artist_norm=?, title_norm=?, mix_norm=? WHERE id=?",
                               [(norm(r["artist"]), norm(r["title"]), norm(r["mix_name"]), r["id"]) for r in rows])
+        self.conn.commit()
+
+    # Columns holding an absolute path inside the data folder. `tracks.path` is deliberately absent: it
+    # points into the music library, which no rename of ours touches.
+    PATH_COLUMNS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("tracks", "spectrogram_path"),
+        ("lossless_attempts", "spectrogram_path"),
+        ("lossless_attempts", "raw_dir"),
+    )
+
+    def _repoint_legacy_paths(self, data_dir: Path) -> None:
+        """Rebase stored absolute paths that still name a folder this project used under an older name.
+
+        The folder migration renames files and rewrites slskd.yml, but these paths live in rows, and the
+        first rename missed them: every spectrogram the UI renders and every raw response `lossless
+        replay` reads pointed at a folder that had already been deleted. Nothing errored -- the images
+        just silently stopped resolving, which is why it survived a rename undetected.
+
+        This runs on every open rather than only during a folder migration, because by the time the
+        stale rows are noticed the old folder is long gone and there is no migration left to hang the
+        repair on. Idempotent, and matches nothing once it has run."""
+        for legacy in legacy_data_dirs():
+            old, new = f"{legacy}/", f"{data_dir}/"
+            for table, column in self.PATH_COLUMNS:
+                self.conn.execute(
+                    f"UPDATE {table} SET {column} = ? || substr({column}, ?) WHERE {column} LIKE ? || '%'",
+                    (new, len(old) + 1, old))
         self.conn.commit()
 
     # ---- requests -------------------------------------------------------

@@ -265,3 +265,38 @@ def test_evidence_rows(store: Store, tmp_path: Path):
     store.add_evidence(tid, "source", {"provider": "soulseek", "username": "loginty"})
     rows = store.list_evidence(tid)
     assert [r.kind for r in rows] == ["recording_match", "source"] and rows[0].value["score"] == 0.98
+
+
+def test_paths_stored_under_an_older_project_name_are_rebased_on_open(tmp_path: Path, monkeypatch):
+    # The first rename moved the files and rewrote slskd.yml but not the absolute paths held in rows, so
+    # every spectrogram the UI renders pointed at a deleted folder and silently stopped resolving. The
+    # repair runs on open, not during the folder migration: once the stale rows are noticed the old
+    # folder is already gone, and there is no migration left to attach it to.
+    legacy, data_dir = tmp_path / "Cratedigger", tmp_path / "Flackey"
+    monkeypatch.setattr("flackey.store.legacy_data_dirs", lambda: (legacy,))
+    db = data_dir / "flackey.sqlite"
+    store = Store(db)
+    rid = store.add_request("x", RequestKind.TEXT)
+    aid = store.add_attempt(rid, "soulseek", "q")
+    store.update_attempt(aid, raw_dir=str(legacy / "lossless" / "attempts" / str(aid)),
+                         spectrogram_path=str(legacy / "spectrograms" / "a.png"))
+    store.conn.close()
+
+    row = Store(db).conn.execute(
+        "SELECT raw_dir, spectrogram_path FROM lossless_attempts WHERE id=?", (aid,)).fetchone()
+    assert row["raw_dir"] == str(data_dir / "lossless" / "attempts" / str(aid))
+    assert row["spectrogram_path"] == str(data_dir / "spectrograms" / "a.png")
+
+
+def test_a_stored_path_outside_any_old_folder_is_left_alone(tmp_path: Path, monkeypatch):
+    # The music library is addressed the same way and this rename must never touch it.
+    legacy, data_dir = tmp_path / "Cratedigger", tmp_path / "Flackey"
+    monkeypatch.setattr("flackey.store.legacy_data_dirs", lambda: (legacy,))
+    db = data_dir / "flackey.sqlite"
+    store = Store(db)
+    aid = store.add_attempt(store.add_request("x", RequestKind.TEXT), "soulseek", "q")
+    outside = str(tmp_path / "Music" / "DJ Library" / "a.png")
+    store.update_attempt(aid, spectrogram_path=outside)
+    store.conn.close()
+    assert Store(db).conn.execute("SELECT spectrogram_path FROM lossless_attempts WHERE id=?",
+                                  (aid,)).fetchone()["spectrogram_path"] == outside
