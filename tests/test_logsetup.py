@@ -76,3 +76,14 @@ def test_banner_says_whether_soulseek_is_on_without_the_key(tmp_path, caplog):
     caplog.set_level("INFO")
     log_startup_banner(Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="very-secret-key"), "0.1.0")
     assert "soulseek: yes" in caplog.text and "very-secret-key" not in caplog.text
+
+
+def test_the_log_filename_agrees_with_the_project_file_prefix():
+    # `config.FILE_PREFIX` names the live database and the files a migration renames; `LOG_FILE` names the
+    # log beside them. They must spell the same project name, but config and logsetup are siblings on one
+    # layer line and cannot import each other, so the agreement is asserted here instead of derived. A
+    # rename that updates one and forgets the other leaves the app writing its log under the old name.
+    from flackey.config import FILE_PREFIX
+    from flackey.logsetup import LOG_FILE
+
+    assert LOG_FILE == f"{FILE_PREFIX}.log"

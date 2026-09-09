@@ -130,6 +130,11 @@ class Store:
         ("tracks", "spectrogram_path"),
         ("lossless_attempts", "spectrogram_path"),
         ("lossless_attempts", "raw_dir"),
+        # `rejections` was missed on the first pass and is the one that matters most: it backs
+        # /rejections/{id}/spectrogram.png, the only spectrogram the app serves over HTTP. It held no
+        # rows on the owner's machine when the rename ran, which is exactly why it stayed invisible --
+        # a rejection written before the next rename would have been stranded on its own.
+        ("rejections", "spectrogram_path"),
     )
 
     def _repoint_legacy_paths(self, data_dir: Path) -> None:

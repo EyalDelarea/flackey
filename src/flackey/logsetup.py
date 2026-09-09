@@ -9,6 +9,11 @@ import platform
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+# Spelled out rather than derived from `config.FILE_PREFIX`, which is what it must agree with: config
+# is a sibling on the same import-linter layer line, so neither module may import the other, and this
+# one stays at the bottom of the graph on purpose. Where the name cannot be derived it is asserted --
+# see test_the_log_filename_agrees_with_the_project_file_prefix, which fails on the next rename that
+# updates one and not the other.
 LOG_FILE = "flackey.log"
 MAX_BYTES = 2_000_000
 BACKUPS = 5

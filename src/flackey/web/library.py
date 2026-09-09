@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from .. import __version__
 from ..config import FILING_FORMATS, Settings, save_settings
 from ..export import PLAYLIST_DIR, playlist_names
+from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
 from ..slskd_config import SlskdConfigError, read_listen_port, read_username, write_credentials
@@ -133,7 +134,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         # the shared library -- that is how Soulseek works, and it cannot be loopback.
         return {"library_root": str(settings.library_root), "data_dir": str(settings.data_dir),
                 "version": __version__, "telegram_configured": settings.telegram_configured,
-                "log_path": str(settings.data_dir / "flackey.log"),
+                "log_path": str(settings.data_dir / LOG_FILE),
                 "soulseek_enabled": settings.soulseek_enabled, "slskd_url": settings.slskd_url,
                 "slskd_downloads_dir": str(settings.slskd_downloads),
                 "lossless_filing_format": settings.lossless_filing_format,

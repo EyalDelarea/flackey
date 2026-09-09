@@ -280,12 +280,17 @@ def test_paths_stored_under_an_older_project_name_are_rebased_on_open(tmp_path: 
     aid = store.add_attempt(rid, "soulseek", "q")
     store.update_attempt(aid, raw_dir=str(legacy / "lossless" / "attempts" / str(aid)),
                          spectrogram_path=str(legacy / "spectrograms" / "a.png"))
+    # `rejections` too: it backs the only spectrogram route the app serves, and the table was empty on the
+    # machine the rename ran on, so nothing would have caught it there.
+    jid = store.add_rejection(rid, "lossy", 320, 16_000, legacy / "spectrograms" / "r.png")
     store.conn.close()
 
-    row = Store(db).conn.execute(
+    reopened = Store(db)
+    row = reopened.conn.execute(
         "SELECT raw_dir, spectrogram_path FROM lossless_attempts WHERE id=?", (aid,)).fetchone()
     assert row["raw_dir"] == str(data_dir / "lossless" / "attempts" / str(aid))
     assert row["spectrogram_path"] == str(data_dir / "spectrograms" / "a.png")
+    assert reopened.get_rejection(jid).spectrogram_path == str(data_dir / "spectrograms" / "r.png")
 
 
 def test_a_stored_path_outside_any_old_folder_is_left_alone(tmp_path: Path, monkeypatch):
