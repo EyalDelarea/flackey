@@ -1,0 +1,33 @@
+[
+ {
+  "username": "loginty",
+  "directories": [
+   {
+    "directory": "Musique\\Sorted\\Albums\\Hallucinogen\\Twisted",
+    "fileCount": 1,
+    "files": [
+     {
+      "id": "d6b5590f-68f5-4e44-8708-861aad3b1d18",
+      "username": "loginty",
+      "direction": "Download",
+      "filename": "Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac",
+      "size": 51223918,
+      "state": "Completed, Succeeded",
+      "requestedAt": "2026-09-07T14:26:21.439071",
+      "enqueuedAt": "2026-09-07T14:26:22.4987",
+      "startedAt": "2026-09-07T14:26:23.190807Z",
+      "endedAt": "2026-09-07T14:26:38.727966Z",
+      "bytesTransferred": 51223918,
+      "averageSpeed": 3296865.147611607,
+      "attempts": 1,
+      "removed": false,
+      "bytesRemaining": 0,
+      "elapsedTime": "00:00:15.5371590",
+      "percentComplete": 100,
+      "remainingTime": "00:00:00"
+     }
+    ]
+   }
+  ]
+ }
+]

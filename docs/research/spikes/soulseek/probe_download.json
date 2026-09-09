@@ -1,0 +1,150 @@
+{
+ "6": {
+  "state": "Completed, Succeeded",
+  "elapsed": 18.2,
+  "speed_kbs": 3296.865147611607,
+  "size": 51223918,
+  "log": [
+   [
+    3.9,
+    "InProgress",
+    12
+   ],
+   [
+    18.2,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ },
+ "14": {
+  "state": "Completed, Succeeded",
+  "elapsed": 29.4,
+  "speed_kbs": 2142.1382949586796,
+  "size": 59778432,
+  "log": [
+   [
+    2.9,
+    "InProgress",
+    3
+   ],
+   [
+    29.4,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ },
+ "16": {
+  "state": "Completed, Succeeded",
+  "elapsed": 47.2,
+  "speed_kbs": 1505.1755191297532,
+  "size": 62888941,
+  "log": [
+   [
+    2.4,
+    "Queued, Remotely",
+    0
+   ],
+   [
+    4.4,
+    "InProgress",
+    0
+   ],
+   [
+    47.2,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ },
+ "10": {
+  "state": "Completed, Succeeded",
+  "elapsed": 50.1,
+  "speed_kbs": 1059.5574616519898,
+  "size": 47621221,
+  "log": [
+   [
+    3.2,
+    "Initializing",
+    0
+   ],
+   [
+    5.3,
+    "InProgress",
+    0
+   ],
+   [
+    50.1,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ },
+ "26": {
+  "state": "Completed, Succeeded",
+  "elapsed": 73.2,
+  "speed_kbs": 1461.3143547907264,
+  "size": 101163366,
+  "log": [
+   [
+    2.0,
+    "Initializing",
+    0
+   ],
+   [
+    4.1,
+    "InProgress",
+    0
+   ],
+   [
+    73.2,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ },
+ "8": {
+  "state": "Completed, Succeeded",
+  "elapsed": 201.7,
+  "speed_kbs": 566.231157083981,
+  "size": 79970666,
+  "log": [
+   [
+    3.5,
+    "Initializing",
+    0
+   ],
+   [
+    11.7,
+    "InProgress",
+    0
+   ],
+   [
+    13.7,
+    "Requested",
+    0
+   ],
+   [
+    15.8,
+    "Queued, Remotely",
+    0
+   ],
+   [
+    52.4,
+    "Queued, Locally",
+    0
+   ],
+   [
+    60.5,
+    "InProgress",
+    0
+   ],
+   [
+    201.7,
+    "Completed, Succeeded",
+    100
+   ]
+  ]
+ }
+}

@@ -1,0 +1,109 @@
+export type RequestState = 'queued'|'identifying'|'awaiting_review'|'fetching'|'verifying'|'filing'|'done'|'duplicate'|'rejected'|'cancelled'|'not_found'|'error'
+export interface Request { id:number; created_at:string; updated_at:string; raw_text:string; kind:string; state:RequestState;
+  playlist_id:number|null; playlist_position:number|null; source_url:string|null; query_artist:string|null; query_title:string|null;
+  query_version:string|null; query_duration_s:number|null; chosen_candidate_id:number|null; catalog_track_id:number|null;
+  confidence:number|null; flag_reason:string|null; error_message:string|null; attempts:number; retry_after:string|null; track_id:number|null;
+  fetch_source:string|null }
+export interface Candidate { id:number; request_id:number; source:string; source_ref:string; artist:string; title:string; mix_name:string|null;
+  duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null }
+export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;
+  catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null }
+export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:number|null; source:string; source_fmt:string|null; label:string }
+export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number; cutoff_hz:number; file_size:number; artist:string; title:string; mix_name:string;
+  duration_s:number|null; isrc:string|null; catalog_track_id:number|null; request_id:number|null; added_at:string; verified_at:string|null; spectrogram_path:string|null;
+  source:string; source_fmt:string|null; bit_depth:number|null; sample_rate:number|null; format?:TrackFormat; catalog:Catalog|null }
+export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
+export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;
+  fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
+export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string }
+export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null }
+export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; file:string }
+export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
+export interface ProviderHealth { name:string; status:string; username:string|null }
+export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
+  attempts_24h:Record<string,number>; raw_mb:number }
+export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
+  setup_done:boolean; lossless?:LosslessHealth }
+export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
+  speed_bps:number; pick:number; state:string }
+export interface PortInfo { port:number; host:string; public:boolean }
+export interface Ranking { max_picks:number; duration_tolerance_s:number; title_ratio:number;
+  require_artist:boolean; max_queue:number|null; fingerprint_min:number }
+export interface AppSettings { library_root:string; data_dir:string; version:string; telegram_configured:boolean;
+  log_path:string; soulseek_enabled?:boolean; slskd_url?:string; slskd_downloads_dir?:string;
+  lossless_filing_format?:string; filing_formats?:string[];
+  ports?:{ app:PortInfo; sidecar:PortInfo; soulseek_listen:PortInfo }; ranking?:Ranking }
+export interface Submission { summary:string; request_ids:number[]; playlist_id:number|null; name:string; total:number; already_in_library:number; already_queued:number }
+export interface Tools { ffmpeg:boolean; ffprobe:boolean; yt_dlp:boolean }
+export interface Upload { id:string|null; peer:string; file:string; folder:string; size:number; bytes:number; pct:number;
+  state:string; speed_bps:number; started_at:string|null; ended_at:string|null }
+export interface UploadSummary { total:number; active:number; completed:number; peers:number; bytes:number }
+export interface UploadFeed { enabled:boolean; provider:string|null; uploads:Upload[]; summary:UploadSummary; error:string|null }
+export interface TelegramStatus { authorized:boolean; configured:boolean; phone_masked:string|null }
+export interface QrStart { id:string; url:string; expires_at:string }
+export interface SoulseekSetup { configured: boolean; username: string | null }
+export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 'failed'
+  username: string | null; error: string | null }
+export interface SlskdSetup { installed: boolean; running: boolean; version: string }
+export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message) }
+}
+
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...init })
+  const body = res.status === 204 ? null : await res.json().catch(() => null)
+  if (!res.ok) throw new ApiError(res.status, (body && body.detail) || res.statusText)
+  return body as T
+}
+const post = <T,>(path: string, body?: unknown) => call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
+
+export const api = {
+  health: () => call<Health>('/api/health'),
+  queue: () => call<Bundle[]>('/api/queue'),
+  submit: (url: string) => post<Submission>('/api/requests', { url }),
+  choose: (rid: number, cid: number) => post<Request>(`/api/requests/${rid}/choose/${cid}`),
+  cancel: (rid: number) => post<Request>(`/api/requests/${rid}/cancel`),
+  retry: (rid: number) => post<Request>(`/api/requests/${rid}/retry`),
+  removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
+  clearFailed: () => post<{ removed: number[] }>('/api/requests/clear-failed'),
+  library: (q?: string, playlistId?: number | null) => {
+    const p = new URLSearchParams()
+    if (q) p.set('q', q)
+    if (playlistId != null) p.set('playlist_id', String(playlistId))
+    const qs = p.toString()
+    return call<Track[]>(`/api/library${qs ? '?' + qs : ''}`)
+  },
+  upgradeTrack: (trackId: number) =>
+    post<{ ok: boolean; message: string; upgraded: boolean }>(`/api/lossless/upgrade/${trackId}`),
+  playlists: () => call<Playlist[]>('/api/playlists'),
+  stats: () => call<Stats>('/api/stats'),
+  settings: () => call<AppSettings>('/api/settings'),
+  saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string }> = {}) =>
+    call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
+  reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),
+  pickFolder: (initial: string | null) => post<{ path: string | null }>('/api/pick-folder', { initial }),
+  pickFolderAvailable: () => call<{ available: boolean }>('/api/pick-folder/available'),
+  tools: () => call<Tools>('/api/tools'),
+  setupDone: () => post<{ setup_done: boolean }>('/api/setup/done'),
+  setupReset: () => post<{ setup_done: boolean }>('/api/setup/reset'),
+  telegramStatus: () => call<TelegramStatus>('/api/telegram/status'),
+  qrStart: () => post<QrStart>('/api/telegram/qr'),
+  qrState: (id: string) => call<{ state: 'waiting' | 'password_needed' | 'done' | 'expired' | 'unknown' }>(`/api/telegram/qr/${id}`),
+  password: (password: string) => post<{ state: string }>('/api/telegram/password', { password }),
+  sendCode: (phone: string) => post<{ ok: boolean }>('/api/telegram/phone', { phone }),
+  signIn: (phone: string, code: string) => post<{ state: 'done' | 'password_needed' }>('/api/telegram/code', { phone, code }),
+  logout: () => post<{ ok: boolean }>('/api/telegram/logout'),
+  uploads: () => call<UploadFeed>('/api/lossless/uploads'),
+  soulseekSetup: () => call<SoulseekSetup>('/api/setup/soulseek'),
+  saveSoulseek: (username: string, password: string) =>
+    post<{ ok: boolean; restart_required: boolean; connecting: boolean }>('/api/setup/soulseek', { username, password }),
+  soulseekConnectStatus: () => call<SoulseekConnect>('/api/setup/soulseek/status'),
+  connectSoulseek: () => post<SoulseekConnect>('/api/setup/soulseek/connect'),
+  slskdSetup: () => call<SlskdSetup>('/api/setup/slskd'),
+  installSlskd: () => post<{ state: SlskdProgress['state'] }>('/api/setup/slskd'),
+  slskdProgress: () => call<SlskdProgress>('/api/setup/slskd/progress'),
+}
+export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/spectrogram.png`

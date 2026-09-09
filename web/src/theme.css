@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light dark;
+  --window: #ECECEC; --content: #FFFFFF;
+  --sidebar: rgba(233,233,235,.86);
+  --group: #FFFFFF; --group-border: rgba(0,0,0,.10);
+  --well: #FFFFFF; --well-border: rgba(0,0,0,.16);
+  --text: #1D1D1F; --secondary: rgba(0,0,0,.55); --tertiary: rgba(0,0,0,.28);
+  --sep: rgba(0,0,0,.09);
+  --accent: #007AFF; --accent-text: #FFFFFF;
+  --selection: rgba(0,0,0,.07); --alt: rgba(0,0,0,.03); --chip: rgba(0,0,0,.08);
+  --button: #FFFFFF; --button-border: rgba(0,0,0,.14); --button-shadow: 0 .5px 1px rgba(0,0,0,.12);
+  --orange: #FF9500; --green: #34C759; --red: #FF3B30;
+  --orange-wash: rgba(255,149,0,.08); --red-wash: rgba(255,59,48,.07);
+  --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: #1E1E1E; --content: #1E1E1E;
+    --sidebar: rgba(43,43,43,.86);
+    --group: #2A2A2A; --group-border: rgba(255,255,255,.09);
+    --well: #1B1B1B; --well-border: rgba(255,255,255,.16);
+    --text: rgba(255,255,255,.87); --secondary: rgba(255,255,255,.55); --tertiary: rgba(255,255,255,.28);
+    --sep: rgba(255,255,255,.09);
+    --accent: #0A84FF;
+    --selection: rgba(255,255,255,.09); --alt: rgba(255,255,255,.03); --chip: rgba(255,255,255,.12);
+    --button: rgba(255,255,255,.11); --button-border: rgba(255,255,255,.10); --button-shadow: 0 .5px 1px rgba(0,0,0,.3);
+    --orange: #FF9F0A; --green: #30D158; --red: #FF453A;
+    --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
+  }
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--window); color: var(--text); font: 13px/1.35 var(--sans); -webkit-font-smoothing: antialiased; }
+/* Inside the native window the WKWebView is transparent and a vibrancy view sits behind it: only the
+   sidebar (rgba) lets it through; every screen paints --window itself. */
+html.native body { background: transparent; }
+h1, h2, p { margin: 0; }
+button, input { font: inherit; color: inherit; }
+button { cursor: default; }
+.mono { font-family: var(--mono); font-size: 11px; }
+.muted { color: var(--secondary); } .faint { color: var(--tertiary); }
+.err { color: var(--red); font-size: 12px; }
+.btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 500; box-shadow: var(--button-shadow); white-space: nowrap; }
+.btn-primary.lg { height: 30px; padding: 0 22px; border-radius: 7px; font-size: 14px; }
+.btn-secondary { display: inline-flex; align-items: center; justify-content: center; height: 22px; padding: 0 10px; border: .5px solid var(--button-border); border-radius: 5px; background: var(--button); color: var(--text); font-size: 12px; box-shadow: var(--button-shadow); white-space: nowrap; }
+.btn-primary:active { filter: brightness(.92); } .btn-secondary:active { background: var(--selection); }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: .45; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; }
+.btn-link.muted { color: var(--secondary); }
+.input { height: 28px; width: 100%; padding: 0 8px; border: .5px solid var(--well-border); border-radius: 7px; background: var(--well); color: var(--text); font-size: 13px; outline: none; }
+.input::placeholder { color: var(--tertiary); }
+.input:focus, .btn-primary:focus-visible, .btn-secondary:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+/* flex: none because a .group is usually a child of .scroll, which is a flex column: without it the
+   group shrinks below its own content and `overflow: hidden` -- there for the rounded corners --
+   silently cuts the last row's text off mid-sentence. */
+.group { flex: none; background: var(--group); border: .5px solid var(--group-border); border-radius: 10px; overflow: hidden; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
+.status-dot.amber { background: var(--orange); }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }

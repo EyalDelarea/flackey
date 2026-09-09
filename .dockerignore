@@ -1,0 +1,7 @@
+.env
+.venv
+node_modules
+web/node_modules
+data
+*.session*
+.git

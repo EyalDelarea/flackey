@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}svg{display:block}</style></head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B4D75"/><stop offset="1" stop-color="#151B29"/>
+    </linearGradient>
+    <linearGradient id="crate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7A5A3A"/><stop offset="1" stop-color="#4A3521"/>
+    </linearGradient>
+    <linearGradient id="crateLip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A67C50"/><stop offset="1" stop-color="#7A5A3A"/>
+    </linearGradient>
+    <radialGradient id="vinyl" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2A2A2E"/><stop offset="0.55" stop-color="#151517"/><stop offset="1" stop-color="#0B0B0D"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.18"/><stop offset="0.5" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="label" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7DDCFF"/><stop offset="1" stop-color="#0A84FF"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <clipPath id="tileClip"><rect x="96" y="96" width="832" height="832" rx="186"/></clipPath>
+    <clipPath id="aboveCrate"><rect x="0" y="0" width="1024" height="655"/></clipPath>
+  </defs>
+
+  <!-- tile -->
+  <rect x="96" y="96" width="832" height="832" rx="186" fill="url(#tile)" filter="url(#shadow)"/>
+  <g clip-path="url(#tileClip)">
+    <!-- subtle glow behind the record -->
+    <circle cx="512" cy="470" r="330" fill="#0A84FF" opacity="0.10"/>
+
+    <!-- vinyl, only the part above the crate lip -->
+    <g clip-path="url(#aboveCrate)" filter="url(#soft)">
+      <circle cx="512" cy="480" r="300" fill="url(#vinyl)"/>
+      <!-- grooves -->
+      <g fill="none" stroke="#fff" stroke-opacity="0.07" stroke-width="3">
+        <circle cx="512" cy="480" r="270"/><circle cx="512" cy="480" r="248"/><circle cx="512" cy="480" r="226"/>
+        <circle cx="512" cy="480" r="204"/><circle cx="512" cy="480" r="182"/><circle cx="512" cy="480" r="160"/>
+      </g>
+      <!-- light sheen -->
+      <path d="M512 180 A300 300 0 0 1 812 480 L512 480 Z" fill="url(#sheen)"/>
+      <!-- label -->
+      <circle cx="512" cy="480" r="112" fill="url(#label)"/>
+      <circle cx="512" cy="480" r="112" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="4"/>
+      <circle cx="512" cy="480" r="14" fill="#0B0B0D"/>
+    </g>
+
+    <!-- crate front -->
+    <rect x="96" y="655" width="832" height="273" fill="url(#crate)"/>
+    <rect x="96" y="640" width="832" height="34" rx="6" fill="url(#crateLip)"/>
+    <!-- plank lines -->
+    <g stroke="#000" stroke-opacity="0.25" stroke-width="6">
+      <line x1="96" y1="760" x2="928" y2="760"/><line x1="96" y1="850" x2="928" y2="850"/>
+    </g>
+    <g stroke="#fff" stroke-opacity="0.08" stroke-width="3">
+      <line x1="96" y1="766" x2="928" y2="766"/><line x1="96" y1="856" x2="928" y2="856"/>
+    </g>
+    <!-- crate handle cutout -->
+    <rect x="432" y="790" width="160" height="40" rx="20" fill="#0B0B0D" opacity="0.8"/>
+  </g>
+  <!-- tile edge highlight -->
+  <rect x="97" y="97" width="830" height="830" rx="185" fill="none" stroke="#fff" stroke-opacity="0.12" stroke-width="2"/>
+</svg>
+</body></html>

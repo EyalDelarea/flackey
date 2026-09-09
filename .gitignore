@@ -1,0 +1,30 @@
+# secrets and sessions
+.env
+*.session
+*.session-journal
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+/dist/
+build/
+*.egg-info/
+
+# node
+node_modules/
+web/dist/
+
+# runtime data
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# os
+.DS_Store
+
+# Playwright MCP scratch output
+.playwright-mcp/

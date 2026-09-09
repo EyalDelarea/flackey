@@ -1,0 +1,268 @@
+"""The gate that turns a provider's search results into one pick, with a report that explains every
+rejection (spec §6). Pure: no I/O, no clock. Rules are cheap filters against downloading the wrong file;
+the fingerprint check (fingerprint.py) is what proves identity after the download."""
+from __future__ import annotations
+
+import re
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+
+from rapidfuzz import fuzz
+
+from .config import Settings
+from .identify import parse_version
+from .models import Candidate, CatalogTrack, is_original, norm
+
+LOSSLESS_EXTENSIONS = frozenset({"flac", "wav", "aiff", "aif"})
+MAX_SAMPLE_RATE = 48_000                       # CDJs play 44.1 and 48 kHz; nothing higher gets downloaded
+SIZE_KBPS = {"flac": (400, 2500), "wav": (1400, 4700), "aiff": (1400, 4700), "aif": (1400, 4700)}
+VERSION_WORDS = frozenset({"remix", "rmx", "mix", "edit", "version", "dub", "rework", "bootleg", "mashup",
+                           "live", "instrumental", "acoustic", "vip", "remixed"})
+_TRACK_NO = re.compile(r"^\s*[\[(]?\d{1,3}[\])]?\s*[.\-_)]?\s*")
+_TRAILING_HASH = re.compile(r"-[0-9a-f]{6,}$")
+_PARENS = re.compile(r"\(.*?\)")
+
+
+@dataclass(frozen=True)
+class LosslessFile:
+    provider: str
+    username: str
+    path: str                      # as the peer reported it, backslash separated
+    extension: str
+    size: int
+    length_s: int | None
+    bitrate_kbps: int | None
+    sample_rate: int | None
+    bit_depth: int | None
+    has_free_slot: bool
+    upload_speed_bps: int
+    queue_length: int
+
+    @property
+    def name(self) -> str:
+        return self.path.replace("\\", "/").rsplit("/", 1)[-1]
+
+    @property
+    def folder(self) -> str:
+        parts = self.path.replace("\\", "/").rsplit("/", 1)
+        return self.path[: len(self.path) - len(parts[-1]) - 1] if len(parts) == 2 else ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class Reference:
+    artist: str
+    title: str
+    mix_name: str | None
+    duration_s: int | None
+    deezer_id: int | None = None
+
+    @property
+    def is_original(self) -> bool:
+        return self.mix_name is None or is_original(self.mix_name)
+
+
+def first_artist(artist: str) -> str:
+    return _PARENS.sub("", artist).split(",")[0].strip()
+
+
+def reference_for(catalog: CatalogTrack | None, cand: Candidate) -> Reference:
+    if catalog is not None:
+        return Reference(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s or cand.duration_s,
+                         cand.deezer_id)
+    title, version = parse_version(cand.title)
+    return Reference(cand.artist, title, cand.mix_name or version or "Original Mix", cand.duration_s, cand.deezer_id)
+
+
+def search_text(ref: Reference) -> str:
+    """What is typed into the network: first artist, title without parentheses, mix name only when it is a
+    real version (the spike: this form found every track once the search was allowed to complete)."""
+    text = f"{first_artist(ref.artist)} {_PARENS.sub('', ref.title)}"
+    if not ref.is_original:
+        text += f" {ref.mix_name}"
+    return " ".join(text.split())
+
+
+def file_title(name: str, artist: str) -> tuple[str, str | None]:
+    """Normalised title tokens of a peer's file name with the artist's tokens removed, plus the version text
+    `identify.parse_version` finds. Handles "02. A - T.flac", "09-a--t_x-6920ae5a.flac", "A_-_01_T.flac"."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    stem = re.sub(r"_+|--", " ", stem)
+    stem = _TRAILING_HASH.sub("", _TRACK_NO.sub("", stem))
+    seg = stem.split(" - ")[-1] if " - " in stem else stem
+    seg = _TRACK_NO.sub("", seg)
+    title, version = parse_version(seg.strip())
+    artist_tokens = set(norm(artist).split())
+    tokens = [t for t in norm(title).split() if t not in artist_tokens]
+    return " ".join(tokens), version
+
+
+@dataclass(frozen=True)
+class PickPolicy:
+    lossless_extensions: frozenset[str] = LOSSLESS_EXTENSIONS
+    duration_tolerance_s: int = 3
+    title_ratio: int = 90
+    require_artist: bool = False
+    max_queue_length: int | None = None
+    banned_users: frozenset[str] = frozenset()
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["lossless_extensions"] = sorted(self.lossless_extensions)
+        d["banned_users"] = sorted(self.banned_users)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PickPolicy:
+        return cls(lossless_extensions=frozenset(d["lossless_extensions"]), duration_tolerance_s=d["duration_tolerance_s"],
+                   title_ratio=d["title_ratio"], require_artist=d["require_artist"],
+                   max_queue_length=d["max_queue_length"], banned_users=frozenset(d["banned_users"]))
+
+
+def policy_from_settings(settings: Settings) -> PickPolicy:
+    return PickPolicy(duration_tolerance_s=settings.lossless_duration_tolerance_s, title_ratio=settings.lossless_title_ratio,
+                      require_artist=settings.lossless_require_artist, max_queue_length=settings.lossless_max_queue)
+
+
+Rule = Callable[[LosslessFile, Reference, PickPolicy], str | None]
+
+
+def rule_extension(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    return None if f.extension in p.lossless_extensions else f"extension {f.extension!r}"
+
+
+def rule_has_length(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    return "no length reported" if f.length_s is None else None
+
+
+def rule_plausible_size(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    if f.sample_rate and f.sample_rate > MAX_SAMPLE_RATE:
+        return f"sample rate {f.sample_rate} above {MAX_SAMPLE_RATE}"
+    lo, hi = SIZE_KBPS.get(f.extension, (400, 4700))
+    kbps = f.size * 8 / 1000 / max(f.length_s or 1, 1)
+    if not lo <= kbps <= hi:
+        return f"{kbps:.0f} kbps does not fit a {f.extension} of {f.length_s} s"
+    return None
+
+
+def rule_duration(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    if ref.duration_s is None or f.length_s is None:
+        return None
+    if abs(f.length_s - ref.duration_s) > p.duration_tolerance_s:
+        return f"length {f.length_s} s vs {ref.duration_s} s"
+    return None
+
+
+def rule_title(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    title, _ = file_title(f.name, ref.artist)
+    score = fuzz.token_set_ratio(norm(ref.title), title)
+    if score < p.title_ratio:
+        return f"title {title!r} scores {score:.0f} < {p.title_ratio}"
+    return None
+
+
+def rule_version(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    title, version = file_title(f.name, ref.artist)
+    extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
+    words = set(norm(version or "").split()) | set(extra)
+    if ref.is_original:
+        hit = words & VERSION_WORDS
+        if hit and "original" not in words:
+            return f"looks like a version ({' '.join(sorted(hit))}) but the reference is the original"
+        return None
+    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
+    have = set(norm(f"{version or ''} {title}").split())
+    missing = [w for w in want if w not in have]
+    if missing:
+        return f"version words {missing} missing for {ref.mix_name!r}"
+    return None
+
+
+def rule_artist(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    if p.require_artist and norm(first_artist(ref.artist)) not in norm(f.path):
+        return "artist not in path"
+    return None
+
+
+def rule_queue(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    if p.max_queue_length is not None and f.queue_length > p.max_queue_length:
+        return f"queue {f.queue_length} > {p.max_queue_length}"
+    return None
+
+
+def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    return "banned user" if f.username in p.banned_users else None
+
+
+RULES: list[tuple[str, Rule]] = [
+    ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
+    ("duration", rule_duration), ("title", rule_title), ("version", rule_version), ("artist", rule_artist),
+    ("queue", rule_queue), ("banned_user", rule_banned_user),
+]
+
+RANKERS: list[tuple[str, Callable[[LosslessFile], object]]] = [
+    ("free_slot", lambda f: not f.has_free_slot),
+    ("bit_depth", lambda f: {16: 0, 24: 1}.get(f.bit_depth or 0, 2)),   # CD master first; unknown last
+    ("queue_length", lambda f: f.queue_length),
+    ("upload_speed", lambda f: -f.upload_speed_bps),
+    ("size", lambda f: f.size),
+]
+
+
+@dataclass
+class Rejection:
+    file: LosslessFile
+    rule: str
+    reason: str
+
+
+@dataclass
+class PickReport:
+    reference: Reference
+    policy: PickPolicy
+    seen: int
+    rejections: list[Rejection] = field(default_factory=list)
+    survivors: list[LosslessFile] = field(default_factory=list)
+    chosen: LosslessFile | None = None
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {"reference": asdict(self.reference), "policy": self.policy.to_dict(), "seen": self.seen,
+                "rejections": [{"file": r.file.to_dict(), "rule": r.rule, "reason": r.reason} for r in self.rejections],
+                "survivors": [f.to_dict() for f in self.survivors],
+                "chosen": self.chosen.to_dict() if self.chosen else None, "summary": self.summary}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PickReport:
+        return cls(reference=Reference(**d["reference"]), policy=PickPolicy.from_dict(d["policy"]), seen=d["seen"],
+                   rejections=[Rejection(LosslessFile(**r["file"]), r["rule"], r["reason"]) for r in d["rejections"]],
+                   survivors=[LosslessFile(**f) for f in d["survivors"]],
+                   chosen=LosslessFile(**d["chosen"]) if d["chosen"] else None, summary=d["summary"])
+
+
+def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
+         rules: list[tuple[str, Rule]] = RULES, rankers=RANKERS) -> PickReport:
+    report = PickReport(reference=ref, policy=policy, seen=len(files))
+    for f in files:
+        for name, rule in rules:
+            reason = rule(f, ref, policy)
+            if reason:
+                report.rejections.append(Rejection(f, name, reason))
+                break
+        else:
+            report.survivors.append(f)
+    report.survivors.sort(key=lambda f: tuple(fn(f) for _, fn in rankers))
+    report.chosen = report.survivors[0] if report.survivors else None
+    counts = Counter(r.rule for r in report.rejections)
+    parts = [f"{n} {rule}" for rule, n in counts.most_common()]
+    head = f"{len(files)} files: " + (", ".join(parts) if parts else "")
+    if report.chosen:
+        c = report.chosen
+        tail = f"chose {c.username} ({'slot' if c.has_free_slot else 'no slot'}, q{c.queue_length}, {c.extension})"
+    else:
+        tail = "nothing left"
+    report.summary = f"{head}; {tail}" if parts else f"{head}{tail}"
+    return report
