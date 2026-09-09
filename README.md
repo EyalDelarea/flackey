@@ -20,20 +20,23 @@ label are in the tags.
 cp .env.example .env   # fill in TELEGRAM_API_ID, TELEGRAM_API_HASH
 uv sync
 npm --prefix web install
-npm --prefix web run build   # builds web/dist, which crate start serves
+npm --prefix web run build   # builds web/dist, which krater start serves
 ```
 
 ## Usage
 
 ```bash
-uv run crate start          # worker + web UI, until Ctrl-C; opens the UI in a browser
-uv run crate start --no-browser
+uv run krater start          # worker + web UI, until Ctrl-C; opens the UI in a browser
+uv run krater start --no-browser
 ```
+
+The project was called cratedigger until the rename, so `crate` is kept as an
+alias for `krater` — every command below works under either name.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
 phone number instead) — this authorizes your own Telegram account, via
-Telethon, as the account that talks to the source bot. `uv run crate login`
+Telethon, as the account that talks to the source bot. `uv run krater login`
 is an optional, terminal-only way to do that same sign-in instead of the
 setup screen; neither path stores the two-step verification password.
 
@@ -41,9 +44,9 @@ Then paste a YouTube or YouTube Music track/playlist link into the UI.
 Plain text is refused and queues nothing. Useful companions:
 
 ```bash
-uv run crate add "https://music.youtube.com/watch?v=…"   # enqueue from the Mac, no phone needed
-uv run crate status                                     # queue counts and library size
-uv run crate export                                     # rewrite every M3U8 playlist file
+uv run krater add "https://music.youtube.com/watch?v=…"   # enqueue from the Mac, no phone needed
+uv run krater status                                     # queue counts and library size
+uv run krater export                                     # rewrite every M3U8 playlist file
 ```
 
 ## Rekordbox import
@@ -67,12 +70,12 @@ the full reasoning.
 ## Notes on Telegram behaviour
 
 - **Session expiry**: if the owner's Telethon session goes missing or
-  expires, `crate start` does not exit — the web UI keeps running so links
+  expires, `krater start` does not exit — the web UI keeps running so links
   still queue, but the worker pauses. `/api/health` reports
   `telegram_authorized: false`, and the UI shows an amber "Telegram signed
   out" banner with a Reconnect button. Reconnecting takes you through the
   same sign-in screen as first-time setup (QR code or phone number), without
-  restarting `crate start`; the worker resumes automatically once you're
+  restarting `krater start`; the worker resumes automatically once you're
   signed back in.
 
 ## Lossless via Soulseek
@@ -112,14 +115,19 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
 
 Every attempt is recorded: `GET /api/lossless/attempts`, the attempt block on a request, and the raw slskd
 responses under `<data dir>/lossless/attempts/<id>/` (pruned after `LOSSLESS_KEEP_RAW_DAYS`, default 30).
-`crate lossless replay <request id>` re-runs the pick under the current settings and shows what changed.
+`krater lossless replay <request id>` re-runs the pick under the current settings and shows what changed.
 A transfer cancelled by a cap can still complete on slskd's side; such files stay in slskd's downloads folder
 and can be deleted at any time.
 
 ## Where data lives
 
-- `~/Library/Application Support/Krater/` on macOS; `~/.config/krater/` elsewhere. An existing
-  folder at the legacy location is moved on first launch. Contains the sqlite database, `settings.json`
+- `~/Library/Application Support/Krater/` on macOS; `~/.config/krater/` elsewhere. Two renames are
+  behind us — the project was called cratedigger, and before the Mac-native move its data lived under
+  `~/.config` — so first launch looks for either older folder, newest first, and brings it across:
+  copied, verified file by file, and only then is the old one removed, with `cratedigger.sqlite` (and
+  its `-wal`/`-shm` sidecars) and `cratedigger.log` renamed by prefix on the way. If the copy is
+  incomplete both folders are kept and the failure is logged, never a half-migrated library.
+  Contains the sqlite database, `settings.json`
   (with the library folder and Telegram api id/hash), the Telethon session, tmp downloads, and spectrogram PNGs.
   `settings.json` is created from env vars and can be updated via the app; env vars always override it.
 - `~/Music/DJ Library/` — one folder per artist, plus `Playlists/*.m3u8`.
@@ -133,24 +141,24 @@ docker run --env-file .env -v krater-data:/data -v /path/to/library:/library -p 
 
 Open `http://localhost:8765` and sign in to Telegram from the setup screen
 (QR code or phone number). The Telethon session is stored in the `/data`
-volume, so this only needs to happen once. `uv run crate login` also works
+volume, so this only needs to happen once. `uv run krater login` also works
 as a terminal-only alternative, run once beforehand:
 
 ```bash
-docker run --env-file .env -it -v krater-data:/data krater uv run crate login
+docker run --env-file .env -it -v krater-data:/data krater uv run krater login
 ```
 
 ## Development
 
 ```bash
 npm --prefix web install
-npm --prefix web run build    # needed once before crate start
+npm --prefix web run build    # needed once before krater start
 uv run pytest -q
 uv run ruff check src tests
 uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.toml for the exact contract
 ```
 
-`crate start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
+`krater start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
 
 ## More
 
