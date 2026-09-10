@@ -123,10 +123,11 @@ def lenv(tmp_path: Path, monkeypatch):
     return settings, store, MemoryNotifier(), provider, fake_check, Clock()
 
 
-def make(lenv, provider=None, source=None, catalog=None, **kw):
-    settings, store, notifier, default_provider, _, clock = lenv
+def make(lenv, provider=None, source=None, catalog=None, settings=None, **kw):
+    default_settings, store, notifier, default_provider, _, clock = lenv
     providers = kw.pop("providers", [provider or default_provider])
-    return Worker(store, source or FakeSource([good_cand()]), catalog or FakeCatalog([CT3]), notifier, settings,
+    return Worker(store, source or FakeSource([good_cand()]), catalog or FakeCatalog([CT3]), notifier,
+                  settings or default_settings,
                   artwork_fetch=no_art, providers=providers, http=httpx.AsyncClient(), clock=clock, **kw)
 
 
@@ -751,3 +752,135 @@ async def test_upgrade_runs_even_though_a_normal_retry_would_be_refused(lenv):
     provider.files = [lf("a")]
     await w.upgrade(before.id)
     assert store.get_track(before.id).source_fmt == "flac"
+
+
+# ---- the source is unavailable: fetching on the Beatport match alone ------------------------------------
+# The Telegram bot went silent for hours on the owner's machine while Beatport was matching every track and
+# peers were holding the files. These cover the path that keeps the request alive: no Deezer candidate, a
+# catalog stand-in built from Beatport, and the fingerprint step skipped rather than failed.
+
+
+def _capture_deezer_id(fake_check):
+    """Record the deezer_id the fingerprint step is handed, and answer the way `fingerprint.check` really
+    does when there is none -- "skipped", which is not a rejection."""
+    seen: list[int | None] = []
+
+    async def check(path, deezer_id, http, *, minimum, tmp_dir):
+        seen.append(deezer_id)
+        if deezer_id is None:
+            return FingerprintResult("skipped", None, None, "no deezer id for this request")
+        return fake_check.result
+
+    return seen, check
+
+
+async def test_source_switched_off_fetches_on_the_beatport_match_alone(lenv, monkeypatch):
+    settings, store, _, _, fake_check, _ = lenv
+    seen, check = _capture_deezer_id(fake_check)
+    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    source = FakeSource([good_cand()])
+    w = make(lenv, source=source, settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert r.state == RequestState.DONE
+    assert (source.searches, source.fetched) == (0, [])   # the bot is never spoken to, not even to time out
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert seen == [None]                                 # no Deezer id, so identity could not be proven
+    assert attempt_of(store, rid).outcome == "filed"
+
+
+async def test_a_file_taken_without_a_fingerprint_says_so_on_the_request(lenv, monkeypatch):
+    settings, store, _, _, fake_check, _ = lenv
+    _, check = _capture_deezer_id(fake_check)
+    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    # The spectral check ran and the Beatport rules picked the file, but nothing proved the audio is this
+    # recording. A row that reaches DONE that way must not look like one that was fingerprinted.
+    assert r.state == RequestState.DONE
+    assert r.flag_reason == worker_mod.NO_FINGERPRINT_FLAG
+
+
+async def test_a_silent_source_falls_back_to_the_providers_instead_of_failing_the_request(lenv, monkeypatch):
+    _, store, _, _, fake_check, _ = lenv
+    _, check = _capture_deezer_id(fake_check)
+    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    # Exactly the live failure: `conv.get_response()` times out, so the bot offers no candidate at all.
+    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    w = make(lenv, source=source)
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "soulseek"
+
+
+async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(lenv):
+    settings, store, _, _, _, _ = lenv
+    # The providers find nothing, so the old code would fall through to `source.fetch`. There is no Deezer
+    # candidate to fetch -- the stand-in's source_ref is a Beatport id the bot has never heard of.
+    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []), source=source)
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    assert source.fetched == []
+    assert r.state == RequestState.QUEUED and "source is unavailable" in r.flag_reason
+
+
+async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(lenv):
+    _, store, _, _, _, _ = lenv
+    # Nothing identified the track, so there is no reference to search Soulseek with and no stand-in to
+    # build. This is the one case that must keep failing rather than guessing.
+    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    w = make(lenv, source=source, catalog=FakeCatalog([]))
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    # unchanged from before the fallback existed: the source's own error, retried with backoff
+    assert r.state == RequestState.QUEUED
+    assert r.flag_reason == "source error: source bot did not answer the search"
+
+
+async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_off(lenv):
+    _, store, _, _, _, _ = lenv
+    # A DJ set or a track outside Beatport's catalogue, with the bot switched off: nothing identified it,
+    # and nothing about that changes on the next pass. It must land terminally rather than burn the
+    # backoff schedule re-asking two sources that already answered.
+    source = FakeSource([good_cand()])
+    w = make(lenv, source=source, catalog=FakeCatalog([]),
+             settings=lenv[0].model_copy(update={"source_enabled": False}))
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    assert r.state == RequestState.NOT_FOUND
+    assert r.retry_after is None                      # terminal: no backoff was scheduled
+    assert "Beatport" in r.error_message and "switched off" in r.error_message
+    assert source.searches == 0
+
+
+async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(lenv, monkeypatch):
+    _, store, _, _, fake_check, _ = lenv
+    _, check = _capture_deezer_id(fake_check)
+    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    empty = FakeProvider(lenv[0].slskd_downloads, [])
+    w = make(lenv, provider=empty, source=source)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    for _ in range(3):                       # exhaust the backoff: no peer has it, no source to fall back to
+        await w.process(rid)
+    assert store.get_request(rid).state == RequestState.ERROR
+    assert attempt_of(store, rid).outcome == "no_pick"   # not a retryable outcome, so the worker stops here
+
+    # The owner presses "Try again", which is what `_lossless_miss_line` told them to do. A peer has it now.
+    stocked = FakeProvider(lenv[0].slskd_downloads, [lf("a")], audio={"a": _flac(lenv[0].data_dir / "again.flac")})
+    w.providers = [stocked]
+    await w.retry(rid)
+    r = await w.process(rid)
+
+    assert stocked.searches, "Try again must search the provider again, not skip straight past it"
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "soulseek"

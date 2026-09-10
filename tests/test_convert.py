@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from mutagen.flac import FLAC, Picture
 
-from flackey.convert import ConvertError, to_format
+from flackey.convert import ConvertError, _distinct, to_format
 from flackey.verify import probe
 from tests.conftest import requires_ffmpeg
 
@@ -95,3 +95,25 @@ def test_bad_input_raises(tmp_path: Path):
         to_format(junk, "mp3", 16)
     with pytest.raises(ConvertError):
         to_format(junk, "flac", 16)
+
+
+@pytest.mark.parametrize("fmt", ["wav", "aiff"])
+def test_a_source_already_in_the_filing_format_is_not_handed_to_ffmpeg_as_its_own_output(tmp_path: Path, fmt: str):
+    # The live failure: a peer's .wav arrives while `lossless_filing_format` is "wav" (the default), so
+    # `src.with_suffix(".wav")` is `src` and ffmpeg exits with "Output ... same as Input #0". Every WAV a
+    # peer offered failed this way; only FLAC sources ever got filed.
+    src = tmp_path / f"track.{fmt}"
+    codec = "pcm_s16le" if fmt == "wav" else "pcm_s16be"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "anoisesrc=color=pink:seed=3:duration=1:sample_rate=44100", "-ac", "2", "-c:a", codec,
+                    str(src)], check=True)
+    out = to_format(src, fmt, 16)
+
+    assert out != src and out.exists() and src.exists()
+    assert probe(out).fmt == fmt and decode(out) == decode(src)
+
+
+def test_the_distinct_name_ignores_case_because_the_filesystem_does(tmp_path: Path):
+    # On macOS `x.WAV` and `x.wav` are one file, so a case-sensitive comparison would still collide.
+    assert _distinct(Path("/t/x.WAV"), "wav") == Path("/t/x.clean.wav")
+    assert _distinct(Path("/t/x.flac"), "wav") == Path("/t/x.wav")

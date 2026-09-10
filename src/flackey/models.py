@@ -189,6 +189,10 @@ class Request:
     retry_after: str | None = None  # ISO timestamp; `next_queued` skips the request until then (backoff)
     track_id: int | None = None
     fetch_source: str | None = None         # "soulseek" or "deezer" while FETCHING; cleared after
+    # One manual pass at the lossless providers, granted by `Worker.retry` on a failed request and spent by
+    # the next fetch. Spec §5 bars the *worker* from going back after a definitive miss; this is the owner
+    # asking, which `_lossless_miss_line` tells them to do.
+    lossless_retry: int = 0
 
     def query(self) -> Query:
         return Query(

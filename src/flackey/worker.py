@@ -81,6 +81,33 @@ def _mmss(seconds: int | None) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+CATALOG_SOURCE = "beatport"
+# Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
+# was not met is visible on the row rather than buried in the attempt's JSON.
+NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
+                       "fingerprinted -- only the spectral check ran")
+
+
+def catalog_candidate(catalog: CatalogTrack) -> Candidate:
+    """A stand-in for the Deezer candidate, built from the Beatport record -- the mirror of
+    `_fallback_catalog`, which builds a catalog track from a candidate.
+
+    The Telegram bot is a third party that can go silent for hours (it did), and without a candidate the
+    whole request used to die at the source search even when Beatport had identified the track and a peer
+    was holding the file. Nothing downstream actually needs Deezer: `lossless.reference_for` takes artist,
+    title, mix name and duration from the catalog whenever one is present, so every pick rule already runs
+    on Beatport data rather than on anything a peer said.
+
+    `deezer_id` stays None, and that is the real cost: `fingerprint.check` returns "skipped" rather than
+    running, so identity rests on the duration, title and version rules plus the spectral verify. Callers
+    must set `NO_FINGERPRINT_FLAG` on the request. It is never persisted as a candidate row -- a retry
+    re-matches Beatport, which is cheap, instead of resuming from a candidate the source never offered.
+    """
+    return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
+                     artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
+                     duration_s=catalog.duration_s, isrc=catalog.isrc)
+
+
 def _fallback_catalog(cand: Candidate) -> CatalogTrack:
     # negative so it never collides with a Beatport id; crc32 (not hash()) so it is stable across processes
     fallback_id = -(cand.deezer_id or zlib.crc32(cand.source_ref.encode()) or 1)
@@ -238,8 +265,15 @@ class Worker:
         if req.state == RequestState.QUEUED and req.retry_after is not None:
             self.store.update_request(request_id, retry_after=None)
         elif req.state == RequestState.ERROR:
+            # `lossless_retry`: "Try again" on a failure is the owner asking for another look at the
+            # providers, which is exactly what `_lossless_miss_line` tells them the button does. Without it
+            # a request whose attempt ended in a non-retryable outcome could never reach Soulseek again.
+            # Granted whatever the last outcome was, including `verify_failed`: the pick loop starts again
+            # at the first survivor, so a press can re-download a file already proven wrong. That is the
+            # price of the button meaning what it says -- peers come and go, so the same search an hour
+            # later is not the same file list, and the alternative is a dead end the owner cannot leave.
             self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
-                            error_message=None, flag_reason=None)
+                            error_message=None, flag_reason=None, lossless_retry=1)
         else:
             raise ValueError(f"request {request_id} is {req.state.value}; nothing to retry")
         return self.store.get_request(request_id)
@@ -320,17 +354,55 @@ class Worker:
                 self.store.upsert_catalog_track(catalog)
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
 
-            try:
-                cands = await self.source.search(query)
-            except SourceNotFound as e:
-                log.info("req#%d not found at source: %s", req.id, e)
-                self._set_state(req, RequestState.NOT_FOUND, error_message=str(e))
-                await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
-                return
-            except SourceUnauthorized:
-                raise  # handled in process(): subclass of SourceError, so it must be caught before it
-            except (SourceTimeout, SourceError) as e:
-                await self._retry_or_fail(req, f"source error: {e}")
+            cands: list[Candidate] = []
+            if self.settings.source_enabled:
+                try:
+                    cands = await self.source.search(query)
+                except SourceUnauthorized:
+                    raise  # handled in process(): subclass of SourceError, so it must be caught before it
+                except (SourceNotFound, SourceTimeout, SourceError) as e:
+                    if catalog is None:
+                        # Neither side identified the track. Without a Beatport record there is no reference
+                        # to search a lossless provider with, so this is as far as the request goes.
+                        if isinstance(e, SourceNotFound):
+                            log.info("req#%d not found at source: %s", req.id, e)
+                            self._set_state(req, RequestState.NOT_FOUND, error_message=str(e))
+                            await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
+                        else:
+                            await self._retry_or_fail(req, f"source error: {e}")
+                        return
+                    # Beatport knows the track, so the request is still actionable: fall through to the
+                    # catalog-only path rather than retrying a source that may be down for hours.
+                    log.info("req#%d source gave nothing (%s); trying the lossless providers on the "
+                             "Beatport match alone", req.id, e)
+
+            if not cands:
+                # Either the source is switched off, or it failed with a Beatport match already in hand.
+                # `catalog_candidate` explains what this costs; the short version is that the pick rules
+                # still run entirely on Beatport data and only the fingerprint is lost.
+                if catalog is None:
+                    # Nothing identified the track: the source offered nothing and Beatport has no match.
+                    # Terminal, not a retry -- both halves are the same on the next pass, so backing off
+                    # and asking again only delays the same answer. This is where `decide` used to land a
+                    # request with an empty candidate list, and it keeps landing there.
+                    why = ("no match on Beatport, and the Deezer bot is switched off"
+                           if not self.settings.source_enabled else
+                           "neither Deezer nor Beatport has a match for it")
+                    self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}")
+                    await self.notifier.send(f"Could not identify: {req.raw_text}")
+                    return
+                if not self._lossless_allowed(req):
+                    # Beatport knows the track, so it exists -- there is just no route to a file right now.
+                    # Say which route is missing rather than blaming the source for a setting, the same way
+                    # `_lossless_miss_line` stays quiet when the provider is simply off.
+                    await self._retry_or_fail(req, "no way to fetch this track: the source is unavailable, and "
+                                                   + ("Soulseek is switched off"
+                                                      if not (self.providers and self.settings.lossless_enabled)
+                                                      else "Soulseek has already looked and found nothing. Use "
+                                                           "Try again in the app to search once more"))
+                    return
+                self.store.update_request(req.id, flag_reason=NO_FINGERPRINT_FLAG)
+                await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                 return
 
             decision = decide(query, cands, catalog)
@@ -398,7 +470,18 @@ class Worker:
             await self._mark_duplicate(req, dup.id, dup.path)
             return
         self._set_state(req, RequestState.FETCHING)
-        hit = await self._try_lossless(req, cand, catalog) if self._lossless_allowed(req) else None
+        hit = None
+        if self._lossless_allowed(req):
+            if req.lossless_retry:
+                self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
+            hit = await self._try_lossless(req, cand, catalog)
+        if hit is None and cand.source == CATALOG_SOURCE:
+            # A Beatport stand-in has no source_ref the bot would recognise, so there is no Deezer copy to
+            # fall back to -- the providers were the only route and they came up empty. Say so plainly
+            # instead of handing the source a candidate it never issued.
+            await self._retry_or_fail(req, "no lossless copy found, and the source is unavailable for the "
+                                           "lossy fallback")
+            return
         if hit is None:
             self.store.update_request(req.id, fetch_source=self.source.name)
             try:
@@ -422,7 +505,10 @@ class Worker:
         if not self.providers or not self.settings.lossless_enabled:
             return False
         last = self.store.get_attempt_for_request(req.id)
-        return last is None or last.outcome in RETRY_LOSSLESS_OUTCOMES
+        # Spec §5 stops the *worker* going back to a provider on its own after a definitive miss. It does
+        # not bind the owner: `retry()` grants `lossless_retry` on a failed request, which is the button
+        # `_lossless_miss_line` points them at. `upgrade()` skips this check outright for the same reason.
+        return last is None or last.outcome in RETRY_LOSSLESS_OUTCOMES or bool(req.lossless_retry)
 
     async def _verify_and_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
                                hit: LosslessHit | None = None) -> None:

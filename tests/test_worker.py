@@ -11,7 +11,7 @@ from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestS
 from flackey.notify import MemoryNotifier
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
-from flackey.worker import Worker
+from flackey.worker import Worker, catalog_candidate
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -455,3 +455,16 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     store.set_state(rid, RequestState.DONE)
     with pytest.raises(ValueError):
         await w.retry(rid)
+
+
+def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
+    # Built when the source cannot offer a candidate. Everything `lossless.reference_for` needs comes off
+    # the Beatport record; `deezer_id` stays None, which is what makes `fingerprint.check` skip rather than
+    # run, and what `NO_FINGERPRINT_FLAG` tells the owner.
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 412_000})
+    cand = catalog_candidate(ct)
+
+    assert (cand.artist, cand.title, cand.mix_name) == (ct.artist, ct.title, ct.mix_name)
+    assert cand.duration_s == 412 and cand.isrc == ct.isrc
+    assert cand.deezer_id is None
+    assert cand.source == "beatport" and cand.source_ref == f"beatport:{ct.id}"

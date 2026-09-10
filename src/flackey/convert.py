@@ -32,19 +32,27 @@ def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
     return dst
 
 
+def _distinct(src: Path, fmt: str) -> Path:
+    """`src` renamed to a `fmt` suffix, guaranteed never to be `src` itself.
+
+    ffmpeg refuses outright when its output names its input ("Output ... same as Input #0"), and a peer's
+    file often already carries the filing format's own extension -- a .wav download while
+    `lossless_filing_format` is "wav", which is the default. The comparison is case-insensitive because
+    macOS is: writing `x.wav` while reading `x.WAV` is the same collision, spelled differently."""
+    dst = src.with_suffix(f".{fmt}")
+    return dst if dst.name.lower() != src.name.lower() else src.with_name(f"{src.stem}.clean.{fmt}")
+
+
 def to_format(src: Path, fmt: str, bit_depth: int | None) -> Path:
     """Write a new file next to `src` and return it; the result is always a distinct path from `src`,
-    never `src` itself. `fmt` "flac" rebuilds the container through ffmpeg too, so a peer's
-    APPLICATION/CUESHEET/foreign-ID3 blocks never reach the library (tagging happens afterwards,
-    unaffected): `-c:a copy` when `src` is already a flac (bit-identical, no re-encode -- `dst` gets a
-    `.clean.flac` stem so it can never collide with `src`), `-c:a flac` when `src` is wav/aiff/aif (a
-    real but still-lossless encode; PCM cannot be copied into a FLAC container)."""
+    never `src` itself (see `_distinct`). `fmt` "flac" rebuilds the container through ffmpeg too, so a
+    peer's APPLICATION/CUESHEET/foreign-ID3 blocks never reach the library (tagging happens afterwards,
+    unaffected): `-c:a copy` when `src` is already a flac (bit-identical, no re-encode), `-c:a flac` when
+    `src` is wav/aiff/aif (a real but still-lossless encode; PCM cannot be copied into a FLAC container)."""
     if fmt == "flac":
-        if src.suffix.lower() == ".flac":
-            return _run_ffmpeg(src, src.with_name(f"{src.stem}.clean.flac"), "copy")
-        return _run_ffmpeg(src, src.with_suffix(".flac"), "flac")
+        return _run_ffmpeg(src, _distinct(src, "flac"), "copy" if src.suffix.lower() == ".flac" else "flac")
     bits = 16 if bit_depth in (None, 16) else 24
     codec = CODECS.get((fmt, bits))
     if codec is None:
         raise ConvertError(f"no codec for {fmt} at {bits} bit")
-    return _run_ffmpeg(src, src.with_suffix(f".{fmt}"), codec)
+    return _run_ffmpeg(src, _distinct(src, fmt), codec)

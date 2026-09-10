@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS requests (
   playlist_id INTEGER, playlist_position INTEGER, source_url TEXT,
   query_artist TEXT, query_title TEXT, query_version TEXT, query_duration_s INTEGER,
   chosen_candidate_id INTEGER, catalog_track_id INTEGER, confidence INTEGER,
-  flag_reason TEXT, error_message TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_after TEXT, track_id INTEGER
+  flag_reason TEXT, error_message TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_after TEXT, track_id INTEGER,
+  lossless_retry INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL, rank INTEGER NOT NULL,
@@ -102,6 +103,7 @@ class Store:
         self._ensure_column("tracks", "bit_depth", "INTEGER")
         self._ensure_column("tracks", "sample_rate", "INTEGER")
         self._ensure_column("requests", "fetch_source", "TEXT")
+        self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._renormalize()
         self._repoint_legacy_paths(path.parent)
         self.listeners: list[Callable[[str, int], None]] = []

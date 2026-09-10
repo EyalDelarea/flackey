@@ -28,7 +28,8 @@ FILE_PREFIX = "flackey"
 # generation's bundle is skipped, not only the newest.
 SKIP_ON_MIGRATE = tuple(f"{name}.app" for name in LEGACY_APP_DIR_NAMES)
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
-             "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format")
+             "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
+             "source_enabled")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
@@ -56,6 +57,11 @@ class Settings(BaseSettings):
     telegram_api_id: int | None = None
     telegram_api_hash: str | None = None
     source_bot_username: str = "DeezerMusicBot"
+    # The Telegram bot is one of two ways to get audio, and the flakier one: it is a third party that can
+    # stop answering without any signal beyond a timeout. Turning it off skips it entirely -- no search, no
+    # fetch -- so a request goes straight to Soulseek on the Beatport match instead of burning three
+    # 30-second timeouts per track first. See `Worker._process`.
+    source_enabled: bool = True
     library_root: Path = Path("~/Music/DJ Library")
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a

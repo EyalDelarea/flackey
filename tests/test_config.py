@@ -283,3 +283,15 @@ def test_save_settings_leaves_settings_json_at_mode_0600(tmp_path: Path):
     assert s.settings_path.stat().st_mode & 0o777 == 0o600
     save_settings(s, telegram_api_id=1, telegram_api_hash="h")  # a later write stays 0600 too
     assert s.settings_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_path: Path):
+    # `source_enabled` is the first false-y settings-file key. `_read_settings_file` drops values that are
+    # None or "", and False is neither -- but a later "simplify" to a truthiness check would silently drop
+    # the toggle and quietly turn the Deezer bot back on.
+    s = load_settings(_env(tmp_path))
+    assert s.source_enabled is True
+    save_settings(s, source_enabled=False)
+
+    assert json.loads(s.settings_path.read_text())["source_enabled"] is False
+    assert load_settings(_env(tmp_path)).source_enabled is False
