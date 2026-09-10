@@ -94,7 +94,26 @@ it('puts Stop beside a running download, where there are no choices to skip past
     tag: null, dimmed: false, action: { label: 'Stop', kind: 'cancel' },
     progress: { pct: 5, label: '2.0 MB of 43.1 MB from starvetodeath · 100 kB/s' } }
   render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} />)
-  expect(screen.getByText('2.0 MB of 43.1 MB from starvetodeath · 100 kB/s · 5%')).toBeInTheDocument()
+  expect(screen.getByText('2.0 MB of 43.1 MB from starvetodeath · 100 kB/s')).toBeInTheDocument()
+  // The percentage is the platter's job now, and it is the one place the number appears.
+  expect(screen.getByLabelText('5% transferred').querySelector('text')).toHaveTextContent('5')
   fireEvent.click(screen.getByText('Stop'))
   expect(onAction).toHaveBeenCalledWith('cancel', 1, undefined)
+})
+
+it('a queued transfer spins without a number: nothing has arrived, so there is no proportion to draw', () => {
+  const view: RowView = { ...base, status: 'Waiting for the peer', statusTone: 'amber', tag: null, dimmed: false,
+    progress: { pct: null, label: "Waiting in someone's queue" } }
+  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+  const platter = screen.getByLabelText("Waiting in someone's queue")
+  expect(platter).toHaveClass('waiting')
+  expect(platter.querySelector('text')).toBeNull()
+})
+
+it('sweeps without claiming a queue when the transfer has started but the size is not known yet', () => {
+  // `progressOf` returns a null pct for two different states; only the label tells them apart.
+  const view: RowView = { ...base, status: 'Downloading', statusTone: 'amber', tag: null, dimmed: false,
+    progress: { pct: null, label: 'Downloading from someone' } }
+  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+  expect(screen.getByLabelText('Downloading from someone')).toHaveClass('waiting')
 })

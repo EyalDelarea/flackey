@@ -15,6 +15,14 @@ const isLossy = (t: Track) => !t.source_fmt
     their focus, or tabbing through the table would drop the caller back to the top of the page. */
 const releasePointer = (e: React.MouseEvent<HTMLButtonElement>) => { if (e.detail) e.currentTarget.blur() }
 
+/** What the cover is worth saying on hover. The row already carries the artist, title, mix, genre, label
+    and year, so a tooltip that repeated them would earn nothing -- this is the release the track was
+    lifted off and its catalogue number, which are the two catalogue facts the table has no column for. */
+function releaseOf(c: Track['catalog']): string | undefined {
+  const parts = [c?.release_name, c?.catalog_number].filter(Boolean)
+  return parts.length ? parts.join(' · ') : undefined
+}
+
 export default function TrackTable({ tracks, onReveal, onUpgrade }: {
   tracks: Track[]; onReveal: (path: string) => void
   onUpgrade?: (t: Track) => Promise<void>
@@ -33,12 +41,12 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
   // library that is entirely lossless can hand those ~100px back to the track and genre names.
   const width = tracks.some(isLossy) && onUpgrade ? '210px' : '110px'
   return (<div className="group table" style={{ '--actions': width } as React.CSSProperties}>
-    <div className="thead"><span /><span>Track</span><span>Genre</span><span>Label</span><span>Year</span><span className="num">Kbps</span><span>Format</span><span /></div>
+    <div className="thead"><span /><span>Track</span><span>Genre</span><span>Label</span><span>Year</span><span>Kbps</span><span>Format</span><span /></div>
     {tracks.map(t => {
       const c = t.catalog
       const lossy = isLossy(t)
       return (<div className={`trow${selected === t.id ? ' selected' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
-        <Artwork url={c?.artwork_url ?? null} small />
+        <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
         <div className="cell"><div className="t">{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div></div>
         <span className="ellipsis" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
         <span className="ellipsis" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span>{c?.release_date?.slice(0, 4) ?? ''}</span>

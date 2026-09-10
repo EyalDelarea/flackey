@@ -3,6 +3,7 @@ import CandidateCard from './CandidateCard'
 import Checks from './Checks'
 import SpectrogramWell from './SpectrogramWell'
 import Stepper from './Stepper'
+import Platter from './Platter'
 import Icon from '../Icon'
 import type { RowAction, RowView } from '../../presentation'
 
@@ -20,16 +21,14 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
           <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
           <div className={`status ${v.statusTone}${v.statusMono ? ' mono' : ''}`}>{v.status}</div>
           {showSteps && <Stepper steps={v.steps!} />}
-          {v.progress && (<div className="xfer">
-            <div className={`xfer-track${v.progress.pct === null ? ' waiting' : ''}`}>
-              <div className="xfer-fill" style={v.progress.pct === null ? undefined : { width: `${v.progress.pct}%` }} />
-            </div>
-            <div className="xfer-label">{v.progress.label}{v.progress.pct !== null && ` · ${v.progress.pct}%`}</div>
-          </div>)}
+          {/* The percentage moved to the platter on the right; what stays here is the part it cannot
+              show -- how much of how big, from whom, how fast. */}
+          {v.progress && <div className="xfer-label">{v.progress.label}</div>}
           {v.fallback && <div className="fallback" title={v.fallback.reason}>{v.fallback.reason}</div>}
           <Checks checks={v.checks} />
         </div>
         <div className="row-right">
+          {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
