@@ -9,6 +9,8 @@ import platform
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from .tools import missing_helpers
+
 # Spelled out rather than derived from `config.FILE_PREFIX`, which is what it must agree with: config
 # is a sibling on the same import-linter layer line, so neither module may import the other, and this
 # one stays at the bottom of the graph on purpose. Where the name cannot be derived it is asserted --
@@ -68,3 +70,9 @@ def log_startup_banner(settings, version: str) -> None:
     log.info("web port: %s", settings.web_port)
     log.info("telegram configured: %s", "yes" if settings.telegram_configured else "no")
     log.info("soulseek: %s", "yes" if settings.soulseek_enabled else "no")
+    # `tools` is stdlib-only and sits below this module, so importing it keeps the rule this file's
+    # docstring is really about: no reaching upward for `config`. Logged only when something is absent --
+    # a line that is nearly always empty stops being read.
+    missing = missing_helpers()
+    if missing:
+        log.warning("missing helpers: %s", ", ".join(missing))

@@ -34,7 +34,8 @@ def fpcalc_available() -> bool:
 
 def fingerprint(path: Path, start_s: float = 0.0) -> list[int]:
     """Raw 32-bit frames for the whole file, optionally starting `start_s` seconds in (via an ffmpeg trim)."""
-    if not fpcalc_available():
+    fpcalc = tool_path("fpcalc")
+    if fpcalc is None:
         raise FingerprintError("fpcalc not installed (brew install chromaprint)")
     src = path
     tmp = None
@@ -43,11 +44,14 @@ def fingerprint(path: Path, start_s: float = 0.0) -> list[int]:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)  # noqa: SIM115 - path must outlive this block
             tmp.close()
             src = Path(tmp.name)
-            r = subprocess.run([tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-y", "-ss", f"{start_s}", "-i", str(path), "-vn", "-map", "0:a",
+            ffmpeg = tool_path("ffmpeg")
+            if ffmpeg is None:
+                raise FingerprintError("ffmpeg is not installed")
+            r = subprocess.run([ffmpeg, "-v", "error", "-y", "-ss", f"{start_s}", "-i", str(path), "-vn", "-map", "0:a",
                                 str(src)], capture_output=True, timeout=FPCALC_TIMEOUT_S, check=False)
             if r.returncode != 0:
                 raise FingerprintError(r.stderr.decode(errors="replace")[-300:])
-        r = subprocess.run([tool_path("fpcalc") or "fpcalc", "-raw", "-json", "-length", "0", str(src)], capture_output=True,
+        r = subprocess.run([fpcalc, "-raw", "-json", "-length", "0", str(src)], capture_output=True,
                             timeout=FPCALC_TIMEOUT_S, check=False)
         if r.returncode != 0:
             raise FingerprintError(r.stderr.decode(errors="replace")[-300:] or "fpcalc failed")

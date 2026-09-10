@@ -78,6 +78,23 @@ def test_banner_says_whether_soulseek_is_on_without_the_key(tmp_path, caplog):
     assert "soulseek: yes" in caplog.text and "very-secret-key" not in caplog.text
 
 
+def test_banner_names_the_helper_programs_the_machine_is_missing(tmp_path, caplog, monkeypatch):
+    """The README tells a friend to send back the log file when something goes wrong, and the commonest
+    thing that will be wrong is that they skipped `brew install ffmpeg chromaprint`. Naming the helpers
+    here answers that from the log alone, instead of from a failed row further down."""
+    from flackey import tools
+    from flackey.config import Settings
+    from flackey.logsetup import log_startup_banner
+
+    monkeypatch.setattr(tools, "BREW_BINS", ())
+    monkeypatch.setattr(tools.shutil, "which", lambda _: None)
+    caplog.set_level("INFO")
+
+    log_startup_banner(Settings(_env_file=None, data_dir=tmp_path), "0.1.0")
+
+    assert "missing helpers: ffmpeg, ffprobe, fpcalc" in caplog.text
+
+
 def test_the_log_filename_agrees_with_the_project_file_prefix():
     # `config.FILE_PREFIX` names the live database and the files a migration renames; `LOG_FILE` names the
     # log beside them. They must spell the same project name, but config and logsetup are siblings on one

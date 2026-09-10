@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from flackey import tools
 
 
@@ -95,3 +97,39 @@ def test_a_frozen_app_carries_its_web_build_inside_itself(monkeypatch, tmp_path:
     monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
 
     assert tools.resource_dir() == tmp_path
+
+
+def test_a_missing_ffmpeg_is_reported_as_a_conversion_failure_not_a_stack_trace(monkeypatch, tmp_path: Path):
+    """The friend this build goes to may not have run `brew install ffmpeg` yet. Without this the
+    resolver hands `subprocess` a bare name that is nowhere on a Finder PATH, and the raw
+    FileNotFoundError travels all the way to a failed row whose message is a filename."""
+    from flackey import convert
+
+    monkeypatch.setattr(convert, "tool_path", lambda _: None)
+    src = tmp_path / "a.flac"
+    src.write_bytes(b"not audio")
+
+    with pytest.raises(convert.ConvertError, match="ffmpeg"):
+        convert.to_format(src, "aiff", 16)
+
+
+def test_a_missing_ffprobe_is_reported_as_a_verify_failure_not_a_stack_trace(monkeypatch, tmp_path: Path):
+    """Same reason as ffmpeg: `verify` runs before anything is filed, so it is usually the first place
+    a machine without the helpers notices."""
+    from flackey import verify
+
+    monkeypatch.setattr(verify, "tool_path", lambda _: None)
+    src = tmp_path / "a.flac"
+    src.write_bytes(b"not audio")
+
+    with pytest.raises(verify.VerifyError, match="ffprobe"):
+        verify.probe(src)
+
+
+def test_the_helpers_a_machine_is_missing_are_named(monkeypatch):
+    """What the startup banner logs. A friend sends back the log file, and this is the line that says
+    which of the three they still need to install."""
+    monkeypatch.setattr(tools, "BREW_BINS", ())
+    monkeypatch.setattr(tools.shutil, "which", lambda _: None)
+
+    assert tools.missing_helpers() == tools.HELPERS

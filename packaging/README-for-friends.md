@@ -16,19 +16,25 @@ brew install ffmpeg chromaprint
 ```
 
 Flackey looks in `/opt/homebrew/bin` and `/usr/local/bin` by name, so it finds them even though apps
-launched from Finder do not normally see your shell's PATH. Without them the app still opens and you
-can look around, but nothing will convert.
+launched from Finder do not normally see your shell's PATH. Without them the app still opens and you can
+look around; anything that needs them stops with "ffmpeg is not installed" rather than a stack trace, the
+setup screen shows which are missing, and the log names them on startup.
 
 ## Installing it
 
-1. Unzip `Flackey.zip` and drag **Flackey.app** to your Applications folder.
-2. Run this in Terminal, which is what stops macOS blocking it:
+1. Unzip `Flackey.zip`. **Don't open the app yet** — do step 2 first.
+2. Run this in Terminal, which is what stops macOS blocking it. Drag the app onto the Terminal window
+   after typing the first part and it will fill in the path for you:
 
    ```sh
-   xattr -dr com.apple.quarantine /Applications/Flackey.app
+   xattr -dr com.apple.quarantine ~/Downloads/Flackey.app
    ```
 
-3. Open it normally.
+   That path is wherever the app actually is. If you moved it to Applications first, it is
+   `/Applications/Flackey.app` instead — and moving it there may ask for your admin password, which is
+   macOS, not this app. Leaving it in Downloads is fine.
+
+3. Now open it normally.
 
 Step 2 is not optional and there is no way around it from the GUI on a current macOS. The app is
 signed only ad-hoc — there is no Apple Developer account behind this build, so macOS cannot check who

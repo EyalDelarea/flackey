@@ -42,7 +42,13 @@ def _run(cmd: list[str]) -> bytes:
     # `name` is kept for the message: an absolute path in a timeout error tells the reader nothing
     # they did not already know, and buries the one word that matters.
     name = cmd[0]
-    cmd = [tool_path(name) or name, *cmd[1:]]
+    found = tool_path(name)
+    if found is None:
+        # Say it here rather than handing `subprocess` a bare name and letting FileNotFoundError travel
+        # up as a failed row whose message is a filename. `tool_path` has already looked in the bundle,
+        # on the PATH and in both Homebrew prefixes, so None means the machine really does not have it.
+        raise VerifyError(f"{name} is not installed")
+    cmd = [found, *cmd[1:]]
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S)
     except subprocess.TimeoutExpired as e:

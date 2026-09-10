@@ -20,8 +20,13 @@ class ConvertError(Exception):
 
 def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
     # Absolute path, not the bare name: a .app launched from Finder gets a PATH without the Homebrew
-    # prefixes, so the bare name resolves to nothing there even when ffmpeg is plainly installed.
-    cmd = [tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
+    # prefixes, so the bare name resolves to nothing there even when ffmpeg is plainly installed. None
+    # means it is genuinely absent -- `tool_path` has already looked in all three places -- and saying so
+    # beats letting FileNotFoundError surface as a failed row whose message is a filename.
+    ffmpeg = tool_path("ffmpeg")
+    if ffmpeg is None:
+        raise ConvertError("ffmpeg is not installed")
+    cmd = [ffmpeg, "-v", "error", "-y", "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
            "-c:a", codec, str(dst)]
     t0 = time.monotonic()
     try:
