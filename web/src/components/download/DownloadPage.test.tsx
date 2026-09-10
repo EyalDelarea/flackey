@@ -13,7 +13,7 @@ function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
   const health: Health = { ok: true, version: '0', telegram_authorized: true, worker_running: true, setup_done: true }
   return {
     health, bundles: new Map(bundles.map(b => [b.request.id, b])), playlists: [], stats: null, settings: null,
-    fetchProgress: null, libraryVersion: 0, loadError: null, loading: false,
+    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
     ...overrides,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import time
 import zlib
@@ -54,7 +55,12 @@ log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_S = (30, 120)  # wait before attempt 2, before attempt 3
 REVIEW_BUTTONS = 5
-CANCELLABLE = {RequestState.QUEUED, RequestState.AWAITING_REVIEW, RequestState.ERROR}
+# IDENTIFYING and FETCHING are here because a download in progress is exactly the thing an owner watching a
+# slow transfer wants to stop. VERIFYING and FILING deliberately are not: those stages move a file into the
+# library, and cancelling mid-move is the one outcome that does not clean itself up. They are seconds long,
+# so the answer to "stop it" there is that it has already stopped.
+CANCELLABLE = {RequestState.QUEUED, RequestState.IDENTIFYING, RequestState.FETCHING,
+               RequestState.AWAITING_REVIEW, RequestState.ERROR}
 LOGIN_REQUIRED = "Telegram login required"
 RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted"}   # spec §5: only these let a request try again
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
@@ -160,6 +166,21 @@ class Worker:
         self.clock = clock
         self._last_maintenance: float | None = None
         self._last_health: float | None = None
+        # request id -> the task running it. This, not the row's state, is what stops a request being
+        # started twice: a task that has been created has not run yet, so the next poll would still see
+        # QUEUED and start a second one. Entries are removed by a done-callback rather than by `process`
+        # itself, so a request `_retry_or_fail` has put back on the queue cannot be re-claimed before its
+        # own task has finished unwinding.
+        self._tasks: dict[int, asyncio.Task] = {}
+        # Where each in-flight transfer has got to, keyed by request id. It used to be a single slot
+        # because there was only ever one download; with the whole queue moving at once every row needs
+        # its own bar. Published as a list because `Status.__setitem__` is what fires the SSE event --
+        # mutating a nested dict in place would change nothing on screen.
+        self._progress: dict[int, dict] = {}
+        # Verify, fingerprint and convert are ffmpeg and fpcalc: CPU, not waiting. Fourteen at once do not
+        # finish the playlist any sooner, they just take the machine down with them. Network stages stay
+        # unbounded -- this bounds only the part where more parallelism buys nothing.
+        self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
 
     def _set_state(self, req: Request, state: RequestState, **kw) -> None:
         """Every state change goes through here so a remote log shows the full path of a request. `update_request`
@@ -228,17 +249,54 @@ class Worker:
             except LosslessError as e:
                 log.warning("%s: rescan failed: %s", p.name, e)
 
+    def _start_due(self) -> None:
+        """Put every queued request that is due on its own task. Claiming happens here, synchronously and
+        before the first await: `create_task` only schedules, so a request whose row still says QUEUED when
+        the next tick comes round would otherwise be started a second time and filed twice."""
+        cap = self.settings.max_concurrent_requests
+        room = None if cap is None else cap - len(self._tasks)
+        if room is not None and room <= 0:
+            return
+        for req in self.store.due_queued():
+            if req.id in self._tasks:
+                continue
+            task = asyncio.create_task(self.process(req.id), name=f"req{req.id}")
+            self._tasks[req.id] = task
+            task.add_done_callback(lambda t, rid=req.id: self._tasks.pop(rid, None))
+            if room is not None:
+                room -= 1
+                if room == 0:
+                    return
+
     async def run_forever(self, poll_s: float = 2.0) -> None:
+        """Run every queued track at once, each on its own task.
+
+        The queue used to be a line: one request off the head of it, awaited to the end, then the next. On
+        a fourteen-track playlist that meant thirteen tracks watching one download at 100 kB/s. Two tracks
+        share nothing that makes an order necessary -- the peer sending one has its own upload slot, and
+        the two stages that *are* shared (the single Deezer bot conversation, slskd's single-search
+        endpoint) hold their own locks inside the components that own them. So the loop's job is no longer
+        to take turns; it is to keep starting whatever is due and to wait for the lot at the end."""
         await self.startup()
-        while self.status.get("telegram_authorized", True):
-            await self._maintenance()
-            req = self.store.next_queued()
-            if req is None:
+        try:
+            while self.status.get("telegram_authorized", True):
+                await self._maintenance()
+                self._start_due()
                 await self.refresh_lossless_health()
                 await asyncio.sleep(poll_s)
-                continue
-            await self.process(req.id)
+        finally:
+            # Ctrl-C cancels this coroutine; the tracks it started are separate tasks and would otherwise
+            # outlive it, still writing to the store the app is closing. Each one puts itself back on the
+            # queue as it unwinds (see `process`), so the next run picks up where this one stopped.
+            await self._stop_all()
         log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
+
+    async def _stop_all(self) -> None:
+        tasks = list(self._tasks.values())
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def choose(self, request_id: int, candidate_id: int) -> Request:
         req = self.store.get_request(request_id)
@@ -252,11 +310,22 @@ class Worker:
         return self.store.get_request(request_id)
 
     async def cancel(self, request_id: int) -> Request:
+        """Stop a request, including one that is downloading right now.
+
+        Nothing between the state check and `task.cancel()` awaits, so this runs to completion before the
+        worker task can take another step: the row cannot slip from FETCHING into VERIFYING underneath the
+        check, and the CANCELLED written here cannot be overwritten by a state the task was about to set.
+        The task then unwinds from wherever it was suspended -- `SoulseekProvider.download` tells the
+        sidecar to stop the transfer and deletes the partial file on its way out."""
         req = self.store.get_request(request_id)
         if req.state not in CANCELLABLE:
-            raise ValueError(f"request {request_id} is {req.state.value}; only queued, awaiting-review "
-                             f"or failed requests can be cancelled")
+            raise ValueError(f"request {request_id} is {req.state.value}; a track can be stopped while it "
+                             f"is queued, waiting for a choice, downloading or failed -- not while its "
+                             f"file is being checked or filed")
         self._set_state(req, RequestState.CANCELLED)
+        task = self._tasks.get(request_id)
+        if task is not None:
+            task.cancel()
         return self.store.get_request(request_id)
 
     async def retry(self, request_id: int) -> Request:
@@ -282,6 +351,9 @@ class Worker:
     async def process(self, request_id: int) -> Request | None:
         try:
             await self._process(request_id)
+        except asyncio.CancelledError:
+            self._on_cancelled(request_id)
+            raise    # never swallowed: a cancellation that does not propagate is a task that never stops
         except SourceUnauthorized as e:
             # not the request's fault: keep it queued, attempts untouched, and pause the worker
             self._set_state(self.store.get_request(request_id), RequestState.QUEUED, flag_reason=LOGIN_REQUIRED)
@@ -302,6 +374,21 @@ class Worker:
             # The row is already gone and handled - nothing left for us to return.
             log.debug("req#%d removed while finishing", request_id)
             return None
+
+    def _on_cancelled(self, request_id: int) -> None:
+        """Two things cancel a task: the owner pressing Stop, and the app closing. `cancel()` has already
+        written CANCELLED in the first case, so a row still in an in-flight state here is the second one --
+        and it goes back on the queue rather than staying in a state nothing will move it out of."""
+        self._progress.pop(request_id, None)
+        try:
+            req = self.store.get_request(request_id)
+        except KeyError:
+            return
+        if req.state == RequestState.CANCELLED:
+            log.info("req#%d stopped", request_id)
+            return
+        log.info("req#%d interrupted; back on the queue", request_id)
+        self._set_state(req, RequestState.QUEUED, flag_reason=None)
 
     async def _retry_or_fail(self, req: Request, reason: str, *, flag: str | None = None) -> None:
         attempts = req.attempts + 1
@@ -485,7 +572,14 @@ class Worker:
         if hit is None:
             self.store.update_request(req.id, fetch_source=self.source.name)
             try:
-                tmp = await self.source.fetch(cand, self.settings.tmp_dir)
+                # A folder of this request's own, not the shared tmp dir. A source names the file after
+                # the track (the Deezer bot uses the Deezer id), so two requests for the same track --
+                # a duplicate paste, the same remix in two playlists -- used to be handed the same path.
+                # Serially that was fine; running at once, one request's cleanup deletes the other's file
+                # out from under ffmpeg. Scoping the folder fixes it for every source at once, rather
+                # than asking each of them to remember to make its own names unique.
+                fetch_dir = self.settings.tmp_dir / f"req{req.id}"
+                tmp = await self.source.fetch(cand, fetch_dir)
             except SourceUnauthorized:
                 self.store.update_request(req.id, fetch_source=None)
                 raise
@@ -499,6 +593,7 @@ class Worker:
             await self._verify_and_file(req, cand, catalog, tmp, hit)
         finally:
             tmp.unlink(missing_ok=True)  # gone already when file_track moved it; garbage in every other outcome
+            shutil.rmtree(self.settings.tmp_dir / f"req{req.id}", ignore_errors=True)  # spec §13: leave tmp_dir empty
             self.store.update_request(req.id, fetch_source=None)
 
     def _lossless_allowed(self, req: Request) -> bool:
@@ -516,7 +611,9 @@ class Worker:
             self._set_state(req, RequestState.VERIFYING)
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
             # (inbox bot, API) free
-            verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir, f"req{req.id}-{tmp.stem}")
+            async with self._cpu:
+                verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
+                                                  f"req{req.id}-{tmp.stem}")
             if not verdict.passed:
                 self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz,
                                          verdict.spectrogram_path)
@@ -673,6 +770,15 @@ class Worker:
         if fp.track:
             self.store.add_evidence(track_id, "fingerprint", {"frames": fp.track, "fps": FPS})
 
+    def _publish_progress(self, request_id: int, position: dict | None) -> None:
+        """One row's transfer moved (or ended). Republishes the whole list, because assigning to
+        `status` is what raises the SSE event -- editing the list in place would reach nobody."""
+        if position is None and self._progress.pop(request_id, None) is None:
+            return                                   # nothing was published for this row; say nothing
+        if position is not None:
+            self._progress[request_id] = position
+        self.status["fetch_progress"] = list(self._progress.values())
+
     # ---- lossless ---------------------------------------------------------
     async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> LosslessHit | None:
         """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
@@ -702,9 +808,9 @@ class Worker:
                 hit = None
             finally:
                 # However this attempt ended, the bar it was driving is over. Leaving the last position
-                # published would strand a full-looking bar on a row that has moved on.
-                if self.status.get("fetch_progress") is not None:
-                    self.status["fetch_progress"] = None
+                # published would strand a full-looking bar on a row that has moved on. Only this
+                # request's bar: the other tracks are still downloading.
+                self._publish_progress(req.id, None)
             if hit is not None:
                 return hit
         return None
@@ -761,10 +867,10 @@ class Worker:
             # Live, for the row's progress bar. The timeline below records *changes* (that is what a
             # timeline is for); this is the current position, republished on every poll, and cleared in
             # `_try_lossless`'s finally so a bar never outlives the transfer it belongs to.
-            self.status["fetch_progress"] = {
+            self._publish_progress(req.id, {
                 "request_id": req.id, "bytes": p.bytes, "size": p.size, "peer": file.username,
                 "pct": round(100 * p.bytes / p.size) if p.size else 0,
-                "speed_bps": p.speed_bps, "pick": n, "state": p.state}
+                "speed_bps": p.speed_bps, "pick": n, "state": p.state})
             if p.state != seen["state"]:
                 seen["state"] = p.state
                 rec.event("transfer_state", state=p.state, pct=round(100 * p.bytes / max(p.size, 1)),
@@ -798,7 +904,8 @@ class Worker:
                                  tmp: Path) -> tuple[LosslessHit | None, str]:
         s = self.settings
         try:
-            verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
+            async with self._cpu:
+                verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
         except VerifyError as e:
             rec.event("verify_failed", error=str(e))
             return None, "verify_failed"
@@ -807,7 +914,9 @@ class Worker:
         rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason)
         if not verdict.passed:
             return None, "verify_failed"
-        fp = await fingerprint_check(tmp, ref.deezer_id, self.http, minimum=s.lossless_fingerprint_min, tmp_dir=s.tmp_dir)
+        async with self._cpu:   # fpcalc decodes the whole file; it belongs with the other ffmpeg work
+            fp = await fingerprint_check(tmp, ref.deezer_id, self.http, minimum=s.lossless_fingerprint_min,
+                                         tmp_dir=s.tmp_dir)
         rec.raw("fingerprint", {"preview": fp.preview, "track": fp.track})
         self.store.update_attempt(rec.id, fingerprint=fp.to_dict())
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
@@ -816,11 +925,12 @@ class Worker:
         t0 = self.clock()
         out: Path | None = None
         try:
-            out = await asyncio.to_thread(to_format, tmp, s.lossless_filing_format, verdict.bit_depth)
-            # to_format never returns `src` unchanged, so `tmp` is always the second file here and must
-            # always be cleaned up -- at most one temp file from here on (spec §9)
-            tmp.unlink(missing_ok=True)
-            pr = await asyncio.to_thread(probe, out)
+            async with self._cpu:
+                out = await asyncio.to_thread(to_format, tmp, s.lossless_filing_format, verdict.bit_depth)
+                # to_format never returns `src` unchanged, so `tmp` is always the second file here and must
+                # always be cleaned up -- at most one temp file from here on (spec §9)
+                tmp.unlink(missing_ok=True)
+                pr = await asyncio.to_thread(probe, out)
             verdict = replace(verdict, fmt=pr.fmt, bitrate_kbps=pr.bitrate_kbps, bit_depth=pr.bit_depth,
                               sample_rate=pr.sample_rate)
         except (ConvertError, VerifyError) as e:

@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, gb, groupRows, mmss, presentRow, queueAhead, relPath, stepIndex } from './presentation'
+import { bucketCounts, bucketOf, gb, groupRows, mmss, presentRow, relPath, stepIndex } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -20,10 +20,11 @@ describe('formatting', () => {
 })
 
 describe('presentRow', () => {
-  it('queued row waits its turn, dimmed, with a mono tag', () => {
+  it('queued row is dimmed and tagged, and can be stopped before it starts', () => {
     const v = presentRow(bundle({}), opts)
     expect(v.title).toBe('Ace Ventura – Rezonate')
-    expect(v.status).toBe('Waiting its turn'); expect(v.tag).toBe('queued'); expect(v.dimmed).toBe(true); expect(v.action).toBeNull()
+    expect(v.status).toBe('Starting\u2026'); expect(v.tag).toBe('queued'); expect(v.dimmed).toBe(true)
+    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
   it('in-progress row carries one ladder: each step names itself and holds its own state', () => {
     const v = presentRow(bundle({ state: 'fetching' }), opts)
@@ -239,77 +240,52 @@ describe('a running transfer shows where it has got to', () => {
     size: 42_000_000, peer: 'someone', pct: 50, speed_bps: 1_400_000, pick: 1, state: 'InProgress', ...over })
 
   it('reports bytes, peer and speed, not just a percentage', () => {
-    const v = presentRow(fetching, { ...opts, fetchProgress: p() as never })
+    const v = presentRow(fetching, { ...opts, fetchProgress: [p()] as never })
     expect(v.progress).toEqual({ pct: 50, label: '21.0 MB of 42.0 MB from someone · 1.4 MB/s' })
   })
 
   it('shows a waiting bar with no percentage while queued at the peer', () => {
     // 0% would read as a stall; this is a queue, which is a different thing to say.
-    const v = presentRow(fetching, { ...opts, fetchProgress: p({ state: 'Queued, Remotely', bytes: 0, pct: 0 }) as never })
+    const v = presentRow(fetching, { ...opts, fetchProgress: [p({ state: 'Queued, Remotely', bytes: 0, pct: 0 })] as never })
     expect(v.progress).toEqual({ pct: null, label: "Waiting in someone's queue" })
   })
 
-  it('belongs only to the row actually downloading', () => {
-    const v = presentRow(fetching, { ...opts, fetchProgress: p({ request_id: 999 }) as never })
+  it('belongs only to the row it names, with several transfers running at once', () => {
+    const v = presentRow(fetching, { ...opts, fetchProgress: [p({ request_id: 999 })] as never })
     expect(v.progress).toBeNull()
   })
 
   it('is absent when nothing is downloading', () => {
-    expect(presentRow(fetching, { ...opts, fetchProgress: null }).progress).toBeNull()
+    expect(presentRow(fetching, { ...opts, fetchProgress: [] }).progress).toBeNull()
   })
 })
 
-describe('queue position', () => {
-  const line = [
-    bundle({ id: 1, state: 'fetching' }), bundle({ id: 2 }), bundle({ id: 3 }),
-    bundle({ id: 4, state: 'queued', retry_after: '2026-09-06T10:01:00Z' }),
-    bundle({ id: 5, state: 'done' }),
-  ]
-
-  it('counts the in-flight track plus every lower-id queued one, in worker order', () => {
-    const ahead = queueAhead(line)
-    expect(ahead.get(2)).toBe(1)     // the fetching row is ahead of it
-    expect(ahead.get(3)).toBe(2)
+describe('a queued track', () => {
+  it('says it is starting rather than counting a line it does not wait in', () => {
+    // Every queued track is picked up on the worker's next pass now, so there is no position to report.
+    expect(presentRow(bundle({ id: 2 }), opts).status).toBe('Starting\u2026')
+    expect(presentRow(bundle({ id: 2 }), opts).action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
 
-  it('leaves out rows on a retry backoff and rows that are not queued', () => {
-    const ahead = queueAhead(line)
-    expect(ahead.has(4)).toBe(false)   // its own countdown says what it waits for
-    expect(ahead.has(5)).toBe(false)
-  })
-
-  it('orders by id, not by the order the bundles arrive in', () => {
-    const ahead = queueAhead([bundle({ id: 9 }), bundle({ id: 2 })])
-    expect(ahead.get(2)).toBe(0)
-    expect(ahead.get(9)).toBe(1)
-  })
-
-  it('explains the one-at-a-time rule on the next-up row only', () => {
-    const ahead = queueAhead(line)
-    expect(presentRow(bundle({ id: 2 }), { ...opts, queueAhead: ahead }).status)
-      .toBe('Next up — tracks are fetched one at a time')
-    expect(presentRow(bundle({ id: 3 }), { ...opts, queueAhead: ahead }).status).toBe('2 tracks ahead')
-  })
-
-  it('says "Starting now" when nothing is ahead, and falls back to the old wording with no queue map', () => {
-    expect(presentRow(bundle({ id: 2 }), { ...opts, queueAhead: queueAhead([bundle({ id: 2 })]) }).status)
-      .toBe('Starting now')
-    expect(presentRow(bundle({ id: 2 }), opts).status).toBe('Waiting its turn')
-  })
-
-  it('groupRows counts tracks in other playlists ahead too, because the worker has one queue', () => {
-    const groups = groupRows(
-      [bundle({ id: 1, state: 'fetching', playlist_id: 10 }), bundle({ id: 2, playlist_id: 10 }),
-       bundle({ id: 3, playlist_id: 11 })],
-      [{ id: 10, name: 'A' }, { id: 11, name: 'B' }] as Playlist[], opts)
-    const b = groups.find(g => g.name === 'B')!
-    expect(b.rows[0].status).toBe('2 tracks ahead')
-  })
-
-  it('a backoff row keeps its countdown instead of a queue position', () => {
-    const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z', flag_reason: 'Beatport unreachable, will retry' }),
-      { ...opts, queueAhead: queueAhead(line) })
+  it('keeps its countdown when it is on a retry backoff, and offers no Stop over it', () => {
+    const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
+      flag_reason: 'Beatport unreachable, will retry' }), opts)
     expect(v.status).toContain('trying again in 60 seconds')
     expect(v.retryInSeconds).toBe(60)
+  })
+})
+
+describe('stopping a track that is already running', () => {
+  it('offers Stop while it is being identified or downloaded', () => {
+    for (const state of ['identifying', 'fetching'] as const) {
+      expect(presentRow(bundle({ state }), opts).action).toEqual({ label: 'Stop', kind: 'cancel' })
+    }
+  })
+
+  it('does not, once the file is being checked or filed', () => {
+    // Those stages move the file into the library; there is no safe moment to stop them.
+    for (const state of ['verifying', 'filing'] as const) {
+      expect(presentRow(bundle({ state }), opts).action).toBeNull()
+    }
   })
 })

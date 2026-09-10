@@ -87,3 +87,67 @@ async def test_fetch_download_hang_raises_source_timeout(tmp_path: Path):
 
     with pytest.raises(SourceTimeout):
         await source.fetch(cand, tmp_path)
+
+
+async def test_a_fetch_that_has_to_re_search_does_not_block_on_its_own_lock(tmp_path: Path):
+    """There is one DM with the bot, so search and fetch hold a lock. `asyncio.Lock` is not reentrant, and
+    fetch's menu-lost path runs a search: reaching it through the public method would have the fetch wait
+    forever for a lock it is holding itself."""
+    cand = _candidate()
+
+    async def download(msg, file):
+        Path(file).write_bytes(b"audio")
+
+    source = DeezerBotSource(FakeClient(FakeResponseMessage(), download), "bot", deezer=None, fetch_timeout=1)
+    searched = []
+
+    async def fake_search(query):
+        searched.append(query.raw)
+        source._menus[cand.source_ref] = FakeMenuMessage()   # what a real search leaves behind
+        return []
+
+    source._search_held = fake_search
+    got = await asyncio.wait_for(source.fetch(cand, tmp_path), timeout=1)
+
+    assert searched == ["A T"]
+    assert got.read_bytes() == b"audio"
+    assert not source._bot.locked(), "the lock has to be given back, or the next track never runs"
+
+
+async def test_the_bot_conversation_is_held_by_one_track_at_a_time(tmp_path: Path):
+    """Telethon refuses a second exclusive conversation on the same chat, and the bot's replies carry no
+    request id -- so this one stage really does have to take turns. The file transfer that follows does
+    not: it is an ordinary download that says nothing to the bot, and holding the lock across it would put
+    every track's bytes behind every other track's."""
+    # Neither download may finish until both have started. If the lock covered the file transfer, the
+    # second track could never reach its own download and this would time out.
+    both_downloading = asyncio.Barrier(2)
+
+    async def download(msg, file):
+        Path(file).write_bytes(b"audio")
+        await asyncio.wait_for(both_downloading.wait(), timeout=1)
+
+    source = DeezerBotSource(FakeClient(FakeResponseMessage(), download), "bot", deezer=None, fetch_timeout=1)
+    asking, peak = 0, 0
+    original = source._ask_for_file
+
+    async def watched(cand):
+        nonlocal asking, peak
+        asking, peak = asking + 1, max(peak, asking + 1)
+        try:
+            await asyncio.sleep(0)      # a chance for the other track to interleave, if it can
+            return await original(cand)
+        finally:
+            asking -= 1
+
+    source._ask_for_file = watched
+
+    async def one(n: int):
+        cand = Candidate(source="deezer_bot", source_ref=f"dz_track:{n}:send", artist="A", title="T", deezer_id=n)
+        source._menus[cand.source_ref] = FakeMenuMessage()
+        await source.fetch(cand, tmp_path)
+
+    await asyncio.wait_for(asyncio.gather(one(1), one(2)), timeout=2)
+    assert peak == 1, "two tracks were talking to the bot at once"
+    assert not source._bot.locked()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["1.mp3", "2.mp3"]

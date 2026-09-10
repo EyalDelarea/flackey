@@ -201,12 +201,16 @@ class Store:
         rows = self.conn.execute("SELECT * FROM requests ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [self._row_to_request(r) for r in rows]
 
-    def next_queued(self) -> Request | None:
-        r = self.conn.execute(
-            "SELECT * FROM requests WHERE state=? AND (retry_after IS NULL OR retry_after <= ?) "
-            "ORDER BY id ASC LIMIT 1",
-            (str(RequestState.QUEUED), _now())).fetchone()
-        return None if r is None else self._row_to_request(r)
+    def due_queued(self, limit: int | None = None) -> list[Request]:
+        """Every queued request whose backoff (if any) has passed, oldest first. The worker starts all of
+        them at once, so this is the whole batch rather than the head of a line; `limit` caps it when the
+        owner has set `max_concurrent_requests`."""
+        sql = ("SELECT * FROM requests WHERE state=? AND (retry_after IS NULL OR retry_after <= ?) "
+               "ORDER BY id ASC")
+        args: list = [str(RequestState.QUEUED), _now()]
+        if limit is not None:
+            sql, args = sql + " LIMIT ?", [*args, limit]
+        return [self._row_to_request(r) for r in self.conn.execute(sql, args).fetchall()]
 
     def open_request_for_url(self, source_url: str) -> Request | None:
         marks = ",".join("?" * len(TERMINAL_STATES))

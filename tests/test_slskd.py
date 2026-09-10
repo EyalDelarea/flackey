@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -101,6 +102,29 @@ async def test_search_waits_for_completion_retries_429_and_sends_key(provider, f
     assert raw == ["search", "responses"] and clock.t >= 1.0
 
 
+async def test_searches_take_turns_and_each_one_gets_its_full_budget(provider):
+    """slskd creates one search at a time and answers 429 to a concurrent POST. With the whole queue
+    searching at once, leaving them all to retry on 429 would spend every request's search budget on
+    retries -- so they queue, and the budget starts when a search does, not when it asked."""
+    p, clock, _ = provider
+    inside, peak, budgets = 0, 0, []
+
+    async def held(text, *, wait_s, on_raw=None):
+        nonlocal inside, peak
+        inside, peak = inside + 1, max(peak, inside + 1)
+        budgets.append((clock.t, wait_s))
+        await clock.sleep(10)          # a search that takes ten seconds
+        inside -= 1
+        return []
+
+    p._search_held = held
+    await asyncio.gather(*(p.search("x", wait_s=30) for _ in range(3)))
+
+    assert peak == 1, "three searches were being created at once; slskd answers 429 to that"
+    assert [t for t, _ in budgets] == [0, 10, 20]
+    assert [w for _, w in budgets] == [30, 30, 30], "waiting your turn must not eat your search time"
+
+
 @respx.mock
 async def test_search_gives_up_at_the_wait_cap(provider, fixtures: Path):
     p, clock, _ = provider
@@ -171,7 +195,10 @@ async def test_download_polls_to_completion_and_reports_progress(provider):
     seen: list[TransferProgress] = []
     raw = []
     got = await p.download(f, first_byte_s=60, total_s=600, poll_s=2, on_progress=seen.append, on_raw=lambda n, o: raw.append(n))
-    assert got == dest.resolve()
+    # Off the derived path, in the same folder, still the same file: the download hands its caller a path
+    # nothing else derives, so the next download of this track is free to clear the derived one.
+    assert got != dest.resolve() and got.parent == dest.resolve().parent and got.name.endswith(dest.name)
+    assert got.stat().st_size == f.size and not dest.exists()
     assert json.loads(enqueue.calls[0].request.content) == [{"filename": f.path, "size": f.size}]
     assert [s.state for s in seen] == ["Queued, Remotely", "InProgress", "Completed, Succeeded"]
     assert seen[0].first_byte_ms is None and seen[1].first_byte_ms == 4000 and seen[2].bytes == f.size
@@ -230,8 +257,7 @@ async def test_a_stale_file_at_the_derived_path_is_removed_before_enqueue_so_the
 
     respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[land])
     got = await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
-    assert got == dest.resolve()
-    assert dest.read_bytes() == b"fresh"
+    assert got.read_bytes() == b"fresh"
 
 
 @respx.mock
@@ -262,7 +288,8 @@ async def test_a_peer_advertising_a_different_size_than_slskd_wrote_is_not_a_fai
         return httpx.Response(200, json=transfer("Completed, Succeeded", 999))
 
     respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[land])
-    assert await p.download(f, first_byte_s=5, total_s=10, poll_s=0) == dest
+    got = await p.download(f, first_byte_s=5, total_s=10, poll_s=0)
+    assert got.read_bytes() == b"y" * 999
 
 
 @respx.mock
@@ -332,3 +359,68 @@ async def test_uploads_survives_an_empty_feed_and_a_zero_byte_file(provider):
             {"id": "z", "filename": "d\\a.flac", "size": 0, "state": "Queued", "bytesTransferred": 0}]}]}]))
     row = (await p.uploads())[0]
     assert row["pct"] == 0 and row["peer"] == "p" and row["file"] == "a.flac" and row["speed_bps"] == 0.0
+
+
+async def test_two_downloads_deriving_the_same_path_take_it_in_turns(provider):
+    """`_remove_stale_file` deletes whatever sits at the derived path before enqueueing. Two peers can offer
+    the same folder and file name, and slskd writes both to the same place -- so without this the second
+    download's pre-clean would delete the first one's file while it was still arriving."""
+    p, _clock, downloads = provider
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    order = []
+
+    async def hold(tag: str):
+        async with p._path_lock(dest):
+            order.append(f"{tag} in")
+            await asyncio.sleep(0)
+            order.append(f"{tag} out")
+
+    await asyncio.gather(hold("a"), hold("b"))
+    assert order == ["a in", "a out", "b in", "b out"]
+    assert p._paths == {}, "the lock is dropped once nobody holds or wants it"
+
+
+async def test_downloads_to_different_paths_do_not_wait_for_each_other(provider):
+    """The whole point: two tracks from two peers have nothing to do with each other."""
+    p, _clock, downloads = provider
+    order = []
+
+    async def hold(tag: str):
+        async with p._path_lock(downloads / f"{tag}.flac"):
+            order.append(f"{tag} in")
+            await asyncio.sleep(0)
+            order.append(f"{tag} out")
+
+    await asyncio.gather(hold("a"), hold("b"))
+    assert order == ["a in", "b in", "a out", "b out"]
+
+
+@respx.mock
+async def test_stopping_a_download_tells_the_sidecar_and_takes_the_partial_file_with_it(provider):
+    """What the owner presses Stop for. Cancelling the task is not enough on its own: the peer keeps
+    sending until slskd is told, and the half-file left at the derived path is the stale file the next
+    download of the same track would have to clean up."""
+    p, _clock, downloads = provider
+    p.sleep = asyncio.sleep                       # a real suspension, so the cancel can land in the loop
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    dest.parent.mkdir()
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    polled = asyncio.Event()
+
+    def poll(_request):
+        dest.write_bytes(b"half a file")
+        polled.set()
+        return httpx.Response(200, json=transfer("InProgress", 100))
+
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=poll)
+    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+
+    task = asyncio.create_task(p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=0.001))
+    await asyncio.wait_for(polled.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cancel.called and cancel.calls[0].request.url.params["remove"] == "true"
+    assert not dest.exists()
+    assert p._paths == {}, "a cancelled download still hands back the path it was holding"

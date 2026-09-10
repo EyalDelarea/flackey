@@ -123,6 +123,14 @@ def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
 
 class BeatportCatalog:
     BASE = "https://www.beatport.com/search/tracks?q="
+    # Beatport is a web page being scraped, not an API we are entitled to. With the whole queue running at
+    # once, fourteen simultaneous search pages is exactly the pattern that earns a 403 -- and a 403 is a
+    # `CatalogUnavailable` on every one of those requests, so the queue would back off as a body instead
+    # of identifying anything. A handful in flight keeps the lookups quick and the site unbothered.
+    CONCURRENCY = 3
+
+    def __init__(self) -> None:
+        self._slots = asyncio.Semaphore(self.CONCURRENCY)
 
     @staticmethod
     def search_url(text: str) -> str:
@@ -144,7 +152,8 @@ class BeatportCatalog:
 
     async def search(self, query: Query) -> list[CatalogTrack]:
         try:
-            html = await asyncio.to_thread(self._get, self.search_url(self.query_text(query)))
+            async with self._slots:
+                html = await asyncio.to_thread(self._get, self.search_url(self.query_text(query)))
         except CatalogUnavailable:
             raise
         except Exception as e:  # network errors

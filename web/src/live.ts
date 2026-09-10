@@ -6,7 +6,7 @@ export const UNREACHABLE = "Can't reach Flackey. Is `crate start` running?"
 
 export interface Live {
   health: Health | null; bundles: Map<number, Bundle>; playlists: Playlist[]; stats: Stats | null; settings: AppSettings | null
-  fetchProgress: FetchProgress | null
+  fetchProgress: FetchProgress[]
   libraryVersion: number; loadError: string | null; loading: boolean
   refresh: () => Promise<void>; refreshLibrary: () => Promise<void>; retry: () => Promise<void>
   setHealth: (h: Health) => void; setSettings: (s: AppSettings) => void; dropBundle: (id: number) => void
@@ -14,7 +14,7 @@ export interface Live {
 
 export function useLive(): Live {
   const [health, setHealth] = useState<Health | null>(null)
-  const [fetchProgress, setFetchProgress] = useState<FetchProgress | null>(null)
+  const [fetchProgress, setFetchProgress] = useState<FetchProgress[]>([])
   const [bundles, setBundles] = useState<Map<number, Bundle>>(new Map())
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
@@ -62,8 +62,8 @@ export function useLive(): Live {
       // which is why the Soulseek line could sit on "Signing in…" long after the worker had signed in.
       const { lossless_provider: provider, fetch_progress: fetching, ...flags } =
         JSON.parse((e as MessageEvent).data) as Partial<Health> &
-          { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress | null }
-      if (fetching !== undefined) setFetchProgress(fetching)
+          { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress[] | null }
+      if (fetching !== undefined) setFetchProgress(fetching ?? [])
       setHealth(prev => {
         if (!prev) return prev
         const next: Health = { ...prev, ...flags }

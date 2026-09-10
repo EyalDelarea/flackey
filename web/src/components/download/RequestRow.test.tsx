@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
 import type { RowView } from '../../presentation'
 
-const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Waiting its turn', statusTone: 'muted', statusMono: false,
+const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted', statusMono: false,
   steps: ['Identify','Match','Fetch','Verify','File','Done'].map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
@@ -11,7 +11,7 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
 it('renders title, status and tag', () => {
   render(<RequestRow view={base} onAction={() => {}} onChoose={() => {}} />)
   expect(screen.getByText('Ace Ventura – Rezonate')).toBeInTheDocument()
-  expect(screen.getByText('Waiting its turn')).toBeInTheDocument()
+  expect(screen.getByText('Starting…')).toBeInTheDocument()
   expect(screen.getByText('queued')).toBeInTheDocument()
 })
 
@@ -84,4 +84,17 @@ it('names the delivered format on a filed row instead of a bare bitrate', () => 
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
   expect(screen.getByText('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')).toBeInTheDocument()
   expect(screen.getByText('Ace Ventura / Ace Ventura - Rezonate.mp3')).toHaveClass('mono')
+})
+
+it('puts Stop beside a running download, where there are no choices to skip past', () => {
+  // The cancel action used to render only under a list of candidates, so a downloading row -- the one
+  // place the owner actually wants a way out -- had a Stop that appeared nowhere.
+  const onAction = vi.fn()
+  const view: RowView = { ...base, status: 'Downloading the file from Soulseek', statusTone: 'amber',
+    tag: null, dimmed: false, action: { label: 'Stop', kind: 'cancel' },
+    progress: { pct: 5, label: '2.0 MB of 43.1 MB from starvetodeath · 100 kB/s' } }
+  render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} />)
+  expect(screen.getByText('2.0 MB of 43.1 MB from starvetodeath · 100 kB/s · 5%')).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Stop'))
+  expect(onAction).toHaveBeenCalledWith('cancel', 1, undefined)
 })

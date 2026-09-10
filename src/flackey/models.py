@@ -186,7 +186,7 @@ class Request:
     flag_reason: str | None = None
     error_message: str | None = None
     attempts: int = 0
-    retry_after: str | None = None  # ISO timestamp; `next_queued` skips the request until then (backoff)
+    retry_after: str | None = None  # ISO timestamp; `due_queued` skips the request until then (backoff)
     track_id: int | None = None
     fetch_source: str | None = None         # "soulseek" or "deezer" while FETCHING; cleared after
     # One manual pass at the lossless providers, granted by `Worker.retry` on a failed request and spent by

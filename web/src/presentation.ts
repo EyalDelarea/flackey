@@ -20,7 +20,7 @@ export interface RowView {
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null
 }
-/** A live transfer's position. Only ever set for the row actually downloading right now. */
+/** A live transfer's position. Every downloading row has one of these -- they all run at once. */
 export interface ProgressView { pct: number | null; label: string }
 /** This track is on the lossy Deezer copy and why, so a miss is visible rather than silent. */
 export interface FallbackView { label: string; reason: string }
@@ -28,9 +28,8 @@ export interface GroupSummary { filed: number; total: number; needsChoice: numbe
 export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[]; beatportDown: { seconds: number; requestIds: number[] } | null }
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
-  fetchProgress?: FetchProgress | null
-  /** request id -> how many tracks the worker will take before this one. See `queueAhead`. */
-  queueAhead?: Map<number, number>
+  /** One entry per track currently transferring; the row picks out its own by request id. */
+  fetchProgress?: FetchProgress[] | null
 }
 
 export const mmss = (s: number | null | undefined) => s == null ? '?:??' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -53,22 +52,6 @@ const BUCKET_OF: Record<RequestState, Bucket> = {
 }
 export const bucketOf = (state: RequestState): Bucket => BUCKET_OF[state]
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
-
-/** How many tracks the worker will take before each queued one -- the same order `Store.next_queued` uses:
-    anything already in flight first, then queued rows by id. A row waiting on a `retry_after` backoff is not
-    in line yet and is left out; its own countdown already says what it is waiting for.
-
-    This exists because "why isn't it parallel?" is the question a bare "Waiting its turn" invites. The answer
-    is that the slow stages cannot overlap: the Deezer source is one bot conversation whose replies would
-    interleave, and two lossless downloads would race on the same derived path (see `_remove_stale_file`).
-    Since the wait is real and permanent, the honest fix is to show its length rather than to hide it. */
-export function queueAhead(bundles: Bundle[]): Map<number, number> {
-  const out = new Map<number, number>()
-  let ahead = bundles.filter(b => IN_FLIGHT.includes(b.request.state)).length
-  const waiting = bundles.filter(b => b.request.state === 'queued' && !b.request.retry_after)
-  for (const b of waiting.sort((a, c) => a.request.id - c.request.id)) out.set(b.request.id, ahead++)
-  return out
-}
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
    value of ATTEMPT_OUTCOMES has an entry: a miss with no explanation is the thing this exists to stop. */
@@ -99,8 +82,9 @@ function fallbackOf(b: Bundle): FallbackView | null {
 const kbps = (bps: number) => bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} kB/s`
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
 
-function progressOf(b: Bundle, p: FetchProgress | null | undefined): ProgressView | null {
-  if (!p || p.request_id !== b.request.id) return null
+function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): ProgressView | null {
+  const p = all?.find(x => x.request_id === b.request.id)
+  if (!p) return null
   // Queued at the peer means no bytes are moving yet; a 0% bar there would read as a stall rather than
   // as a wait, so it says so in words and shows an indeterminate bar instead.
   if (p.state.startsWith('Queued')) return { pct: null, label: `Waiting in ${p.peer}'s queue` }
@@ -109,6 +93,8 @@ function progressOf(b: Bundle, p: FetchProgress | null | undefined): ProgressVie
     label: `${mb(p.bytes)} of ${mb(p.size)} from ${p.peer}${p.speed_bps > 0 ? ` · ${kbps(p.speed_bps)}` : ''}` }
 }
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
+/** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
+const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
 // No "step N of 6" here any more: the stepper itself says which rung we are on, and two places saying it
 // disagreed the moment the map changed. Each line describes what is happening, nothing else.
 const PROGRESS_TEXT: Partial<Record<RequestState, string>> = {
@@ -171,7 +157,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   }
   const step = stepIndex(r.state)
   if (!opts.telegramAuthorized && (IN_FLIGHT.includes(r.state) || r.state === 'queued')) {
-    v.status = r.state === 'queued' ? 'Waiting its turn' : 'Paused — will continue after you reconnect'
+    v.status = r.state === 'queued' ? 'Paused — will start when you reconnect'
+                                    : 'Paused — will continue after you reconnect'
     v.tag = r.state === 'queued' ? 'queued' : `paused at step ${(step ?? 0) + 1} of 6`
     v.dimmed = true
     return v
@@ -184,20 +171,22 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         v.status = `${(r.flag_reason || 'Will retry').replace(/, will retry$/, '')} — trying again in ${secs} seconds`
         v.statusTone = 'amber'
       } else {
-        const ahead = opts.queueAhead?.get(r.id)
-        // The explanation rides on the "next up" row only. There is exactly one of those, so the reason
-        // appears once, next to the wait it explains, instead of on every queued row as noise.
-        v.status = ahead == null ? 'Waiting its turn'
-          : ahead === 0 ? 'Starting now'
-          : ahead === 1 ? 'Next up — tracks are fetched one at a time'
-          : `${ahead} tracks ahead`
+        // There is no line any more: every queued track is picked up on the worker's next pass, so this
+        // is a second or two, not a position. The old text counted the tracks ahead because the wait was
+        // real and permanent; it is neither, now, and a queue length nobody waits in would be theatre.
+        v.status = 'Starting…'
         v.tag = 'queued'; v.dimmed = true
+        v.action = STOP
       }
       break
     case 'identifying': case 'fetching': case 'verifying': case 'filing': {
       const from = r.state === 'fetching' ? sourceLabel(r.fetch_source) : null
       v.status = PROGRESS_TEXT[r.state]! + (from ? ` from ${from}` : '')
       v.statusTone = 'amber'
+      // Verify and file move the finished file into the library; there is no safe moment to stop those,
+      // and they are over in seconds. Everything before them can be stopped, which is the point: a
+      // download crawling at 100 kB/s from one peer is exactly what an owner wants to be rid of.
+      if (r.state === 'identifying' || r.state === 'fetching') v.action = STOP
       break
     }
     case 'awaiting_review': {
@@ -268,9 +257,6 @@ export function groupRows(bundles: Bundle[], playlists: Playlist[], opts: Presen
     byPlaylist.get(k)!.push(b)
   }
   const names = new Map(playlists.map(p => [p.id, p.name]))
-  // Computed over every bundle, not per group: the worker has one queue, so a track's place in line counts
-  // the playlists ahead of it too.
-  const withQueue: PresentOpts = { ...opts, queueAhead: opts.queueAhead ?? queueAhead(bundles) }
   const groups: GroupView[] = []
   const keys = [...byPlaylist.keys()].filter((k): k is number => k != null)
     .sort((a, c) => Math.max(...byPlaylist.get(c)!.map(b => b.request.id)) - Math.max(...byPlaylist.get(a)!.map(b => b.request.id)))
@@ -280,7 +266,7 @@ export function groupRows(bundles: Bundle[], playlists: Playlist[], opts: Presen
         ? c.request.created_at.localeCompare(a.request.created_at) || c.request.id - a.request.id
         : a.request.id - c.request.id
     )
-    const rows = sorted.map(b => presentRow(b, withQueue)).filter(r => filter === 'all' || r.bucket === filter)
+    const rows = sorted.map(b => presentRow(b, opts)).filter(r => filter === 'all' || r.bucket === filter)
     const down = sorted.filter(b => b.request.state === 'queued' && b.request.retry_after && BEATPORT_DOWN.test(b.request.flag_reason || ''))
     const seconds = down.length ? Math.max(0, ...down.map(b => Math.round((new Date(b.request.retry_after!).getTime() - opts.now.getTime()) / 1000))) : 0
     return {

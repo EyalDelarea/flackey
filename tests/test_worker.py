@@ -222,7 +222,7 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
     assert "Retrying in 30 s" in notifier.sent[-1][0]
-    assert store.next_queued() is None                      # backoff: not picked up again immediately
+    assert store.due_queued() == []                          # backoff: not picked up again immediately
     r = await w.process(rid)                                # forced second attempt
     assert r.attempts == 2 and src.searches == 1 and len(store.get_candidates(rid)) == 1
 
@@ -444,10 +444,10 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request("q", RequestKind.TEXT)
     store.update_request(rid, retry_after="2999-01-01T00:00:00+00:00", attempts=1, flag_reason="Beatport unreachable, will retry")
-    assert store.next_queued() is None
+    assert store.due_queued() == []
     r = await w.retry(rid)
     assert r.retry_after is None and r.state == RequestState.QUEUED and r.attempts == 1
-    assert store.next_queued().id == rid
+    assert [q.id for q in store.due_queued()] == [rid]
     store.set_state(rid, RequestState.ERROR, error_message="boom")
     store.update_request(rid, attempts=3)
     r = await w.retry(rid)
@@ -468,3 +468,162 @@ def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
     assert cand.duration_s == 412 and cand.isrc == ct.isrc
     assert cand.deezer_id is None
     assert cand.source == "beatport" and cand.source_ref == f"beatport:{ct.id}"
+
+
+# ---- every track at once, and stopping one that is running -----------------------------------------
+
+class SlowSource(FakeSource):
+    """A source whose fetch parks until it is released, so a test can look at the queue mid-flight."""
+
+    def __init__(self, cands=None):
+        super().__init__(cands or [good_cand()])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.in_flight = 0
+        self.peak = 0
+
+    async def fetch(self, cand: Candidate, dest_dir: Path) -> Path:
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        self.started.set()
+        try:
+            await self.release.wait()
+            return await super().fetch(cand, dest_dir)
+        finally:
+            self.in_flight -= 1
+
+
+async def _settle(n: int = 3) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+async def test_the_whole_queue_runs_at_once_rather_than_taking_turns(env):
+    """The point of the change: fourteen tracks in a playlist are fourteen downloads, not a line. Nothing
+    about two requests makes an order necessary -- the peers sending them have their own upload slots."""
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    ids = [store.add_request(TEXT, RequestKind.TEXT) for _ in range(5)]
+
+    w._start_due()
+    await src.started.wait()
+    await _settle()
+    assert src.in_flight == 5, "every queued track should be fetching, not one with four behind it"
+    assert sorted(w._tasks) == ids
+
+    src.release.set()
+    await asyncio.gather(*w._tasks.values())
+    # Five pastes of the same track: they all download at once, and exactly one of them lands in the
+    # library. Running in parallel must not turn the duplicate check into five copies of one file.
+    states = [store.get_request(i).state for i in ids]
+    assert states.count(RequestState.DONE) == 1
+    assert states.count(RequestState.DUPLICATE) == 4
+    assert len(store.list_tracks()) == 1
+
+
+async def test_a_request_already_running_is_never_started_a_second_time(env):
+    """`create_task` only schedules: on the next tick the row still says QUEUED. Claiming has to come from
+    the task table, or a track would be downloaded and filed twice."""
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CT]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    w._start_due()
+    w._start_due()                      # same tick, before the task has run at all
+    assert len(w._tasks) == 1
+    await src.started.wait()
+    w._start_due()                      # and again once it is in flight
+    assert len(w._tasks) == 1
+    src.release.set()
+    await asyncio.gather(*w._tasks.values())
+    assert src.fetched == ["dz_track:1754956977:send"]
+    assert store.get_request(rid).state == RequestState.DONE
+
+
+async def test_the_owner_can_cap_how_many_run_at_once(env):
+    settings, store, _ = env
+    settings.max_concurrent_requests = 2
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CT]))
+    for _ in range(5):
+        store.add_request(TEXT, RequestKind.TEXT)
+
+    w._start_due()
+    await src.started.wait()
+    await _settle()
+    assert src.in_flight == 2
+    w._start_due()
+    assert len(w._tasks) == 2, "no room until one of the two finishes"
+    src.release.set()
+    await asyncio.gather(*w._tasks.values())
+
+
+async def test_stopping_a_track_mid_download_cancels_it_and_leaves_it_stopped(env):
+    """What the owner asked for: a way out of a transfer that is already running. The row goes to
+    CANCELLED and stays there -- the task must not overwrite it on its way out."""
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CT]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    w._start_due()
+    await src.started.wait()
+    assert store.get_request(rid).state == RequestState.FETCHING
+
+    r = await w.cancel(rid)
+    assert r.state == RequestState.CANCELLED
+    await asyncio.gather(*w._tasks.values(), return_exceptions=True)
+    assert store.get_request(rid).state == RequestState.CANCELLED
+    assert src.in_flight == 0
+
+
+async def test_stopping_one_track_leaves_the_others_downloading(env):
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    ids = [store.add_request(TEXT, RequestKind.TEXT) for _ in range(3)]
+
+    w._start_due()
+    await src.started.wait()
+    await _settle()
+    await w.cancel(ids[1])
+    await _settle()
+    assert src.in_flight == 2
+
+    src.release.set()
+    await asyncio.gather(*w._tasks.values(), return_exceptions=True)
+    states = [store.get_request(i).state for i in ids]
+    assert states[1] == RequestState.CANCELLED
+    # The other two ran to a conclusion of their own; which of them filed first does not matter, only
+    # that stopping the middle one did not touch either.
+    assert {states[0], states[2]} == {RequestState.DONE, RequestState.DUPLICATE}
+
+
+async def test_a_track_interrupted_by_shutdown_goes_back_on_the_queue(env):
+    """Ctrl-C cancels the tasks too. That is not the owner stopping a track, so the row must not be left
+    in a state nothing will move it out of."""
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src, FakeCatalog([CT]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    w._start_due()
+    await src.started.wait()
+    await w._stop_all()
+    assert store.get_request(rid).state == RequestState.QUEUED
+    assert w._tasks == {}
+
+
+async def test_a_file_being_verified_or_filed_cannot_be_stopped(env):
+    """Those stages move the file into the library. There is no safe moment to cut them in half, and they
+    are over in seconds -- so the honest answer is that it has already stopped."""
+    _, store, _ = env
+    w = make_worker(env, FakeSource(), FakeCatalog())
+    rid = store.add_request("q", RequestKind.TEXT)
+    for state in (RequestState.VERIFYING, RequestState.FILING):
+        store.set_state(rid, state)
+        with pytest.raises(ValueError, match="checked or filed"):
+            await w.cancel(rid)
+        assert store.get_request(rid).state == state

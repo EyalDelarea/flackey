@@ -33,7 +33,9 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
-          {v.action && v.action.kind !== 'cancel' && (
+          {/* A cancel sits under the choices when there are choices to skip past, and on the right of the
+              row when there are not -- which is where a track that is downloading right now needs it. */}
+          {v.action && (v.action.kind !== 'cancel' || !v.candidates) && (
             <button className="btn-secondary" onClick={() => onAction(v.action!.kind, v.id, v.action!.path)}>{v.action.label}</button>)}
           {v.removable && <button className="btn-link muted" onClick={() => onAction('remove', v.id, undefined)}>Remove</button>}
         </div>

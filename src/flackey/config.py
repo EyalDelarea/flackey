@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
     web_host: str = "127.0.0.1"
     data_dir: Path = Field(default_factory=default_data_dir)
+    # How many requests the worker runs at once. None is "every queued track at the same time", which is
+    # what the whole queue wants: the slow stage is a Soulseek transfer from one peer, upload slots are
+    # per-peer, and two tracks share nothing but the pipeline. The two stages that *are* shared -- the one
+    # Deezer bot conversation and slskd's single-search endpoint -- hold their own locks, so a cap here is
+    # for the machine (ffmpeg, sockets, file handles), not for correctness. See `Worker.run_forever`.
+    max_concurrent_requests: int | None = None
 
     # Lossless upgrade through the slskd sidecar (spec §10). Off until an API key is set.
     slskd_url: str = "http://127.0.0.1:5030"

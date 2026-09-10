@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import numpy as np
@@ -111,7 +112,10 @@ async def check(path: Path, deezer_id: int | None, http: httpx.AsyncClient, *, m
         return FingerprintResult("skipped", None, None, "no deezer id for this request")
     if not fpcalc_available():
         return FingerprintResult("skipped", None, None, "fpcalc not installed")
-    preview = tmp_dir / f"preview-{deezer_id}.mp3"
+    # Unique per call, not per track: two requests for the same recording can be here at the same time now,
+    # and on a shared name one of them writes the file while the other reads it -- then the first to finish
+    # deletes it under the second.
+    preview = tmp_dir / f"preview-{deezer_id}-{uuid4().hex[:8]}.mp3"
     try:
         url = await _preview_url(deezer_id, http)
         if not url:

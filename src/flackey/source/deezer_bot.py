@@ -78,6 +78,12 @@ class DeezerBotSource:
         self.search_timeout = search_timeout
         self.fetch_timeout = fetch_timeout
         self._menus: dict[str, Message] = {}
+        # The one part of the pipeline that genuinely cannot run for two tracks at once. There is a single
+        # DM with the bot; Telethon refuses a second exclusive `conversation()` on the same chat, and even
+        # if it did not, the bot's replies carry no request id, so two searches in flight would read each
+        # other's menus. Everything after this -- Soulseek, verify, convert, file -- is per-track and runs
+        # concurrently; this is the queue's only serial stretch.
+        self._bot = asyncio.Lock()
 
     @property
     def client(self) -> TelegramClient:
@@ -99,6 +105,12 @@ class DeezerBotSource:
         return c
 
     async def search(self, query: Query) -> list[Candidate]:
+        async with self._bot:
+            return await self._search_held(query)
+
+    async def _search_held(self, query: Query) -> list[Candidate]:
+        """The body of `search`, for callers that are already holding `_bot`. `asyncio.Lock` is not
+        reentrant, so `fetch`'s menu-lost path has to reach the search this way or block on itself."""
         try:
             async with self.client.conversation(self.bot_username, timeout=self.search_timeout) as conv:
                 await conv.send_message(query.search_text())
@@ -131,25 +143,35 @@ class DeezerBotSource:
             self._menus.pop(next(iter(self._menus)))
         return [await self._enrich(c) for c in cands]
 
-    async def fetch(self, cand: Candidate, dest_dir: Path) -> Path:
+    async def _ask_for_file(self, cand: Candidate) -> Message:
+        """Click the candidate's button and wait for the bot to answer with the audio document. The caller
+        holds `_bot`: this is the half of `fetch` that talks to the shared conversation."""
         menu_msg = self._menus.get(cand.source_ref)
         if menu_msg is None:
-            # menu lost (restart): re-run the search to get a fresh menu
-            await self.search(Query(raw=f"{cand.artist} {cand.title}"))
+            # menu lost (restart): re-run the search to get a fresh menu. `_search_held`, not `search` --
+            # we are already inside the lock and `asyncio.Lock` would deadlock rather than recurse.
+            await self._search_held(Query(raw=f"{cand.artist} {cand.title}"))
             menu_msg = self._menus.get(cand.source_ref)
             if menu_msg is None:
                 raise SourceNotFound("candidate no longer offered by the source bot")
+        async with self.client.conversation(self.bot_username, timeout=self.fetch_timeout) as conv:
+            await menu_msg.click(data=cand.source_ref.encode())  # track buttons have unique data
+            while True:
+                # This conversation sent nothing itself, so anchor on the menu message: a bare
+                # get_response() raises "No message was sent previously". Repeated calls with the same
+                # anchor advance through the bot's replies (progress text, then the audio document).
+                msg: Message = await conv.get_response(menu_msg)
+                if msg.document is not None:
+                    return msg
+
+    async def fetch(self, cand: Candidate, dest_dir: Path) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         try:
-            async with self.client.conversation(self.bot_username, timeout=self.fetch_timeout) as conv:
-                await menu_msg.click(data=cand.source_ref.encode())  # track buttons have unique data
-                while True:
-                    # This conversation sent nothing itself, so anchor on the menu message: a bare
-                    # get_response() raises "No message was sent previously". Repeated calls with the same
-                    # anchor advance through the bot's replies (progress text, then the audio document).
-                    msg: Message = await conv.get_response(menu_msg)
-                    if msg.document is not None:
-                        break
+            async with self._bot:
+                msg = await self._ask_for_file(cand)
+            # The download is outside the lock as well as outside the conversation: the document is ours
+            # already and pulling its bytes says nothing to the bot. Holding `_bot` across it would put
+            # every track's file behind every other track's for no reason at all.
             ext = EXT_BY_MIME.get(msg.document.mime_type or "", None)
             if ext is None and msg.file and msg.file.name and "." in msg.file.name:
                 ext = msg.file.name.rsplit(".", 1)[1].lower()

@@ -24,9 +24,9 @@ def test_request_lifecycle(store: Store):
     r = store.get_request(rid)
     assert r.state == RequestState.QUEUED
     assert r.query_artist == "Astral Projection"
-    assert store.next_queued().id == rid
+    assert [q.id for q in store.due_queued()] == [rid]
     store.set_state(rid, RequestState.FETCHING)
-    assert store.next_queued() is None
+    assert store.due_queued() == []
     assert store.reset_inflight() == 1
     assert store.get_request(rid).state == RequestState.QUEUED
     store.set_state(rid, RequestState.ERROR, error_message="boom")
@@ -35,21 +35,20 @@ def test_request_lifecycle(store: Store):
     assert store.get_request(rid).confidence == 96
 
 
-def test_next_queued_is_fifo(store: Store):
+def test_due_queued_returns_the_whole_batch_the_worker_starts_at_once(store: Store):
+    """The worker no longer takes one request and awaits it; it starts everything that is due. A row on a
+    retry backoff is not due, and nothing that has left the queue is either."""
     a = store.add_request("a", RequestKind.TEXT)
     b = store.add_request("b", RequestKind.TEXT)
-    assert store.next_queued().id == a
-    store.set_state(a, RequestState.DONE)
-    assert store.next_queued().id == b
+    c = store.add_request("c", RequestKind.TEXT)
+    d = store.add_request("d", RequestKind.TEXT)
+    store.update_request(c, retry_after="2999-01-01T00:00:00+00:00")
+    store.set_state(d, RequestState.FETCHING)
 
-
-def test_next_queued_honours_retry_after(store: Store):
-    a = store.add_request("a", RequestKind.TEXT)
-    b = store.add_request("b", RequestKind.TEXT)
-    store.update_request(a, retry_after="2999-01-01T00:00:00+00:00")
-    assert store.next_queued().id == b
-    store.update_request(a, retry_after="2000-01-01T00:00:00+00:00")
-    assert store.next_queued().id == a
+    assert [r.id for r in store.due_queued()] == [a, b]
+    assert [r.id for r in store.due_queued(limit=1)] == [a]
+    store.update_request(c, retry_after="2000-01-01T00:00:00+00:00")
+    assert [r.id for r in store.due_queued()] == [a, b, c]
 
 
 def test_open_request_for_url(store: Store):

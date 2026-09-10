@@ -1173,6 +1173,15 @@ through it for the existing Deezer-bot source per `EXT_BY_MIME`,
   queued request waits behind it too, unlike Deezer's bot which answers in
   seconds. This is worth flagging even though it's arguably part of "effort" (B6)
   rather than a hard blocker.
+  **Resolved 2026-09-10.** `run_forever` now starts every due request on its own
+  task (`worker.py`, `Worker._start_due`), so a slow Soulseek transfer holds up
+  nobody but itself. The two stages that genuinely cannot overlap hold locks in
+  the components that own them: the single Deezer bot conversation
+  (`DeezerBotSource._bot`) and slskd's one-search-at-a-time endpoint
+  (`SoulseekProvider._searching`), plus a per-derived-path lock so two peers
+  offering the same file name cannot delete each other's in-flight download. The
+  "waiting in a remote peer's upload queue" state is still missing; the progress
+  bar reports it from the transfer's own state string instead.
 
 #### B5. Docker
 

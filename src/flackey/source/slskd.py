@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 
@@ -122,12 +125,30 @@ def local_path_for(downloads: Path, file: LosslessFile) -> Path:
     return resolved
 
 
+def _claim(dest: Path) -> Path:
+    """Move a finished download off the derived path, under a name no other download can derive.
+
+    Called with the path's lock still held. Without it the caller would own a file at a path the *next*
+    download of the same track is entitled to clear away as stale, and the only thing keeping that safe
+    would be the absence of an `await` between here and the move into `tmp_dir` -- an invariant nothing
+    states and one added await breaks. A failure to rename is not fatal: the file is there and the caller
+    is about to move it anyway; only the path's privacy is lost, which is what this had before.
+    """
+    claimed = dest.with_name(f"{uuid4().hex[:8]}-{dest.name}")
+    try:
+        dest.replace(claimed)
+    except OSError as e:                       # peer-chosen names: ENAMETOOLONG and friends are input, not bugs
+        log.warning("could not claim %s off the derived path: %s", dest.name, e)
+        return dest
+    return claimed
+
+
 def _remove_stale_file(dest: Path) -> None:
     """Clear whatever sits at the derived path before enqueueing, so slskd cannot dedup a fresh download onto a
-    different (.NET-ticks-suffixed) name because the derived name was already taken. Safe only because lossless
-    downloads are serialized; if two attempts ever ran concurrently, one job's pre-clean could delete the other's
-    in-flight file at the same derived path. `dest` is built from peer-chosen strings - treat every failure mode
-    as expected input, not a bug."""
+    different (.NET-ticks-suffixed) name because the derived name was already taken. The caller holds that path's
+    lock (`SoulseekProvider._path_lock`) for the whole download and takes its finished file off the derived path
+    before dropping it (`_claim`), so the file this deletes is never another download's. `dest` is built from peer-chosen strings - treat every failure mode as expected
+    input, not a bug."""
     try:
         dest.unlink()
         log.info("removed stale file at derived path: %s", dest.name)
@@ -141,12 +162,29 @@ def _remove_stale_file(dest: Path) -> None:
         raise LosslessError(f"could not remove stale file at {dest.name!r}: {e}", "transfer_failed") from e
 
 
+@dataclass
+class _PathWaiters:
+    """A derived path's lock plus how many downloads hold or want it. See `SoulseekProvider._path_lock`."""
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    n: int = 0
+
+
 class SoulseekProvider:
     name = "soulseek"
 
     def __init__(self, client: SlskdClient, downloads: Path, *, sleep=asyncio.sleep,
                  clock: Callable[[], float] = time.monotonic):
         self.client, self.downloads, self.sleep, self.clock = client, downloads, sleep, clock
+        # slskd creates one search at a time and answers 429 to a concurrent POST (spike findings). The
+        # client retries on 429, but with the whole queue searching at once that turns into every request
+        # spending its search budget on retries instead of on the search. One at a time, each with its
+        # full budget, is both kinder to the sidecar and faster in the end.
+        self._searching = asyncio.Lock()
+        # One lock per derived download path. Two peers can offer the same folder and file name, and slskd
+        # writes both to the same place; whoever gets there first owns the path from the pre-clean until
+        # the file has been moved out. Without this, one download's pre-clean would delete another's
+        # in-flight file. Entries are dropped when nothing is waiting, so this cannot grow unboundedly.
+        self._paths: dict[Path, asyncio.Lock] = {}
 
     async def health(self) -> dict:
         try:
@@ -157,7 +195,30 @@ class SoulseekProvider:
         return {"status": "ok" if server.get("isLoggedIn") else "not_logged_in",
                 "username": (app.get("user") or {}).get("username")}
 
+    @asynccontextmanager
+    async def _path_lock(self, dest: Path) -> AsyncIterator[None]:
+        """Own `dest` for the length of a download. The count is bumped before the first await, so an entry
+        is only dropped once nobody holds or wants it -- pruning on `Lock.locked()` alone would discard a
+        lock a waiter had already been handed."""
+        entry = self._paths.get(dest)
+        if entry is None:
+            entry = self._paths[dest] = _PathWaiters()
+        entry.n += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.n -= 1
+            if entry.n == 0:
+                self._paths.pop(dest, None)
+
     async def search(self, text: str, *, wait_s: float, on_raw: RawSink | None = None) -> list[LosslessFile]:
+        async with self._searching:
+            return await self._search_held(text, wait_s=wait_s, on_raw=on_raw)
+
+    async def _search_held(self, text: str, *, wait_s: float, on_raw: RawSink | None = None) -> list[LosslessFile]:
+        # The budget starts when this search does, not when its caller queued up behind another one: a
+        # request that waited its turn still gets the full `wait_s` to find peers.
         deadline = self.clock() + wait_s
         sid = await self.client.start_search(text, deadline=deadline)
         try:
@@ -184,54 +245,77 @@ class SoulseekProvider:
                        on_progress: Callable[[TransferProgress], None] | None = None,
                        on_raw: RawSink | None = None) -> Path:
         dest = local_path_for(self.downloads, file)     # containment before anything is enqueued
+        async with self._path_lock(dest):
+            return await self._download_held(file, dest, first_byte_s=first_byte_s, total_s=total_s,
+                                             poll_s=poll_s, on_progress=on_progress, on_raw=on_raw)
+
+    async def _download_held(self, file: LosslessFile, dest: Path, *, first_byte_s: float, total_s: float,
+                             poll_s: float, on_progress: Callable[[TransferProgress], None] | None = None,
+                             on_raw: RawSink | None = None) -> Path:
         _remove_stale_file(dest)                        # so a leftover file can't be mistaken for the fresh one
         await self.client.enqueue(file.username, file.path, file.size)
         t0, first_byte_at, last_state, n = self.clock(), None, None, 0
-        while True:
-            await self.sleep(poll_s)
-            tr = await self._find(file)
-            now = self.clock()
-            if tr is None:
-                if now - t0 > first_byte_s:
-                    raise LosslessError("transfer never appeared in slskd", "first_byte_timeout")
-                continue
-            done, state = int(tr.get("bytesTransferred") or 0), str(tr.get("state") or "")
-            if done > 0 and first_byte_at is None:
-                first_byte_at = now
-            first_byte_ms = None if first_byte_at is None else int((first_byte_at - t0) * 1000)
-            if state != last_state:
-                if on_raw:
-                    on_raw(f"transfer-{n}", tr)
-                n, last_state = n + 1, state
-            if on_progress:
-                on_progress(TransferProgress(state, done, file.size, float(tr.get("averageSpeed") or 0), first_byte_ms))
-            if done > file.size:
-                await self.client.cancel_download(file.username, tr["id"])
-                raise LosslessError(f"peer sent {done} bytes for a {file.size} byte file", "transfer_failed")
-            if state.startswith("Completed"):
-                if "Succeeded" in state and dest.exists():
-                    try:
-                        actual = dest.stat().st_size
-                    except OSError as e:
-                        raise LosslessError(f"could not stat completed file at {dest.name!r}: {e}",
-                                            "transfer_failed") from e
-                    # Compare against slskd's own byte count for the transfer it just wrote, not the size the
-                    # peer advertised in the search response: those two describe different things and need not
-                    # agree, and only the former measures the file now on disk.
-                    expected = done or file.size
-                    if actual != expected:
-                        raise LosslessError(
-                            f"completed file at derived path is {actual} bytes, expected {expected}",
-                            "transfer_failed")
-                    return dest
-                raise LosslessError(f"transfer ended {state}" if "Succeeded" not in state
-                                    else "completed but no file at the derived path", "transfer_failed")
-            if first_byte_at is None and now - t0 > first_byte_s:
-                await self.client.cancel_download(file.username, tr["id"])
-                raise LosslessError(f"no bytes within {first_byte_s:.0f} s", "first_byte_timeout")
-            if now - t0 > total_s:
-                await self.client.cancel_download(file.username, tr["id"])
-                raise LosslessError(f"not finished within {total_s:.0f} s", "transfer_timeout")
+        # Only for the cancel path: the id slskd gave this transfer, once we have seen it. Stopping a
+        # download the owner cancelled means telling the sidecar too -- otherwise the bytes keep arriving
+        # from the peer long after the row has gone, and the next run's `cancel_all` is what finally
+        # notices. There is nothing to cancel before the transfer exists, which is what None means.
+        transfer_id: str | None = None
+        try:
+            while True:
+                await self.sleep(poll_s)
+                tr = await self._find(file)
+                now = self.clock()
+                if tr is None:
+                    if now - t0 > first_byte_s:
+                        raise LosslessError("transfer never appeared in slskd", "first_byte_timeout")
+                    continue
+                transfer_id = tr.get("id")
+                done, state = int(tr.get("bytesTransferred") or 0), str(tr.get("state") or "")
+                if done > 0 and first_byte_at is None:
+                    first_byte_at = now
+                first_byte_ms = None if first_byte_at is None else int((first_byte_at - t0) * 1000)
+                if state != last_state:
+                    if on_raw:
+                        on_raw(f"transfer-{n}", tr)
+                    n, last_state = n + 1, state
+                if on_progress:
+                    on_progress(TransferProgress(state, done, file.size, float(tr.get("averageSpeed") or 0), first_byte_ms))
+                if done > file.size:
+                    await self.client.cancel_download(file.username, tr["id"])
+                    raise LosslessError(f"peer sent {done} bytes for a {file.size} byte file", "transfer_failed")
+                if state.startswith("Completed"):
+                    if "Succeeded" in state and dest.exists():
+                        try:
+                            actual = dest.stat().st_size
+                        except OSError as e:
+                            raise LosslessError(f"could not stat completed file at {dest.name!r}: {e}",
+                                                "transfer_failed") from e
+                        # Compare against slskd's own byte count for the transfer it just wrote, not the size the
+                        # peer advertised in the search response: those two describe different things and need not
+                        # agree, and only the former measures the file now on disk.
+                        expected = done or file.size
+                        if actual != expected:
+                            raise LosslessError(
+                                f"completed file at derived path is {actual} bytes, expected {expected}",
+                                "transfer_failed")
+                        return _claim(dest)
+                    raise LosslessError(f"transfer ended {state}" if "Succeeded" not in state
+                                        else "completed but no file at the derived path", "transfer_failed")
+                if first_byte_at is None and now - t0 > first_byte_s:
+                    await self.client.cancel_download(file.username, tr["id"])
+                    raise LosslessError(f"no bytes within {first_byte_s:.0f} s", "first_byte_timeout")
+                if now - t0 > total_s:
+                    await self.client.cancel_download(file.username, tr["id"])
+                    raise LosslessError(f"not finished within {total_s:.0f} s", "transfer_timeout")
+        except asyncio.CancelledError:
+            # The owner stopped this download. Tell slskd so the peer stops sending, and take the partial
+            # file with it: nothing else will ever look at it, and leaving it at the derived path would be
+            # the stale file the *next* download of the same track has to clean up. Then re-raise -- a
+            # cancellation that is swallowed is a task that never actually stops.
+            if transfer_id is not None:
+                await self.client.cancel_download(file.username, transfer_id)
+            dest.unlink(missing_ok=True)
+            raise
 
     async def uploads(self) -> list[dict]:
         """What peers are pulling from the shared library, newest first (spec-neutral shape the UI renders as

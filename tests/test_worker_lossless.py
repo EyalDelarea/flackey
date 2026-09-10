@@ -514,8 +514,9 @@ def test_format_line():
 
 
 async def test_a_running_transfer_publishes_its_position_and_clears_it_afterwards(lenv):
-    """The row's progress bar reads status["fetch_progress"]. A bar left published after the transfer
-    ends is worse than no bar: it sits full on a row that has moved on."""
+    """The row's progress bar reads its own entry in status["fetch_progress"], which is a list because
+    every track downloads at once now. A bar left published after the transfer ends is worse than no bar:
+    it sits full on a row that has moved on."""
     _, store, _, provider, _, _ = lenv
     seen = []
     w = make(lenv)
@@ -524,7 +525,7 @@ async def test_a_running_transfer_publishes_its_position_and_clears_it_afterward
     async def watched(file, *, on_progress=None, **kw):
         def spy(p):
             on_progress(p)
-            seen.append(dict(w.status["fetch_progress"] or {}))
+            seen.extend(dict(x) for x in w.status["fetch_progress"])
         return await original(file, on_progress=spy, **kw)
 
     provider.download = watched
@@ -534,7 +535,7 @@ async def test_a_running_transfer_publishes_its_position_and_clears_it_afterward
     assert [p["bytes"] for p in seen] == [0, 10, 320_000]    # bytes, not just the rounded percentage
     assert {p["request_id"] for p in seen} == {rid}
     assert seen[-1]["peer"] == "a" and seen[-1]["size"] == 320_000
-    assert w.status["fetch_progress"] is None                # cleared once the attempt is over
+    assert w.status["fetch_progress"] == []                  # cleared once the attempt is over
 
 
 async def test_the_position_is_cleared_when_the_transfer_fails_too(lenv):
@@ -542,7 +543,7 @@ async def test_the_position_is_cleared_when_the_transfer_fails_too(lenv):
     provider.download_error = LosslessError("boom", "transfer_timeout")
     w = make(lenv)
     await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    assert w.status["fetch_progress"] is None
+    assert w.status["fetch_progress"] == []
 
 
 async def test_a_lossy_fallback_says_in_the_notification_why_the_lossless_copy_was_missed(lenv):
@@ -616,9 +617,9 @@ async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv
         name, data = q.get_nowait()
         if name == "status" and "fetch_progress" in data:
             frames.append(data["fetch_progress"])
-    moving = [f for f in frames if f is not None]
+    moving = [f[0] for f in frames if f]
     assert [f["pct"] for f in moving] == [0, 0, 100]
-    assert frames[-1] is None, "the clear has to reach the page too, or the bar stays full on a done row"
+    assert frames[-1] == [], "the clear has to reach the page too, or the bar stays full on a done row"
 
 
 # ---- upgrading a track that was filed on the lossy copy (the L.S.D. case) --------------------------
