@@ -430,6 +430,20 @@ def test_setup_soulseek_get_before_and_after_post(client):
     assert settings.slskd_api_key  # the running process now knows Soulseek is configured
 
 
+def test_setup_soulseek_password_is_404_until_one_is_saved_and_then_hands_it_back(client):
+    """The password is generated for the owner and there is no way to reset it on Soulseek, so the app
+    that generated it has to be able to show it to them. It lives on its own path rather than on
+    GET /setup/soulseek, which the wizard polls -- a secret must not ride along on a poll."""
+    c, _, _ = client
+    assert c.get("/api/setup/soulseek/password").status_code == 404
+    assert "password" not in c.get("/api/setup/soulseek").json()
+
+    c.post("/api/setup/soulseek", json={"username": "digger", "password": "not-a-real-password"})
+    assert c.get("/api/setup/soulseek/password").json() == {"username": "digger",
+                                                            "password": "not-a-real-password"}
+    assert "password" not in c.get("/api/setup/soulseek").json()
+
+
 def test_setup_soulseek_post_asks_the_link_to_connect_when_one_is_wired_in(tmp_path: Path):
     """With a link the wizard can answer "did my account work?" on the spot: the POST starts a connect
     and the status endpoint carries the result, so nothing tells the owner to restart and find out."""

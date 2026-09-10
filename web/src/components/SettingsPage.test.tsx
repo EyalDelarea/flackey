@@ -200,6 +200,26 @@ describe('the Soulseek panel', () => {
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith('/tmp/lib', { lossless_filing_format: 'aiff' }))
   })
 
+  it('does not fetch the saved password until it is asked for, and hides it again', async () => {
+    // Soulseek cannot reset a password, so the owner has to be able to get this one back -- but a secret
+    // printed in the panel is a secret over their shoulder. It is fetched on the press, not on render.
+    const password = vi.spyOn(api, 'soulseekPassword')
+      .mockResolvedValue({ username: 'digger', password: 'not-a-real-password' })
+    show(lossless({ provider: { name: 'soulseek', status: 'ok', username: 'digger' } }))
+    expect(password).not.toHaveBeenCalled()
+    expect(screen.queryByText('not-a-real-password')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    await waitFor(() => expect(screen.getByText('not-a-real-password')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(screen.queryByText('not-a-real-password')).not.toBeInTheDocument()
+  })
+
+  it('has nothing to show when no Soulseek account was ever saved', () => {
+    show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
+    expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
+  })
+
   it('hides the format and ranking rows when no account is set up, and says why', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
     expect(screen.getByText(/Not set up — run setup again/)).toBeInTheDocument()

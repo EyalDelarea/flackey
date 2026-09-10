@@ -3,6 +3,7 @@ import { api, ApiError } from '../api'
 import type { AppSettings, LosslessHealth, TelegramStatus } from '../api'
 import type { Live } from '../live'
 import Banner from './Banner'
+import CopyButton from './CopyButton'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
 
@@ -38,6 +39,11 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [formatError, setFormatError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
+  // The saved Soulseek password, once the owner asks for it. Held only in this component's state:
+  // nothing fetches it until the button is pressed, and leaving Settings forgets it again.
+  const [soulseekPassword, setSoulseekPassword] = useState<string | null>(null)
+  const [passwordBusy, setPasswordBusy] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
@@ -88,6 +94,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setSoulseekError(getErrorMessage(e, "Couldn't reconnect to Soulseek.")))
       .finally(() => setReconnecting(false))
   }
+  const showSoulseekPassword = () => {
+    setPasswordBusy(true); setPasswordError(null)
+    api.soulseekPassword()
+      .then(r => setSoulseekPassword(r.password))
+      .catch(e => setPasswordError(getErrorMessage(e, "Couldn't read the saved Soulseek password.")))
+      .finally(() => setPasswordBusy(false))
+  }
   const setFormat = (fmt: string) => {
     setFormatBusy(true); setFormatError(null)
     api.saveSettings(s.library_root, { lossless_filing_format: fmt })
@@ -122,6 +135,20 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="actions">{lossless?.enabled &&
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
+        {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
+            Flackey generated both. So the owner has to be able to get this string back -- without it they
+            cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
+            printed in the panel, because a secret on screen is a secret over someone's shoulder. */}
+        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Password</div>
+          {soulseekPassword
+            ? <div className="v mono">{soulseekPassword}</div>
+            : <div className="v">Soulseek cannot reset a password. Keep a copy of this one somewhere safe.</div>}
+          {passwordError && <div className="err">{passwordError}</div>}</div>
+          <div className="actions">{soulseekPassword
+            ? <><CopyButton value={soulseekPassword} />
+              <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
+            : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
+                {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>}
         {lossless?.enabled && <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">What new downloads are filed as. All three are lossless; tracks already in your
             library keep the format they have.</div>

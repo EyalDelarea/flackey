@@ -16,7 +16,13 @@ from ..export import PLAYLIST_DIR, playlist_names
 from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
-from ..slskd_config import SlskdConfigError, read_listen_port, read_username, write_credentials
+from ..slskd_config import (
+    SlskdConfigError,
+    read_listen_port,
+    read_password,
+    read_username,
+    write_credentials,
+)
 from ..slskd_process import SlskdProcess
 from ..store import Store
 from . import SETUP_DONE_KEY, Bundles, to_dict
@@ -204,6 +210,21 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     async def get_soulseek_setup() -> dict:
         username = read_username(settings.data_dir)
         return {"configured": username is not None, "username": username}
+
+    @r.get("/setup/soulseek/password")
+    async def get_soulseek_password() -> dict:
+        """Hand the owner back the Soulseek password flackey generated for them.
+
+        The only route in flackey that returns a secret, and it is here because Soulseek has no password
+        reset: the name is bound to the password it was claimed with, and an owner who cannot produce that
+        string cannot sign in from anywhere else, ever. Keeping it unreadable would not protect them from
+        anything -- the file is 0600 under their own account, so anything that can call this can already
+        read it -- it would only make the account unrecoverable. Deliberately its own path rather than a
+        field on GET /setup/soulseek, which the wizard polls: a secret must not ride along on a poll."""
+        password = read_password(settings.data_dir)
+        if password is None:
+            raise HTTPException(404, "No Soulseek password is saved.")
+        return {"username": read_username(settings.data_dir), "password": password}
 
     @r.post("/setup/soulseek")
     async def post_soulseek_setup(body: dict) -> dict:

@@ -230,6 +230,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .folder-well svg { color: var(--secondary); }
 .folder-well input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: 12px var(--mono); color: var(--text); }
 .hint-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--tertiary); }
+/* A hint the owner is meant to act on before moving off the screen, not one they may skim. */
+.hint-row.warn { display: block; color: var(--secondary); max-width: 420px; text-align: center; line-height: 1.45; }
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .tg { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: center; width: 100%; text-align: left; }
 .tg .lead { max-width: none; }
@@ -247,6 +249,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .path-well { padding: 8px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); font: 12px var(--mono); }
 .fields { display: flex; flex-direction: column; gap: 12px; width: 320px; max-width: 100%; text-align: left; }
 .fields .field { display: flex; flex-direction: column; gap: 4px; }
+.fields .field-row { display: flex; align-items: center; gap: 6px; }
+.fields .field-row .input { flex: 1; min-width: 0; }
 .fields label { font-size: 12px; font-weight: 500; color: var(--secondary); }
 
 /* ---- Welcome ---- */

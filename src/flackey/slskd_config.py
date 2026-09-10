@@ -86,6 +86,23 @@ def read_username(data_dir: Path) -> str | None:
     return username or None
 
 
+def read_password(data_dir: Path) -> str | None:
+    """The saved Soulseek password, or None. This is the one function here that hands a secret back to a
+    caller, and it exists because Soulseek has no way to recover one: a username is bound to the password
+    it was first claimed with, logging in with a different one is rejected rather than treated as a change,
+    and the protocol's own change-password message needs a session that only the current password can open.
+    An owner who loses this string loses the account, so flackey has to be able to show it to them.
+    Never raises, never logs the value -- same contract as `read_api_key`."""
+    data = _load_or_none(config_path(data_dir))
+    if data is None:
+        return None
+    try:
+        password = data["soulseek"]["password"]
+    except (KeyError, TypeError):
+        return None
+    return password or None
+
+
 def _submapping(parent: dict, key: str, path: Path) -> dict:
     """`parent[key]` as a dict, installing an empty one when the key is absent or explicitly null (a
     hand-written file's bare `web:` line parses to `None` -- that is just "nothing here yet", the same

@@ -42,6 +42,7 @@ export interface UploadFeed { enabled:boolean; provider:string|null; uploads:Upl
 export interface TelegramStatus { authorized:boolean; configured:boolean; phone_masked:string|null }
 export interface QrStart { id:string; url:string; expires_at:string }
 export interface SoulseekSetup { configured: boolean; username: string | null }
+export interface SoulseekPassword { username: string | null; password: string }
 export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 'failed'
   username: string | null; error: string | null }
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
@@ -100,6 +101,9 @@ export const api = {
   soulseekSetup: () => call<SoulseekSetup>('/api/setup/soulseek'),
   saveSoulseek: (username: string, password: string) =>
     post<{ ok: boolean; restart_required: boolean; connecting: boolean }>('/api/setup/soulseek', { username, password }),
+  // Its own path, not a field on soulseekSetup: that one is polled, and a secret must not ride along
+  // on a poll. It exists at all because Soulseek has no password reset -- see the route's docstring.
+  soulseekPassword: () => call<SoulseekPassword>('/api/setup/soulseek/password'),
   soulseekConnectStatus: () => call<SoulseekConnect>('/api/setup/soulseek/status'),
   connectSoulseek: () => post<SoulseekConnect>('/api/setup/soulseek/connect'),
   slskdSetup: () => call<SlskdSetup>('/api/setup/slskd'),

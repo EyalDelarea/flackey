@@ -7,6 +7,7 @@ from flackey.slskd_config import (
     SlskdConfigError,
     config_path,
     read_api_key,
+    read_password,
     read_username,
     write_credentials,
 )
@@ -138,3 +139,26 @@ def test_read_username_returns_none_then_the_username_after_a_write(tmp_path: Pa
     assert read_username(tmp_path) is None
     write_credentials(tmp_path, "digger", "not-a-real-password")
     assert read_username(tmp_path) == "digger"
+
+
+def test_read_password_returns_none_for_missing_malformed_and_passwordless_configs(tmp_path: Path):
+    """The one reader that hands a secret back still has to fail like the others: an absent, unparseable
+    or half-written config is an ordinary state on the way to a first setup, not an error to raise from."""
+    assert read_password(tmp_path) is None
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("not: [valid, yaml, :::\n")
+    assert read_password(tmp_path) is None
+    path.write_text("- a\n- list\n")
+    assert read_password(tmp_path) is None
+    path.write_text("soulseek:\n  username: digger\n")
+    assert read_password(tmp_path) is None
+    path.write_text("soulseek:\n  username: digger\n  password: ''\n")
+    assert read_password(tmp_path) is None
+
+
+def test_read_password_returns_what_was_written(tmp_path: Path):
+    """Soulseek has no password reset, so an owner who cannot read this string back has lost the account.
+    That is the whole reason this reader exists."""
+    write_credentials(tmp_path, "digger", "not-a-real-password")
+    assert read_password(tmp_path) == "not-a-real-password"

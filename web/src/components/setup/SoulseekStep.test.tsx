@@ -29,13 +29,44 @@ it('disables Save and continue until both fields are filled', async () => {
   await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())
   const username = screen.getByLabelText('Soulseek username')
   const password = screen.getByLabelText('Soulseek password')
-  expect(password).toHaveAttribute('type', 'password')
   const save = screen.getByText('Create account')
+  fireEvent.change(username, { target: { value: '' } })
+  fireEvent.change(password, { target: { value: '' } })
   expect(save).toBeDisabled()
   fireEvent.change(username, { target: { value: 'digger' } })
   expect(save).toBeDisabled()
   fireEvent.change(password, { target: { value: 'not-a-real-password' } })
   expect(save).not.toBeDisabled()
+})
+
+describe('the account Flackey makes on the owner\'s behalf', () => {
+  it('arrives filled in, so there is nothing to sign up for', async () => {
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())
+    expect((screen.getByLabelText('Soulseek username') as HTMLInputElement).value).toMatch(/^[a-z]+\d{4}$/)
+    expect((screen.getByLabelText('Soulseek password') as HTMLInputElement).value).toHaveLength(16)
+    expect(screen.getByText('Create account')).not.toBeDisabled()
+  })
+
+  it('shows the password it made up in the clear, and masks one the owner types', async () => {
+    // A password nobody chose and nobody can reset is useless behind dots: the owner has to be able to
+    // copy it down. One they typed is already theirs to remember, so it goes back behind the mask.
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())
+    expect(screen.getByLabelText('Soulseek password')).toHaveAttribute('type', 'text')
+    expect(screen.getByText('Copy')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Soulseek password'), { target: { value: 'mine' } })
+    expect(screen.getByLabelText('Soulseek password')).toHaveAttribute('type', 'password')
+    expect(screen.queryByText('Copy')).not.toBeInTheDocument()
+  })
+
+  it('leaves the fields empty for an account that already exists', async () => {
+    vi.spyOn(api, 'soulseekSetup').mockResolvedValue({ configured: true, username: 'digger' })
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Soulseek username')).toHaveValue('digger'))
+    expect(screen.getByLabelText('Soulseek password')).toHaveValue('')
+    expect(screen.getByLabelText('Soulseek password')).toHaveAttribute('type', 'password')
+  })
 })
 
 it('saves and calls onDone with the typed values', async () => {
@@ -217,6 +248,36 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     await settle(POLL_MS)
     expect(screen.getByText('Somebody already uses that name.')).toBeInTheDocument()
     expect(screen.getByLabelText('Soulseek username')).not.toBeDisabled()
+  })
+
+  it('keeps a password it made up on screen after saving, because Soulseek cannot reset one', async () => {
+    // The typed-password path clears the field on save. This one must not: the sign-in is the first moment
+    // the owner has any reason to write the password down, and there is no second chance to read it here.
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus').mockResolvedValue(connect({ state: 'connected', username: 'dealt' }))
+    renderWithFakeTimers()
+    await settle(0)
+    const dealt = (screen.getByLabelText('Soulseek password') as HTMLInputElement).value
+    fireEvent.click(screen.getByText('Create account'))
+    await settle(POLL_MS)
+    expect(screen.getByLabelText('Soulseek password')).toHaveValue(dealt)
+    expect(screen.getByText('Copy')).toBeInTheDocument()
+  })
+
+  it('deals another name when Soulseek rejects the one it made up', async () => {
+    // The server's own reason tells the owner to pick a different name. They did not pick this one and have
+    // no attachment to it, so the step picks again itself and their next click retries with a fresh pair.
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus')
+      .mockResolvedValue(connect({ state: 'failed', error: 'Somebody already uses that name.' }))
+    renderWithFakeTimers()
+    await settle(0)
+    const first = (screen.getByLabelText('Soulseek username') as HTMLInputElement).value
+    fireEvent.click(screen.getByText('Create account'))
+    await settle(POLL_MS)
+    expect(screen.getByLabelText('Soulseek username')).not.toHaveValue(first)
+    expect(screen.getByText('That name was taken. Here is another one — try again.')).toBeInTheDocument()
+    expect(screen.queryByText('Somebody already uses that name.')).not.toBeInTheDocument()
   })
 
   it('does not leave polling running after the step unmounts', async () => {
