@@ -5,12 +5,16 @@ file `Flackey Mockups.dc.html`
 (https://claude.ai/design/p/5c58f04e-9bb6-48ec-b641-b26820e343e6). Chosen 2026-09-06.
 Every value below was read from that file's source, not eyeballed. A capture of the main
 screen sits beside this file as `screen-download.jpg`; open the project link for the rest.
+`mockups.dc.html` beside this file is that source verbatim, so it still shows the six-step
+`Identify · Match · Fetch · Verify · File · Done` row the app has since dropped (see "Download"
+below). Read it for spacing and colour, which have not moved; this file, not the mockup, says
+what the progress ladder is.
 
 Design reasoning, in the designer's words: dark graphite like pro-audio gear (DJs live in
 dark UIs: Rekordbox, Ableton); one warm amber accent for "needs you"; green strictly for
 "verified and filed"; red for rejections. Every row answers three questions: a plain-words
 status line says what is happening now, filed rows show the on-disk path in monospace, and
-exactly one button per row says what to click. Six-step progress is dots plus words, never
+exactly one button per row says what to click. Progress is named rungs, never
 jargon. Setup runs in a smaller focused window (760×600); the app itself is 1200×800.
 
 ## Tokens
@@ -121,9 +125,10 @@ Group "Progressive Psy Set 2026" with summary "12 of 40 filed · 1 needs your ch
 
 1. Filed: "Astral Projection – Into the Void (Original Mix)"; green mono path
    "Astral Projection / Astral Projection - Into the Void (Original Mix).mp3 · 320 kbps verified";
-   six green dots; "Show in Finder".
-2. In progress: "Ace Ventura – Rezonate"; amber status "Fetching the file — step 3 of 6";
-   dots green green amber(pulse) pending×3; mono "Identify · Match · Fetch · Verify · File · Done".
+   five green rungs; "Show in Finder".
+2. In progress: "Ace Ventura – Rezonate"; amber status "Downloading the file"; one ladder of five
+   rungs, each carrying its own name, its own state and a tooltip explaining the phase:
+   "Search · Choose · Download · Verify · Done", green green amber(pulse) pending×2.
 3. Needs your choice (amber-washed row): "Vini Vici – The Tribe"; amber status "Needs your
    choice — the video is 8:41 long, but the best match is only 6:12. Pick the version you want."
    Two candidate cards side by side: "Vini Vici – The Tribe (Extended Mix)" · "92% match" ·
@@ -149,7 +154,7 @@ Group "Single tracks" · "1 of 1 filed": "Captain Hook – Human Design (Origina
 Banner under the title bar: "Telegram signed out. Reconnect to keep digging — tracks already
 filed are untouched." with primary "Reconnect". Sidebar footer turns amber: "Telegram signed
 out". Rows dim to 60%: "Ace Ventura – Rezonate" · "Paused — will continue after you reconnect"
-· mono "paused at step 3 of 6"; queued row unchanged.
+· mono "paused while downloading"; queued row unchanged.
 
 ### Library (1200×800)
 

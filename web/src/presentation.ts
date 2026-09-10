@@ -1,7 +1,20 @@
 import type { Bundle, Candidate, FetchProgress, Playlist, RequestState } from './api'
 import { spectrogramUrl } from './api'
 
-export const STEPS = ['Identify', 'Match', 'Fetch', 'Verify', 'File', 'Done'] as const
+export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
+/* A rung earns its place if the request can stop on it: Search ends in not_found, Choose waits on the owner
+   indefinitely, Download ends in error, Verify ends in rejected. Filing ends in nothing -- a name clash with
+   a track already there is a duplicate, which is a success -- so it got a rung the owner only ever watched
+   flash past. The ladder's job is saying how far a track got when it stopped, and File never stopped one. */
+/** Hover text for each rung. Here rather than in Stepper.tsx for the same reason the "step N of 6" counter
+ *  went: two places describing one ladder disagreed the moment the map below changed. */
+export const STEP_TIPS: Record<string, string> = {
+  Search: 'Working out which track this is. Beatport gives the official title, remix name and release; Deezer says who has a copy.',
+  Choose: 'More than one copy could be the right one and none of them won outright, so it is waiting on you. Most tracks skip this.',
+  Download: "Pulling the file down. Soulseek first for a lossless copy, which can mean waiting in a stranger's queue; Deezer as the fallback. A Soulseek copy is also checked and fingerprinted here, before it moves on.",
+  Verify: 'Reading the spectrogram to make sure the file is really lossless. An MP3 re-wrapped as FLAC has a hard cutoff around 16 kHz that real music never has.',
+  Done: 'Tagged with artist, title, remix and artwork, and filed under the artist\'s folder. No BPM or key — Rekordbox works those out on import.',
+}
 export type Dot = 'done' | 'current' | 'pending'
 /** One rung of the ladder: the name and the state are rendered together, never as two separate widgets. */
 export interface StepView { name: string; state: Dot }
@@ -38,8 +51,13 @@ export function relPath(path: string, root: string): string {
   return rel.split('/').filter(Boolean).join(' / ')
 }
 export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
-// `done` is index 5, not 6: the old value indexed past STEPS, so the Done rung could never read as reached.
-const STEP_OF: Partial<Record<RequestState, number>> = { queued: 0, identifying: 0, awaiting_review: 1, fetching: 2, verifying: 3, filing: 4, done: 5, duplicate: 5 }
+// `done` is the last index, not one past it: the old value indexed past STEPS, so the Done rung could never
+// read as reached. `filing` rides on Verify rather than on Done -- it has no rung of its own now, and a Done
+// rung pulsing amber on a track that is not filed yet claims the very thing the ladder exists to report.
+// So on a Soulseek row -- which skips VERIFYING outright, having verified inside the attempt -- Verify is
+// amber for the seconds the file is being tagged and moved. The row's own words say "Tagging and filing"
+// while it is, and the rung behind it has been reached; the alternative reads as finished when it is not.
+const STEP_OF: Partial<Record<RequestState, number>> = { queued: 0, identifying: 0, awaiting_review: 1, fetching: 2, verifying: 3, filing: 3, done: 4, duplicate: 4 }
 const COMPLETE: RequestState[] = ['done', 'duplicate']
 const SOURCE_LABEL: Record<string, string> = { soulseek: 'Soulseek', deezer: 'Deezer', deezer_bot: 'Deezer' }
 export const sourceLabel = (s: string | null | undefined) => s ? SOURCE_LABEL[s] ?? s : null
@@ -83,9 +101,21 @@ function fallbackOf(b: Bundle): FallbackView | null {
 const kbps = (bps: number) => bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} kB/s`
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
 
+/* What the worker is doing in the seconds between the last byte landing and the row leaving FETCHING.
+   Verify, fingerprint and convert all run inside the Soulseek attempt -- the state never reaches VERIFYING,
+   because FETCHING is the one the owner may still stop -- so without these the platter sits at 100% and the
+   label says nothing while they run. The worker publishes the key; the words live here with the rest of them. */
+const PHASE_TEXT: Record<string, string> = {
+  verifying: 'Checking the audio is really lossless',
+  fingerprinting: 'Checking it is the same recording',
+  converting: 'Converting it for your library',
+}
+
 function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): ProgressView | null {
   const p = all?.find(x => x.request_id === b.request.id)
   if (!p) return null
+  // No bytes are moving in these, so the platter sweeps instead of filling -- the same signal as a queue wait.
+  if (p.phase && PHASE_TEXT[p.phase]) return { pct: null, label: PHASE_TEXT[p.phase] }
   // Queued at the peer means no bytes are moving yet; a 0% bar there would read as a stall rather than
   // as a wait, so it says so in words and shows an indeterminate bar instead.
   if (p.state.startsWith('Queued')) return { pct: null, label: `Waiting in ${p.peer}'s queue` }

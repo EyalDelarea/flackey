@@ -16,7 +16,7 @@ describe('formatting', () => {
   it('relPath drops empty segments so an out-of-root path has no leading " / "', () =>
     expect(relPath('/elsewhere/track.mp3', '/Users/me/Music/DJ Library')).toBe('elsewhere / track.mp3'))
   it('gb', () => { expect(gb(3.2e9)).toBe('3.2 GB'); expect(gb(512e6)).toBe('512 MB') })
-  it('stepIndex', () => { expect(stepIndex('fetching')).toBe(2); expect(stepIndex('done')).toBe(5); expect(stepIndex('rejected')).toBeNull() })
+  it('stepIndex', () => { expect(stepIndex('fetching')).toBe(2); expect(stepIndex('done')).toBe(4); expect(stepIndex('rejected')).toBeNull() })
 })
 
 describe('presentRow', () => {
@@ -30,8 +30,17 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'fetching' }), opts)
     expect(v.status).toBe('Downloading the file'); expect(v.statusTone).toBe('amber')
     expect(v.steps).toEqual([
-      { name: 'Identify', state: 'done' }, { name: 'Match', state: 'done' }, { name: 'Fetch', state: 'current' },
-      { name: 'Verify', state: 'pending' }, { name: 'File', state: 'pending' }, { name: 'Done', state: 'pending' }])
+      { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
+      { name: 'Verify', state: 'pending' }, { name: 'Done', state: 'pending' }])
+  })
+  it('has no File rung: filing is a moment, not a phase you wait in', () => {
+    // Dropping File leaves `filing` without a rung of its own. It rides on Verify rather than on Done,
+    // because a Done rung pulsing amber on a track that is not filed yet is the same lie the all-green
+    // duplicate row tells.
+    const v = presentRow(bundle({ state: 'filing' }), opts)
+    expect(v.steps).toEqual([
+      { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'done' },
+      { name: 'Verify', state: 'current' }, { name: 'Done', state: 'pending' }])
   })
   it('a fetching row says which network the bytes are coming from', () => {
     expect(presentRow(bundle({ state: 'fetching', fetch_source: 'soulseek' }), opts).status).toBe('Downloading the file from Soulseek')
@@ -39,7 +48,7 @@ describe('presentRow', () => {
   })
   it('the Done rung reads as reached when the request is done (it indexed past the array before)', () => {
     expect(presentRow(bundle({ state: 'done' }), opts).steps).toEqual(
-      ['Identify', 'Match', 'Fetch', 'Verify', 'File', 'Done'].map(name => ({ name, state: 'done' })))
+      ['Search', 'Choose', 'Download', 'Verify', 'Done'].map(name => ({ name, state: 'done' })))
     expect(presentRow(bundle({ state: 'queued' }), opts).steps!.every(x => x.state === 'pending')).toBe(true)
   })
   it('filed row shows the relative path in mono, a verified badge and Show in Finder', () => {
@@ -51,7 +60,7 @@ describe('presentRow', () => {
     expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
     expect(v.statusMono).toBe(true)
     expect(v.statusTone).toBe('muted'); expect(v.version).toBe('Original Mix')
-    expect(v.steps).toEqual(Array(6).fill(null).map((_, i) => ({ name: ['Identify','Match','Fetch','Verify','File','Done'][i], state: 'done' })))
+    expect(v.steps).toEqual(Array(5).fill(null).map((_, i) => ({ name: ['Search','Choose','Download','Verify','Done'][i], state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
   })
   it('a lossless row names the delivered format and shows the evidence it is the right recording', () => {
@@ -94,7 +103,7 @@ describe('presentRow', () => {
     ]
     const v = presentRow(bundle({ state: 'awaiting_review', flag_reason: 'best match is a Extended Mix; no version was requested', chosen_candidate_id: 5 }, { candidates: cands }), opts)
     expect(v.status).toBe('Needs your choice — best match is a Extended Mix; no version was requested. Pick the version you want.')
-    expect(v.washed).toBe(true); expect(v.steps?.[1]).toEqual({ name: 'Match', state: 'current' })
+    expect(v.washed).toBe(true); expect(v.steps?.[1]).toEqual({ name: 'Choose', state: 'current' })
     expect(v.candidates).toEqual([
       { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true },
       { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false },
@@ -253,6 +262,13 @@ describe('a running transfer shows where it has got to', () => {
   it('belongs only to the row it names, with several transfers running at once', () => {
     const v = presentRow(fetching, { ...opts, fetchProgress: [p({ request_id: 999 })] as never })
     expect(v.progress).toBeNull()
+  })
+
+  it('says what it is doing in the seconds after the bytes land, not sitting full and silent', () => {
+    // verify, fingerprint and convert all run with the row still FETCHING, so without this the platter
+    // reads 100% and the label says nothing for the seconds those take.
+    const v = presentRow(fetching, { ...opts, fetchProgress: [p({ phase: 'fingerprinting', pct: 100 })] as never })
+    expect(v.progress).toEqual({ pct: null, label: 'Checking it is the same recording' })
   })
 
   it('is absent when nothing is downloading', () => {

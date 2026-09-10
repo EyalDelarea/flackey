@@ -80,10 +80,11 @@ exact copy, and measurements: `docs/superpowers/design/gui/DESIGN.md`.
   summary "12 of 40 filed · 1 needs your choice · 1 rejected". Single tracks share one
   "Single tracks" group.
 - **Row anatomy**: artwork (Beatport art once matched, a placeholder before), title with the
-  version in muted parentheses, a plain-words status line, six progress dots, and at most
-  one button. The dots map to Identify, Match, Fetch, Verify, File, Done; the current one
-  pulses amber, finished ones are green.
-- **Row states**: in progress ("Fetching the file — step 3 of 6"); filed (green mono path
+  version in muted parentheses, a plain-words status line, a five-rung progress ladder, and at
+  most one button. The rungs are Search, Choose, Download, Verify, Done, each with hover text
+  saying what happens in it; the current one pulses amber, finished ones are green. There is no
+  File rung: a rung earns its place if a request can stop on it, and filing never stops one.
+- **Row states**: in progress ("Downloading the file"); filed (green mono path
   relative to the library folder plus "320 kbps verified", button "Show in Finder"); needs
   your choice (amber-washed row, reason with the video length, one card per candidate with
   length, Beatport presence, match percentage and "Use this", plus a quiet "Skip this

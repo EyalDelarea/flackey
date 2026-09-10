@@ -28,7 +28,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
           <Checks checks={v.checks} />
         </div>
         <div className="row-right">
-          {v.progress && <Platter pct={v.progress.pct} />}
+          {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}

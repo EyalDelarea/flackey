@@ -819,6 +819,16 @@ class Worker:
         if fp.track:
             self.store.add_evidence(track_id, "fingerprint", {"frames": fp.track, "fps": FPS})
 
+    def _publish_phase(self, request_id: int, phase: str) -> None:
+        """The bytes have landed but the file is not accepted yet. verify, fingerprint and convert all run
+        with the row still FETCHING -- that is the state `cancel` still accepts, so none of them may have a
+        state of its own -- and without this the row's platter sits full and silent for the seconds they
+        take. Stamped onto the last published position so the peer and size stay put; `_try_lossless`
+        clears the whole entry afterwards exactly as before."""
+        last = self._progress.get(request_id)
+        if last is not None:
+            self._publish_progress(request_id, {**last, "phase": phase})
+
     def _publish_progress(self, request_id: int, position: dict | None) -> None:
         """One row's transfer moved (or ended). Republishes the whole list, because assigning to
         `status` is what raises the SSE event -- editing the list in place would reach nobody."""
@@ -957,6 +967,7 @@ class Worker:
     async def _check_and_convert(self, rec: AttemptRecorder, req: Request, ref: Reference, file,
                                  tmp: Path) -> tuple[LosslessHit | None, str]:
         s = self.settings
+        self._publish_phase(req.id, "verifying")
         try:
             async with self._cpu:
                 verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
@@ -968,6 +979,7 @@ class Worker:
         rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason)
         if not verdict.passed:
             return None, "verify_failed"
+        self._publish_phase(req.id, "fingerprinting")
         async with self._cpu:   # fpcalc decodes the whole file; it belongs with the other ffmpeg work
             fp = await fingerprint_check(tmp, ref.deezer_id, self.http, minimum=s.lossless_fingerprint_min,
                                          tmp_dir=s.tmp_dir)
@@ -976,6 +988,7 @@ class Worker:
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
         if fp.status == "failed":
             return None, "fingerprint_failed"
+        self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None
         try:

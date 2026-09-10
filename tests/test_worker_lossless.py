@@ -608,9 +608,31 @@ async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv
         name, data = q.get_nowait()
         if name == "status" and "fetch_progress" in data:
             frames.append(data["fetch_progress"])
-    moving = [f[0] for f in frames if f]
+    # The phases between the last byte and the file being accepted publish at 100% as well; this test is
+    # about the transfer's own ticks reaching the page, so it reads only the frames the transfer produced.
+    moving = [f[0] for f in frames if f and not f[0].get("phase")]
     assert [f["pct"] for f in moving] == [0, 0, 100]
     assert frames[-1] == [], "the clear has to reach the page too, or the bar stays full on a done row"
+
+
+async def test_the_row_says_what_it_is_doing_between_the_last_byte_and_the_file_being_accepted(lenv):
+    """verify, fingerprint and convert all run with the request still FETCHING -- FETCHING is the state the
+    owner may still stop, so the worker cannot move it to VERIFYING for them. Without a phase on the
+    published position the platter sits at 100% and the label says nothing for the seconds those take."""
+    from flackey.events import EventBus, Status
+    _, store, _, _, _, _ = lenv
+    bus = EventBus()
+    w = make(lenv, status=Status(bus, telegram_authorized=True))
+    q = bus.subscribe()
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    phases = []
+    while not q.empty():
+        name, data = q.get_nowait()
+        if name == "status" and data.get("fetch_progress"):
+            phase = data["fetch_progress"][0].get("phase")
+            if phase and phase not in phases:
+                phases.append(phase)
+    assert phases == ["verifying", "fingerprinting", "converting"]
 
 
 # ---- upgrading a track that was filed on the lossy copy (the L.S.D. case) --------------------------

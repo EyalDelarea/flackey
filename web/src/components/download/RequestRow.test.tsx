@@ -1,9 +1,10 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
+import { STEPS } from '../../presentation'
 import type { RowView } from '../../presentation'
 
 const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted', statusMono: false,
-  steps: ['Identify','Match','Fetch','Verify','File','Done'].map(name => ({ name, state: 'pending' as const })),
+  steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
   formatLabel: null, checks: [], progress: null, fallback: null }
@@ -54,18 +55,34 @@ it('does not show Remove on a row that is not removable', () => {
 it('a queued row still shows the whole road ahead beside its tag', () => {
   render(<RequestRow view={base} onAction={() => {}} onChoose={() => {}} />)
   expect(screen.getByText('queued')).toBeInTheDocument()
-  expect(screen.getByLabelText('progress').querySelectorAll('.step')).toHaveLength(6)
+  expect(screen.getByLabelText('progress').querySelectorAll('.step')).toHaveLength(STEPS.length)
+})
+
+it('a row being checked after the transfer is not announced as waiting in a queue', () => {
+  // `pct: null` used to mean one thing -- queued at the peer. The phases after the last byte land use it
+  // too now, so the platter cannot keep announcing every one of them as a wait.
+  const view: RowView = { ...base, progress: { pct: null, label: 'Checking it is the same recording' } }
+  const { container } = render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+  expect(container.querySelector('.platter')!.getAttribute('aria-label')).toBe('Checking it is the same recording')
+})
+
+it('every rung explains itself on hover, so the ladder needs no legend beside it', () => {
+  const view: RowView = { ...base, steps: STEPS.map(name => ({ name, state: 'pending' as const })) }
+  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+  const rungs = [...screen.getByLabelText('progress').querySelectorAll('.step')]
+  expect(rungs).toHaveLength(STEPS.length)
+  for (const rung of rungs) expect(rung.getAttribute('title')).toBeTruthy()
 })
 
 it('renders every step by name with the current one marked, as one ladder', () => {
   const view: RowView = { ...base, tag: null, status: 'Downloading the file',
-    steps: [{ name: 'Identify', state: 'done' }, { name: 'Match', state: 'done' }, { name: 'Fetch', state: 'current' },
-            { name: 'Verify', state: 'pending' }, { name: 'File', state: 'pending' }, { name: 'Done', state: 'pending' }] }
+    steps: [{ name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
+            { name: 'Verify', state: 'pending' }, { name: 'Done', state: 'pending' }] }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
   const track = screen.getByLabelText('progress')
-  expect(track.querySelectorAll('.step')).toHaveLength(6)
-  for (const name of ['Identify', 'Match', 'Fetch', 'Verify', 'File', 'Done']) expect(screen.getByText(name)).toBeInTheDocument()
-  expect(track.querySelector('[aria-current="step"]')!.textContent).toContain('Fetch')
+  expect(track.querySelectorAll('.step')).toHaveLength(5)
+  for (const name of ['Search', 'Choose', 'Download', 'Verify', 'Done']) expect(screen.getByText(name)).toBeInTheDocument()
+  expect(track.querySelector('[aria-current="step"]')!.textContent).toContain('Download')
   expect(screen.queryByText('queued')).not.toBeInTheDocument()
 })
 
@@ -105,7 +122,7 @@ it('a queued transfer spins without a number: nothing has arrived, so there is n
   const view: RowView = { ...base, status: 'Waiting for the peer', statusTone: 'amber', tag: null, dimmed: false,
     progress: { pct: null, label: "Waiting in someone's queue" } }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
-  const platter = screen.getByLabelText('Waiting in the queue')
+  const platter = screen.getByLabelText("Waiting in someone's queue")   // the row's own words, which name the peer
   expect(platter).toHaveClass('waiting')
   expect(platter.querySelector('text')).toBeNull()
 })
