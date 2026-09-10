@@ -233,6 +233,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .tg { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: center; width: 100%; text-align: left; }
 .tg .lead { max-width: none; }
+/* The already-connected state: no QR to stand beside, so it centres in the step rather than joining `.tg`'s grid. */
+.tg-done { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .qr-card { width: 220px; height: 220px; padding: 12px; border-radius: 8px; background: #fff; border: .5px solid rgba(0,0,0,.15); display: grid; place-items: center; }
 .qr-card img { display: block; width: 196px; height: 196px; }
 .qr-card.phone { background: var(--well); border-color: var(--well-border); color: var(--tertiary); }

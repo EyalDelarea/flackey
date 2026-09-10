@@ -72,13 +72,17 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
     <div className="row-gap"><input className="input" type="password" placeholder="Two-step password" value={pw} onChange={e => setPw(e.target.value)} />
     <button className="btn-primary" onClick={submitPw} disabled={busy}>Sign in</button></div></div>)
 
-  if (connected === undefined) return <div className="tg" />
+  if (connected === undefined) return <div />
   if (connected !== null) {
-    return (<div className="tg"><div>
+    // Deliberately outside `.tg`: that grid exists to stand a 220px QR card beside its instructions, and a
+    // lone child lands in the 220px column -- which is what wrapped this heading onto two lines against the
+    // left edge of a step whose every other screen is centred. With nothing to sit beside, the plain block
+    // inherits `.setup-content`'s centring instead.
+    return (<div className="tg-done">
       <h1>Telegram is already connected</h1>
       <p className="lead"><span className="status-dot" style={{ display: 'inline-block', marginRight: 8 }} />{connected ? `Connected as ${connected}` : 'Connected'}</p>
       <div className="row-gap"><button className="btn-primary" onClick={() => doneRef.current()}>Continue</button></div>
-    </div></div>)
+    </div>)
   }
   return (<div className="tg">
     <div>{mode === 'qr' ? (<><div className="qr-card">{img && <img src={img} alt="QR code" />}</div>

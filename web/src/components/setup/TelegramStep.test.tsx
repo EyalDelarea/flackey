@@ -44,6 +44,9 @@ it('skips the QR when the account is already signed in', async () => {
   const onDone = vi.fn()
   render(<TelegramStep onDone={onDone} pollMs={10} />)
   await waitFor(() => expect(screen.getByText('Connected as +31 •••• ••42')).toBeInTheDocument())
+  // Not merely present -- present outside the two-column QR grid. Its 220px first column is what broke the
+  // heading across two lines and pinned this screen to the left while every other setup step is centred.
+  expect(document.querySelector('.tg')).toBeNull()
   fireEvent.click(screen.getByText('Continue'))
   expect(onDone).toHaveBeenCalled()
   expect(qrStart).not.toHaveBeenCalled()
