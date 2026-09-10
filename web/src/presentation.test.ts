@@ -49,7 +49,7 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts)
     expect(v.status).toBe('Ace Ventura / Ace Ventura - Rezonate.mp3')
     expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
-    expect(v.statusMono).toBe(true)
+    expect(v.statusPath).toBe(true)
     expect(v.statusTone).toBe('muted'); expect(v.version).toBe('Original Mix')
     expect(v.steps).toEqual(Array(6).fill(null).map((_, i) => ({ name: ['Identify','Match','Fetch','Verify','File','Done'][i], state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
