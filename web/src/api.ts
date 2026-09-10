@@ -3,7 +3,10 @@ export interface Request { id:number; created_at:string; updated_at:string; raw_
   playlist_id:number|null; playlist_position:number|null; source_url:string|null; query_artist:string|null; query_title:string|null;
   query_version:string|null; query_duration_s:number|null; chosen_candidate_id:number|null; catalog_track_id:number|null;
   confidence:number|null; flag_reason:string|null; error_message:string|null; attempts:number; retry_after:string|null; track_id:number|null;
-  fetch_source:string|null }
+  fetch_source:string|null
+  /** 1 once the request has been parked for the owner to choose; never cleared. The only durable record
+      that a choice was ever asked for -- `flag_reason` is wiped when they answer. */
+  reviewed?:number }
 export interface Candidate { id:number; request_id:number; source:string; source_ref:string; artist:string; title:string; mix_name:string|null;
   duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null }
 export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;

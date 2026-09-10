@@ -627,3 +627,27 @@ async def test_a_file_being_verified_or_filed_cannot_be_stopped(env):
         with pytest.raises(ValueError, match="checked or filed"):
             await w.cancel(rid)
         assert store.get_request(rid).state == state
+
+
+async def test_a_request_remembers_that_it_was_sent_for_review(env):
+    """The progress ladder shows a Choose rung only on tracks that actually stopped for one, and nothing else
+    on the row records that. `chosen_candidate_id` is set by the auto-pick too, and `choose()` clears
+    `flag_reason`, so once the owner has picked there is no trace left of the pause -- the ladder would
+    either forget the rung the moment they click it, or claim one on every track that never needed it."""
+    _, store, _ = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
+                      duration_s=100, deezer_id=5, rank=1)
+    w = make_worker(env, FakeSource([other]), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.AWAITING_REVIEW
+    assert store.get_request(rid).reviewed
+    await w.choose(rid, store.get_candidates(rid)[0].id)
+    assert store.get_request(rid).reviewed          # survives the pick, which clears flag_reason
+    assert (await w.process(rid)).state == RequestState.DONE
+    assert store.get_request(rid).reviewed          # and survives all the way to filed
+
+    auto = store.add_request(TEXT, RequestKind.TEXT)
+    w2 = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    assert (await w2.process(auto)).state in (RequestState.DONE, RequestState.DUPLICATE)
+    assert not store.get_request(auto).reviewed     # never paused, so it never earns the rung

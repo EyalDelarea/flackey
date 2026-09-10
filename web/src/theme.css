@@ -9,6 +9,13 @@
   --accent: #007AFF; --accent-text: #FFFFFF;
   --selection: rgba(0,0,0,.07); --alt: rgba(0,0,0,.03); --chip: rgba(0,0,0,.08);
   --button: #FFFFFF; --button-border: rgba(0,0,0,.14); --button-shadow: 0 .5px 1px rgba(0,0,0,.12);
+  /* Help tags sit over whatever they explain, so they are translucent and blurred rather than a flat panel;
+     nearly opaque all the same, because the text has to stay readable over a busy row. */
+  --tip-bg: rgba(250,250,250,.92);
+  /* The record in the progress platter. Vinyl is nearly black in both themes -- that is what the object is
+     -- but on a white row a true black puck is heavier than anything else in sight, so light mode lifts it
+     to a dark grey and lets the accent label carry the eye instead. */
+  --vinyl: #3A3A3C; --vinyl-groove: rgba(255,255,255,.18); --vinyl-label-idle: rgba(255,255,255,.22);
   --orange: #FF9500; --green: #34C759; --red: #FF3B30;
   --orange-wash: rgba(255,149,0,.08); --red-wash: rgba(255,59,48,.07);
   --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
@@ -25,6 +32,8 @@
     --accent: #0A84FF;
     --selection: rgba(255,255,255,.09); --alt: rgba(255,255,255,.03); --chip: rgba(255,255,255,.12);
     --button: rgba(255,255,255,.11); --button-border: rgba(255,255,255,.10); --button-shadow: 0 .5px 1px rgba(0,0,0,.3);
+    --tip-bg: rgba(58,58,60,.92);
+    --vinyl: #121214; --vinyl-groove: rgba(255,255,255,.14); --vinyl-label-idle: rgba(255,255,255,.16);
     --orange: #FF9F0A; --green: #30D158; --red: #FF453A;
     --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
   }

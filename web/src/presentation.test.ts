@@ -23,7 +23,8 @@ describe('presentRow', () => {
     expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
   it('in-progress row carries one ladder: each step names itself and holds its own state', () => {
-    const v = presentRow(bundle({ state: 'fetching' }), opts)
+    // Reviewed, so the whole five-rung ladder is on show and every rung's state can be read at once.
+    const v = presentRow(bundle({ state: 'fetching', reviewed: 1 }), opts)
     expect(v.status).toBe('Downloading the file'); expect(v.statusTone).toBe('amber')
     expect(v.steps).toEqual([
       { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
@@ -33,17 +34,38 @@ describe('presentRow', () => {
     // Dropping File leaves `filing` without a rung of its own. It rides on Verify rather than on Done,
     // because a Done rung pulsing amber on a track that is not filed yet is the same lie the all-green
     // duplicate row tells.
-    const v = presentRow(bundle({ state: 'filing' }), opts)
+    const v = presentRow(bundle({ state: 'filing', reviewed: 1 }), opts)
     expect(v.steps).toEqual([
       { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'done' },
       { name: 'Verify', state: 'current' }, { name: 'Done', state: 'pending' }])
+  })
+  it('leaves Choose off a track that was never stopped for one', () => {
+    // Most tracks are matched outright and never wait on anybody. A green Choose rung on those claims a
+    // step that never happened -- the same false completion the all-green duplicate row used to tell.
+    expect(presentRow(bundle({ state: 'fetching' }), opts).steps!.map(s => s.name))
+      .toEqual(['Search', 'Download', 'Verify', 'Done'])
+    expect(presentRow(bundle({ state: 'done', track_id: 7 }), opts).steps!.map(s => s.name))
+      .toEqual(['Search', 'Download', 'Verify', 'Done'])
+  })
+  it('keeps Choose on a track that waited for one, after the owner has answered', () => {
+    // The rung is not "you are choosing now", it is "this track needed you". That stays true once they
+    // have picked, so the ladder must not shrink under them the moment they click Use this.
+    const v = presentRow(bundle({ state: 'fetching', reviewed: 1 }), opts)
+    expect(v.steps).toEqual([
+      { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
+      { name: 'Verify', state: 'pending' }, { name: 'Done', state: 'pending' }])
+  })
+  it('shows Choose while the choice is being asked for, before anything durable is written back', () => {
+    const v = presentRow(bundle({ state: 'awaiting_review', flag_reason: 'the video is longer' }), opts)
+    expect(v.steps!.map(s => s.name)).toEqual(['Search', 'Choose', 'Download', 'Verify', 'Done'])
+    expect(v.steps![1].state).toBe('current')
   })
   it('a fetching row says which network the bytes are coming from', () => {
     expect(presentRow(bundle({ state: 'fetching', fetch_source: 'soulseek' }), opts).status).toBe('Downloading the file from Soulseek')
     expect(presentRow(bundle({ state: 'fetching', fetch_source: 'deezer' }), opts).status).toBe('Downloading the file from Deezer')
   })
   it('the Done rung reads as reached when the request is done (it indexed past the array before)', () => {
-    expect(presentRow(bundle({ state: 'done' }), opts).steps).toEqual(
+    expect(presentRow(bundle({ state: 'done', reviewed: 1 }), opts).steps).toEqual(
       ['Search', 'Choose', 'Download', 'Verify', 'Done'].map(name => ({ name, state: 'done' })))
     expect(presentRow(bundle({ state: 'queued' }), opts).steps!.every(x => x.state === 'pending')).toBe(true)
   })
@@ -56,7 +78,8 @@ describe('presentRow', () => {
     expect(v.status).toBe('')
     expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
     expect(v.version).toBe('Original Mix')
-    expect(v.steps).toEqual(Array(5).fill(null).map((_, i) => ({ name: ['Search','Choose','Download','Verify','Done'][i], state: 'done' })))
+    // Four rungs, not five: nobody was ever asked to choose this one. See the Choose tests above.
+    expect(v.steps).toEqual(['Search', 'Download', 'Verify', 'Done'].map(name => ({ name, state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
   })
   it('a lossless row names the delivered format and shows the evidence it is the right recording', () => {

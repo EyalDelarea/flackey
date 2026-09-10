@@ -66,12 +66,15 @@ it('a row being checked after the transfer is not announced as waiting in a queu
   expect(container.querySelector('.platter')!.getAttribute('aria-label')).toBe('Checking it is the same recording')
 })
 
-it('every rung explains itself on hover, so the ladder needs no legend beside it', () => {
+it('every rung explains itself, so the ladder needs no legend beside it', () => {
+  // The explanation used to be a `title` attribute, which the native window renders as nothing at all.
+  // Each rung now carries it where both a pointer and a screen reader can reach it; Stepper.test.tsx
+  // covers the hover popover itself.
   const view: RowView = { ...base, steps: STEPS.map(name => ({ name, state: 'pending' as const })) }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
-  const rungs = [...screen.getByLabelText('progress').querySelectorAll('.step')]
+  const rungs = [...screen.getByLabelText('progress').querySelectorAll('.step-tip-target')]
   expect(rungs).toHaveLength(STEPS.length)
-  for (const rung of rungs) expect(rung.getAttribute('title')).toBeTruthy()
+  for (const rung of rungs) expect(rung.getAttribute('aria-label')).toMatch(/\w.*\. /)
 })
 
 it('renders every step by name with the current one marked, as one ladder', () => {

@@ -104,6 +104,7 @@ class Store:
         self._ensure_column("tracks", "sample_rate", "INTEGER")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
         self._renormalize()
         self._repoint_legacy_paths(path.parent)
         self.listeners: list[Callable[[str, int], None]] = []

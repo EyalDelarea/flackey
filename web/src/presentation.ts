@@ -1,4 +1,4 @@
-import type { Bundle, Candidate, FetchProgress, Playlist, RequestState } from './api'
+import type { Bundle, Candidate, FetchProgress, Playlist, Request, RequestState } from './api'
 import { spectrogramUrl } from './api'
 
 export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
@@ -129,12 +129,24 @@ const PROGRESS_TEXT: Partial<Record<RequestState, string>> = {
   verifying: 'Checking the audio is genuine and that it is the right recording', filing: 'Tagging and filing',
 }
 
-function stepsFor(state: RequestState): StepView[] | null {
+/** Choose is the one rung most tracks never touch: it exists for the minority that stop and wait on a
+ *  person. Drawing it green on the rest claims a step that never happened, which is the same false
+ *  completion the all-green duplicate row used to tell. `reviewed` is the durable answer -- it is written
+ *  the first time the request is parked and never cleared, so the rung neither appears out of nowhere nor
+ *  vanishes from under the owner the moment they pick. The `awaiting_review` clause covers the instant
+ *  before the flag reaches the browser, and old rows written before the column existed. */
+const skipsChoice = (r: Request) => !r.reviewed && r.state !== 'awaiting_review'
+
+function stepsFor(r: Request): StepView[] | null {
+  const state = r.state
   const i = stepIndex(state)
   if (i == null) return null
-  if (COMPLETE.includes(state)) return STEPS.map(name => ({ name, state: 'done' as Dot }))
-  if (state === 'queued') return STEPS.map(name => ({ name, state: 'pending' as Dot }))
-  return STEPS.map((name, n) => ({ name, state: (n < i ? 'done' : n === i ? 'current' : 'pending') as Dot }))
+  // Built against the full ladder, then thinned: the indices in STEP_OF are positions in STEPS, and a rung
+  // dropped first would shift every one after it.
+  const dot = (n: number): Dot =>
+    COMPLETE.includes(state) ? 'done' : state === 'queued' ? 'pending' : n < i ? 'done' : n === i ? 'current' : 'pending'
+  const rungs = STEPS.map((name, n) => ({ name, state: dot(n) }))
+  return skipsChoice(r) ? rungs.filter(s => s.name !== 'Choose') : rungs
 }
 
 /** What proves the file is the real thing: the Chromaprint match against Deezer, and the spectrogram cutoff.
@@ -180,7 +192,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const { title, version } = titleOf(b)
   const bucket = bucketOf(r.state)
   const v: RowView = {
-    id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r.state),
+    id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
     bucket, removable: bucket === 'done' || bucket === 'failed', formatLabel: formatLabelOf(b), checks: checksFor(b),

@@ -213,6 +213,11 @@ class Worker:
         (chosen_candidate_id, track_id, attempts, retry_after, ...) alongside the new state."""
         title = (req.query_title or req.raw_text or "")[:80]
         log.debug("req#%d %s -> %s %s", req.id, req.state, state, title)
+        if state == RequestState.AWAITING_REVIEW:
+            # Recorded here rather than at the two call sites that park a request, so a third one cannot
+            # forget to. Nothing clears it: the ladder's Choose rung is the fact that this track once
+            # waited on a person, which stays true after they have answered.
+            kw.setdefault("reviewed", 1)
         self.store.update_request(req.id, state=state, **kw)
 
     # ---- lifecycle ------------------------------------------------------
