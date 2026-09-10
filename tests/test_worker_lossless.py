@@ -79,7 +79,8 @@ class FakeProvider:
             on_raw("responses", [{"username": f.username, "files": [{"filename": f.path, "size": f.size}]} for f in self.files])
         return list(self.files)
 
-    async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, on_progress=None, on_raw=None):
+    async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, stall_s=None,
+                       on_progress=None, on_raw=None):
         self.downloaded.append(file.username)
         if on_progress:
             on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
@@ -219,18 +220,6 @@ async def test_a_peer_that_will_not_send_moves_on_to_the_next_one(lenv, outcome)
     a = attempt_of(store, rid)
     assert a.outcome == outcome and provider.downloaded == ["a", "b"]
     assert not list(settings.tmp_dir.iterdir())
-
-
-async def test_transfer_timeout_stops_at_that_peer(lenv):
-    """The one download failure that does *not* try again: bytes were flowing and merely too slow,
-    which says something about the link rather than the peer, so the next one is no more likely."""
-    _, store, _, provider, _, _ = lenv
-    provider.files = [lf("a"), lf("b")]
-    provider.download_error = LosslessError("boom", "transfer_timeout")
-    w = make(lenv)
-    rid = store.add_request(TEXT, RequestKind.TEXT)
-    await w.process(rid)
-    assert attempt_of(store, rid).outcome == "transfer_timeout" and provider.downloaded == ["a"]
 
 
 async def test_a_rejected_transfer_still_files_from_the_next_peer(lenv):
@@ -951,3 +940,28 @@ async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
 
     assert attempt_of(store, rid).outcome == "first_byte_timeout"
     assert "never started sending" in r.error_message and "found nothing" not in r.error_message
+
+
+async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, tmp_path: Path):
+    """This reverses what `test_transfer_timeout_stops_at_that_peer` used to assert. Its reasoning was that
+    a slow transfer "says something about the link rather than the peer, so the next one is no more likely",
+    and the measurement on 2026-09-10 says otherwise: "Dog Days Bliss" was cut off at 90 % of a 67 MB FLAC
+    from a peer sending 102 kB/s while six survivors sat untried -- four of them on a free slot with nobody
+    queued -- and 316 s of the attempt's budget was still unspent. Upload rate is a fact about the peer."""
+    _, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b")]
+    provider.audio["b"] = _fake_flac(tmp_path / "fake.flac")
+    original = provider.download
+
+    async def stalls(file, **kw):
+        if file.username == "a":
+            provider.downloaded.append(file.username)
+            raise LosslessError("stopped sending after 60000000 of 67000000 bytes", "transfer_timeout")
+        return await original(file, **kw)
+
+    provider.download = stalls
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert provider.downloaded == ["a", "b"]
+    assert attempt_of(store, rid).outcome == "verify_failed"     # "b" was asked, and answered on its own terms

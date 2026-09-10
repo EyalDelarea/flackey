@@ -80,7 +80,13 @@ class Settings(BaseSettings):
     # FLAC are queue-deep and have no free slot; that wait is normal Soulseek, not a failed transfer, so it
     # gets its own budget rather than being counted against `lossless_first_byte_s` (see slskd.download).
     lossless_queue_wait_s: int = 300
+    # A transfer is alive while bytes keep arriving, so this is how long it may go without a new one --
+    # not how long it may run in total. `lossless_transfer_s` is only the floor of the absolute ceiling,
+    # which grows with the file so that a 67 MB FLAC from an honest 100 kB/s peer is not cut at 90 %;
+    # below `lossless_min_rate_kbps` the peer is trickling and the next survivor is the better bet.
+    lossless_stall_s: int = 60
     lossless_transfer_s: int = 600
+    lossless_min_rate_kbps: int = 160
     lossless_poll_s: float = 2.0
     lossless_duration_tolerance_s: int = 3
     lossless_title_ratio: int = 90

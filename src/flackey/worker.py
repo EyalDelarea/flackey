@@ -22,7 +22,14 @@ from .fingerprint import FPS, FingerprintResult
 from .fingerprint import check as fingerprint_check
 from .identify import parse_text
 from .library import file_track, final_path, find_duplicate, prune_missing_tracks
-from .lossless import Reference, pick, policy_from_settings, reference_for, search_text
+from .lossless import (
+    Reference,
+    pick,
+    policy_from_settings,
+    reference_for,
+    search_text,
+    transfer_ceiling_s,
+)
 from .match import candidate_query, candidate_version, decide, same_version
 from .models import (
     MISS_REASON,
@@ -68,7 +75,8 @@ RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
 # Not here: transfer_timeout (bytes were flowing, just too slowly -- another peer on the same
 # link is unlikely to do better), and unavailable/interrupted, which the request-level retry
 # (RETRY_LOSSLESS_OUTCOMES) already handles.
-SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued"}
+SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
+                     "transfer_timeout"}
 # A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
 # possibly have changed. Long enough to be a real second look, short enough that the row is not abandoned.
 QUEUED_BACKOFF_S = 900
@@ -761,10 +769,13 @@ class Worker:
         if report.chosen is None:
             rec.finish("no_pick")
             return None
-        budget_s = s.lossless_search_wait_s + s.lossless_queue_wait_s + s.lossless_first_byte_s + s.lossless_transfer_s
         outcome = "no_pick"
         for n, file in enumerate(report.survivors[:s.lossless_max_picks], start=1):
-            if n > 1 and rec.elapsed_ms() / 1000 > budget_s - s.lossless_queue_wait_s:
+            # What one pick may cost, for this file: the queue wait is left out because the pick about to
+            # start still has its own, and charging it twice is what would close this gate the moment the
+            # ceiling grew with the file.
+            budget_s = s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(file.size, s)
+            if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
             hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n)
@@ -804,8 +815,9 @@ class Worker:
                 self.store.update_attempt(rec.id, first_byte_ms=p.first_byte_ms)
 
         try:
-            landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s, total_s=s.lossless_transfer_s,
-                                             poll_s=s.lossless_poll_s, queue_wait_s=s.lossless_queue_wait_s,
+            landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s,
+                                             total_s=transfer_ceiling_s(file.size, s), poll_s=s.lossless_poll_s,
+                                             queue_wait_s=s.lossless_queue_wait_s, stall_s=s.lossless_stall_s,
                                              on_progress=progress, on_raw=rec.raw)
         except LosslessError as e:
             rec.event("transfer_failed", error=str(e))

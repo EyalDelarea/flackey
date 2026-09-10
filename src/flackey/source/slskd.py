@@ -189,23 +189,31 @@ class SoulseekProvider:
         return None
 
     async def download(self, file: LosslessFile, *, first_byte_s: float, total_s: float, poll_s: float,
-                       queue_wait_s: float | None = None,
+                       queue_wait_s: float | None = None, stall_s: float | None = None,
                        on_progress: Callable[[TransferProgress], None] | None = None,
                        on_raw: RawSink | None = None) -> Path:
-        """Three separate budgets, because a transfer can stall for three unrelated reasons.
+        """Four separate budgets, because a transfer can stop for four unrelated reasons.
 
         `queue_wait_s` bounds the time spent in the peer's queue: a popular peer with no free slot parks us
         behind everyone else, which says nothing about whether they will send and cannot be told apart from
         a healthy transfer that has simply not started. It ends the attempt as "queued" -- a wait, retryable
-        by the caller -- not as a refusal. `first_byte_s` and `total_s` then measure the transfer itself and
-        only start once it leaves the queue; counting queue time against them is what made every busy peer
-        look like a peer that would not send.
+        by the caller -- not as a refusal. The other three measure the transfer itself and only start once it
+        leaves the queue; counting queue time against them is what made every busy peer look like a peer that
+        would not send.
+
+        `first_byte_s` is how long a transfer that has left the queue may send nothing at all, `stall_s` how
+        long it may go without a *new* byte once it has started, and `total_s` the absolute ceiling. Length
+        is not evidence: a 67 MB FLAC arriving honestly at 100 kB/s takes eleven minutes, so only the bytes
+        stopping says the transfer is dead. Give `total_s` room for the file (see `transfer_ceiling_s`); it
+        is there for a peer that trickles forever, which no stall bound can catch.
         """
         dest = local_path_for(self.downloads, file)     # containment before anything is enqueued
         _remove_stale_file(dest)                        # so a leftover file can't be mistaken for the fresh one
         await self.client.enqueue(file.username, file.path, file.size)
         queue_wait_s = first_byte_s if queue_wait_s is None else queue_wait_s
+        stall_s = first_byte_s if stall_s is None else stall_s
         t0, active_at, first_byte_at, last_state, n = self.clock(), None, None, None, 0
+        last_done, moved_at = 0, None
         while True:
             await self.sleep(poll_s)
             tr = await self._find(file)
@@ -220,6 +228,8 @@ class SoulseekProvider:
                 active_at = now
             if done > 0 and first_byte_at is None:
                 first_byte_at = now
+            if done > last_done:
+                last_done, moved_at = done, now
             first_byte_ms = None if first_byte_at is None else int((first_byte_at - t0) * 1000)
             if state != last_state:
                 if on_raw:
@@ -256,6 +266,9 @@ class SoulseekProvider:
             if first_byte_at is None and now - active_at > first_byte_s:
                 await self.client.cancel_download(file.username, tr["id"])
                 raise LosslessError(f"no bytes within {first_byte_s:.0f} s", "first_byte_timeout")
+            if moved_at is not None and now - moved_at > stall_s:
+                await self.client.cancel_download(file.username, tr["id"])
+                raise LosslessError(f"stopped sending after {done} of {file.size} bytes", "transfer_timeout")
             if now - active_at > total_s:
                 await self.client.cancel_download(file.username, tr["id"])
                 raise LosslessError(f"not finished within {total_s:.0f} s", "transfer_timeout")

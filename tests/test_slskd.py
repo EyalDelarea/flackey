@@ -382,3 +382,40 @@ async def test_a_transfer_that_leaves_the_queue_and_sends_nothing_is_still_a_fir
         await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=300)
     assert e.value.outcome == "first_byte_timeout" and cancel.called
     assert 62 <= clock.t <= 66     # the cap runs from leaving the queue at t=2, not from the enqueue
+
+@respx.mock
+async def test_a_peer_still_sending_is_never_cut_off_for_taking_a_long_time(provider):
+    """The flat transfer cap measured how long the download had been running, so a 67 MB FLAC arriving
+    honestly at 100 kB/s -- the real Filteria case -- was cancelled at 90 %. Steady progress is the one
+    thing that says a transfer is alive; length is not."""
+    p, clock, downloads = provider
+    f = flac_file(size=1000)
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+
+    def land(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x" * f.size)
+        return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
+
+    # 200 polls = 400 s of steady progress: far past the 60 s that would have been the whole budget
+    crawling = [httpx.Response(200, json=transfer("InProgress", n)) for n in range(1, 201)]
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[*crawling, land])
+    assert await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=30) == dest.resolve()
+    assert clock.t > 400
+
+
+@respx.mock
+async def test_a_peer_that_stops_sending_midway_is_cut_at_the_stall_bound(provider):
+    """The other half: what the flat cap was reaching for is a transfer that died mid-flight, and that is
+    now measured from the last byte that arrived rather than from the enqueue."""
+    p, clock, _ = provider
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+        httpx.Response(200, json=transfer("InProgress", 1)),
+        *([httpx.Response(200, json=transfer("InProgress", 500))] * 200)])
+    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    with pytest.raises(LosslessError) as e:
+        await p.download(flac_file(), first_byte_s=60, total_s=6000, poll_s=2, stall_s=30)
+    assert e.value.outcome == "transfer_timeout" and "stopped" in str(e.value) and cancel.called
+    assert 32 <= clock.t <= 38     # 30 s after the last new byte at t=4, not 6000 s after the enqueue

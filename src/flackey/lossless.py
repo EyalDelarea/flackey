@@ -133,6 +133,14 @@ class PickPolicy:
                    max_queue_length=d["max_queue_length"], banned_users=frozenset(d["banned_users"]))
 
 
+def transfer_ceiling_s(size: int, settings: Settings) -> float:
+    """The longest one transfer may run, whatever it is doing. One flat cap cannot serve both a 5 MB single
+    and a 67 MB ten-minute FLAC: 600 s at a peer's honest 100 kB/s files the first and cancels the second
+    with 7 MB left. What has to hold is a floor on the rate, so the ceiling grows with the file; the stall
+    bound in `slskd.download` is what catches a transfer that has actually died."""
+    return max(settings.lossless_transfer_s, size * 8 / (settings.lossless_min_rate_kbps * 1000))
+
+
 def policy_from_settings(settings: Settings) -> PickPolicy:
     return PickPolicy(duration_tolerance_s=settings.lossless_duration_tolerance_s, title_ratio=settings.lossless_title_ratio,
                       require_artist=settings.lossless_require_artist, max_queue_length=settings.lossless_max_queue)

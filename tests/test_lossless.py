@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from flackey.config import Settings
 from flackey.lossless import (
     RANKERS,
@@ -12,6 +14,7 @@ from flackey.lossless import (
     policy_from_settings,
     reference_for,
     search_text,
+    transfer_ceiling_s,
 )
 from flackey.models import Candidate, CatalogTrack
 
@@ -158,3 +161,15 @@ def test_a_file_matching_the_requested_length_survives_a_catalog_duration_from_a
 def test_the_requested_length_is_only_a_second_window_never_a_wider_one():
     ref = Reference(artist="A", title="T", mix_name="Original Mix", duration_s=544, requested_duration_s=532)
     assert rejected_by(mk(length_s=538, size=538 * 900 * 1000 // 8), ref) == "duration"   # between the two
+
+
+def test_the_transfer_ceiling_grows_with_the_file_so_a_long_flac_is_not_cut_at_ninety_percent(tmp_path):
+    """One flat cap cannot serve a 5 MB single and a 67 MB ten-minute FLAC. 600 s at a peer's honest
+    100 kB/s files the first and cancels the second with 7 MB to go -- which is what happened to Filteria's
+    "Dog Days Bliss". A floor on the rate is the thing that actually has to hold: below it the peer is
+    trickling and the single-threaded worker is better off with the next survivor."""
+    s = Settings(_env_file=None, data_dir=tmp_path)
+    assert transfer_ceiling_s(5_000_000, s) == s.lossless_transfer_s          # small file keeps the floor
+    big = transfer_ceiling_s(67_085_339, s)
+    assert big / 60 > 55 and big == pytest.approx(67_085_339 * 8 / (s.lossless_min_rate_kbps * 1000))
+    assert transfer_ceiling_s(67_085_339, s) > transfer_ceiling_s(40_000_000, s)
