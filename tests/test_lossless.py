@@ -167,7 +167,7 @@ def test_the_transfer_ceiling_grows_with_the_file_so_a_long_flac_is_not_cut_at_n
     """One flat cap cannot serve a 5 MB single and a 67 MB ten-minute FLAC. 600 s at a peer's honest
     100 kB/s files the first and cancels the second with 7 MB to go -- which is what happened to Filteria's
     "Dog Days Bliss". A floor on the rate is the thing that actually has to hold: below it the peer is
-    trickling and the single-threaded worker is better off with the next survivor."""
+    trickling and the request is better off with the next survivor."""
     s = Settings(_env_file=None, data_dir=tmp_path)
     assert transfer_ceiling_s(5_000_000, s) == s.lossless_transfer_s          # small file keeps the floor
     big = transfer_ceiling_s(67_085_339, s)
