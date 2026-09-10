@@ -1,11 +1,19 @@
 /* ---- Transfer progress and the lossy-fallback notice ---- */
-.xfer { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; max-width: 420px; }
-.xfer-track { position: relative; height: 4px; border-radius: 2px; background: var(--selection); overflow: hidden; }
-.xfer-fill { height: 100%; border-radius: 2px; background: var(--accent); transition: width 300ms ease; }
-/* Nothing is moving yet (queued at the peer): a 0%-wide bar would read as a stall, so it sweeps instead. */
-.xfer-track.waiting .xfer-fill { width: 34%; animation: xfer-sweep 1.3s ease-in-out infinite; }
-@keyframes xfer-sweep { 0% { margin-left: -34%; } 100% { margin-left: 100%; } }
-.xfer-label { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.xfer-label { margin-top: 3px; font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+/* The record that carries the percentage, in the right rail beside Stop. The disc turns; the rim does not,
+   so the filled arc stays readable as a proportion rather than chasing itself around the circle. */
+.platter { flex: none; line-height: 0; }
+.platter .rim { stroke: var(--selection); }
+.platter .arc { stroke: var(--accent); transition: stroke-dasharray 300ms ease; }
+.platter .pct { fill: #fff; font: 600 10px var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.platter .disc { transform-box: fill-box; transform-origin: center; animation: platter-spin 3.4s linear infinite; }
+/* Queued at the peer: nothing has arrived, so there is no number and no proportion to draw. A short arc
+   sweeps the rim instead -- the same signal the old bar's `.waiting` state gave. */
+.platter.waiting .arc { transform-box: fill-box; transform-origin: center; animation: platter-spin 1.1s linear infinite; }
+@keyframes platter-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .platter .disc, .platter.waiting .arc { animation: none; }
+}
 .fallback { margin-top: 4px; font-size: 12px; color: var(--orange); }
 .tag.amber { color: var(--orange); font-weight: 500; }
 
@@ -156,13 +164,19 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    `TrackTable`, which knows whether any row in it can offer the second button. */
 .thead, .trow { display: grid; grid-template-columns: 36px minmax(0, 2.8fr) 1fr 1.2fr 48px 60px 52px var(--actions, 210px); gap: 12px; align-items: center; padding: 0 12px; }
 .thead { height: 26px; font-size: 11px; font-weight: 500; color: var(--secondary); border-bottom: .5px solid var(--sep); }
-.thead .num { text-align: right; }
+/* Every column but the track name is a short value in a wide track, and left-aligning them left the whole
+   table hugging its left edge against the empty actions column. Centring the metadata columns -- headers
+   and values together -- balances the row; the track name stays left because it is long and ellipsized.
+   Text alignment only: `justify-self: center` would shrink the cell to its content and take the ellipsis
+   on Genre and Label with it. */
+.thead > :nth-child(n+3), .trow > :nth-child(n+3) { text-align: center; }
+.thead > :last-child, .trow > :last-child { text-align: right; }
 .trow { height: 44px; font-size: 12px; color: var(--secondary); }
 .trow:nth-child(odd) { background: var(--alt); }
 .trow .cell { min-width: 0; }
 .trow .t { color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow .v { font-size: 11px; }
-.trow .kbps { display: inline-flex; justify-content: flex-end; align-items: center; gap: 4px; color: var(--text); }
+.trow .kbps { display: inline-flex; justify-content: center; align-items: center; gap: 4px; color: var(--text); }
 .trow .fmt { font-variant-numeric: tabular-nums; font-size: 11px; letter-spacing: .02em; }
 .trow .kbps svg { color: var(--green); }
 /* No transition: an animated opacity is what left previously-hovered rows still showing their buttons

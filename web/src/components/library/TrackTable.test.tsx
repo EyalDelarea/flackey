@@ -117,3 +117,14 @@ describe('a track still on the lossy copy', () => {
     expect(screen.queryByText('Find lossless')).not.toBeInTheDocument()
   })
 })
+
+it('hangs the release the track came off on its cover, where the row has no column for it', () => {
+  const withRelease = { ...t, catalog: { ...t.catalog!, release_name: 'Trust in Trance 3', catalog_number: 'TIP-CD-08' } }
+  render(<TrackTable tracks={[withRelease]} onReveal={() => {}} />)
+  expect(document.querySelector('.artwork')).toHaveAttribute('title', 'Trust in Trance 3 · TIP-CD-08')
+})
+
+it('leaves the cover untitled when the catalogue knows no release', () => {
+  render(<TrackTable tracks={[t]} onReveal={() => {}} />)
+  expect(document.querySelector('.artwork')).not.toHaveAttribute('title')
+})
