@@ -152,14 +152,31 @@ sub-project 4 waits until the app is judged good in a browser.
    `crate start` says so when it is missing.
 3. **Guided setup.** QR login flow end to end, phone fallback, reconnect banner, tool
    check.
-4. **Mac app** (later, own branch). pywebview window, PyInstaller spec, bundled
-   ffmpeg/ffprobe, signing notes, a README for friends.
+4. **Mac app** — done, except for bundling ffmpeg. `packaging/build_app.sh` builds
+   `Flackey.app` (66 MB, arm64, ad-hoc signed) from `packaging/Flackey.spec`, and
+   `packaging/README-for-friends.md` is the note that goes with it.
+
+   ffmpeg, ffprobe and fpcalc are **not** bundled: the friend installs them with
+   `brew install ffmpeg chromaprint`. `flackey/tools.py` resolves each helper to an absolute
+   path -- the copy inside the app first, then the PATH, then the Homebrew prefixes by name --
+   so dropping static binaries into `Contents/Resources/bin` later needs no call-site change.
+   That resolution is required either way: Finder gives a GUI app a PATH without either
+   Homebrew prefix, so the previous bare `["ffmpeg", ...]` calls failed inside a bundle on a
+   machine where ffmpeg plainly worked in a terminal.
+
+   The bundle deliberately carries no `.env` and no settings file, so it ships none of the
+   owner's Telegram API credentials and the friend supplies their own (see §7).
 
 One implementation plan covers 1 to 3: `docs/superpowers/plans/2026-09-06-gui-app.md`.
 
 ## 7. Open items for the owner
 
-- Apple Developer account for notarisation (99 USD/year), or accept the right-click → Open
-  step for friends.
+- Apple Developer account for notarisation (99 USD/year). Until then the app is ad-hoc signed,
+  which `spctl` rejects, so a friend runs `xattr -dr com.apple.quarantine /Applications/Flackey.app`
+  once. Right-click → Open is no longer a dependable substitute on a current macOS.
+- Whether to ship the owner's Telegram `api_id`/`api_hash` in builds meant for other people.
+  §3 assumed a packaged copy has them prefilled; the first build does not, so friends make their
+  own at my.telegram.org. They identify the software rather than the person, but they are still
+  the owner's, and putting them in a binary handed to someone else is a decision, not a detail.
 - Whether the `crate` CLI is shipped to friends at all (current assumption: no; it stays
   a developer tool).
