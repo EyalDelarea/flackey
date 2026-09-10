@@ -68,13 +68,15 @@ LOGIN_REQUIRED = "Telegram login required"
 # asking a question that has genuinely changed. Everything else is a verdict the next pass would only repeat.
 RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
-# survivor. Three kinds sit here: the file was wrong (verify, fingerprint), the peer would not
-# send it (rejected the transfer, or never started after leaving the queue), and the peer is
-# simply busy (queued). All three are facts about one peer, never about the file, so giving up
-# on the whole attempt at any of them threw away survivors that were still good.
-# Not here: transfer_timeout (bytes were flowing, just too slowly -- another peer on the same
-# link is unlikely to do better), and unavailable/interrupted, which the request-level retry
-# (RETRY_LOSSLESS_OUTCOMES) already handles.
+# survivor. Four kinds sit here: the file was wrong (verify, fingerprint), the peer would not
+# send it (rejected the transfer, or never started after leaving the queue), the peer stopped
+# part-way (transfer_timeout), and the peer is simply busy (queued). All four are facts about one
+# peer, never about the file, so giving up on the whole attempt at any of them threw away
+# survivors that were still good. transfer_timeout used to be excluded on the theory that a slow
+# transfer measures the link rather than the peer; the Filteria measurement on 2026-09-10 says
+# otherwise -- 102 kB/s from one peer while four survivors sat on free slots with nobody queued.
+# Not here: unavailable/interrupted, which the request-level retry (RETRY_LOSSLESS_OUTCOMES)
+# already handles, and no_pick, which is about the search rather than any peer.
 SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
                      "transfer_timeout"}
 # A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
