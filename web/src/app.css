@@ -1,32 +1,36 @@
 /* ---- Transfer progress and the lossy-fallback notice ---- */
 .xfer-label { margin-top: 3px; font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
-/* The record that carries the percentage, in the right rail beside Stop. The disc turns; the rim does not,
-   so the filled arc stays readable as a proportion rather than chasing itself around the circle. */
+/* The record that carries the percentage, in the right rail beside Stop. The disc and its rim are one
+   object: the track's inner edge sits under the disc's edge, so the arc reads as the record filling up
+   rather than as a stroke hovering near it. */
 .platter { flex: none; line-height: 0; }
-.platter .rim { stroke: var(--selection); }
-/* ease-out, not ease: a percentage arriving should settle rather than drift into place. */
-.platter .arc { stroke: var(--accent); transition: stroke-dasharray 300ms cubic-bezier(.16,1,.3,1); }
 .platter .vinyl { fill: var(--vinyl); }
 .platter .groove { stroke: var(--vinyl-groove); }
-.platter .groove.faint { opacity: .55; }
-/* The label is paper, not another accent surface. Painting it accent made it the brightest thing in the
-   widget and larger than the arc, so the disc shouted and the arc -- the part that actually means
-   something -- came second. Now the arc is the only accent, and the number is ink on a printed label. */
-.platter .label { fill: var(--vinyl-label); }
-.platter .spindle { fill: var(--vinyl); }
-.platter .pct { fill: var(--vinyl-ink); font: 600 11px var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
-.platter .disc { transform-box: fill-box; transform-origin: center; animation: platter-spin 4.2s linear infinite; }
+/* The track has to be visible or the arc is a fragment with no whole to belong to. It was `--selection`
+   before, which is 7% black on a light card and 9% white on a dark one -- a value meant for the tint
+   behind a selected row, not for a line that has to hold its own against a 3.2-unit accent stroke. */
+.platter .track { stroke: var(--platter-track); }
+/* ease-out, not ease: a percentage arriving should settle rather than drift into place. */
+.platter .arc { stroke: var(--accent); transition: stroke-dasharray 300ms cubic-bezier(.16,1,.3,1); }
+.platter .spindle { fill: var(--platter-ink); opacity: .5; }
+/* Not the `font` shorthand: it resets font-variant-numeric, and without tabular figures the number
+   changes width as it counts, which reads as the whole widget shifting on every tick. No negative
+   tracking either -- at this size it welded `15` into one glyph, which is half of why the number looked
+   wrong. 13px, up from 11px: it is the thing the widget exists to say. */
+.platter .pct { fill: var(--platter-ink); font-family: var(--sans); font-size: 13px; font-weight: 600;
+  font-variant-numeric: tabular-nums; }
 /* Queued at the peer, or the file being checked after the last byte: nothing has arrived or nothing is
    moving, so there is no number and no proportion to draw. A short arc sweeps the rim instead -- the same
    signal the old bar's `.waiting` state gave. Grey and slow: a transfer that is running has earned the
-   accent colour and the quicker turn, and an indeterminate wait beside it should not shout louder. The
-   label loses its accent for the same reason -- with no number on it, a bright disc says nothing. */
-.platter.waiting .arc { stroke: var(--tertiary); transform-box: fill-box; transform-origin: center;
+   accent colour and the quicker turn, and an indeterminate wait beside it should not shout louder.
+   view-box, not fill-box: the box is the 44-unit square the sweep is drawn in, so 50% 50% is the centre
+   it turns about by construction, rather than whatever bounding box an engine computes for a dashed
+   circle. This is the only animation in the widget -- see Platter.tsx on the disc spin that went. */
+.platter.waiting .arc { stroke: var(--tertiary); transform-box: view-box; transform-origin: 50% 50%;
   animation: platter-spin 1.9s linear infinite; }
-.platter.waiting .label { fill: var(--vinyl-label-idle); }
 @keyframes platter-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .platter .disc, .platter.waiting .arc { animation: none; }
+  .platter.waiting .arc { animation: none; }
 }
 .fallback { margin-top: 4px; font-size: 12px; color: var(--orange); }
 .tag.amber { color: var(--orange); font-weight: 500; }
