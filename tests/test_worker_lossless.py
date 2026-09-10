@@ -79,7 +79,7 @@ class FakeProvider:
             on_raw("responses", [{"username": f.username, "files": [{"filename": f.path, "size": f.size}]} for f in self.files])
         return list(self.files)
 
-    async def download(self, file, *, first_byte_s, total_s, poll_s, on_progress=None, on_raw=None):
+    async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, on_progress=None, on_raw=None):
         self.downloaded.append(file.username)
         if on_progress:
             on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
@@ -107,7 +107,7 @@ class FakeProvider:
 def lenv(tmp_path: Path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", library_root=tmp_path / "lib",
                         data_dir=tmp_path / "data", slskd_api_key="k", lossless_poll_s=0.01, lossless_search_wait_s=5,
-                        lossless_first_byte_s=10, lossless_transfer_s=20)
+                        lossless_first_byte_s=10, lossless_transfer_s=20, lossless_queue_wait_s=15)
     store = Store(settings.db_path)
     downloads = settings.slskd_downloads
     downloads.mkdir(parents=True)
@@ -295,7 +295,7 @@ async def test_second_pick_needs_budget(lenv, tmp_path: Path):
     original = provider.download
 
     async def slow(file, **kw):
-        clock.t += 28                                         # 35 s budget - 10 s first-byte cap = 25 s: gone
+        clock.t += 38                       # a second pick needs room for another queue wait (15 s): gone
         return await original(file, **kw)
 
     provider.download = slow
@@ -828,7 +828,10 @@ async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(len
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
 
     assert source.fetched == []
-    assert r.state == RequestState.QUEUED and "source is unavailable" in r.flag_reason
+    # Nothing about no_pick changes on the next pass -- `_lossless_allowed` refuses a second search and the
+    # source has already timed out -- so the row lands terminally rather than burning two silent retries.
+    assert r.state == RequestState.ERROR and r.attempts == 1 and r.retry_after is None
+    assert "nothing on Soulseek matched" in r.error_message and "source is unavailable" in r.error_message
 
 
 async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(lenv):
@@ -884,3 +887,67 @@ async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(len
 
     assert stocked.searches, "Try again must search the provider again, not skip straight past it"
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "soulseek"
+
+
+# ---- a peer's queue is a wait, not a refusal -------------------------------------------------------------
+# Three tracks of the owner's test playlist died on this. Every peer holding the FLAC was queue-deep
+# (127, 360, 1866 people), slskd parked each transfer in "Queued, Remotely", and the 60 s first-byte cap
+# killed all four picks. The attempt closed as a terminal outcome, so the two remaining request attempts
+# searched nothing and the row settled on "Soulseek has already looked and found nothing" -- untrue: it
+# had found five perfect copies of exactly the right recording.
+
+
+def _queued(msg="still in the peer's queue after 300 s"):
+    return LosslessError(msg, "queued")
+
+
+async def test_a_peers_queue_leaves_the_request_free_to_try_again(lenv):
+    settings, store, _, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert attempt_of(store, rid).outcome == "queued"
+    assert r.state == RequestState.QUEUED and r.retry_after is not None
+    assert w._lossless_allowed(store.get_request(rid)) is True     # the next pass searches again
+
+
+async def test_the_wait_is_reported_as_a_wait_not_as_nothing_found(lenv):
+    settings, store, notifier, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert "found nothing" not in r.flag_reason
+    assert "queue" in r.flag_reason and "found nothing" not in notifier.sent[-1][0]
+
+
+async def test_a_definitive_miss_with_no_source_fails_once_instead_of_searching_nothing_twice(lenv):
+    settings, store, _, _, _, _ = lenv
+    # no_pick is terminal for the worker, so passes 2 and 3 cannot search Soulseek and cannot ask a source
+    # that is switched off. Three passes that do no work, two "retrying in 30 s" messages, same answer.
+    w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []),
+             settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert r.state == RequestState.ERROR and r.retry_after is None and r.attempts == 1
+    assert "switched off" in r.error_message and "nothing on Soulseek matched" in r.error_message
+
+
+async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
+    settings, store, _, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")],
+                            download_error=LosslessError("no bytes within 60 s", "first_byte_timeout"))
+    w = make(lenv, provider=provider, settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert attempt_of(store, rid).outcome == "first_byte_timeout"
+    assert "never started sending" in r.error_message and "found nothing" not in r.error_message

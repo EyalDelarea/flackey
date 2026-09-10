@@ -180,14 +180,16 @@ async def test_download_polls_to_completion_and_reports_progress(provider):
 
 @respx.mock
 async def test_download_first_byte_cap_cancels(provider):
+    # "Initializing", not "Queued, Remotely": the transfer has left the peer's queue and still sends nothing,
+    # which is the peer refusing rather than the peer being busy. See the queue tests at the end of the file.
     p, clock, _ = provider
     respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("Queued, Remotely", 0)))
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("Initializing", 0)))
     cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
     with pytest.raises(LosslessError) as e:
         await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2)
     assert e.value.outcome == "first_byte_timeout" and cancel.called and cancel.calls[0].request.url.params["remove"] == "true"
-    assert 60 <= clock.t <= 64
+    assert 62 <= clock.t <= 66
 
 
 @respx.mock
@@ -332,3 +334,51 @@ async def test_uploads_survives_an_empty_feed_and_a_zero_byte_file(provider):
             {"id": "z", "filename": "d\\a.flac", "size": 0, "state": "Queued", "bytesTransferred": 0}]}]}]))
     row = (await p.uploads())[0]
     assert row["pct"] == 0 and row["peer"] == "p" and row["file"] == "a.flac" and row["speed_bps"] == 0.0
+
+
+@respx.mock
+async def test_time_in_the_peers_queue_does_not_count_against_the_first_byte_cap(provider):
+    """A peer with no free slot parks us in "Queued, Remotely" until their queue reaches us -- 127 people
+    deep on the goa FLACs the owner asks for. That wait is a fact about the peer's popularity, not about
+    whether they will send, so the first-byte cap only starts once the transfer leaves the queue."""
+    p, _clock, downloads = provider
+    f = flac_file(size=1000)
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+
+    def land(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x" * f.size)
+        return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
+
+    queued = [httpx.Response(200, json=transfer("Queued, Remotely", 0))] * 60   # 120 s at poll_s=2
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+        *queued, httpx.Response(200, json=transfer("InProgress", 500)), land])
+    assert await p.download(f, first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=600) == dest.resolve()
+
+
+@respx.mock
+async def test_a_queue_that_never_reaches_us_is_queued_not_a_refusal(provider):
+    p, clock, _ = provider
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(
+        return_value=httpx.Response(200, json=transfer("Queued, Remotely", 0)))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    with pytest.raises(LosslessError) as e:
+        await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=300)
+    assert e.value.outcome == "queued" and cancel.called
+    assert 300 <= clock.t <= 304
+
+
+@respx.mock
+async def test_a_transfer_that_leaves_the_queue_and_sends_nothing_is_still_a_first_byte_timeout(provider):
+    p, clock, _ = provider
+    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+        httpx.Response(200, json=transfer("Queued, Remotely", 0)),
+        *([httpx.Response(200, json=transfer("Initializing", 0))] * 200)])
+    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    with pytest.raises(LosslessError) as e:
+        await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=300)
+    assert e.value.outcome == "first_byte_timeout" and cancel.called
+    assert 62 <= clock.t <= 66     # the cap runs from leaving the queue at t=2, not from the enqueue

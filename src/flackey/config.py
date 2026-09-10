@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     lossless_filing_format: str = "wav"   # PCM either way; WAV is the more universally readable container
     lossless_search_wait_s: int = 30
     lossless_first_byte_s: int = 60
+    # How long to sit in one peer's queue before moving to the next survivor. The peers holding a rare goa
+    # FLAC are queue-deep and have no free slot; that wait is normal Soulseek, not a failed transfer, so it
+    # gets its own budget rather than being counted against `lossless_first_byte_s` (see slskd.download).
+    lossless_queue_wait_s: int = 300
     lossless_transfer_s: int = 600
     lossless_poll_s: float = 2.0
     lossless_duration_tolerance_s: int = 3
