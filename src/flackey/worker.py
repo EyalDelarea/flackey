@@ -313,7 +313,7 @@ class Worker:
                              wait_s: int | None = None) -> None:
         attempts = req.attempts + 1
         if attempts < MAX_ATTEMPTS:
-            wait = wait_s or RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1]
+            wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1] if wait_s is None else wait_s
             retry_after = (datetime.now(UTC) + timedelta(seconds=wait)).isoformat(timespec="seconds")
             self._set_state(req, RequestState.QUEUED, attempts=attempts, flag_reason=flag or reason,
                             retry_after=retry_after)
@@ -521,7 +521,7 @@ class Worker:
             why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
         fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
-                    if not self.settings.source_enabled else "and the source is unavailable for the lossy fallback")
+                    if not self.settings.source_enabled else "the source is unavailable for the lossy fallback")
         reason = f"no way to fetch this track: {why}, {fallback}"
         if self._lossless_allowed(self.store.get_request(req.id)):
             await self._retry_or_fail(req, reason, wait_s=QUEUED_BACKOFF_S if outcome == "queued" else None)

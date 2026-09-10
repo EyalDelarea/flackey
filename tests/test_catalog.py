@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from flackey.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
+from flackey.catalog import (
+    BeatportCatalog,
+    CatalogParseError,
+    _length_pins_a_version,
+    best_match,
+    parse_search_html,
+)
 from flackey.models import CatalogTrack, Query
 
 
@@ -135,9 +141,16 @@ def test_an_original_mix_that_matches_the_length_still_beats_a_remix_of_the_same
 
 
 def test_a_remix_far_from_the_videos_length_keeps_losing_to_the_original():
-    """S.U.N. Project's "Space Dwarfs": the 559 s original is what the 560 s video is, and the 1997 mixes at
-    529 s are genuinely other recordings. Nothing about this case may change."""
+    """S.U.N. Project's "Space Dwarfs": the 559 s original is what the 560 s video is, and the 1997 mixes and
+    the Morphic Resonance remix are genuinely other recordings. This is the case the length-pinning rule must
+    leave alone -- an original mix is already the right length, so nothing pins a version. The rows are the
+    six Beatport actually returns for this search; nothing about this case may change."""
     q = Query(raw="", artist="S.U.N. Project", title="Space Dwarfs", duration_s=560)
-    original = _ct(1, "Sun Project", title="Space Dwarfs", mix="Original Mix", dur_s=559, date="2009-02-20")
-    mix97 = _ct(2, "Sun Project", title="Space Dwarfs", mix="1997 Mix", dur_s=530, date="2022-12-23")
-    assert best_match(q, [original, mix97]).id == 1
+    tracks = [_ct(1, "S.U.N. Project", title="Space Dwarfs", mix="Morphic Resonance Remix", dur_s=549, date="2016-05-09"),
+              _ct(2, "Sun Project", title="Space Dwarfs", mix="Original Mix", dur_s=559, date="2009-02-20"),
+              _ct(3, "Sun Project", title="Space Dwarfs", mix="1997 Mix", dur_s=530, date="2022-12-23"),
+              _ct(4, "Sun Project", title="Space Dwarfs", mix="1997 mix", dur_s=529, date="2022-11-05"),
+              _ct(5, "Sun Project", title="Space Dwarfs", mix="Atomic Pulse Remix", dur_s=452, date="2009-10-30"),
+              _ct(6, "Sun Project", title="Space Dwarfs", mix="1997 Unreleased Mix", dur_s=532, date="2021-09-21")]
+    assert not _length_pins_a_version(q, tracks)
+    assert best_match(q, tracks).id == 2
