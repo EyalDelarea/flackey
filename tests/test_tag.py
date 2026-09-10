@@ -141,3 +141,21 @@ async def test_fetch_artwork_owns_and_closes_client_when_none_passed(monkeypatch
     data = await fetch_artwork("https://example.com/art.jpg")
     assert data == b"art-bytes"
     assert created[0].is_closed is True
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("ext", ["mp3", "wav", "aiff"])
+def test_id3_is_written_as_v23_with_a_year_rekordbox_can_read(tmp_path: Path, ext: str):
+    """Rekordbox skips a 2.4 tag outright: the track imports with the filename as its title and no artist,
+    album, genre or cover. The tag itself was valid -- ffprobe read ours back in full -- so the fix is the
+    version, not the content. Asserted against the bytes, because mutagen models every tag it reads as 2.4
+    and would report a 2.3 file's TYER back to us as a TDRC."""
+    p = _make(tmp_path, ext)
+    write_tags(p, CT, V, PNG_1x1, "image/png")
+    raw = p.read_bytes()
+    head = raw.find(b"ID3\x03\x00")
+    assert head >= 0, "no ID3v2.3 header on disk"
+    body = raw[head:head + 4000]
+    # mutagen writes TDRC alone when it saves 2.3, and a 2.3 reader skips it: TYER is ours.
+    assert b"TYER" in body and b"APIC" in body
+    assert read_tags(p)["date"] == "2022-06-03" and read_tags(p)["has_artwork"] == "yes"

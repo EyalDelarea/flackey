@@ -19,7 +19,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         <Artwork url={v.artworkUrl} rejected={v.rejected} />
         <div className="row-text">
           <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
-          <div className={`status ${v.statusTone}${v.statusPath ? ' path' : ''}`}>{v.status}</div>
+          {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
           {showSteps && <Stepper steps={v.steps!} />}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}

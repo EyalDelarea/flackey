@@ -81,9 +81,6 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .row .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .title .version { font-weight: 400; color: var(--secondary); }
-/* The filed path, which used to be monospace: it sits under a 13px sans title in a dense list, and the
-   typeface change read as a mistake rather than as "this is a path". */
-.row .status.path { font-size: 11px; color: var(--tertiary); }
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.amber { color: var(--orange); } .status.red { color: var(--red); } .status.green { color: var(--green); }
 .row-right { flex: none; display: flex; align-items: center; gap: 10px; }

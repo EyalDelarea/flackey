@@ -20,6 +20,7 @@ from mutagen.id3 import (
     TPUB,
     TSRC,
     TXXX,
+    TYER,
     ID3NoHeaderError,
 )
 from mutagen.wave import WAVE
@@ -29,6 +30,13 @@ from .models import CatalogTrack, Verdict, source_label
 
 class TagError(Exception):
     pass
+
+
+# Rekordbox reads ID3v2.3 and skips 2.4, which is mutagen's default. A 2.4 tag on a WAV is well-formed --
+# ffprobe reads ours back in full -- and rekordbox still shows the file with an empty artist, album, genre
+# and cover, falling back to the filename for the title. Everything we write exists in 2.3, so we simply
+# write 2.3: the only frame that does not carry over is TDRC, and TYER stands in for it below.
+ID3_VERSION = 3
 
 
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
@@ -83,7 +91,10 @@ def _write_id3(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) 
     tags.add(TCON(encoding=3, text=v["genre"]))
     tags.add(TPUB(encoding=3, text=v["label"]))
     if v["date"]:
+        # TDRC is a 2.4 frame; a 2.3 reader skips it. TYER is what rekordbox looks for, so write both and
+        # let each reader take the one it knows. `read_tags` still prefers the full date from TDRC.
         tags.add(TDRC(encoding=3, text=v["date"]))
+        tags.add(TYER(encoding=3, text=v["date"][:4]))
     if v["isrc"]:
         tags.add(TSRC(encoding=3, text=v["isrc"]))
     if v["bpm"]:
@@ -97,9 +108,9 @@ def _write_id3(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) 
     if artwork:
         tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=artwork))
     if container is None:
-        tags.save(path, v2_version=4)
+        tags.save(path, v2_version=ID3_VERSION)
     else:
-        container.save()
+        container.save(v2_version=ID3_VERSION)
 
 
 def _write_flac(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) -> None:
