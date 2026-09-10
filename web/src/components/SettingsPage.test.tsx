@@ -156,6 +156,16 @@ describe('the Soulseek panel', () => {
     expect(screen.getByText(/5030 — the Soulseek helper · this Mac only/)).toBeInTheDocument()
   })
 
+  it('keeps the ports and the pick rules folded away until they are asked for', () => {
+    // Both are diagnostics. They stay in the panel -- the owner needs them the day a transfer never
+    // starts -- but a first read of Settings must not open on a port table.
+    show(lossless())
+    const details = screen.getByText('Technical details').closest('details')!
+    expect(details).not.toHaveAttribute('open')
+    expect(details).toContainElement(screen.getByText(/50300 — incoming Soulseek transfers/))
+    expect(details).toContainElement(screen.getByText(/keeps a copy only if its fingerprint matches/))
+  })
+
   it('shows the current file format as chosen rather than as unavailable', () => {
     // A disabled button reads "you can't have this"; the point is "you already have this".
     show(lossless())

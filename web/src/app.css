@@ -148,7 +148,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .pl-card h2 { margin-bottom: 4px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 .pl-card h2 span { font-weight: 400; color: var(--secondary); }
 .table { background: var(--content); }
-.thead, .trow { display: grid; grid-template-columns: 36px minmax(0, 2.4fr) 1fr 1.4fr 56px 64px 110px; gap: 12px; align-items: center; padding: 0 12px; }
+/* The last column holds the row's buttons, and it is sized for the widest case -- "Find lossless" beside
+   "Show in Finder" (measured 93.5px + 104.2px + the gap). Sizing it for one button, as it was, let the
+   second one overflow left across the Kbps value and sit on top of the number. Every row is its own grid,
+   so this has to be a length: an `auto` track would be measured per row and the columns would no longer
+   line up between a row with two buttons and a row with one. `--actions` is set once per table by
+   `TrackTable`, which knows whether any row in it can offer the second button. */
+.thead, .trow { display: grid; grid-template-columns: 36px minmax(0, 2.8fr) 1fr 1.2fr 48px 60px 52px var(--actions, 210px); gap: 12px; align-items: center; padding: 0 12px; }
 .thead { height: 26px; font-size: 11px; font-weight: 500; color: var(--secondary); border-bottom: .5px solid var(--sep); }
 .thead .num { text-align: right; }
 .trow { height: 44px; font-size: 12px; color: var(--secondary); }
@@ -157,11 +163,16 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .trow .t { color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow .v { font-size: 11px; }
 .trow .kbps { display: inline-flex; justify-content: flex-end; align-items: center; gap: 4px; color: var(--text); }
+.trow .fmt { font-variant-numeric: tabular-nums; font-size: 11px; letter-spacing: .02em; }
 .trow .kbps svg { color: var(--green); }
-.trow .reveal { display: flex; justify-content: flex-end; opacity: 0; transition: opacity 120ms; }
+/* No transition: an animated opacity is what left previously-hovered rows still showing their buttons
+   after the pointer had moved on, and a fade earns nothing here. `:focus-within` stays so the buttons can
+   still be reached with the keyboard -- they are focusable at opacity 0 -- and the click handlers blur
+   them, so a click no longer pins one row's buttons open. */
+.trow .reveal { display: flex; justify-content: flex-end; gap: 6px; opacity: 0; }
 .trow:hover .reveal, .trow.selected .reveal, .trow .reveal:focus-within { opacity: 1; }
 .trow.selected, .trow.selected:nth-child(odd) { background: var(--accent); color: var(--accent-text); }
-.trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
+.trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
 
 /* ---- Settings ---- */
 .settings { max-width: 640px; gap: 14px; padding: 22px 20px; }
@@ -175,6 +186,16 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    at "…/Application Support/Crate" tells them nothing. */
 .srow .v.mono { display: block; overflow-wrap: anywhere; }
 .srow .input { margin-top: 4px; }
+/* The disclosure the ports and the pick rules live behind. Closed it is one 13px line that reads like
+   every other key in the panel; open, the blocks inside keep their own spacing, so the first `.k` sits
+   under the summary rather than beside it. */
+.tech > summary { font-size: 13px; color: var(--secondary); cursor: default; list-style: none; }
+.tech > summary::-webkit-details-marker { display: none; }
+.tech > summary::before { content: "›"; display: inline-block; width: 12px; transition: transform 120ms; }
+.tech[open] > summary::before { transform: rotate(90deg); }
+.tech > summary:hover { color: var(--text); }
+.tech .k { margin-top: 10px; }
+.tech .k:first-of-type { margin-top: 6px; }
 .srow .actions { display: flex; gap: 8px; flex: none; }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--selection); }
 .segmented button { flex: none; padding: 3px 12px; border: 0; border-radius: 5px; background: none;

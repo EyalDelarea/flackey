@@ -22,6 +22,38 @@ it('renders a track row from catalog data', () => {
 
 const lossy: Track = { ...t, source: 'deezer_bot', source_fmt: null }
 
+it('names the format each file is filed as', () => {
+  // The library mixes formats -- a WAV filed from Soulseek beside an MP3 that came from the bot -- and
+  // Kbps alone does not separate them: 1411 is WAV and AIFF alike.
+  render(<TrackTable tracks={[t, { ...t, id: 2, fmt: 'aiff', title: 'Second' }]} onReveal={() => {}} />)
+  expect(screen.getByText('Format')).toBeInTheDocument()
+  expect(screen.getByText('MP3')).toBeInTheDocument()
+  expect(screen.getByText('AIFF')).toBeInTheDocument()
+})
+
+describe('a button the pointer clicked', () => {
+  // The buttons sit in a cell held at opacity 0 and revealed by :hover, :focus-within or selection, so a
+  // button that keeps focus holds its row revealed after the pointer has moved on -- which is what left
+  // four rows showing "Show in Finder" at once.
+  it('is let go of, so the row stops being revealed', () => {
+    render(<TrackTable tracks={[t]} onReveal={() => {}} />)
+    const btn = screen.getByText('Show in Finder')
+    btn.focus()
+    fireEvent.click(btn, { detail: 1 })
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('keeps its focus when the click came from the keyboard', () => {
+    // Enter on a focused button reports detail 0. Blurring that would drop a keyboard caller out of the
+    // table entirely, and :focus-within is the only thing showing them the buttons in the first place.
+    render(<TrackTable tracks={[t]} onReveal={() => {}} />)
+    const btn = screen.getByText('Show in Finder')
+    btn.focus()
+    fireEvent.click(btn, { detail: 0 })
+    expect(document.activeElement).toBe(btn)
+  })
+})
+
 it('falls back to the track tags when there is no catalog record', () => {
   render(<TrackTable tracks={[{ ...t, catalog: null }]} onReveal={() => {}} />)
   expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(2)

@@ -123,26 +123,31 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
         {lossless?.enabled && <div className="srow"><div className="srow-body"><div className="k">File format</div>
-          <div className="v">What a lossless download is filed as. AIFF and WAV are both uncompressed and
-            sound identical; FLAC is the same audio, compressed. Tracks already in your library keep the
-            format they were filed with.</div>
+          <div className="v">What new downloads are filed as. All three are lossless; tracks already in your
+            library keep the format they have.</div>
           {formatError && <div className="err">{formatError}</div>}</div>
           <div className="actions"><div className="segmented" role="group" aria-label="File format">
             {(s.filing_formats ?? []).map(f =>
               <button key={f} aria-pressed={s.lossless_filing_format === f} disabled={formatBusy}
                 onClick={() => { if (s.lossless_filing_format !== f) setFormat(f) }}>{f.toUpperCase()}</button>)}
           </div></div></div>}
-        {s.ports && <div className="srow"><div className="srow-body"><div className="k">Ports</div>
-          <div className="v mono">{PORT_ROWS.map(([key, label]) => {
-            const p = s.ports![key]
-            return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : '· this Mac only'}</div>
-          })}</div></div></div>}
-        {lossless?.enabled && s.ranking && <div className="srow"><div className="srow-body"><div className="k">How copies are ranked</div>
-          <div className="v">Files a peer offers must match on length (±{s.ranking.duration_tolerance_s}s) and
-            title ({s.ranking.title_ratio}% or closer){s.ranking.require_artist ? ', and name the artist' : ''}.
-            Survivors are ordered by quality, then by who can send now. Flackey tries up to {s.ranking.max_picks} of
-            them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div>
-          </div></div>}
+        {/* Ports and the pick rules are the two things nobody needs until something is wrong, and stating
+            them beside the format switch made the panel read as a control room. Folded away, not dropped:
+            they are the first thing to ask for when a transfer never starts or a copy is refused. */}
+        {(s.ports || (lossless?.enabled && s.ranking)) && <div className="srow"><div className="srow-body">
+          <details className="tech">
+            <summary>Technical details</summary>
+            {s.ports && <><div className="k">Ports</div>
+              <div className="v mono">{PORT_ROWS.map(([key, label]) => {
+                const p = s.ports![key]
+                return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : '· this Mac only'}</div>
+              })}</div></>}
+            {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
+              <div className="v">Files a peer offers must match on length (±{s.ranking.duration_tolerance_s}s) and
+                title ({s.ranking.title_ratio}% or closer){s.ranking.require_artist ? ', and name the artist' : ''}.
+                Survivors are ordered by quality, then by who can send now. Flackey tries up to {s.ranking.max_picks} of
+                them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
+          </details></div></div>}
       </div>
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Flackey {s.version}</div></div></div>
