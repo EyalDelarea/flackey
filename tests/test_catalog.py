@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from flackey.catalog import BeatportCatalog, CatalogParseError, best_match, parse_search_html
+from flackey.catalog import (
+    BeatportCatalog,
+    CatalogParseError,
+    _length_pins_a_version,
+    best_match,
+    parse_search_html,
+)
 from flackey.models import CatalogTrack, Query
 
 
@@ -112,4 +118,39 @@ def test_best_match_treats_lengths_within_tolerance_as_equal():
     q = Query(raw="", artist="Celestial Intelligence", title="Inevitable Feelings", duration_s=605)
     tracks = [_ct(1, "Celestial Intelligence", title="Inevitable Feelings", dur_s=605, date="2024-10-05"),
               _ct(2, "Celestial Intelligence", title="Inevitable Feelings", dur_s=604, date="2015-06-05")]
+    assert best_match(q, tracks).id == 2
+
+
+def test_the_videos_length_outweighs_the_original_mix_bonus_when_no_original_is_that_length():
+    """Filteria's "Dog Days Bliss": Beatport carries the album (Suntrip, 531 s, tagged "Album Edit") and a
+    later compilation (Ovnimoon, 544 s, tagged "Original Mix"). The flat original-mix bonus used to pick the
+    compilation, whose 544 s master exists nowhere on Soulseek, and the reference duration it fixed then
+    rejected all eight real FLACs. When the requested length singles out one release and no original mix is
+    that length, the length wins -- the same rule `match._pinned_by_length` applies to source candidates."""
+    q = Query(raw="", artist="Filteria", title="Dog Days Bliss", duration_s=532)
+    album = _ct(1, "Filteria", title="Dog Days Bliss", mix="Album Edit", dur_s=531, date="2022-06-25")
+    compilation = _ct(2, "Filteria", title="Dog Days Bliss", mix="Original Mix", dur_s=544, date="2015-10-09")
+    assert best_match(q, [album, compilation]).id == 1
+
+
+def test_an_original_mix_that_matches_the_length_still_beats_a_remix_of_the_same_length():
+    q = Query(raw="", artist="Filteria", title="Dog Days Bliss", duration_s=532)
+    remix = _ct(1, "Filteria", title="Dog Days Bliss", mix="Nova Fractal Remix", dur_s=531, date="2010-01-01")
+    original = _ct(2, "Filteria", title="Dog Days Bliss", mix="Original Mix", dur_s=533, date="2013-05-05")
+    assert best_match(q, [remix, original]).id == 2
+
+
+def test_a_remix_far_from_the_videos_length_keeps_losing_to_the_original():
+    """S.U.N. Project's "Space Dwarfs": the 559 s original is what the 560 s video is, and the 1997 mixes and
+    the Morphic Resonance remix are genuinely other recordings. This is the case the length-pinning rule must
+    leave alone -- an original mix is already the right length, so nothing pins a version. The rows are the
+    six Beatport actually returns for this search; nothing about this case may change."""
+    q = Query(raw="", artist="S.U.N. Project", title="Space Dwarfs", duration_s=560)
+    tracks = [_ct(1, "S.U.N. Project", title="Space Dwarfs", mix="Morphic Resonance Remix", dur_s=549, date="2016-05-09"),
+              _ct(2, "Sun Project", title="Space Dwarfs", mix="Original Mix", dur_s=559, date="2009-02-20"),
+              _ct(3, "Sun Project", title="Space Dwarfs", mix="1997 Mix", dur_s=530, date="2022-12-23"),
+              _ct(4, "Sun Project", title="Space Dwarfs", mix="1997 mix", dur_s=529, date="2022-11-05"),
+              _ct(5, "Sun Project", title="Space Dwarfs", mix="Atomic Pulse Remix", dur_s=452, date="2009-10-30"),
+              _ct(6, "Sun Project", title="Space Dwarfs", mix="1997 Unreleased Mix", dur_s=532, date="2021-09-21")]
+    assert not _length_pins_a_version(q, tracks)
     assert best_match(q, tracks).id == 2

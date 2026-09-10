@@ -16,7 +16,7 @@ from flackey.models import CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
 from flackey.source import LosslessError, SourceTimeout, TransferProgress
 from flackey.store import Store
-from flackey.worker import Worker, format_line
+from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
 
@@ -79,7 +79,8 @@ class FakeProvider:
             on_raw("responses", [{"username": f.username, "files": [{"filename": f.path, "size": f.size}]} for f in self.files])
         return list(self.files)
 
-    async def download(self, file, *, first_byte_s, total_s, poll_s, on_progress=None, on_raw=None):
+    async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, stall_s=None,
+                       on_progress=None, on_raw=None):
         self.downloaded.append(file.username)
         if on_progress:
             on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
@@ -107,7 +108,7 @@ class FakeProvider:
 def lenv(tmp_path: Path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", library_root=tmp_path / "lib",
                         data_dir=tmp_path / "data", slskd_api_key="k", lossless_poll_s=0.01, lossless_search_wait_s=5,
-                        lossless_first_byte_s=10, lossless_transfer_s=20)
+                        lossless_first_byte_s=10, lossless_transfer_s=20, lossless_queue_wait_s=15)
     store = Store(settings.db_path)
     downloads = settings.slskd_downloads
     downloads.mkdir(parents=True)
@@ -221,18 +222,6 @@ async def test_a_peer_that_will_not_send_moves_on_to_the_next_one(lenv, outcome)
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_transfer_timeout_stops_at_that_peer(lenv):
-    """The one download failure that does *not* try again: bytes were flowing and merely too slow,
-    which says something about the link rather than the peer, so the next one is no more likely."""
-    _, store, _, provider, _, _ = lenv
-    provider.files = [lf("a"), lf("b")]
-    provider.download_error = LosslessError("boom", "transfer_timeout")
-    w = make(lenv)
-    rid = store.add_request(TEXT, RequestKind.TEXT)
-    await w.process(rid)
-    assert attempt_of(store, rid).outcome == "transfer_timeout" and provider.downloaded == ["a"]
-
-
 async def test_a_rejected_transfer_still_files_from_the_next_peer(lenv):
     """The case measured on 2026-09-09: request 1 ("Hallucinogen - LSD") chose a free-slot FLAC and the
     peer answered `Completed, Rejected` two seconds later. Before SECOND_PICK_AFTER covered
@@ -295,7 +284,7 @@ async def test_second_pick_needs_budget(lenv, tmp_path: Path):
     original = provider.download
 
     async def slow(file, **kw):
-        clock.t += 28                                         # 35 s budget - 10 s first-byte cap = 25 s: gone
+        clock.t += 38                       # a second pick needs room for another queue wait (15 s): gone
         return await original(file, **kw)
 
     provider.download = slow
@@ -368,8 +357,10 @@ async def test_miss_then_deezer_failure_runs_no_second_attempt(lenv):
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.fetch_source is None
     store.update_request(rid, retry_after=None)
     r = await w.process(rid)
-    assert r.attempts == 2 and len(provider.searches) == 1          # the miss is remembered; no second attempt
-    assert len(store.list_attempts()) == 1 and len(store.get_candidates(rid)) == 1
+    # The second pass searches Soulseek again -- an empty search is about who was online, not about the
+    # track -- but it must not duplicate the candidate rows the first pass already saved.
+    assert r.attempts == 2 and len(provider.searches) == 2
+    assert len(store.get_candidates(rid)) == 1
 
 
 async def test_unexpected_error_inside_the_attempt_is_recorded(lenv):
@@ -623,10 +614,13 @@ async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv
 
 
 # ---- upgrading a track that was filed on the lossy copy (the L.S.D. case) --------------------------
-async def _file_on_deezer(lenv, provider):
+async def _file_on_deezer(lenv, provider, download_error=None):
     """Drive a request to DONE with the lossless attempt missing, so it lands on the Deezer mp3."""
     _, store, _, _, _, _ = lenv
-    provider.files = [lf("a", extension="mp3")]          # nothing lossless on offer -> no_pick
+    if download_error is None:
+        provider.files = [lf("a", extension="mp3")]      # nothing lossless on offer -> no_pick
+    else:
+        provider.files, provider.download_error = [lf("a")], download_error
     w = make(lenv, provider=provider)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -744,13 +738,13 @@ async def test_upgrade_refuses_when_the_request_it_came_from_was_removed(lenv):
 
 
 async def test_upgrade_runs_even_though_a_normal_retry_would_be_refused(lenv):
-    """The whole point. `_lossless_allowed` blocks a second attempt after no_pick/transfer_failed -- the
-    L.S.D. outcome -- so going through the ordinary path would silently do nothing."""
+    """The whole point. `_lossless_allowed` blocks a second attempt after transfer_failed -- the L.S.D.
+    outcome this exists for -- so going through the ordinary path would silently do nothing."""
     _, store, _, provider, _, _ = lenv
-    w, before = await _file_on_deezer(lenv, provider)
+    w, before = await _file_on_deezer(lenv, provider, download_error=LosslessError("no", "transfer_failed"))
     req = store.get_request(before.request_id)
     assert w._lossless_allowed(req) is False
-    provider.files = [lf("a")]
+    provider.files, provider.download_error = [lf("a")], None     # the peer sends this time
     await w.upgrade(before.id)
     assert store.get_track(before.id).source_fmt == "flac"
 
@@ -829,7 +823,10 @@ async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(len
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
 
     assert source.fetched == []
-    assert r.state == RequestState.QUEUED and "source is unavailable" in r.flag_reason
+    # The row waits rather than burning the 30 s ladder on a question nothing could have answered yet:
+    # who is online changes over a quarter of an hour, so that is how long it waits before asking again.
+    assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
+    assert "nothing on Soulseek matched" in r.flag_reason and "source is unavailable" in r.flag_reason
 
 
 async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(lenv):
@@ -885,3 +882,135 @@ async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(len
 
     assert stocked.searches, "Try again must search the provider again, not skip straight past it"
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "soulseek"
+
+
+# ---- a peer's queue is a wait, not a refusal -------------------------------------------------------------
+# Three tracks of the owner's test playlist died on this. Every peer holding the FLAC was queue-deep
+# (127, 360, 1866 people), slskd parked each transfer in "Queued, Remotely", and the 60 s first-byte cap
+# killed all four picks. The attempt closed as a terminal outcome, so the two remaining request attempts
+# searched nothing and the row settled on "Soulseek has already looked and found nothing" -- untrue: it
+# had found five perfect copies of exactly the right recording.
+
+
+def _queued(msg="still in the peer's queue after 300 s"):
+    return LosslessError(msg, "queued")
+
+
+async def test_a_peers_queue_leaves_the_request_free_to_try_again(lenv):
+    settings, store, _, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert attempt_of(store, rid).outcome == "queued"
+    assert r.state == RequestState.QUEUED and r.retry_after is not None
+    assert w._lossless_allowed(store.get_request(rid)) is True     # the next pass searches again
+
+
+async def test_the_wait_is_reported_as_a_wait_not_as_nothing_found(lenv):
+    settings, store, notifier, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert "found nothing" not in r.flag_reason
+    assert "queue" in r.flag_reason and "found nothing" not in notifier.sent[-1][0]
+
+
+async def test_an_empty_search_with_no_source_waits_on_the_long_backoff_and_then_gives_up(lenv):
+    """It used to end on the first pass, on the theory that nothing about an empty search could change.
+    It can -- but only on Soulseek's timescale, so the wait is a quarter of an hour rather than the 30 s
+    ladder, and MAX_ATTEMPTS still ends it rather than asking forever."""
+    settings, store, _, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    w = make(lenv, provider=empty, settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
+    assert "switched off" in r.flag_reason and "nothing on Soulseek matched" in r.flag_reason
+
+    for _ in range(MAX_ATTEMPTS - 1):
+        store.update_request(rid, retry_after=None)
+        r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.retry_after is None
+    assert len(empty.searches) == MAX_ATTEMPTS      # every pass asked a question that could have changed
+
+
+async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
+    settings, store, _, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads, [lf("a")],
+                            download_error=LosslessError("no bytes within 60 s", "first_byte_timeout"))
+    w = make(lenv, provider=provider, settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert attempt_of(store, rid).outcome == "first_byte_timeout"
+    assert "never started sending" in r.error_message and "found nothing" not in r.error_message
+
+
+async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, tmp_path: Path):
+    """This reverses what `test_transfer_timeout_stops_at_that_peer` used to assert. Its reasoning was that
+    a slow transfer "says something about the link rather than the peer, so the next one is no more likely",
+    and the measurement on 2026-09-10 says otherwise: "Dog Days Bliss" was cut off at 90 % of a 67 MB FLAC
+    from a peer sending 102 kB/s while six survivors sat untried -- four of them on a free slot with nobody
+    queued -- and 316 s of the attempt's budget was still unspent. Upload rate is a fact about the peer."""
+    _, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b")]
+    provider.audio["b"] = _fake_flac(tmp_path / "fake.flac")
+    original = provider.download
+
+    async def stalls(file, **kw):
+        if file.username == "a":
+            provider.downloaded.append(file.username)
+            raise LosslessError("stopped sending after 60000000 of 67000000 bytes", "transfer_timeout")
+        return await original(file, **kw)
+
+    provider.download = stalls
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert provider.downloaded == ["a", "b"]
+    assert attempt_of(store, rid).outcome == "verify_failed"     # "b" was asked, and answered on its own terms
+
+
+async def test_an_empty_search_is_asked_again_later_because_soulseek_is_not_a_fixed_library(lenv):
+    """Measured on 2026-09-10: the same query for "Space Dwarfs" returned no survivor at 11:40 and two
+    (one on a free slot) at 14:51. Soulseek's population turns over hourly, so one empty search is a fact
+    about who happened to be online, not about the track. The backoff is long because that is the timescale
+    on which the answer can change; MAX_ATTEMPTS still bounds it."""
+    settings, store, _, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    w = make(lenv, provider=empty, source=FakeSource(error=SourceTimeout("bot silent")))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert attempt_of(store, rid).outcome == "no_pick"
+    assert r.state == RequestState.QUEUED and r.retry_after is not None
+    assert w._lossless_allowed(store.get_request(rid)) is True     # and the next pass really does search
+
+    stocked = FakeProvider(settings.slskd_downloads, [lf("a")], audio={"a": _flac(settings.data_dir / "later.flac")})
+    w.providers = [stocked]
+    r = await w.process(rid)
+    assert stocked.searches and r.state == RequestState.DONE
+    assert store.get_track(r.track_id).source == "soulseek"
+
+
+async def test_a_lossy_filing_after_an_empty_search_does_not_promise_a_retry_that_never_comes(lenv):
+    """The other half of the same change. A request that fell back to the Deezer copy is DONE, and nothing
+    reprocesses a DONE request -- so the line under it must point at the button, not claim the worker will
+    come back. "Searching again is allowed" and "this request will come back on its own" are two different
+    questions, and they stopped having the same answer when no_pick became retryable."""
+    settings, store, notifier, _, _, _ = lenv
+    w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []))
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
+    assert "Try again" in notifier.sent[-1][0] and "try again on its own" not in notifier.sent[-1][0]

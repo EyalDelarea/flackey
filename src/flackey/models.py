@@ -242,7 +242,7 @@ class LosslessAttempt:
     raw_dir: str | None = None
 
 
-ATTEMPT_OUTCOMES = ("filed", "no_pick", "first_byte_timeout", "transfer_timeout", "transfer_failed",
+ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
                     "verify_failed", "fingerprint_failed", "convert_failed", "unavailable", "interrupted")
 
 # Why a lossless attempt came back empty, in the owner's words rather than the vocabulary above. Every
@@ -253,7 +253,8 @@ MISS_REASON = {
     "no_pick": "nothing on Soulseek matched this track closely enough",
     "transfer_failed": "the people who had it would not send it",
     "first_byte_timeout": "the people who had it never started sending",
-    "transfer_timeout": "the download was too slow to finish",
+    "queued": "the people who had it are busy and their queue has not reached us yet",
+    "transfer_timeout": "the people who had it stopped sending part-way through",
     "verify_failed": "the copies offered were not really lossless",
     "fingerprint_failed": "the copies offered were a different recording",
     "convert_failed": "the file could not be converted",

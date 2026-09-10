@@ -95,11 +95,21 @@ fetch. The owner is not notified of the miss; the Done line says `MP3 320 kbps v
 
 - slskd unreachable or not logged in to the server.
 - No search result survives the gate.
-- The chosen peer does not start sending within the first-byte cap.
-- The transfer does not finish within the total cap, or ends in any state other than succeeded.
+- The peer's queue does not reach us within the queue wait (`queued`).
+- The chosen peer leaves the queue and does not start sending within the first-byte cap.
+- The transfer stops part-way, trickles below the minimum rate, or ends in any state other than
+  succeeded.
 - The file fails verify (lossless container with a lossy cutoff).
 - The fingerprint does not match the Deezer preview (wrong recording).
 - Conversion fails.
+
+**Amended 2026-09-10.** All of these except `no_pick` and `convert_failed` now move to the next
+ranked survivor before ending the attempt (section 5.2), because each is a fact about one peer.
+`ATTEMPT_OUTCOMES` gains `queued`. When there is no lossy route at all -- the Deezer bot switched
+off, or a Beatport stand-in with no `source_ref` -- the miss reaches the owner as the request's
+error text, and it must name the outcome that actually occurred rather than asserting a search
+happened. That text used to be hardcoded to "Soulseek has already looked and found nothing" and to
+"the source is unavailable" even when the bot was switched off by the owner.
 
 Only failures that happen *after* a Soulseek file was filed can reach the owner as errors, and
 those are the same filing errors that exist today.
@@ -173,9 +183,26 @@ deletes whatever landed in `tmp_dir`, records the outcome, logs, and returns `No
 raises out of `_try_lossless`, so no `LosslessMiss` exception crosses a function boundary.
 
 Re-entry: a Deezer failure after a miss goes through `_retry_or_fail` and re-enters `_process`
-with the candidate already chosen (`worker.py:176`). The attempt-row check above makes the retry
-skip Soulseek, so a request never runs the 11-minute attempt more than once; only an
-`unavailable` outcome (sidecar down) is retried with the request. Any exception from the adapter or a
+with the candidate already chosen (`worker.py:176`). The attempt-row check above decides whether
+the retry searches Soulseek again.
+
+**Amended 2026-09-10.** Two questions were sharing one answer and stopped being the same:
+
+- `SEARCH_AGAIN_AFTER` -- may a later pass search a provider again? `unavailable`, `interrupted`,
+  `queued`, and `no_pick`. `no_pick` is here because Soulseek is a population, not a library: the
+  same query for "Space Dwarfs" returned no survivor at 11:40 on 2026-09-10 and two, one on a free
+  slot, at 14:51. The backoff for `queued` and `no_pick` is 900 s rather than the 30 s/120 s
+  ladder, because that is the timescale on which either answer can change. `MAX_ATTEMPTS` still
+  bounds it.
+- `RETRY_LOSSLESS_OUTCOMES` -- will *this request* come back on its own? The same set minus
+  `no_pick`. A request that fell back to the lossy copy is DONE and nothing reprocesses it, so the
+  line under it points at the Try again button rather than promising a retry that never arrives.
+
+Second pick (was: after `verify_failed` or `fingerprint_failed` only) now also covers
+`transfer_failed`, `first_byte_timeout`, `queued` and `transfer_timeout`. All of these are facts
+about one peer rather than about the file, and stopping at any of them threw away survivors that
+were still good -- "Dog Days Bliss" ended on a peer that stopped sending while six survivors sat
+untried, four of them on a free slot with nobody queued. Any exception from the adapter or a
 cap expiry cancels the transfer, records the outcome, logs, and returns `None`.
 
 A Soulseek file that fails verify or the fingerprint check is a miss (fallback, not
@@ -300,16 +327,34 @@ setting; its default is `<data_dir>/slskd/downloads`.
 | Setting | Default | Meaning |
 |---|---|---|
 | `lossless_search_wait_s` | 30 | give up on a search that has not completed |
-| `lossless_first_byte_s` | 60 | from enqueue until `bytesTransferred > 0` |
-| `lossless_transfer_s` | 600 | from enqueue until `Completed, Succeeded` |
+| `lossless_queue_wait_s` | 300 | from enqueue until the transfer leaves the peer's queue |
+| `lossless_first_byte_s` | 60 | from leaving the queue until `bytesTransferred > 0` |
+| `lossless_stall_s` | 60 | longest gap between one byte and the next, once bytes are flowing |
+| `lossless_transfer_s` | 600 | floor of the absolute ceiling on one transfer |
+| `lossless_min_rate_kbps` | 160 | the ceiling grows with the file so this rate would finish it |
 | `lossless_poll_s` | 2 | transfer poll interval |
+
+**Amended 2026-09-10** after three tracks of the owner's test playlist failed on the original
+three caps. The four budgets answer four different questions, and the original three conflated them:
+
+- *Queue.* A peer with no free upload slot parks the transfer in `Queued, Remotely` until their
+  queue reaches us -- 127, 360 and 1866 people deep on the goa FLACs the owner asks for. Counting
+  that against `lossless_first_byte_s` cancelled every pick at exactly 60 s and recorded "the
+  people who had it never started sending", when they had not been asked yet. It ends the attempt
+  `queued`: a wait, retryable, not a refusal.
+- *Stall, not duration.* `lossless_transfer_s` measured how long the transfer had been running, so
+  a 67 MB FLAC arriving honestly at 102 kB/s was cancelled with 7 MB left. Length is not evidence;
+  bytes stopping is. The ceiling remains for a peer that trickles forever -- which no stall bound
+  can see -- and grows with the file (`lossless.transfer_ceiling_s`) so it is not the normal exit.
 
 A poll that reports `bytesTransferred` above the advertised size cancels the transfer and ends
 the attempt `transfer_failed`; `plausible_size` only checks what the peer advertised.
 
 The worker processes one request at a time, so the worst case a Soulseek attempt adds to a
-request is search wait plus first-byte cap plus transfer cap, about 11.5 minutes, before the
-Deezer path runs. The spike measured 20 to 200 s for successful downloads. Retry and backoff for
+request is search wait plus queue wait plus first-byte cap plus the transfer ceiling for that
+file. With the stall bound at 60 s the ceiling is only reachable by a peer sending continuously
+below 160 kbps; the per-pick budget gate uses the same ceiling, so a second pick is admitted on
+the same arithmetic that governed the first. The spike measured 20 to 200 s for successful downloads. Retry and backoff for
 the Deezer path are unchanged; a Soulseek miss never consumes a retry attempt.
 
 ## 9. Conversion and filing

@@ -59,22 +59,33 @@ class Reference:
     mix_name: str | None
     duration_s: int | None
     deezer_id: int | None = None
+    # The length of the thing the owner actually pointed at (the video), when it is known and the catalogue
+    # disagrees with it. `match.score_candidate` already refuses to let a wrongly matched Beatport release
+    # redefine that length for source candidates; without this the lossless gate was the one place that did.
+    requested_duration_s: int | None = None
 
     @property
     def is_original(self) -> bool:
         return self.mix_name is None or is_original(self.mix_name)
+
+    @property
+    def durations(self) -> tuple[int, ...]:
+        """Every length this recording is known by, newest evidence first. Two at most, and never a range
+        between them: each stays its own tolerance window, so the gate does not get looser, only less wrong."""
+        return tuple(dict.fromkeys(d for d in (self.duration_s, self.requested_duration_s) if d is not None))
 
 
 def first_artist(artist: str) -> str:
     return _PARENS.sub("", artist).split(",")[0].strip()
 
 
-def reference_for(catalog: CatalogTrack | None, cand: Candidate) -> Reference:
+def reference_for(catalog: CatalogTrack | None, cand: Candidate, requested_duration_s: int | None = None) -> Reference:
     if catalog is not None:
         return Reference(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s or cand.duration_s,
-                         cand.deezer_id)
+                         cand.deezer_id, requested_duration_s)
     title, version = parse_version(cand.title)
-    return Reference(cand.artist, title, cand.mix_name or version or "Original Mix", cand.duration_s, cand.deezer_id)
+    return Reference(cand.artist, title, cand.mix_name or version or "Original Mix", cand.duration_s, cand.deezer_id,
+                     requested_duration_s)
 
 
 def search_text(ref: Reference) -> str:
@@ -122,6 +133,14 @@ class PickPolicy:
                    max_queue_length=d["max_queue_length"], banned_users=frozenset(d["banned_users"]))
 
 
+def transfer_ceiling_s(size: int, settings: Settings) -> float:
+    """The longest one transfer may run, whatever it is doing. One flat cap cannot serve both a 5 MB single
+    and a 67 MB ten-minute FLAC: 600 s at a peer's honest 100 kB/s files the first and cancels the second
+    with 7 MB left. What has to hold is a floor on the rate, so the ceiling grows with the file; the stall
+    bound in `slskd.download` is what catches a transfer that has actually died."""
+    return max(settings.lossless_transfer_s, size * 8 / (settings.lossless_min_rate_kbps * 1000))
+
+
 def policy_from_settings(settings: Settings) -> PickPolicy:
     return PickPolicy(duration_tolerance_s=settings.lossless_duration_tolerance_s, title_ratio=settings.lossless_title_ratio,
                       require_artist=settings.lossless_require_artist, max_queue_length=settings.lossless_max_queue)
@@ -149,11 +168,12 @@ def rule_plausible_size(f: LosslessFile, ref: Reference, p: PickPolicy) -> str |
 
 
 def rule_duration(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    if ref.duration_s is None or f.length_s is None:
+    known = ref.durations
+    if not known or f.length_s is None:
         return None
-    if abs(f.length_s - ref.duration_s) > p.duration_tolerance_s:
-        return f"length {f.length_s} s vs {ref.duration_s} s"
-    return None
+    if any(abs(f.length_s - d) <= p.duration_tolerance_s for d in known):
+        return None
+    return f"length {f.length_s} s vs {' or '.join(f'{d} s' for d in known)}"
 
 
 def rule_title(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:

@@ -23,7 +23,14 @@ from .fingerprint import FPS, FingerprintResult
 from .fingerprint import check as fingerprint_check
 from .identify import parse_text
 from .library import file_track, final_path, find_duplicate, prune_missing_tracks
-from .lossless import Reference, pick, policy_from_settings, reference_for, search_text
+from .lossless import (
+    Reference,
+    pick,
+    policy_from_settings,
+    reference_for,
+    search_text,
+    transfer_ceiling_s,
+)
 from .match import candidate_query, candidate_version, decide, same_version
 from .models import (
     MISS_REASON,
@@ -62,16 +69,34 @@ REVIEW_BUTTONS = 5
 CANCELLABLE = {RequestState.QUEUED, RequestState.IDENTIFYING, RequestState.FETCHING,
                RequestState.AWAITING_REVIEW, RequestState.ERROR}
 LOGIN_REQUIRED = "Telegram login required"
-RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted"}   # spec §5: only these let a request try again
+# spec §5: only these let a request try again on its own. "queued" belongs with them because it is a wait,
+# not an answer -- the peers had the file and simply had not reached us in their queue, so the next pass is
+# asking a question that has genuinely changed. Everything else is a verdict the next pass would only repeat.
+RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
+# Whether a *later pass* may search a provider again, which is a different question: a request that fell
+# back to the lossy copy is DONE and nothing reprocesses it, so "may search again" never means "will come
+# back on its own". `no_pick` sits here and not above for exactly that reason. It belongs here at all
+# because Soulseek is a population, not a library -- the same query for "Space Dwarfs" found no survivor
+# at 11:40 on 2026-09-10 and two, one on a free slot, at 14:51.
+SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
-# survivor. Two kinds sit here: the file was wrong (verify, fingerprint) and the peer would not
-# send it (rejected the transfer, or queued us past the first-byte cap). The second kind is the
-# one to keep in mind -- a peer refusing an upload is a fact about that peer, never about the
-# file, so giving up on the whole attempt there threw away survivors that were still good.
-# Not here: transfer_timeout (bytes were flowing, just too slowly -- another peer on the same
-# link is unlikely to do better), and unavailable/interrupted, which the request-level retry
-# (RETRY_LOSSLESS_OUTCOMES) already handles.
-SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout"}
+# survivor. Four kinds sit here: the file was wrong (verify, fingerprint), the peer would not
+# send it (rejected the transfer, or never started after leaving the queue), the peer stopped
+# part-way (transfer_timeout), and the peer is simply busy (queued). All four are facts about one
+# peer, never about the file, so giving up on the whole attempt at any of them threw away
+# survivors that were still good. transfer_timeout used to be excluded on the theory that a slow
+# transfer measures the link rather than the peer; the Filteria measurement on 2026-09-10 says
+# otherwise -- 102 kB/s from one peer while four survivors sat on free slots with nobody queued.
+# Not here: unavailable/interrupted, which the request-level retry (RETRY_LOSSLESS_OUTCOMES)
+# already handles, and no_pick, which is about the search rather than any peer.
+SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
+                     "transfer_timeout"}
+# A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
+# possibly have changed. Long enough to be a real second look, short enough that the row is not abandoned.
+SLOW_BACKOFF_S = 900
+# Outcomes whose answer can only change on the timescale of a Soulseek queue moving or the people online
+# turning over. The 30 s/120 s ladder would ask again long before either could happen.
+SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
 MAINTENANCE_EVERY_S = 86_400
 LOSSLESS_HEALTH_EVERY_S = 60        # once the provider answers "ok"
 LOSSLESS_HEALTH_SETTLING_S = 5      # while it is still connecting, or has gone away
@@ -390,10 +415,11 @@ class Worker:
         log.info("req#%d interrupted; back on the queue", request_id)
         self._set_state(req, RequestState.QUEUED, flag_reason=None)
 
-    async def _retry_or_fail(self, req: Request, reason: str, *, flag: str | None = None) -> None:
+    async def _retry_or_fail(self, req: Request, reason: str, *, flag: str | None = None,
+                             wait_s: int | None = None) -> None:
         attempts = req.attempts + 1
         if attempts < MAX_ATTEMPTS:
-            wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1]
+            wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1] if wait_s is None else wait_s
             retry_after = (datetime.now(UTC) + timedelta(seconds=wait)).isoformat(timespec="seconds")
             self._set_state(req, RequestState.QUEUED, attempts=attempts, flag_reason=flag or reason,
                             retry_after=retry_after)
@@ -480,13 +506,7 @@ class Worker:
                     return
                 if not self._lossless_allowed(req):
                     # Beatport knows the track, so it exists -- there is just no route to a file right now.
-                    # Say which route is missing rather than blaming the source for a setting, the same way
-                    # `_lossless_miss_line` stays quiet when the provider is simply off.
-                    await self._retry_or_fail(req, "no way to fetch this track: the source is unavailable, and "
-                                                   + ("Soulseek is switched off"
-                                                      if not (self.providers and self.settings.lossless_enabled)
-                                                      else "Soulseek has already looked and found nothing. Use "
-                                                           "Try again in the app to search once more"))
+                    await self._no_route(req)
                     return
                 self.store.update_request(req.id, flag_reason=NO_FINGERPRINT_FLAG)
                 await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
@@ -564,10 +584,8 @@ class Worker:
             hit = await self._try_lossless(req, cand, catalog)
         if hit is None and cand.source == CATALOG_SOURCE:
             # A Beatport stand-in has no source_ref the bot would recognise, so there is no Deezer copy to
-            # fall back to -- the providers were the only route and they came up empty. Say so plainly
-            # instead of handing the source a candidate it never issued.
-            await self._retry_or_fail(req, "no lossless copy found, and the source is unavailable for the "
-                                           "lossy fallback")
+            # fall back to -- the providers were the only route and this pass produced no file.
+            await self._no_route(req)
             return
         if hit is None:
             self.store.update_request(req.id, fetch_source=self.source.name)
@@ -596,6 +614,37 @@ class Worker:
             shutil.rmtree(self.settings.tmp_dir / f"req{req.id}", ignore_errors=True)  # spec §13: leave tmp_dir empty
             self.store.update_request(req.id, fetch_source=None)
 
+    async def _no_route(self, req: Request) -> None:
+        """Soulseek was the only way to a file and this pass did not produce one. Two things have to be
+        right here, and both used to be wrong.
+
+        What to say. The old line asserted that Soulseek "has already looked and found nothing" whatever had
+        actually happened, which for the live failure this was written from was untrue three ways over: the
+        peers had five perfect copies and were merely busy. The attempt row knows which outcome it really was
+        and `MISS_REASON` already words each one, so read it rather than guess. Likewise the source is
+        "switched off" when the owner switched it off, and only otherwise "unavailable".
+
+        Whether to come back. Exactly `_lossless_allowed`: after a retryable outcome the next pass really does
+        search again, and after a definitive one it would repeat this pass's work to reach this pass's answer
+        -- three passes, two "retrying" messages, no searches. Say it once and stop, the same way a track
+        neither side can identify lands terminally rather than burning the backoff schedule."""
+        attempt = self.store.get_attempt_for_request(req.id)
+        outcome = attempt.outcome if attempt else None
+        why = MISS_REASON.get(outcome) if outcome else None
+        if why is None:
+            why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
+                   else "Soulseek found no copy of it")
+        fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
+                    if not self.settings.source_enabled else "the source is unavailable for the lossy fallback")
+        reason = f"no way to fetch this track: {why}, {fallback}"
+        if self._lossless_allowed(self.store.get_request(req.id)):
+            await self._retry_or_fail(req, reason,
+                                      wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None)
+            return
+        reason += ". Use Try again in the app to search once more"
+        self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
+        await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
+
     def _lossless_allowed(self, req: Request) -> bool:
         if not self.providers or not self.settings.lossless_enabled:
             return False
@@ -603,7 +652,7 @@ class Worker:
         # Spec §5 stops the *worker* going back to a provider on its own after a definitive miss. It does
         # not bind the owner: `retry()` grants `lossless_retry` on a failed request, which is the button
         # `_lossless_miss_line` points them at. `upgrade()` skips this check outright for the same reason.
-        return last is None or last.outcome in RETRY_LOSSLESS_OUTCOMES or bool(req.lossless_retry)
+        return last is None or last.outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
 
     async def _verify_and_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
                                hit: LosslessHit | None = None) -> None:
@@ -784,7 +833,7 @@ class Worker:
         """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
         every miss is an attempt row with an outcome (spec §5, §11)."""
         try:
-            ref = reference_for(catalog, cand)
+            ref = reference_for(catalog, cand, req.query_duration_s)
             query = search_text(ref)
             policy = policy_from_settings(self.settings)
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
@@ -838,10 +887,13 @@ class Worker:
         if report.chosen is None:
             rec.finish("no_pick")
             return None
-        budget_s = s.lossless_search_wait_s + s.lossless_first_byte_s + s.lossless_transfer_s
         outcome = "no_pick"
         for n, file in enumerate(report.survivors[:s.lossless_max_picks], start=1):
-            if n > 1 and rec.elapsed_ms() / 1000 > budget_s - s.lossless_first_byte_s:
+            # What one pick may cost, for this file: the queue wait is left out because the pick about to
+            # start still has its own, and charging it twice is what would close this gate the moment the
+            # ceiling grew with the file.
+            budget_s = s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(file.size, s)
+            if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
             hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n)
@@ -881,8 +933,10 @@ class Worker:
                 self.store.update_attempt(rec.id, first_byte_ms=p.first_byte_ms)
 
         try:
-            landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s, total_s=s.lossless_transfer_s,
-                                             poll_s=s.lossless_poll_s, on_progress=progress, on_raw=rec.raw)
+            landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s,
+                                             total_s=transfer_ceiling_s(file.size, s), poll_s=s.lossless_poll_s,
+                                             queue_wait_s=s.lossless_queue_wait_s, stall_s=s.lossless_stall_s,
+                                             on_progress=progress, on_raw=rec.raw)
         except LosslessError as e:
             rec.event("transfer_failed", error=str(e))
             return None, e.outcome

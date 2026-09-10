@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from flackey.config import Settings
 from flackey.lossless import (
     RANKERS,
@@ -12,6 +14,7 @@ from flackey.lossless import (
     policy_from_settings,
     reference_for,
     search_text,
+    transfer_ceiling_s,
 )
 from flackey.models import Candidate, CatalogTrack
 
@@ -137,3 +140,36 @@ def test_policy_from_settings(tmp_path):
                  lossless_require_artist=True)
     p = policy_from_settings(s)
     assert (p.title_ratio, p.max_queue_length, p.require_artist, p.duration_tolerance_s) == (85, 4, True, 3)
+
+
+def test_a_file_matching_the_requested_length_survives_a_catalog_duration_from_another_release():
+    """Beatport can match a compilation master while the owner asked for the album cut. Without a Deezer id
+    there is no fingerprint, so the duration rule is the identity check and must not be widened -- instead it
+    accepts either of the two lengths that are actually known, each still within its own tolerance."""
+    ref = Reference(artist="Filteria", title="Dog Days Bliss", mix_name="Original Mix", duration_s=544,
+                    requested_duration_s=532)
+    album = mk(path="Suntrip\\Lost In The Wild\\02 - Filteria - Dog Days Bliss.flac", length_s=531,
+               size=531 * 900 * 1000 // 8)
+    assert rejected_by(album, ref) is None
+    compilation = mk(path="Ovnimoon\\Jikukan 2\\Filteria - Dog Days Bliss.flac", length_s=544,
+                     size=544 * 900 * 1000 // 8)
+    assert rejected_by(compilation, ref) is None
+    other = mk(path="VA\\Filteria - Dog Days Bliss (1997 Mix).flac", length_s=505, size=505 * 900 * 1000 // 8)
+    assert rejected_by(other, ref) == "duration"
+
+
+def test_the_requested_length_is_only_a_second_window_never_a_wider_one():
+    ref = Reference(artist="A", title="T", mix_name="Original Mix", duration_s=544, requested_duration_s=532)
+    assert rejected_by(mk(length_s=538, size=538 * 900 * 1000 // 8), ref) == "duration"   # between the two
+
+
+def test_the_transfer_ceiling_grows_with_the_file_so_a_long_flac_is_not_cut_at_ninety_percent(tmp_path):
+    """One flat cap cannot serve a 5 MB single and a 67 MB ten-minute FLAC. 600 s at a peer's honest
+    100 kB/s files the first and cancels the second with 7 MB to go -- which is what happened to Filteria's
+    "Dog Days Bliss". A floor on the rate is the thing that actually has to hold: below it the peer is
+    trickling and the request is better off with the next survivor."""
+    s = Settings(_env_file=None, data_dir=tmp_path)
+    assert transfer_ceiling_s(5_000_000, s) == s.lossless_transfer_s          # small file keeps the floor
+    big = transfer_ceiling_s(67_085_339, s)
+    assert big / 60 > 55 and big == pytest.approx(67_085_339 * 8 / (s.lossless_min_rate_kbps * 1000))
+    assert transfer_ceiling_s(67_085_339, s) > transfer_ceiling_s(40_000_000, s)

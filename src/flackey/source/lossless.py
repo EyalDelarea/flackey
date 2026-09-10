@@ -45,6 +45,7 @@ class LosslessProvider(Protocol):
     async def search(self, text: str, *, wait_s: float, on_raw: RawSink | None = None) -> list[LosslessFile]: ...
 
     async def download(self, file: LosslessFile, *, first_byte_s: float, total_s: float, poll_s: float,
+                       queue_wait_s: float | None = None, stall_s: float | None = None,
                        on_progress: Callable[[TransferProgress], None] | None = None,
                        on_raw: RawSink | None = None) -> Path: ...
 

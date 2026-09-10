@@ -88,10 +88,27 @@ def _is_original(mix: str) -> bool:
     return bool(re.search(r"\boriginal\b", mix, re.IGNORECASE))
 
 
+def _matches_length(t: CatalogTrack, wanted_s: int | None) -> bool:
+    return wanted_s is not None and t.duration_s is not None and abs(t.duration_s - wanted_s) <= DURATION_SLACK_S
+
+
+def _length_pins_a_version(query: Query, tracks: list[CatalogTrack]) -> bool:
+    """The requested length singles out something that is not tagged "Original Mix", and no original mix is
+    that length. Then the tag is Beatport's filing, not a different recording, and the flat original-mix
+    bonus is describing the wrong release: an album cut tagged "Album Edit" loses to a later compilation
+    tagged "Original Mix" whose master exists on no other release. `match._pinned_by_length` decides the same
+    question for source candidates; this is that rule where the catalogue itself is being chosen."""
+    if query.duration_s is None or query.version:
+        return False
+    return (any(_matches_length(t, query.duration_s) and not _is_original(t.mix_name) for t in tracks)
+            and not any(_matches_length(t, query.duration_s) and _is_original(t.mix_name) for t in tracks))
+
+
 def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
     if not tracks:
         return None
     want_version = _norm(query.version) if query.version else None
+    pinned = _length_pins_a_version(query, tracks)
     scored: list[tuple[float, CatalogTrack]] = []
     for t in tracks:
         if want_version:
@@ -106,7 +123,7 @@ def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
             # token_sort, not token_set: token_set scores 100 for any *subset* of tokens, so
             # "The Void - Into the Void" ties the real record for "astral projection into the void"
             s = fuzz.token_sort_ratio(_norm(query.raw), _norm(f"{t.artist} {t.title}"))
-        if not want_version and not _is_original(t.mix_name):
+        if not want_version and not _is_original(t.mix_name) and not (pinned and _matches_length(t, query.duration_s)):
             s -= 25
         if query.duration_s and t.duration_s:
             # the video's length picks the release: 15 s off costs the same as a wrong version; a few
