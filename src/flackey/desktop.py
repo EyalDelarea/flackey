@@ -18,7 +18,7 @@ from .config import Settings
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)
-MIN_SIZE = (720, 540)  # the Welcome and setup screens ask for 720x540 through WindowApi.resize
+MIN_SIZE = (720, 540)  # the Welcome and setup screens ask for 720x600 through WindowApi.resize
 LIGHT_WINDOW = "#ECECEC"  # keep in sync with --window in web/src/theme.css
 DARK_WINDOW = "#1E1E1E"
 INSET_FLAG = "?titlebar=inset"

@@ -35,7 +35,10 @@ export default function App() {
   useEffect(() => { if (authorized) setReconnecting(false) }, [authorized])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   const mainScreen = !!h && h.setup_done && !reconnecting
-  useEffect(() => { if (h) requestWindowSize(mainScreen ? 1100 : 720, mainScreen ? 720 : 540) }, [h, mainScreen])
+  // 600, not 540: the Soulseek step carries a heading, a lead, two fields, a warning about a password
+  // nothing can reset, two buttons and a footnote, and at 540 that column did not fit -- which is how
+  // its heading came to be drawn over the stepper. The window is the thing that was wrong, not the step.
+  useEffect(() => { if (h) requestWindowSize(mainScreen ? 1100 : 720, mainScreen ? 720 : 600) }, [h, mainScreen])
 
   if (!h) {
     return (<div className="app-loading">

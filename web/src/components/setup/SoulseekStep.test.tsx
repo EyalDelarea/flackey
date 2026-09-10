@@ -67,6 +67,31 @@ describe('the account Flackey makes on the owner\'s behalf', () => {
     expect(screen.getByLabelText('Soulseek password')).toHaveValue('')
     expect(screen.getByLabelText('Soulseek password')).toHaveAttribute('type', 'password')
   })
+
+  it('still offers to make one when an account is already saved', async () => {
+    // The offer used to exist only on a first run: an owner who reopened setup with an account saved
+    // saw two fields, one of them blank, and no way to ask flackey to do the work again.
+    vi.spyOn(api, 'soulseekSetup').mockResolvedValue({ configured: true, username: 'digger' })
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Soulseek username')).toHaveValue('digger'))
+    fireEvent.click(screen.getByText('Make me a new account'))
+    expect(screen.getByLabelText('Soulseek username')).not.toHaveValue('digger')
+    expect(screen.getByLabelText('Soulseek password')).toHaveAttribute('type', 'text')
+    // And it stops calling itself the account they have, because it is no longer describing that one.
+    expect(screen.getByText('Create a Soulseek account')).toBeInTheDocument()
+    expect(screen.getByText('Create account')).not.toBeDisabled()
+  })
+
+  it('names the saved account it is about to replace', async () => {
+    // A one-way door: saving overwrites the only copy of the old password there is, so the warning has
+    // to name the account being left behind and say where its password can still be read.
+    vi.spyOn(api, 'soulseekSetup').mockResolvedValue({ configured: true, username: 'digger' })
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Soulseek username')).toHaveValue('digger'))
+    fireEvent.click(screen.getByText('Make me a new account'))
+    expect(screen.getByText(/replaces the account already saved \(digger\)/)).toBeInTheDocument()
+    expect(screen.getByText(/from Settings/)).toBeInTheDocument()
+  })
 })
 
 it('saves and calls onDone with the typed values', async () => {
@@ -108,7 +133,8 @@ it('prefills the username when an account is already configured', async () => {
   vi.spyOn(api, 'soulseekSetup').mockResolvedValue({ configured: true, username: 'digger' })
   render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
   await waitFor(() => expect(screen.getByLabelText('Soulseek username')).toHaveValue('digger'))
-  expect(screen.getByText('A Soulseek account is already saved.')).toBeInTheDocument()
+  // The lead says so; there is no separate line repeating it, because the step has to fit the window.
+  expect(screen.getByText(/already saved/)).toBeInTheDocument()
 })
 
 it('renders no error when the mount check is rejected', async () => {

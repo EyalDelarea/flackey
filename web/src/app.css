@@ -219,7 +219,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .step.cur { color: var(--text); font-weight: 500; }
 .disc { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 8px; background: var(--chip); color: var(--secondary); font-size: 10px; }
 .step.cur .disc { background: var(--accent); color: #fff; } .step.done .disc { background: var(--green); color: #fff; }
-.setup-content { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; }
+/* Centred while it fits, scrolled from the top when it does not. `justify-content: center` overflows
+   *both* ends of an overfull box, and the top half of that spill is drawn over the stepper -- which is
+   how the Soulseek step's heading ended up on top of "Telegram". Auto margins collapse to zero when
+   there is no free space, so one rule centres a short step and leaves a tall one flush and scrollable. */
+.setup-content { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; overflow-y: auto; }
+.setup-content > :first-child { margin-top: auto; }
+.setup-content > :last-child { margin-bottom: auto; }
 .setup h1 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; }
 .setup .lead { max-width: 440px; font-size: 13px; color: var(--secondary); line-height: 1.5; }
 .setup .err { margin-top: 8px; }
@@ -231,7 +237,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .folder-well input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: 12px var(--mono); color: var(--text); }
 .hint-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--tertiary); }
 /* A hint the owner is meant to act on before moving off the screen, not one they may skim. */
-.hint-row.warn { display: block; color: var(--secondary); max-width: 420px; text-align: center; line-height: 1.45; }
+.hint-row.warn { display: block; color: var(--secondary); max-width: 460px; text-align: center; line-height: 1.45; }
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .tg { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: center; width: 100%; text-align: left; }
 .tg .lead { max-width: none; }
@@ -243,7 +249,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .qr-hint { margin-top: 8px; font-size: 11px; color: var(--tertiary); text-align: center; }
 .pw-box { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: var(--orange-wash); border: .5px solid var(--orange); }
 .pw-box .k { font-size: 13px; font-weight: 500; }
-.footnote { margin-top: 16px; padding-top: 10px; border-top: .5px solid var(--sep); font-size: 11px; color: var(--tertiary); line-height: 1.5; }
+.footnote { padding-top: 10px; border-top: .5px solid var(--sep); font-size: 11px; color: var(--tertiary); line-height: 1.5; }
 .ready-disc { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .ready-disc.bad { background: var(--red-wash); color: var(--red); }
 .path-well { padding: 8px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); font: 12px var(--mono); }

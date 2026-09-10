@@ -7,7 +7,7 @@ import CopyButton from '../CopyButton'
 const POLL_MS = 1000
 // Soulseek releases a name that goes a month without signing in (slsknet.org/news/node/748), and flackey
 // signs in every time it starts -- so this is a real condition on keeping the account, not a footnote.
-const RECYCLE_NOTE = 'Open Flackey at least once a month: Soulseek releases names that go 30 days without signing in.'
+const RECYCLE_NOTE = 'Open Flackey at least once a month: Soulseek releases a name that goes 30 days without a sign-in.'
 
 export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: boolean) => void; onSkip: () => void }) {
   const [username, setUsername] = useState('')
@@ -29,6 +29,10 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
   const [connect, setConnect] = useState<SoulseekConnect | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const connectTimer = useRef<number | undefined>(undefined)
+  // The name that was already saved when this step opened, kept because `username` is overwritten the
+  // moment the owner asks for a new account -- and that is exactly when they need to be told which
+  // account they are about to walk away from.
+  const savedUsername = useRef<string | null>(null)
 
   const deal = () => {
     const account = generateAccount()
@@ -81,7 +85,7 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
     api.soulseekSetup().then(s => {
       if (cancelled) return
       setConfigured(s.configured)
-      if (s.configured && s.username) setUsername(s.username)
+      if (s.configured && s.username) { savedUsername.current = s.username; setUsername(s.username) }
       else if (!s.configured) deal()   // there is nothing to sign up for, so the form arrives filled in
     }).catch(() => { /* not an error the user should see — leave the fields empty */ })
     api.slskdSetup().then(s => {
@@ -112,14 +116,20 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
   const progressText = install?.state === 'extracting' ? 'Almost there…'
     : pct === null ? 'Getting things ready…' : `Getting things ready… ${pct}%`
   const connected = connect?.state === 'connected'
-  const saveLabel = connected ? 'Continue' : busy ? 'Signing in…' : configured ? 'Sign in' : 'Create account'
+  // Whatever was saved before this screen opened, a name flackey has just dealt is one being created --
+  // so the screen stops describing itself as the account they already have.
+  const existing = configured && !generated
+  const saveLabel = connected ? 'Continue' : busy ? 'Signing in…' : existing ? 'Sign in' : 'Create account'
 
   return (<>
-    <h1>{configured ? 'Your Soulseek account' : 'Create a Soulseek account'}</h1>
-    <p className="lead">Soulseek is where Flackey finds lossless copies of the tracks you queue. {generated
-      ? 'It has no sign-up form — a name becomes yours the moment something signs in with it — so Flackey has made you one. Change either field if you would rather pick your own.'
-      : 'There is no sign-up form — pick any name and password, and if nobody is using that name it becomes yours the moment it signs in. Flackey keeps the password to itself and only uses it to sign in for you.'}</p>
-    {configured && !connect && <div className="hint-row">A Soulseek account is already saved.</div>}
+    <h1>{existing ? 'Your Soulseek account' : 'Create a Soulseek account'}</h1>
+    {/* Kept to two or three lines on purpose: this step carries a password warning and a pair of fields
+        under it, and at the window's default height the whole column has to fit without scrolling. */}
+    <p className="lead">Soulseek is where Flackey finds lossless copies. {existing
+      ? 'This account is already saved — sign in to check it still works, or make a new one.'
+      : generated
+        ? 'It has no sign-up form — a name is yours the moment something signs in with it — so Flackey has made you one.'
+        : 'There is no sign-up form: pick any name and password, and an unused name becomes yours the moment it signs in.'}</p>
     <div className="fields">
       <div className="field">
         <label htmlFor="soulseek-username">Soulseek username</label>
@@ -138,8 +148,14 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
         </div>
       </div>
     </div>
-    {generated && <div className="hint-row warn">Copy this password somewhere safe. Soulseek has no way to
-      reset one — the name stays bound to it, and Flackey is the only other place it is kept.</div>}
+    {/* The only way back to an account flackey makes once the fields hold something else: a name was
+        already saved (so nothing was dealt on mount), or the owner typed over the pair and changed their
+        mind. Without it the offer to do the work for them existed on a first run and nowhere else. */}
+    {!generated && <div className="hint-row"><button className="btn-link" onClick={deal} disabled={busy}>
+      {configured ? 'Make me a new account' : 'Let Flackey make me an account'}</button></div>}
+    {generated && <div className="hint-row warn">Copy this password somewhere safe: Soulseek has no way to
+      reset one, and Flackey is the only other place it is kept.
+      {savedUsername.current && ` Creating it also replaces the account already saved (${savedUsername.current}) — copy that password from Settings first if you want to keep it.`}</div>}
     {connect?.state === 'connecting' && <div className="hint-row">Signing in to Soulseek…</div>}
     {connected && <div className="hint-row ok">Signed in as {connect?.username ?? username}. The account is yours.</div>}
     {connect?.state === 'failed' && (generated
