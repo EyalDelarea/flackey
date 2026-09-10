@@ -32,10 +32,10 @@ class TagError(Exception):
     pass
 
 
-# Rekordbox reads ID3v2.3 and skips 2.4, which is mutagen's default. A 2.4 tag on a WAV is well-formed --
-# ffprobe reads ours back in full -- and rekordbox still shows the file with an empty artist, album, genre
-# and cover, falling back to the filename for the title. Everything we write exists in 2.3, so we simply
-# write 2.3: the only frame that does not carry over is TDRC, and TYER stands in for it below.
+# 2.3, not mutagen's default of 2.4, because 2.3 is the version every DJ tool reads and nothing we write
+# needs 2.4. This is compatibility insurance, not a bug fix: the empty-artist import that prompted it was
+# the WAV container, which rekordbox does not read ID3 from in either version (see `lossless_filing_format`).
+# The one frame that does not carry over is TDRC, and TYER stands in for it below.
 ID3_VERSION = 3
 
 

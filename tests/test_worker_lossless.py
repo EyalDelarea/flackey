@@ -138,16 +138,16 @@ def attempt_of(store: Store, rid: int):
     return a
 
 
-async def test_hit_files_wav_with_evidence_done_line_and_raw_record(lenv):
+async def test_hit_files_aiff_with_evidence_done_line_and_raw_record(lenv):
     settings, store, notifier, _, _, _ = lenv
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.fetch_source is None
     t = store.get_track(r.track_id)
-    assert t.path.suffix == ".wav" and t.path.exists() and (t.source, t.source_fmt, t.bit_depth, t.sample_rate) == (
+    assert t.path.suffix == ".aiff" and t.path.exists() and (t.source, t.source_fmt, t.bit_depth, t.sample_rate) == (
         "soulseek", "flac", 16, 44100)
-    assert t.fmt == "wav"
+    assert t.fmt == "aiff"
     assert w.source.fetched == []                               # Deezer never asked
     a = attempt_of(store, rid)
     assert a.outcome == "filed" and a.first_byte_ms == 800 and a.total_ms is not None
@@ -164,7 +164,7 @@ async def test_hit_files_wav_with_evidence_done_line_and_raw_record(lenv):
     assert kinds["recording_match"]["score"] == 0.98 and kinds["recording_match"]["reference"] == "deezer:1754956977"
     assert kinds["fingerprint"]["frames"] == [4, 5, 6]
     done = notifier.sent[-1][0]
-    assert "WAV 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
+    assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
     assert store.stats()["by_source"] == {"soulseek": 1}
     assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "flackey-dj"}
 
@@ -660,10 +660,10 @@ async def test_upgrade_swaps_the_file_and_keeps_the_row_id(lenv):
     msg = await w.upgrade(before.id)
 
     after = store.get_track(before.id)                    # same id: evidence and playlists follow it
-    assert after.source_fmt == "flac" and after.source == "soulseek" and after.path.suffix == ".wav"
+    assert after.source_fmt == "flac" and after.source == "soulseek" and after.path.suffix == ".aiff"
     assert after.path.exists() and not before.path.exists(), "the lossy file is deleted, but only last"
     assert after.file_size == after.path.stat().st_size
-    assert "Upgraded to WAV" in msg and "Upgraded:" in notifier.sent[-1][0]
+    assert "Upgraded to AIFF" in msg and "Upgraded:" in notifier.sent[-1][0]
     assert not list(settings.tmp_dir.iterdir())
 
 
