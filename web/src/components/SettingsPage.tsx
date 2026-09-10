@@ -35,8 +35,6 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [busy, setBusy] = useState(false)
   const [resettingSetup, setResettingSetup] = useState(false)
   const [setupResetError, setSetupResetError] = useState<string | null>(null)
-  const [formatBusy, setFormatBusy] = useState(false)
-  const [formatError, setFormatError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
   // The saved Soulseek password, once the owner asks for it. Held only in this component's state:
@@ -101,13 +99,6 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setPasswordError(getErrorMessage(e, "Couldn't read the saved Soulseek password.")))
       .finally(() => setPasswordBusy(false))
   }
-  const setFormat = (fmt: string) => {
-    setFormatBusy(true); setFormatError(null)
-    api.saveSettings(s.library_root, { lossless_filing_format: fmt })
-      .then(next => live.setSettings(next))
-      .catch(e => setFormatError(getErrorMessage(e, "Couldn't change the file format.")))
-      .finally(() => setFormatBusy(false))
-  }
   return (
     <div className="scroll settings">
       {revealError && <Banner tone="red" text={revealError} action={{ label: 'Dismiss', onClick: () => setRevealError(null) }} />}
@@ -149,15 +140,6 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
               <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
             : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
                 {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>}
-        {lossless?.enabled && <div className="srow"><div className="srow-body"><div className="k">File format</div>
-          <div className="v">What new downloads are filed as. All three are lossless; tracks already in your
-            library keep the format they have.</div>
-          {formatError && <div className="err">{formatError}</div>}</div>
-          <div className="actions"><div className="segmented" role="group" aria-label="File format">
-            {(s.filing_formats ?? []).map(f =>
-              <button key={f} aria-pressed={s.lossless_filing_format === f} disabled={formatBusy}
-                onClick={() => { if (s.lossless_filing_format !== f) setFormat(f) }}>{f.toUpperCase()}</button>)}
-          </div></div></div>}
         {/* Ports and the pick rules are the two things nobody needs until something is wrong, and stating
             them beside the format switch made the panel read as a control room. Folded away, not dropped:
             they are the first thing to ask for when a transfer never starts or a copy is refused. */}

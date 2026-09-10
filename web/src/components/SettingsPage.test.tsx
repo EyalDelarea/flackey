@@ -121,7 +121,7 @@ it('fills the field when Choose… returns a path', async () => {
 describe('the Soulseek panel', () => {
   const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
     library_root: '/tmp/lib', data_dir: '/tmp/data', version: '0.1.0', telegram_configured: true,
-    log_path: '/tmp/data/flackey.log', soulseek_enabled: true, lossless_filing_format: 'wav',
+    log_path: '/tmp/data/flackey.log', soulseek_enabled: true, lossless_filing_format: 'aiff',
     filing_formats: ['aiff', 'wav', 'flac'],
     ports: {
       app: { port: 8765, host: '127.0.0.1', public: false },
@@ -166,14 +166,6 @@ describe('the Soulseek panel', () => {
     expect(details).toContainElement(screen.getByText(/keeps a copy only if its fingerprint matches/))
   })
 
-  it('shows the current file format as chosen rather than as unavailable', () => {
-    // A disabled button reads "you can't have this"; the point is "you already have this".
-    show(lossless())
-    expect(screen.getByRole('button', { name: 'WAV' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'WAV' })).not.toBeDisabled()
-    expect(screen.getByRole('button', { name: 'AIFF' })).toHaveAttribute('aria-pressed', 'false')
-  })
-
   it('offers a way out of a stuck sign-in instead of leaving the owner watching it', () => {
     const connect = vi.spyOn(api, 'connectSoulseek')
       .mockResolvedValue({ state: 'connecting', username: null, error: null })
@@ -193,11 +185,12 @@ describe('the Soulseek panel', () => {
     expect(screen.queryByRole('button', { name: /Reconnect|Try again/ })).not.toBeInTheDocument()
   })
 
-  it('saves a new format through the settings endpoint', async () => {
-    const saveSettings = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ lossless_filing_format: 'aiff' }))
+  it('offers no format to choose: on a Mac there is one right answer', () => {
+    // Rekordbox reads no ID3 tag out of a WAV, so a WAV files with no artist, genre or cover -- and FLAC is
+    // not playable on every CDJ. AIFF is the only one that is both, which leaves nothing to ask the owner.
     show(lossless())
-    fireEvent.click(screen.getByRole('button', { name: 'AIFF' }))
-    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith('/tmp/lib', { lossless_filing_format: 'aiff' }))
+    expect(screen.queryByRole('group', { name: 'File format' })).not.toBeInTheDocument()
+    expect(screen.queryByText('File format')).not.toBeInTheDocument()
   })
 
   it('does not fetch the saved password until it is asked for, and hides it again', async () => {

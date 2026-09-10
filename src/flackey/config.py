@@ -80,7 +80,12 @@ class Settings(BaseSettings):
     slskd_url: str = "http://127.0.0.1:5030"
     slskd_api_key: str | None = None
     slskd_downloads_dir: Path | None = None       # default: <data_dir>/slskd/downloads, see `slskd_downloads`
-    lossless_filing_format: str = "wav"   # PCM either way; WAV is the more universally readable container
+    # AIFF, not WAV: rekordbox reads no ID3 tag out of a WAV at all. Not after `data`, not moved in front of
+    # it, and not when the tag is a single kilobyte -- all three import with the filename as the title and no
+    # artist, album, genre or cover. For a WAV it reads only the RIFF `LIST/INFO` chunk, which has no artwork
+    # field, so no WAV can carry a cover it will ever show. AIFF is the same PCM at the same size in a
+    # container it tags fully, and every CDJ plays it.
+    lossless_filing_format: str = "aiff"
     lossless_search_wait_s: int = 30
     lossless_first_byte_s: int = 60
     # How long to sit in one peer's queue before moving to the next survivor. The peers holding a rare goa

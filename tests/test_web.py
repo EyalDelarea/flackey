@@ -896,7 +896,7 @@ def test_settings_never_expose_the_api_key_and_accept_lossless_keys(tmp_path: Pa
     settings.slskd_api_key = "secret-key-value"
     out = c.get("/api/settings").json()
     assert "secret-key-value" not in json.dumps(out) and out["soulseek_enabled"] is True
-    assert out["slskd_url"] == "http://127.0.0.1:5030" and out["lossless_filing_format"] == "wav"
+    assert out["slskd_url"] == "http://127.0.0.1:5030" and out["lossless_filing_format"] == "aiff"
     r = c.put("/api/settings", json={"library_root": str(tmp_path / "lib"), "slskd_api_key": "new-key",
                                      "slskd_url": "http://127.0.0.1:5031", "lossless_filing_format": "aiff"})
     assert r.status_code == 200 and "new-key" not in r.text and r.json()["lossless_filing_format"] == "aiff"

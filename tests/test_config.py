@@ -68,6 +68,13 @@ def test_save_settings_preserves_keys_written_by_an_earlier_save(tmp_path: Path)
     assert data == {"telegram_api_id": 999, "telegram_api_hash": "file-hash", "library_root": str(tmp_path / "new")}
 
 
+def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path):
+    """Rekordbox reads no ID3 tag out of a WAV -- proven against it with the tag after `data`, moved in front
+    of `data`, and stripped to a kilobyte with no cover; all three imported as the bare filename. It reads the
+    identical frames out of an AIFF, artwork included. The default is the whole fix, so it is worth a test."""
+    assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
+
+
 def test_web_host_defaults_to_loopback(tmp_path: Path):
     assert load_settings(_env(tmp_path)).web_host == "127.0.0.1"
     assert load_settings(_env(tmp_path, "WEB_HOST=0.0.0.0\n")).web_host == "0.0.0.0"
@@ -214,7 +221,7 @@ def test_lossless_is_off_until_an_api_key_is_set(tmp_path: Path):
     assert s.slskd_downloads == tmp_path / "slskd" / "downloads"
     assert s.lossless_raw_dir == tmp_path / "lossless" / "attempts"
     assert (s.lossless_filing_format, s.lossless_search_wait_s, s.lossless_first_byte_s, s.lossless_transfer_s,
-            s.lossless_poll_s) == ("wav", 30, 60, 600, 2.0)
+            s.lossless_poll_s) == ("aiff", 30, 60, 600, 2.0)
     assert (s.lossless_duration_tolerance_s, s.lossless_title_ratio, s.lossless_require_artist,
             s.lossless_max_queue, s.lossless_fingerprint_min, s.lossless_max_picks,
             s.lossless_keep_raw_days) == (3, 90, False, None, 0.90, 4, 30)
