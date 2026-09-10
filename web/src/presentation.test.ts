@@ -58,7 +58,7 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts)
     expect(v.status).toBe('Ace Ventura / Ace Ventura - Rezonate.mp3')
     expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
-    expect(v.statusMono).toBe(true)
+    expect(v.statusPath).toBe(true)
     expect(v.statusTone).toBe('muted'); expect(v.version).toBe('Original Mix')
     expect(v.steps).toEqual(Array(5).fill(null).map((_, i) => ({ name: ['Search','Choose','Download','Verify','Done'][i], state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
@@ -130,7 +130,9 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)
     expect(v.status).toBe('Beatport unreachable — trying again in 25 seconds'); expect(v.retryInSeconds).toBe(25)
     const p = presentRow(bundle({ state: 'fetching' }), { ...opts, telegramAuthorized: false })
-    expect(p.status).toBe('Paused — will continue after you reconnect'); expect(p.tag).toBe('paused at step 3 of 6'); expect(p.dimmed).toBe(true)
+    // The tag counted rungs -- "step 3 of 6" -- against a ladder that has five, and the count was the
+    // wrong thing to say anyway: the rung is right there beside it. It names where the row stopped.
+    expect(p.status).toBe('Paused — will continue after you reconnect'); expect(p.tag).toBe('paused at Download'); expect(p.dimmed).toBe(true)
   })
 })
 

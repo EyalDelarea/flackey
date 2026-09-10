@@ -3,7 +3,7 @@ import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
 import type { RowView } from '../../presentation'
 
-const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted', statusMono: false,
+const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted', statusPath: false,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
@@ -95,12 +95,12 @@ it('shows the checks that prove the file is the right recording', () => {
 })
 
 it('names the delivered format on a filed row instead of a bare bitrate', () => {
-  const view: RowView = { ...base, status: 'Ace Ventura / Ace Ventura - Rezonate.mp3', statusMono: true, dimmed: false, tag: null,
+  const view: RowView = { ...base, status: 'Ace Ventura / Ace Ventura - Rezonate.mp3', statusPath: true, dimmed: false, tag: null,
     formatLabel: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek',
     action: { label: 'Show in Finder', kind: 'reveal', path: '/a.mp3' }, bucket: 'done', removable: true }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
   expect(screen.getByText('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')).toBeInTheDocument()
-  expect(screen.getByText('Ace Ventura / Ace Ventura - Rezonate.mp3')).toHaveClass('mono')
+  expect(screen.getByText('Ace Ventura / Ace Ventura - Rezonate.mp3')).toHaveClass('path')
 })
 
 it('puts Stop beside a running download, where there are no choices to skip past', () => {
@@ -125,4 +125,12 @@ it('a queued transfer spins without a number: nothing has arrived, so there is n
   const platter = screen.getByLabelText("Waiting in someone's queue")   // the row's own words, which name the peer
   expect(platter).toHaveClass('waiting')
   expect(platter.querySelector('text')).toBeNull()
+})
+
+it('sweeps without claiming a queue when the transfer has started but the size is not known yet', () => {
+  // `progressOf` returns a null pct for two different states; only the label tells them apart.
+  const view: RowView = { ...base, status: 'Downloading', statusTone: 'amber', tag: null, dimmed: false,
+    progress: { pct: null, label: 'Downloading from someone' } }
+  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+  expect(screen.getByLabelText('Downloading from someone')).toHaveClass('waiting')
 })

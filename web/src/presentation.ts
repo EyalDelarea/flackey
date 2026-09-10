@@ -26,7 +26,7 @@ export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | '
 export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean }
 export interface RejectionView { reason: string; cutoffKhz: number | null; caption: string; spectrogramUrl: string | null }
 export interface RowView {
-  id: number; title: string; version: string | null; status: string; statusTone: Tone; statusMono: boolean
+  id: number; title: string; version: string | null; status: string; statusTone: Tone; statusPath: boolean
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
@@ -180,7 +180,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const { title, version } = titleOf(b)
   const bucket = bucketOf(r.state)
   const v: RowView = {
-    id: r.id, title, version, status: '', statusTone: 'muted', statusMono: false, steps: stepsFor(r.state),
+    id: r.id, title, version, status: '', statusTone: 'muted', statusPath: false, steps: stepsFor(r.state),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
     bucket, removable: bucket === 'done' || bucket === 'failed', formatLabel: formatLabelOf(b), checks: checksFor(b),
@@ -190,7 +190,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   if (!opts.telegramAuthorized && (IN_FLIGHT.includes(r.state) || r.state === 'queued')) {
     v.status = r.state === 'queued' ? 'Paused — will start when you reconnect'
                                     : 'Paused — will continue after you reconnect'
-    v.tag = r.state === 'queued' ? 'queued' : `paused at step ${(step ?? 0) + 1} of 6`
+    // The rung, not a count of them: "step 3 of 6" outlived the six-rung ladder, and the ladder beside
+    // this tag already shows how far along it is. What the tag adds is the name of the rung it stopped on.
+    v.tag = r.state === 'queued' ? 'queued' : `paused at ${STEPS[step ?? 0]}`
     v.dimmed = true
     return v
   }
@@ -234,7 +236,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     case 'done':
       if (b.track) {
         v.status = relPath(b.track.path, opts.libraryRoot)
-        v.statusTone = 'muted'; v.statusMono = true
+        v.statusTone = 'muted'; v.statusPath = true
         v.action = { label: 'Show in Finder', kind: 'reveal', path: b.track.path }
         if (!v.version) v.version = b.track.mix_name
       } else { v.status = 'Filed earlier — the file is no longer in your library folder'; v.statusTone = 'muted' }

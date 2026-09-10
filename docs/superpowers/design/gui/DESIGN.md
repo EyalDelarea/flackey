@@ -154,7 +154,7 @@ Group "Single tracks" · "1 of 1 filed": "Captain Hook – Human Design (Origina
 Banner under the title bar: "Telegram signed out. Reconnect to keep digging — tracks already
 filed are untouched." with primary "Reconnect". Sidebar footer turns amber: "Telegram signed
 out". Rows dim to 60%: "Ace Ventura – Rezonate" · "Paused — will continue after you reconnect"
-· mono "paused while downloading"; queued row unchanged.
+· mono "paused at Download"; queued row unchanged.
 
 ### Library (1200×800)
 

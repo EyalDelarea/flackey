@@ -8,23 +8,23 @@ const CIRC = 2 * Math.PI * R
     would. It replaces the thin bar that used to sit under the title -- the point of the redesign was to
     make the percentage the thing you see first, and a 4px line beside a paragraph of grey text was not it.
 
-    `pct === null` means there is no number to show: the peer has accepted the request but has not started
-    sending, or the bytes have all landed and the file is being checked. The rim sweeps a short arc instead
-    of filling, which is the same signal the old bar's `.waiting` sweep gave -- something is happening, but
-    no bytes are moving. Which of the two it is only the row's own label knows, so that is what it reads out
-    rather than a sentence of its own that was right for the queue and wrong for everything else. */
+    A null `pct` is every state with no proportion to draw yet -- queued at the peer, sending before the
+    size is known, or the bytes all landed and the file being checked. The rim sweeps a short arc instead
+    of filling, the same signal the old bar's `.waiting` state gave: something is happening, but no bytes
+    are moving. There is no number to announce either, so the row's own `label` stands in -- it is the one
+    string that tells those states apart, and inventing a second one here got it wrong. */
 export default function Platter({ pct, label }: { pct: number | null; label: string }) {
   const waiting = pct === null
   // One gradient per instance: several rows download at once, and a shared `id` would be a duplicate.
   // `useId` returns colons, which are legal in an id but awkward inside `url(#...)`; strip them.
-  const labelId = `platter${useId().replace(/:/g, '')}`
+  const grad = `platter${useId().replace(/:/g, '')}`
   const swept = waiting ? CIRC * 0.22 : (CIRC * Math.min(100, Math.max(0, pct))) / 100
   return (
     <div className={`platter${waiting ? ' waiting' : ''}`} role="img"
          aria-label={waiting ? label : `${Math.round(pct)}% transferred`}>
       <svg viewBox="0 0 44 44" width="44" height="44" aria-hidden focusable="false">
         <defs>
-          <linearGradient id={labelId} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={grad} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stopColor="#7DDCFF" /><stop offset="1" stopColor="#0A84FF" />
           </linearGradient>
         </defs>
@@ -39,7 +39,7 @@ export default function Platter({ pct, label }: { pct: number | null; label: str
           <circle cx="22" cy="22" r="17.6" fill="#12161F" />
           <circle cx="22" cy="22" r="14.7" fill="none" stroke="rgba(255,255,255,.16)" strokeWidth=".6" />
           <circle cx="22" cy="22" r="12.4" fill="none" stroke="rgba(255,255,255,.10)" strokeWidth=".6" />
-          <circle cx="22" cy="22" r="9.4" fill={`url(#${labelId})`} stroke="rgba(0,0,0,.35)" strokeWidth=".8" />
+          <circle cx="22" cy="22" r="9.4" fill={`url(#${grad})`} stroke="rgba(0,0,0,.35)" strokeWidth=".8" />
           {waiting && <circle cx="22" cy="22" r="1" fill="#0B0D12" />}
         </g>
         {!waiting && <text className="pct" x="22" y="22" textAnchor="middle" dominantBaseline="central">{Math.round(pct)}</text>}
