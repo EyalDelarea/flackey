@@ -77,7 +77,7 @@ const MISS_REASON: Record<string, string> = {
   transfer_failed: 'the people who had it would not send it',
   first_byte_timeout: 'the people who had it never started sending',
   queued: 'the people who had it are busy and their queue has not reached us yet',
-  transfer_timeout: 'the download was too slow to finish',
+  transfer_timeout: 'the people who had it stopped sending part-way through',
   verify_failed: 'the copies offered were not really lossless',
   fingerprint_failed: 'the copies offered were a different recording',
   convert_failed: 'the file could not be converted',
