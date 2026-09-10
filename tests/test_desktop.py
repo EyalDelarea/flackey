@@ -343,3 +343,21 @@ def test_relaunch_bundled_is_false_when_already_bundled_or_off_macos(monkeypatch
     monkeypatch.delenv(desktop.BUNDLED_ENV)
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.relaunch_bundled(settings) is False
+
+
+def test_a_packaged_app_does_not_relaunch_itself_through_the_venv_shim(monkeypatch, tmp_path):
+    """`build_bundle` exists to give an unbundled interpreter a Dock name, by wrapping the venv it was
+    started from. A packaged .app already is a bundle and has no venv, so there is nothing to wrap and
+    nothing to fix. Declining explicitly rather than by way of a missing pyvenv.cfg matters because the
+    failure mode here is `os.execve` on a path that is not what the caller thinks it is -- a hang with no
+    window and no message, in the one build where there is no console to see it happen."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    monkeypatch.delenv(desktop.BUNDLED_ENV, raising=False)
+    monkeypatch.setattr(desktop, "build_bundle", lambda settings: (_ for _ in ()).throw(
+        AssertionError("a frozen app must not try to build a venv shim")))
+
+    assert desktop.relaunch_bundled(Settings(data_dir=tmp_path)) is False

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -26,6 +25,7 @@ from ..slskd_config import (
 from ..slskd_process import SlskdProcess
 from ..store import Store
 from ..tools import tool_path
+from ..youtube import ytdlp_available
 from . import SETUP_DONE_KEY, Bundles, to_dict
 
 log = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.get("/tools")
     async def tools() -> dict:
         return {"ffmpeg": tool_path("ffmpeg") is not None, "ffprobe": tool_path("ffprobe") is not None,
-                "yt_dlp": shutil.which("yt-dlp") is not None, "fpcalc": tool_path("fpcalc") is not None}
+                "yt_dlp": ytdlp_available(), "fpcalc": tool_path("fpcalc") is not None}
 
     @r.post("/setup/done")
     async def setup_done() -> dict:

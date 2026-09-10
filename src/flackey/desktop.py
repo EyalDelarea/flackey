@@ -83,7 +83,11 @@ def relaunch_bundled(settings: Settings) -> bool:
     """Exec this process again through the app bundle so the Dock and menu bar say Flackey. Never
     returns on success (the process is replaced). False off macOS, when already running bundled, or when
     the bundle cannot be built."""
-    if sys.platform != "darwin" or os.environ.get(BUNDLED_ENV):
+    # `sys.frozen` is the packaged .app, which already is a bundle: there is no venv to wrap and the
+    # Dock name is its own. Left to reach `build_bundle` it would decline only because a frozen app has
+    # no pyvenv.cfg -- true today, and an accident to rely on when the cost of it changing is `execve`
+    # onto the wrong path, which in a windowed build is a hang with nothing on screen to explain it.
+    if sys.platform != "darwin" or os.environ.get(BUNDLED_ENV) or getattr(sys, "frozen", False):
         return False
     exe = build_bundle(settings)
     if exe is None:
@@ -112,7 +116,7 @@ def set_app_name(name: str = APP_NAME) -> bool:
         bundle = NSBundle.mainBundle()
         info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
         info["CFBundleName"] = name
-    except Exception:  # noqa: BLE001 - cosmetic; the window still opens
+    except Exception:
         log.debug("could not set the app name", exc_info=True)
         return False
     return True
@@ -150,7 +154,7 @@ def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHan
     def target() -> None:
         try:
             asyncio.run(run(settings, open_browser=False, handle=handle))
-        except BaseException as e:  # noqa: BLE001 - the window thread reports it; nothing else would
+        except BaseException as e:
             handle.error = handle.error or e
             log.exception("server thread stopped with an error")
         finally:

@@ -28,3 +28,4 @@ data/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+packaging/build/
