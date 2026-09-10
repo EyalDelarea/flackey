@@ -68,6 +68,7 @@ layers = [
   "lossless",
   "match : identify",
   "notify : config : models : logsetup",
+  "tools",
   "slskd_process",
   "slskd_binary",
   "slskd_config",

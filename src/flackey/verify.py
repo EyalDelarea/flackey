@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .models import Verdict
+from .tools import tool_path
 
 MIN_MP3_BITRATE = 320
 MIN_MP3_CUTOFF = 18_000
@@ -37,10 +38,15 @@ RUN_TIMEOUT_S = 300
 
 
 def _run(cmd: list[str]) -> bytes:
+    # The caller names the tool; this is where it turns into a path that survives a Finder launch.
+    # `name` is kept for the message: an absolute path in a timeout error tells the reader nothing
+    # they did not already know, and buries the one word that matters.
+    name = cmd[0]
+    cmd = [tool_path(name) or name, *cmd[1:]]
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S)
     except subprocess.TimeoutExpired as e:
-        raise VerifyError(f"{cmd[0]} timed out after {RUN_TIMEOUT_S}s") from e
+        raise VerifyError(f"{name} timed out after {RUN_TIMEOUT_S}s") from e
     if p.returncode != 0:
         raise VerifyError(p.stderr.decode(errors="replace")[-400:])
     return p.stdout

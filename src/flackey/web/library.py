@@ -25,6 +25,7 @@ from ..slskd_config import (
 )
 from ..slskd_process import SlskdProcess
 from ..store import Store
+from ..tools import tool_path
 from . import SETUP_DONE_KEY, Bundles, to_dict
 
 log = logging.getLogger(__name__)
@@ -191,8 +192,8 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
 
     @r.get("/tools")
     async def tools() -> dict:
-        return {"ffmpeg": shutil.which("ffmpeg") is not None, "ffprobe": shutil.which("ffprobe") is not None,
-                "yt_dlp": shutil.which("yt-dlp") is not None, "fpcalc": shutil.which("fpcalc") is not None}
+        return {"ffmpeg": tool_path("ffmpeg") is not None, "ffprobe": tool_path("ffprobe") is not None,
+                "yt_dlp": shutil.which("yt-dlp") is not None, "fpcalc": tool_path("fpcalc") is not None}
 
     @r.post("/setup/done")
     async def setup_done() -> dict:

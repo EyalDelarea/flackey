@@ -52,7 +52,7 @@ def test_real_fpcalc_locates_a_cut_at_the_right_offset(tmp_path: Path):
 
 
 def test_fingerprint_raises_when_fpcalc_is_missing(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(fp.shutil, "which", lambda _: None)
+    monkeypatch.setattr(fp, "tool_path", lambda _: None)
     with pytest.raises(FingerprintError):
         fingerprint(tmp_path / "x.wav")
 

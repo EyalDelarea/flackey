@@ -6,7 +6,6 @@ import threading
 import webbrowser
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import httpx
 import uvicorn
@@ -28,6 +27,7 @@ from .source.lossless import LosslessProvider
 from .source.slskd import SlskdClient, SoulseekProvider
 from .store import Store
 from .telegram import TelegramLogin
+from .tools import resource_dir
 from .web import create_app
 from .worker import Worker
 
@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 # Resolves to <repo>/web/dist under `uv sync` (editable install) and in the Docker image, which is how
 # this project is run. A wheel install would resolve elsewhere; the static mount is guarded by
 # `ui_dir.exists()` in create_app, so the failure mode is a 404 on `/`, never a crash.
-UI_DIR = Path(__file__).resolve().parents[2] / "web" / "dist"
+UI_DIR = resource_dir() / "web" / "dist"
 WEB_SERVER_START_TIMEOUT_S = 30
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -14,6 +13,8 @@ from uuid import uuid4
 
 import httpx
 import numpy as np
+
+from .tools import tool_path
 
 log = logging.getLogger(__name__)
 FPS = 8.06                                        # chromaprint hop: 1365 samples at 11025 Hz
@@ -28,7 +29,7 @@ class FingerprintError(Exception):
 
 
 def fpcalc_available() -> bool:
-    return shutil.which("fpcalc") is not None
+    return tool_path("fpcalc") is not None
 
 
 def fingerprint(path: Path, start_s: float = 0.0) -> list[int]:
@@ -42,11 +43,11 @@ def fingerprint(path: Path, start_s: float = 0.0) -> list[int]:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)  # noqa: SIM115 - path must outlive this block
             tmp.close()
             src = Path(tmp.name)
-            r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start_s}", "-i", str(path), "-vn", "-map", "0:a",
+            r = subprocess.run([tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-y", "-ss", f"{start_s}", "-i", str(path), "-vn", "-map", "0:a",
                                 str(src)], capture_output=True, timeout=FPCALC_TIMEOUT_S, check=False)
             if r.returncode != 0:
                 raise FingerprintError(r.stderr.decode(errors="replace")[-300:])
-        r = subprocess.run(["fpcalc", "-raw", "-json", "-length", "0", str(src)], capture_output=True,
+        r = subprocess.run([tool_path("fpcalc") or "fpcalc", "-raw", "-json", "-length", "0", str(src)], capture_output=True,
                             timeout=FPCALC_TIMEOUT_S, check=False)
         if r.returncode != 0:
             raise FingerprintError(r.stderr.decode(errors="replace")[-300:] or "fpcalc failed")

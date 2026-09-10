@@ -7,6 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from .tools import tool_path
+
 log = logging.getLogger(__name__)
 RUN_TIMEOUT_S = 300
 CODECS = {("aiff", 16): "pcm_s16be", ("aiff", 24): "pcm_s24be", ("wav", 16): "pcm_s16le", ("wav", 24): "pcm_s24le"}
@@ -17,7 +19,9 @@ class ConvertError(Exception):
 
 
 def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
-    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
+    # Absolute path, not the bare name: a .app launched from Finder gets a PATH without the Homebrew
+    # prefixes, so the bare name resolves to nothing there even when ffmpeg is plainly installed.
+    cmd = [tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
            "-c:a", codec, str(dst)]
     t0 = time.monotonic()
     try:
