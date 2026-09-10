@@ -26,7 +26,7 @@ export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | '
 export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean }
 export interface RejectionView { reason: string; cutoffKhz: number | null; caption: string; spectrogramUrl: string | null }
 export interface RowView {
-  id: number; title: string; version: string | null; status: string; statusTone: Tone; statusPath: boolean
+  id: number; title: string; version: string | null; status: string; statusTone: Tone
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
@@ -46,10 +46,6 @@ export interface PresentOpts {
 }
 
 export const mmss = (s: number | null | undefined) => s == null ? '?:??' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-export function relPath(path: string, root: string): string {
-  const rel = path.startsWith(root) ? path.slice(root.length).replace(/^\/+/, '') : path
-  return rel.split('/').filter(Boolean).join(' / ')
-}
 export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
 // `done` is the last index, not one past it: the old value indexed past STEPS, so the Done rung could never
 // read as reached. `filing` rides on Verify rather than on Done -- it has no rung of its own now, and a Done
@@ -148,7 +144,11 @@ function checksFor(b: Bundle): CheckView[] {
   const fp = b.attempt?.fingerprint
   if (fp && fp.score != null) out.push({ label: 'Same recording', value: `${(fp.score * 100).toFixed(1)}% match`, ok: fp.status !== 'failed' })
   const hz = b.track?.cutoff_hz ?? b.rejection?.cutoff_hz ?? null
-  if (hz) out.push({ label: 'Audio to', value: `${(hz / 1000).toFixed(1)} kHz`, ok: b.track != null })
+  // "Verified to 22.1 kHz", not "Audio to": the number is the highest frequency carrying real content, and
+  // 22.1 kHz means no encoder lowpass was found anywhere, which is the point the line is making. A file
+  // that failed is not verified to anything, so it says what it is instead.
+  if (hz) out.push({ label: b.track != null ? 'Verified to' : 'Audio only to',
+                     value: `${(hz / 1000).toFixed(1)} kHz`, ok: b.track != null })
   return out
 }
 
@@ -180,7 +180,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const { title, version } = titleOf(b)
   const bucket = bucketOf(r.state)
   const v: RowView = {
-    id: r.id, title, version, status: '', statusTone: 'muted', statusPath: false, steps: stepsFor(r.state),
+    id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r.state),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
     bucket, removable: bucket === 'done' || bucket === 'failed', formatLabel: formatLabelOf(b), checks: checksFor(b),
@@ -235,8 +235,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     }
     case 'done':
       if (b.track) {
-        v.status = relPath(b.track.path, opts.libraryRoot)
-        v.statusTone = 'muted'; v.statusPath = true
+        // No status line: it used to carry the library-relative path, which is `Artist/Artist - Title`
+        // -- the same sentence as the title directly above it, ellipsized before it ever reached the
+        // filename. Show in Finder is right there for anyone who wants the location.
         v.action = { label: 'Show in Finder', kind: 'reveal', path: b.track.path }
         if (!v.version) v.version = b.track.mix_name
       } else { v.status = 'Filed earlier — the file is no longer in your library folder'; v.statusTone = 'muted' }

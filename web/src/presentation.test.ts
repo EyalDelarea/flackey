@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, gb, groupRows, mmss, presentRow, relPath, stepIndex } from './presentation'
+import { bucketCounts, bucketOf, gb, groupRows, mmss, presentRow, stepIndex } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -11,10 +11,6 @@ const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
 
 describe('formatting', () => {
   it('mmss', () => { expect(mmss(442)).toBe('7:22'); expect(mmss(5)).toBe('0:05'); expect(mmss(null)).toBe('?:??') })
-  it('relPath', () => expect(relPath('/Users/me/Music/DJ Library/Ace Ventura/Ace Ventura - Rezonate.mp3', '/Users/me/Music/DJ Library'))
-    .toBe('Ace Ventura / Ace Ventura - Rezonate.mp3'))
-  it('relPath drops empty segments so an out-of-root path has no leading " / "', () =>
-    expect(relPath('/elsewhere/track.mp3', '/Users/me/Music/DJ Library')).toBe('elsewhere / track.mp3'))
   it('gb', () => { expect(gb(3.2e9)).toBe('3.2 GB'); expect(gb(512e6)).toBe('512 MB') })
   it('stepIndex', () => { expect(stepIndex('fetching')).toBe(2); expect(stepIndex('done')).toBe(4); expect(stepIndex('rejected')).toBeNull() })
 })
@@ -56,10 +52,10 @@ describe('presentRow', () => {
       file_size: 1, artist: 'Ace Ventura', title: 'Rezonate', mix_name: 'Original Mix', duration_s: 521, isrc: null, catalog_track_id: null, fetch_source: null,
       request_id: 1, added_at: '', verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null, catalog: null }
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts)
-    expect(v.status).toBe('Ace Ventura / Ace Ventura - Rezonate.mp3')
+    // No status line on a filed row: it used to repeat the title as a library-relative path.
+    expect(v.status).toBe('')
     expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
-    expect(v.statusPath).toBe(true)
-    expect(v.statusTone).toBe('muted'); expect(v.version).toBe('Original Mix')
+    expect(v.version).toBe('Original Mix')
     expect(v.steps).toEqual(Array(5).fill(null).map((_, i) => ({ name: ['Search','Choose','Download','Verify','Done'][i], state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
   })
@@ -79,7 +75,7 @@ describe('presentRow', () => {
     expect(v.formatLabel).toBe('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')
     expect(v.checks).toEqual([
       { label: 'Same recording', value: '98.5% match', ok: true },
-      { label: 'Audio to', value: '22.1 kHz', ok: true }])
+      { label: 'Verified to', value: '22.1 kHz', ok: true }])
   })
   it('a failed fingerprint reads as a failed check, and a rejection still reports its cutoff', () => {
     const attempt = { id: 5, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
@@ -89,7 +85,7 @@ describe('presentRow', () => {
       .toEqual([{ label: 'Same recording', value: '41.0% match', ok: false }])
     const rejection = { id: 2, request_id: 1, reason: 'upscale', bitrate_kbps: 320, cutoff_hz: 16000, spectrogram_path: null, created_at: '' }
     expect(presentRow(bundle({ state: 'rejected' }, { rejection }), opts).checks)
-      .toEqual([{ label: 'Audio to', value: '16.0 kHz', ok: false }])
+      .toEqual([{ label: 'Audio only to', value: '16.0 kHz', ok: false }])
   })
   it('filed row without track shows a muted message when file was removed from library', () => {
     const v = presentRow(bundle({ state: 'done' }), opts)

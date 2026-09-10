@@ -3,7 +3,7 @@ import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
 import type { RowView } from '../../presentation'
 
-const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted', statusPath: false,
+const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted',
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
@@ -95,12 +95,13 @@ it('shows the checks that prove the file is the right recording', () => {
 })
 
 it('names the delivered format on a filed row instead of a bare bitrate', () => {
-  const view: RowView = { ...base, status: 'Ace Ventura / Ace Ventura - Rezonate.mp3', statusPath: true, dimmed: false, tag: null,
+  const view: RowView = { ...base, status: '', dimmed: false, tag: null,
     formatLabel: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek',
     action: { label: 'Show in Finder', kind: 'reveal', path: '/a.mp3' }, bucket: 'done', removable: true }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
   expect(screen.getByText('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')).toBeInTheDocument()
-  expect(screen.getByText('Ace Ventura / Ace Ventura - Rezonate.mp3')).toHaveClass('path')
+  // The path line is gone: it repeated the title above it word for word.
+  expect(document.querySelector('.status')).toBeNull()
 })
 
 it('puts Stop beside a running download, where there are no choices to skip past', () => {
