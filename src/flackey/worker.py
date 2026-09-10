@@ -67,6 +67,12 @@ LOGIN_REQUIRED = "Telegram login required"
 # not an answer -- the peers had the file and simply had not reached us in their queue, so the next pass is
 # asking a question that has genuinely changed. Everything else is a verdict the next pass would only repeat.
 RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
+# Whether a *later pass* may search a provider again, which is a different question: a request that fell
+# back to the lossy copy is DONE and nothing reprocesses it, so "may search again" never means "will come
+# back on its own". `no_pick` sits here and not above for exactly that reason. It belongs here at all
+# because Soulseek is a population, not a library -- the same query for "Space Dwarfs" found no survivor
+# at 11:40 on 2026-09-10 and two, one on a free slot, at 14:51.
+SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
 # survivor. Four kinds sit here: the file was wrong (verify, fingerprint), the peer would not
 # send it (rejected the transfer, or never started after leaving the queue), the peer stopped
@@ -81,7 +87,10 @@ SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "
                      "transfer_timeout"}
 # A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
 # possibly have changed. Long enough to be a real second look, short enough that the row is not abandoned.
-QUEUED_BACKOFF_S = 900
+SLOW_BACKOFF_S = 900
+# Outcomes whose answer can only change on the timescale of a Soulseek queue moving or the people online
+# turning over. The 30 s/120 s ladder would ask again long before either could happen.
+SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
 MAINTENANCE_EVERY_S = 86_400
 LOSSLESS_HEALTH_EVERY_S = 60        # once the provider answers "ok"
 LOSSLESS_HEALTH_SETTLING_S = 5      # while it is still connecting, or has gone away
@@ -534,7 +543,8 @@ class Worker:
                     if not self.settings.source_enabled else "the source is unavailable for the lossy fallback")
         reason = f"no way to fetch this track: {why}, {fallback}"
         if self._lossless_allowed(self.store.get_request(req.id)):
-            await self._retry_or_fail(req, reason, wait_s=QUEUED_BACKOFF_S if outcome == "queued" else None)
+            await self._retry_or_fail(req, reason,
+                                      wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None)
             return
         reason += ". Use Try again in the app to search once more"
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
@@ -547,7 +557,7 @@ class Worker:
         # Spec §5 stops the *worker* going back to a provider on its own after a definitive miss. It does
         # not bind the owner: `retry()` grants `lossless_retry` on a failed request, which is the button
         # `_lossless_miss_line` points them at. `upgrade()` skips this check outright for the same reason.
-        return last is None or last.outcome in RETRY_LOSSLESS_OUTCOMES or bool(req.lossless_retry)
+        return last is None or last.outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
 
     async def _verify_and_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
                                hit: LosslessHit | None = None) -> None:
