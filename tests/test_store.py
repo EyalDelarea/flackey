@@ -304,3 +304,20 @@ def test_a_stored_path_outside_any_old_folder_is_left_alone(tmp_path: Path, monk
     store.conn.close()
     assert Store(db).conn.execute("SELECT spectrogram_path FROM lossless_attempts WHERE id=?",
                                   (aid,)).fetchone()["spectrogram_path"] == outside
+
+
+def test_a_request_parked_before_the_column_existed_still_earns_its_choose_rung(tmp_path: Path):
+    """The `reviewed` column arrived with a DEFAULT of 0, so every row already in the database reads as
+    never-reviewed -- including a request sitting in awaiting_review at the moment of the upgrade. That row
+    is the one the owner is most likely to be looking at when they next open the app, and the rung would
+    vanish from under them the instant they picked. Being parked *is* the proof it was sent for review, so
+    the flag is restored on open."""
+    path = tmp_path / "t.sqlite"
+    store = Store(path)
+    rid = store.add_request("astral projection into the void", RequestKind.TEXT)
+    store.set_state(rid, RequestState.AWAITING_REVIEW)
+    store.conn.execute("UPDATE requests SET reviewed=0 WHERE id=?", (rid,))   # as an older build left it
+    store.conn.commit()
+    store.conn.close()
+
+    assert Store(path).get_request(rid).reviewed

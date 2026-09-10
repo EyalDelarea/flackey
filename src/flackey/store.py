@@ -105,6 +105,12 @@ class Store:
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
+        # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
+        # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
+        # would disappear from under the owner the moment they answered the question they came back to.
+        # Safe to repeat on every open -- it only ever states what the row's own state already says.
+        self.conn.execute("UPDATE requests SET reviewed=1 WHERE state='awaiting_review' AND reviewed=0")
+        self.conn.commit()
         self._renormalize()
         self._repoint_legacy_paths(path.parent)
         self.listeners: list[Callable[[str, int], None]] = []

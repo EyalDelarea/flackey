@@ -204,6 +204,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
                                     : 'Paused — will continue after you reconnect'
     // The rung, not a count of them: "step 3 of 6" outlived the six-rung ladder, and the ladder beside
     // this tag already shows how far along it is. What the tag adds is the name of the rung it stopped on.
+    // `stepIndex` counts positions in the full STEPS vocabulary, not in this row's drawn ladder, which may
+    // have had Choose thinned out of it. That is right for naming a rung and wrong for counting one: drop a
+    // second conditional rung one day and this still names correctly, but do not turn it back into "of N".
     v.tag = r.state === 'queued' ? 'queued' : `paused at ${STEPS[step ?? 0]}`
     v.dimmed = true
     return v
