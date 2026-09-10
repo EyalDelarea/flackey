@@ -80,10 +80,15 @@ exact copy, and measurements: `docs/superpowers/design/gui/DESIGN.md`.
   summary "12 of 40 filed · 1 needs your choice · 1 rejected". Single tracks share one
   "Single tracks" group.
 - **Row anatomy**: artwork (Beatport art once matched, a placeholder before), title with the
-  version in muted parentheses, a plain-words status line, a five-rung progress ladder, and at
-  most one button. The rungs are Search, Choose, Download, Verify, Done, each with hover text
-  saying what happens in it; the current one pulses amber, finished ones are green. There is no
+  version in muted parentheses, a plain-words status line, a progress ladder, and at
+  most one button. The rungs are Search, Choose, Download, Verify, Done, each explaining in a
+  hover tag what happens in it; the current one pulses amber, finished ones are green. There is no
   File rung: a rung earns its place if a request can stop on it, and filing never stops one.
+  Choose appears only on a track that actually stopped for one — most are matched outright and show
+  four rungs, and a green Choose on those would claim a step that never happened. Once a track has
+  been asked about, the rung stays for the rest of its life; `requests.reviewed` records that.
+  The hover tag is drawn by the app, not by the browser: the packaged window is a WKWebView, which
+  renders the `title` attribute as nothing at all.
 - **Row states**: in progress ("Downloading the file"); filed (green mono path
   relative to the library folder plus "320 kbps verified", button "Show in Finder"); needs
   your choice (amber-washed row, reason with the video length, one card per candidate with

@@ -34,3 +34,11 @@ it('escapes the scrolling card it lives in rather than being clipped by it', () 
   expect(tip.parentElement).toBe(document.body)
   expect(tip.style.position).toBe('fixed')
 })
+
+it('drops below a rung that has no room above it, rather than off the top of the window', () => {
+  // Every rect is at the origin under jsdom, which is exactly the case this guards: a rung at the very
+  // top of the window. Above is the better side -- the pointer is not covering it -- but not off-screen.
+  const { container } = render(<Stepper steps={steps} />)
+  fireEvent.mouseEnter(container.querySelectorAll('.step')[1])
+  expect(screen.getByRole('tooltip')).toHaveClass('below')
+})

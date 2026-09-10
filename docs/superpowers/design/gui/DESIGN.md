@@ -82,7 +82,9 @@ match percentages, the setup stepper, the `queued` tag and column headers.
 | Card | radius 11, border `.07`, overflow hidden |
 | Row | grid `44px minmax(0,1fr) auto auto`, gap 14, padding 11 14, divider `.05` |
 | Artwork | 44×44 radius 6 (library rows 36×36 radius 5). Placeholder: radial "record" gradient over a two-stop diagonal gradient |
-| Progress | six 6px dots, gap 4: green done, amber current (pulse 1.2s), `.15` white pending. Step words to the right of the dots on in-progress rows |
+| Progress | One ladder: each rung is a 6px dot and its own name, joined by a 6px hairline. Green done, amber current (pulse 1.2s), faint pending. The mockup's separate row of dots plus a `Search · Choose · …` string is gone — it had to be paired up by counting |
+| Rung hover tag | Drawn by the app, never the `title` attribute (WKWebView renders none). Radius 4, padding 7 10, `saturate(180%) blur(20px)` over a .92-opaque ground, rung name above the sentence. Portalled to the document and placed in viewport coordinates, since the row list scrolls; flips below a rung with no room above it |
+| Transfer platter | 44px record in the right rail beside Stop: rim `--selection`, arc `--accent` at 2.6, vinyl disc turning at 4.2s, pale label with the percentage in dark ink. The arc is the only accent — an accent label outshouted it. Indeterminate states drop the number, grey the arc and sweep it at 1.9s |
 | Row button | padding 6 12, radius 7 |
 | Candidate card | radius 9, padding 12 14, gap 8, indented 58px under the row; chosen one has the amber border |
 | Spectrogram well | margin 0 14 14 72, radius 8, padding 12 14; image 84px tall, radius 5, dashed red cut-off line with mono label |
@@ -125,10 +127,11 @@ Group "Progressive Psy Set 2026" with summary "12 of 40 filed · 1 needs your ch
 
 1. Filed: "Astral Projection – Into the Void (Original Mix)"; green mono path
    "Astral Projection / Astral Projection - Into the Void (Original Mix).mp3 · 320 kbps verified";
-   five green rungs; "Show in Finder".
-2. In progress: "Ace Ventura – Rezonate"; amber status "Downloading the file"; one ladder of five
-   rungs, each carrying its own name, its own state and a tooltip explaining the phase:
-   "Search · Choose · Download · Verify · Done", green green amber(pulse) pending×2.
+   four green rungs — nobody was asked to choose this one; "Show in Finder".
+2. In progress: "Ace Ventura – Rezonate"; amber status "Downloading the file"; one ladder whose rungs
+   each carry their own name, their own state and a hover tag explaining the phase:
+   "Search · Download · Verify · Done", green amber(pulse) pending×2. Choose sits between the first
+   two only on a track that stopped for one, which is the minority; the row below is such a track.
 3. Needs your choice (amber-washed row): "Vini Vici – The Tribe"; amber status "Needs your
    choice — the video is 8:41 long, but the best match is only 6:12. Pick the version you want."
    Two candidate cards side by side: "Vini Vici – The Tribe (Extended Mix)" · "92% match" ·

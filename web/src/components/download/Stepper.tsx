@@ -3,7 +3,11 @@ import { createPortal } from 'react-dom'
 import { STEP_TIPS } from '../../presentation'
 import type { StepView } from '../../presentation'
 
-interface Tip { name: string; x: number; y: number }
+interface Tip { name: string; x: number; y: number; below: boolean }
+/** Roughly the tag's own height plus its gap. Above the rung is the better place -- the pointer is not
+ *  covering it -- but a rung near the top of the window has no room there, and a tag half off the screen
+ *  explains nothing. */
+const TIP_ROOM = 96
 
 /** One ladder, not two widgets. The old row put dots on the left and a `Search · Choose · …` string on the
  *  right, so the reader had to pair them up by counting. Here each rung carries its own name, state and
@@ -18,7 +22,8 @@ export default function Stepper({ steps }: { steps: StepView[] }) {
   const [tip, setTip] = useState<Tip | null>(null)
   const show = (name: string) => (e: { currentTarget: Element }) => {
     const r = e.currentTarget.getBoundingClientRect()
-    setTip({ name, x: r.left + r.width / 2, y: r.top })
+    const below = r.top < TIP_ROOM
+    setTip({ name, x: r.left + r.width / 2, y: below ? r.bottom : r.top, below })
   }
   return (
     <div className="stepper">
@@ -37,7 +42,8 @@ export default function Stepper({ steps }: { steps: StepView[] }) {
         ))}
       </ol>
       {tip && createPortal(
-        <div className="step-tip" role="tooltip" style={{ position: 'fixed', left: tip.x, top: tip.y }}>
+        <div className={`step-tip${tip.below ? ' below' : ''}`} role="tooltip"
+             style={{ position: 'fixed', left: tip.x, top: tip.y }}>
           <strong>{tip.name}</strong>{STEP_TIPS[tip.name]}
         </div>, document.body)}
     </div>
