@@ -17,7 +17,7 @@ label are in the tags.
 ## Setup
 
 ```bash
-cp .env.example .env   # fill in TELEGRAM_API_ID, TELEGRAM_API_HASH
+cp .env.example .env   # optional: TELEGRAM_API_ID, TELEGRAM_API_HASH (the Telegram step asks for them otherwise)
 uv sync
 npm --prefix web install
 npm --prefix web run build   # builds web/dist, which flackey start serves
