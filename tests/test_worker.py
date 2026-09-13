@@ -651,3 +651,23 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
     w2 = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     assert (await w2.process(auto)).state in (RequestState.DONE, RequestState.DUPLICATE)
     assert not store.get_request(auto).reviewed     # never paused, so it never earns the rung
+
+
+async def test_run_forever_keeps_going_with_telegram_signed_out_when_the_source_is_off(env):
+    """Telegram signed out only stops the worker while the bot is a source; with it switched off the
+    loop must keep running so Soulseek requests still get served."""
+    w = make_worker(env, FakeSource(), FakeCatalog())
+    w.settings.source_enabled = False
+    w.status["telegram_authorized"] = False
+    ticks = []
+
+    async def stop_after_two(force: bool = False) -> None:
+        if force:            # startup()'s own call, not a loop tick
+            return
+        ticks.append(1)
+        if len(ticks) == 2:
+            w.settings.source_enabled = True   # now the loop condition is false on the next check
+
+    w._maintenance = stop_after_two
+    await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=2)
+    assert len(ticks) == 2

@@ -121,6 +121,8 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
                 "telegram_authorized": bool(status.get("telegram_authorized", True)),
                 "worker_running": bool(status.get("worker_running", False)),
                 "setup_done": bool(status.get("setup_done", False)),
+                "telegram_configured": settings.telegram_configured,
+                "source_enabled": settings.source_enabled,
                 "lossless": {"enabled": settings.lossless_enabled, "provider": status.get("lossless_provider"),
                              "fpcalc": fpcalc_available(), "attempts_24h": store.attempt_counts(24),
                              "raw_mb": round(raw_size_bytes(settings.lossless_raw_dir) / 1e6, 1)}}

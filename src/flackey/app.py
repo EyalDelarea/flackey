@@ -13,7 +13,7 @@ from telethon import TelegramClient
 
 from . import __version__
 from .catalog import BeatportCatalog
-from .config import Settings, migrate_legacy_data_dir
+from .config import Settings, migrate_legacy_data_dir, save_settings
 from .deezer import DeezerApi
 from .events import EventBus, Status
 from .inbox import Inbox
@@ -84,11 +84,17 @@ async def serve(server: uvicorn.Server, url: str, handle: ServerHandle,
     await task
 
 
-async def supervise_worker(worker, status: dict, poll_s: float = 1.0) -> None:
+async def supervise_worker(worker, status: dict, poll_s: float = 1.0,
+                           run_when: Callable[[], bool] | None = None) -> None:
     """The worker stops itself when the Telegram session dies; start it again once the setup screen
-    has signed the account back in."""
+    has signed the account back in. `run_when` is the gate: by default "Telegram is authorized", and
+    app._run widens it to "or the Telegram source is switched off", because a Soulseek-only copy has
+    nothing to sign in to."""
+    if run_when is None:
+        def run_when() -> bool:
+            return bool(status.get("telegram_authorized"))
     while True:
-        if status.get("telegram_authorized"):
+        if run_when():
             status["worker_running"] = True
             try:
                 await worker.run_forever()
@@ -138,6 +144,12 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     status = Status(bus, telegram_authorized=True, worker_running=False,
                     setup_done=store.get_setting("setup_done") == "1")
 
+    def on_authorized() -> None:
+        status["telegram_authorized"] = True
+        if not settings.source_enabled:
+            # A sign-in after a skipped setup step: the bot is a source again.
+            save_settings(settings, source_enabled=True)
+
     # Telethon's constructor rejects a falsy api_id/api_hash outright (`not api_id or not api_hash`
     # raises ValueError before any network use), so `0`/`""` would crash right here -- verified against
     # telethon/client/telegrambaseclient.py. Placeholder non-empty values satisfy that check; they are
@@ -150,14 +162,13 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     if not settings.telegram_configured:
         status["telegram_authorized"] = False
         log.error("Telegram credentials missing: add them to settings.json")
-        login = TelegramLogin(client, False, make_client=make_client)
+        login = TelegramLogin(client, False, on_authorized=on_authorized, make_client=make_client)
     else:
         await client.connect()
         if not await client.is_user_authorized():
             status["telegram_authorized"] = False
             log.error("Telegram login required, sign in from the setup screen in the UI; the worker is paused")
-        login = TelegramLogin(client, True, on_authorized=lambda: status.__setitem__("telegram_authorized", True),
-                              make_client=make_client)
+        login = TelegramLogin(client, True, on_authorized=on_authorized, make_client=make_client)
 
     http = httpx.AsyncClient(timeout=20)
     providers = build_providers(settings, http)
@@ -195,10 +206,15 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
 
     url = f"http://localhost:{settings.web_port}"
 
-    log.info("flackey started%s", ", worker running" if status["telegram_authorized"] else "")
+    worker_runs = status["telegram_authorized"] or not settings.source_enabled
+    log.info("flackey started%s", ", worker running" if worker_runs else "")
     try:
-        await run_until_server_stops(serve(server, url, handle), supervise_worker(worker, status),
-                                     close_streams_on_exit(server, bus))
+        await run_until_server_stops(
+            serve(server, url, handle),
+            supervise_worker(worker, status,
+                             run_when=lambda: bool(status.get("telegram_authorized"))
+                             or not settings.source_enabled),
+            close_streams_on_exit(server, bus))
     finally:
         server.should_exit = True
         if link.process is not None:      # the link owns the handle after adopt(); it may have replaced it

@@ -69,6 +69,7 @@ def test_health(client):
     from flackey.fingerprint import fpcalc_available
     assert c.get("/api/health").json() == {"ok": True, "version": "0.1.0", "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
+                                          "telegram_configured": True, "source_enabled": True,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
                                                        "attempts_24h": {}, "raw_mb": 0.0}}
 
@@ -1017,3 +1018,10 @@ def test_telegram_skip_route_turns_the_source_off(tmp_path: Path):
     assert r.status_code == 200 and r.json() == {"source_enabled": False}
     assert settings.source_enabled is False
     assert json.loads(settings.settings_path.read_text())["source_enabled"] is False
+
+
+def test_health_says_when_the_source_is_off(tmp_path: Path):
+    """The setup screen's "skip" turns the bot source off; the UI reads that back from health."""
+    app, _, settings = make(tmp_path)
+    settings.source_enabled = False
+    assert TestClient(app).get("/api/health").json()["source_enabled"] is False

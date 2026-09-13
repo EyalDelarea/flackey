@@ -151,3 +151,22 @@ def test_build_providers_follows_the_api_key_and_never_logs_it(tmp_path, caplog)
     assert len(providers) == 1 and isinstance(providers[0], SoulseekProvider)
     assert providers[0].downloads == tmp_path / "slskd" / "downloads" and providers[0].downloads.is_dir()
     assert "very-secret-key" not in caplog.text
+
+
+async def test_supervisor_runs_the_worker_when_run_when_says_so_without_telegram():
+    """A Soulseek-only copy has no Telegram to sign in to; the gate _run passes in must still start it."""
+    status = {"telegram_authorized": False, "worker_running": False}
+    runs = []
+    source_on = [False]
+
+    class W:
+        async def run_forever(self):
+            runs.append(status["worker_running"])
+            source_on[0] = True   # stop after one run
+
+    task = asyncio.create_task(supervise_worker(
+        W(), status, poll_s=0.01,
+        run_when=lambda: status["telegram_authorized"] or not source_on[0]))
+    await asyncio.sleep(0.05)
+    assert runs == [True] and status["worker_running"] is False
+    task.cancel()

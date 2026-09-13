@@ -309,7 +309,7 @@ class Worker:
         to take turns; it is to keep starting whatever is due and to wait for the lot at the end."""
         await self.startup()
         try:
-            while self.status.get("telegram_authorized", True):
+            while self.status.get("telegram_authorized", True) or not self.settings.source_enabled:
                 await self._maintenance()
                 self._start_due()
                 await self.refresh_lossless_health()
@@ -319,7 +319,8 @@ class Worker:
             # outlive it, still writing to the store the app is closing. Each one puts itself back on the
             # queue as it unwinds (see `process`), so the next run picks up where this one stopped.
             await self._stop_all()
-        log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
+        if self.settings.source_enabled:
+            log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
 
     async def _stop_all(self) -> None:
         tasks = list(self._tasks.values())
