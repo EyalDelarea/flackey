@@ -84,7 +84,7 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
   }
   const skip = () => {
     if (busy) return
-    setBusy(true)
+    setBusy(true); setErr(null)
     api.skipTelegram().then(() => onSkip()).catch(fail).finally(() => setBusy(false))
   }
   const skipRow = <div className="row-gap"><button className="btn-link" onClick={skip} disabled={busy}>Skip for now</button></div>
@@ -119,6 +119,9 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
       </div>
       <div className="row-gap"><button className="btn-primary" onClick={saveKeys} disabled={busy || !apiId.trim() || !apiHash.trim()}>Save keys</button></div>
       {keysErr && <div className="err">{keysErr}</div>}
+      {/* `skip` reports through `err`, which the two sign-in screens render. This screen has to render it
+          too, or a skip that fails from here un-disables its button and says nothing at all. */}
+      {err && <div className="err">{err}</div>}
       {skipRow}
       <div className="footnote">Skipping leaves Telegram off. Flackey then fetches from Soulseek only, and you can connect Telegram later from Settings.</div>
     </div>)

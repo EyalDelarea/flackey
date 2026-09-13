@@ -37,14 +37,17 @@ export default function ReadyStep({ libraryRoot, onStart, error, telegram, souls
   // Both sources may be skipped, and the wizard still has to let them finish -- so the last screen stops
   // claiming Telegram is connected and says instead what they will and will not get.
   const nothing = telegram === 'skipped' && soulseek === 'skipped'
+  // 'pending' is a saved account that has not signed in yet, so it names itself rather than falling
+  // through to a generic sentence claiming sources were saved without saying which.
   const sources = [telegram === 'connected' ? 'Telegram is connected' : null,
-    soulseek === 'connected' ? 'Soulseek is connected' : null].filter(Boolean).join(' and ')
+    soulseek === 'connected' ? 'Soulseek is connected' : soulseek === 'pending' ? 'Soulseek is saved' : null]
+    .filter(Boolean).join(' and ')
   return (<>
     <div className="ready-disc"><Icon name="check" size={26} stroke={2.4} /></div>
     <h1>{nothing ? 'Almost set' : "You're set"}</h1>
     <p className="lead">{nothing
       ? 'There is nowhere to fetch from yet: Telegram and Soulseek are both off. You can turn either on later from Settings. Your music will be filed into'
-      : `${sources || 'Your sources are saved'} and your music will be filed into`}</p>
+      : `${sources} and your music will be filed into`}</p>
     <div className="path-well">{libraryRoot}</div>
     {/* Credentials are read once, at startup (build_providers / SlskdProcess.start in app.py), so an
         account saved during this wizard does not take effect on the process that is already running.

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import TelegramStep from './TelegramStep'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 
 vi.mock('qrcode', () => ({ default: { toDataURL: vi.fn(async () => 'data:image/png;base64,AAA') } }))
 beforeEach(() => { vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: true, phone_masked: null }) })
@@ -77,4 +77,14 @@ it('offers Skip for now on every screen and calls onSkip', async () => {
   fireEvent.click(await screen.findByText('Skip for now'))
   await waitFor(() => expect(api.skipTelegram).toHaveBeenCalled())
   expect(onSkip).toHaveBeenCalled()
+})
+
+it('shows why a skip failed on the keys screen, where there is no other error line', async () => {
+  vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+  vi.spyOn(api, 'skipTelegram').mockRejectedValue(new ApiError(500, 'Could not switch Telegram off.'))
+  const onSkip = vi.fn()
+  render(<TelegramStep onDone={vi.fn()} onSkip={onSkip} pollMs={10} />)
+  fireEvent.click(await screen.findByText('Skip for now'))
+  await waitFor(() => expect(screen.getByText('Could not switch Telegram off.')).toBeInTheDocument())
+  expect(onSkip).not.toHaveBeenCalled()
 })

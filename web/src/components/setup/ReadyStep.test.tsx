@@ -46,3 +46,11 @@ it('says there is nowhere to fetch from when both sources were skipped', async (
   await waitFor(() => expect(screen.getByText(/nowhere to fetch from yet/)).toBeInTheDocument())
   expect(screen.getByText('Start digging')).toBeInTheDocument()   // still allowed to finish
 })
+
+it('names the saved Soulseek account rather than claiming sources in general', async () => {
+  vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: true, ffprobe: true, yt_dlp: true })
+  render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="skipped" soulseek="pending" />)
+  await waitFor(() => expect(screen.getByText(/Soulseek is saved and your music will be filed into/)).toBeInTheDocument())
+  expect(screen.queryByText(/Your sources are saved/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/Telegram is connected/)).not.toBeInTheDocument()
+})
