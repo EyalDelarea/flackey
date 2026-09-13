@@ -984,3 +984,35 @@ def test_reconnect_without_a_link_says_so_rather_than_pretending(tmp_path: Path)
     settings.slskd_api_key = "k"
     r = TestClient(app).post("/api/setup/soulseek/connect")
     assert r.status_code == 409 and "Restart flackey" in r.json()["detail"]
+
+
+def test_telegram_keys_route_saves_and_reconfigures(tmp_path: Path):
+    from flackey.telegram import TelegramLogin
+
+    class Client:
+        async def connect(self): pass
+        def is_connected(self): return True
+        async def is_user_authorized(self): return False
+
+    login = TelegramLogin(Client(), False, make_client=Client)
+    app, _, settings = make(tmp_path, login=login)
+    settings.telegram_api_id = None; settings.telegram_api_hash = None
+    c = TestClient(app)
+    assert c.post("/api/telegram/keys", json={"api_id": "abc", "api_hash": "x"}).status_code == 400
+    assert c.post("/api/telegram/keys", json={"api_id": 12, "api_hash": ""}).status_code == 400
+    r = c.post("/api/telegram/keys", json={"api_id": "4242", "api_hash": "b" * 32})
+    assert r.status_code == 200 and r.json() == {"configured": True}
+    assert login.configured is True
+    saved = json.loads(settings.settings_path.read_text())
+    assert saved["telegram_api_id"] == 4242 and saved["telegram_api_hash"] == "b" * 32
+    assert "b" * 32 not in c.get("/api/settings").text
+    assert c.get("/api/telegram/status").json()["configured"] is True
+
+
+def test_telegram_skip_route_turns_the_source_off(tmp_path: Path):
+    app, _, settings = make(tmp_path)
+    c = TestClient(app)
+    r = c.post("/api/telegram/skip")
+    assert r.status_code == 200 and r.json() == {"source_enabled": False}
+    assert settings.source_enabled is False
+    assert json.loads(settings.settings_path.read_text())["source_enabled"] is False

@@ -71,6 +71,20 @@ class TelegramLogin:
                 log.warning("could not read the account's phone number", exc_info=True)
         return {"authorized": authorized, "configured": self.configured, "phone_masked": mask_phone(phone)}
 
+    async def reconfigure(self) -> None:
+        """Keys arrived after startup (the setup screen or Settings saved them): build a client that
+        carries them and connect it. `make_client` closes over the live Settings object, so the
+        values it reads are the ones just saved. Without this the wizard would have to say
+        "restart the app"."""
+        if self.make_client is None:
+            self.configured = True
+            return
+        self._cancel_qr()
+        self.client = self.make_client()
+        self.configured = True
+        await self.client.connect()
+        log.info("Telegram client rebuilt with the keys just saved")
+
     def _authorized(self) -> None:
         self.on_authorized()
 

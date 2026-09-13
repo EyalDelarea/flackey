@@ -252,3 +252,33 @@ async def test_start_qr_reconnects_a_dropped_client():
     login = TelegramLogin(client, True)
     await login.start_qr()
     assert client.connected is True
+
+
+async def test_reconfigure_rebuilds_and_connects_the_client():
+    from flackey.telegram import TelegramLogin
+
+    class Client:
+        def __init__(self):
+            self.connected = False
+
+        async def connect(self):
+            self.connected = True
+
+        def is_connected(self):
+            return self.connected
+
+        async def is_user_authorized(self):
+            return False
+
+    made = []
+
+    def make():
+        c = Client()
+        made.append(c)
+        return c
+
+    login = TelegramLogin(Client(), False, make_client=make)
+    assert (await login.status())["configured"] is False
+    await login.reconfigure()
+    assert login.configured is True and login.client is made[-1] and made[-1].connected
+    assert (await login.status()) == {"authorized": False, "configured": True, "phone_masked": None}

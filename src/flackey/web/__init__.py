@@ -129,7 +129,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(stream.router(bus, status))
     app.include_router(library.router(store, settings, status, bundles, link=link,
                                       **({"opener": opener} if opener else {})))
-    app.include_router(telegram.router(login, status))
+    app.include_router(telegram.router(login, status, settings))
     app.include_router(pick.router(**({"picker": picker} if picker else {})))
     app.include_router(lossless.router(store, worker))
 
