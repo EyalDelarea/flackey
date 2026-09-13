@@ -154,7 +154,7 @@ async def test_worker_logs_parking_for_review(env, caplog):
 
 
 async def test_duplicate_is_skipped(env):
-    settings, store, notifier = env
+    _settings, store, notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     src = FakeSource([good_cand()])
     w = make_worker(env, src, FakeCatalog([ct]))
@@ -165,7 +165,7 @@ async def test_duplicate_is_skipped(env):
 
 
 async def test_duplicate_is_rechecked_when_review_resumes(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     src = FakeSource([good_cand()])
     parked = store.add_request(TEXT, RequestKind.TEXT)
     await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: not on Beatport
@@ -179,7 +179,7 @@ async def test_duplicate_is_rechecked_when_review_resumes(env):
 
 
 async def test_low_confidence_parks_then_choice_resumes(env):
-    settings, store, notifier = env
+    _settings, store, notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
                       duration_s=100, deezer_id=5, rank=1)
@@ -199,7 +199,7 @@ async def test_low_confidence_parks_then_choice_resumes(env):
 
 
 async def test_choose_validates_candidate_and_state(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
     a = store.add_request("q", RequestKind.TEXT)
     b = store.add_request("q", RequestKind.TEXT)
@@ -214,7 +214,7 @@ async def test_choose_validates_candidate_and_state(env):
 
 
 async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
-    settings, store, notifier = env
+    _settings, store, notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     src = FakeSource([good_cand()], fetch_error=SourceTimeout("slow"))
     w = make_worker(env, src, FakeCatalog([ct]))
@@ -228,7 +228,7 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
 
 
 async def test_not_on_beatport_parks(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
     r = await w.process(store.add_request("q", RequestKind.TEXT))
     assert r.state == RequestState.AWAITING_REVIEW and "Beatport" in r.flag_reason
@@ -300,7 +300,7 @@ def _edit_setup(env, catalog_tracks):
 
 async def test_auto_accepted_edit_missing_from_beatport_parks_for_review(env):
     """Only the owner may decide to file a track without a Beatport record behind it."""
-    settings, store, notifier = env
+    _settings, store, notifier = env
     original = CatalogTrack(**{**CT.__dict__, "duration_ms": 544000})
     w, rid = _edit_setup(env, [original])
     r = await w.process(rid)
@@ -325,7 +325,7 @@ async def test_review_message_shows_the_video_length(env):
 
 
 async def test_chosen_without_beatport_is_tagged_from_the_candidate(env):
-    settings, store, notifier = env
+    settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)
@@ -337,7 +337,7 @@ async def test_chosen_without_beatport_is_tagged_from_the_candidate(env):
 
 
 async def test_source_not_found(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceNotFound("source bot replied without results: Nothing")), FakeCatalog([CT]))
     r = await w.process(store.add_request("q", RequestKind.TEXT))
     assert r.state == RequestState.NOT_FOUND
@@ -345,7 +345,7 @@ async def test_source_not_found(env):
 
 
 async def test_source_timeout_retries_then_errors(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceTimeout("slow")), FakeCatalog([CT]))
     rid = store.add_request("q", RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.QUEUED
@@ -355,7 +355,7 @@ async def test_source_timeout_retries_then_errors(env):
 
 
 async def test_beatport_unavailable_requeues(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog(fail=True))
     rid = store.add_request("q", RequestKind.TEXT)
     r = await w.process(rid)
@@ -377,7 +377,7 @@ async def test_verification_failure_rejects_and_deletes(env):
 
 
 async def test_playlist_membership(env):
-    settings, store, notifier = env
+    settings, store, _notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     pid = store.upsert_playlist("https://youtube.com/playlist?list=1", "Goa Set")
@@ -391,7 +391,7 @@ async def test_playlist_membership(env):
 
 
 async def test_cancel(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)
@@ -400,7 +400,7 @@ async def test_cancel(env):
 
 
 async def test_cancel_refuses_finished_requests(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource(), FakeCatalog())
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.DONE)
@@ -422,7 +422,7 @@ async def test_unauthorized_session_pauses_worker_and_keeps_request(env):
 
 
 async def test_on_start_forgets_tracks_whose_files_are_gone(env):
-    settings, store, notifier = env
+    settings, store, _notifier = env
     store.add_track(path=settings.library_root / "gone.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800,
                     file_size=1, artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
                     catalog_track_id=None, request_id=None)
@@ -431,7 +431,7 @@ async def test_on_start_forgets_tracks_whose_files_are_gone(env):
 
 
 async def test_on_start_resets_inflight(env):
-    settings, store, notifier = env
+    _settings, store, _notifier = env
     w = make_worker(env, FakeSource(), FakeCatalog())
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.FETCHING)

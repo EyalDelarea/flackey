@@ -9,7 +9,7 @@ from rapidfuzz import fuzz
 
 from .models import CatalogTrack, Query, norm
 
-_NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
+_NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL)
 BROWSER = "chrome"
 DURATION_SLACK_S = 3
 
@@ -111,9 +111,8 @@ def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
     pinned = _length_pins_a_version(query, tracks)
     scored: list[tuple[float, CatalogTrack]] = []
     for t in tracks:
-        if want_version:
-            if fuzz.token_set_ratio(want_version, _norm(t.mix_name)) < 80:
-                continue
+        if want_version and fuzz.token_set_ratio(want_version, _norm(t.mix_name)) < 80:
+            continue
         if query.artist and query.title:
             # token_sort for the artist: "Hallucinogen In Dub" must not equal "Hallucinogen"
             a = fuzz.token_sort_ratio(_norm(query.artist), _norm(t.artist))

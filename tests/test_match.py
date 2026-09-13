@@ -7,8 +7,8 @@ Q = Query(raw="astral projection into the void", artist="Astral Projection", tit
 
 
 def cand(**kw) -> Candidate:
-    base = dict(source="deezer_bot", source_ref="dz_track:1:send", artist="Astral Projection",
-                title="Into the Void", duration_s=442, rank=1)
+    base = {"source": "deezer_bot", "source_ref": "dz_track:1:send", "artist": "Astral Projection",
+                "title": "Into the Void", "duration_s": 442, "rank": 1}
     return Candidate(**{**base, **kw})
 
 

@@ -2,6 +2,7 @@ import asyncio
 import sys
 import threading
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_wait_for_server_times_out_as_a_runtime_error():
 
 
 def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
-    import flackey.desktop as desktop
+    from flackey import desktop
 
     async def fake_run(settings, open_browser=True, handle=None):
         handle.url = "http://localhost:1"
@@ -52,7 +53,7 @@ def test_window_api_resize_forwards_to_the_window():
     from flackey.desktop import WindowApi
 
     class W:
-        calls = []
+        calls: ClassVar[list] = []
 
         def resize(self, w, h):
             self.calls.append((w, h))

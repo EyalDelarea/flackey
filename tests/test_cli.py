@@ -54,7 +54,7 @@ def test_start_without_browser_does_not_need_pywebview(tmp_path: Path, monkeypat
 
 
 def test_start_opens_the_desktop_window_by_default(tmp_path: Path, monkeypatch):
-    import flackey.desktop as desktop
+    from flackey import desktop
 
     opened = []
     monkeypatch.setattr(desktop, "run_in_window", lambda settings: opened.append(settings.web_port))

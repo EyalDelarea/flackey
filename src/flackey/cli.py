@@ -21,7 +21,7 @@ def _settings() -> Settings:
 
 
 @app.callback()
-def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (default ./.env)"),
+def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (default ./.env)"),  # noqa: B008
          verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
     _state["env"] = env
     configure_logging(_settings().data_dir, verbose=verbose)

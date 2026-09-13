@@ -128,7 +128,7 @@ def system_is_dark() -> bool:
         return False
     try:
         out = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
-                             capture_output=True, text=True, timeout=2)
+                             capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return out.returncode == 0 and out.stdout.strip() == "Dark"

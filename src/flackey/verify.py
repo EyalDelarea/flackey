@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import subprocess
 from dataclasses import dataclass
@@ -50,7 +51,7 @@ def _run(cmd: list[str]) -> bytes:
         raise VerifyError(f"{name} is not installed")
     cmd = [found, *cmd[1:]]
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S)
+        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False)
     except subprocess.TimeoutExpired as e:
         raise VerifyError(f"{name} timed out after {RUN_TIMEOUT_S}s") from e
     if p.returncode != 0:
@@ -97,7 +98,7 @@ def band_levels_db(path: Path, window_s: int = 60, duration_s: float | None = No
     db = 10 * np.log10(power + 1e-20)
     freqs = np.fft.rfftfreq(FRAME, 1 / SR)
     edges = np.arange(0, SR / 2 + BAND_HZ, BAND_HZ)
-    levels = np.array([db[(freqs >= lo) & (freqs < hi)].mean() for lo, hi in zip(edges[:-1], edges[1:])])
+    levels = np.array([db[(freqs >= lo) & (freqs < hi)].mean() for lo, hi in itertools.pairwise(edges)])
     return edges[:-1], levels
 
 
