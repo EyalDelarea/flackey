@@ -259,6 +259,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .srow .actions { display: flex; gap: 8px; flex: none; }
 
 /* ---- Sharing: whether other Soulseek users can reach this Mac ---- */
+/* In Settings the status sentence is the line the row is about, so it matches the paragraph explaining it
+   rather than sitting under it at hint size. Before the `.ok` rule below, which shares its specificity and
+   has to win on colour. The setup step keeps the hint sizing it shares with the lines around it. */
+.sharing:not(.compact) .hint-row { font-size: 12px; color: var(--secondary); }
 /* `.hint-row.ok` carries no colour of its own anywhere else, and `.hint-row.warn` is written for a setup
    step -- centred, 460px wide. Both are corrected only inside `.sharing`, so nothing else moves. */
 .sharing .hint-row.ok { color: var(--green); }
