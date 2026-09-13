@@ -70,6 +70,7 @@ def test_health(client):
     assert c.get("/api/health").json() == {"ok": True, "version": "0.1.0", "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
                                           "telegram_configured": True, "source_enabled": True,
+                                          "sharing": None,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
                                                        "attempts_24h": {}, "raw_mb": 0.0}}
 
@@ -1089,3 +1090,49 @@ def test_a_library_move_asks_a_wired_in_link_to_rescan_the_share(tmp_path: Path)
         assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
         assert not link.rescanned.wait(0.2)      # same folder, nothing moved, nothing to rescan
         assert link.calls == 1
+
+
+def test_sharing_routes_without_a_service(client):
+    c, _, _ = client
+    assert c.get("/api/sharing").json()["enabled"] is False
+    assert c.post("/api/sharing/check").status_code == 409
+
+
+def test_sharing_routes_with_a_service(tmp_path: Path):
+    class FakeSharing:
+        def __init__(self):
+            self.state = {"port": 50300, "enabled": True, "checking": False, "mapping": None,
+                          "reachable": False, "public_ip": "1.2.3.4", "lan_ip": "10.0.0.5",
+                          "gateway": "10.0.0.1", "checked_at": None, "error": None}
+            self.started = 0
+
+        def start_refresh(self):
+            self.started += 1
+            return {**self.state, "checking": True}
+
+    sharing = FakeSharing()
+    app, _, _ = make(tmp_path, sharing=sharing)
+    c = TestClient(app)
+    assert c.get("/api/sharing").json()["reachable"] is False
+    assert c.post("/api/sharing/check").json()["checking"] is True and sharing.started == 1
+
+
+def test_sharing_check_is_refused_while_soulseek_is_off(tmp_path: Path):
+    class OffSharing:
+        def __init__(self):
+            self.state = {"port": 50300, "enabled": False, "checking": False, "mapping": None,
+                          "reachable": None, "public_ip": None, "lan_ip": None, "gateway": None,
+                          "checked_at": None, "error": None}
+
+        def start_refresh(self):
+            raise AssertionError("must not be asked to check a port nobody listens on")
+
+    app, _, _ = make(tmp_path, sharing=OffSharing())
+    assert TestClient(app).post("/api/sharing/check").status_code == 409
+
+
+def test_health_reports_the_sharing_state(tmp_path: Path):
+    status = Status(None, telegram_authorized=True, worker_running=False, setup_done=False)
+    status["sharing"] = {"port": 50300, "enabled": True}
+    app, _, _ = make(tmp_path, status=status)
+    assert TestClient(app).get("/api/health").json()["sharing"] == {"port": 50300, "enabled": True}

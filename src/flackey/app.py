@@ -19,8 +19,9 @@ from .events import EventBus, Status
 from .inbox import Inbox
 from .logsetup import log_startup_banner
 from .notify import LogNotifier
+from .sharing import Sharing
 from .slskd_binary import SlskdBinaryError
-from .slskd_config import SlskdConfigError, write_share
+from .slskd_config import SlskdConfigError, read_listen_port, write_share
 from .slskd_process import SlskdProcess
 from .soulseek_link import SoulseekLink
 from .source.deezer_bot import DeezerBotSource
@@ -212,10 +213,14 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # The wizard's Soulseek step drives this: saving credentials restarts the sidecar under them and
     # rebuilds `worker.providers`, so the owner learns on the spot whether the account signed in --
     # which, on Soulseek, is also the only confirmation that a new account now exists.
-    link = SoulseekLink(settings, worker, http, build_providers=build_providers)
+    # The port has to come from the sidecar's own config: the owner may have changed it, and
+    # opening a different one than slskd listens on would look like it worked and share nothing.
+    sharing = Sharing(settings, status, http, port=read_listen_port(settings.data_dir))
+    link = SoulseekLink(settings, worker, http, build_providers=build_providers,
+                        on_connected=sharing.start_refresh)
     link.adopt(slskd_process)
     api = create_app(store, worker, inbox, settings, ui_dir=UI_DIR, status=status, bus=bus, login=login,
-                     link=link)
+                     link=link, sharing=sharing)
     server = uvicorn.Server(uvicorn.Config(api, host=settings.web_host, port=settings.web_port,
                                            log_level="warning", log_config=None))
 
@@ -229,9 +234,11 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
             supervise_worker(worker, status,
                              run_when=lambda: bool(status.get("telegram_authorized"))
                              or not settings.source_enabled),
-            close_streams_on_exit(server, bus))
+            close_streams_on_exit(server, bus),
+            sharing.run_forever())
     finally:
         server.should_exit = True
+        await sharing.release()       # give the port back before the sidecar that used it goes away
         if link.process is not None:      # the link owns the handle after adopt(); it may have replaced it
             await link.process.stop()
         await http.aclose()

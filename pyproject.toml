@@ -61,7 +61,7 @@ layers = [
   "desktop",
   "app",
   "web",
-  "soulseek_link",
+  "soulseek_link : sharing",
   "worker : events : inbox",
   "attempts",
   "library : export : tag : verify : store : catalog : deezer : youtube : source : telegram : convert : fingerprint",

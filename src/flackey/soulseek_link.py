@@ -38,10 +38,14 @@ class SoulseekLink:
                  build_providers: Callable[[Settings, httpx.AsyncClient], list],
                  process_factory: Callable[..., SlskdProcess] = SlskdProcess,
                  installed: Callable[[object], bool] = is_installed,
-                 clock: Callable[[], float] = time.monotonic, sleep=asyncio.sleep):
+                 clock: Callable[[], float] = time.monotonic, sleep=asyncio.sleep,
+                 on_connected: Callable[[], object] = lambda: None):
         self._settings, self._worker, self._http = settings, worker, http
         self._build_providers, self._clock, self._sleep = build_providers, clock, sleep
         self._process_factory, self._installed = process_factory, installed
+        # Signing in is the moment the listen port starts to matter, so whoever owns the port
+        # (app.py wires in Sharing) is told to go and check it.
+        self._on_connected = on_connected
         self.process: SlskdProcess | None = None
         self._task: asyncio.Task | None = None
         self.state: dict = {"state": "idle", "username": None, "error": None}
@@ -100,6 +104,10 @@ class SoulseekLink:
                 self.state = {"state": "connected", "username": health.get("username"), "error": None}
                 self._worker.status["lossless_provider"] = {"name": provider.name, **health}
                 log.info("soulseek signed in as %s", health.get("username"))
+                try:
+                    self._on_connected()
+                except Exception:   # a signed-in account stays signed in even if the port check won't start
+                    log.exception("could not start the port check after signing in")
                 return
             if self._clock() >= deadline:
                 self._fail(TAKEN_HINT if last == "not_logged_in" else
