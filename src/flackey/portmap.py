@@ -60,10 +60,14 @@ def default_gateway(run=subprocess.run) -> str | None:
         cmd, pattern = ["ip", "route", "show", "default"], r"default via ([0-9.]+)"
     try:
         out = run(cmd, capture_output=True, text=True, timeout=3, check=False)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.info("default gateway: %s failed (%s)", cmd[0], e.__class__.__name__)
         return None
     m = re.search(pattern, out.stdout or "")
-    return m.group(1) if m else None
+    if m is None:
+        log.info("default gateway: no default route in %s output", cmd[0])
+        return None
+    return m.group(1)
 
 
 def lan_ip(gateway: str | None = None) -> str | None:
@@ -74,7 +78,8 @@ def lan_ip(gateway: str | None = None) -> str | None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect((target, 9))
             return s.getsockname()[0]
-    except OSError:
+    except OSError as e:
+        log.info("lan_ip: could not determine (%s)", e.__class__.__name__)
         return None
 
 
@@ -105,6 +110,7 @@ async def natpmp_map(
         log.info("NAT-PMP: no answer from %s (%s)", gateway, e.__class__.__name__)
         return None
     if len(reply) < 16:
+        log.info("NAT-PMP: %s sent a short reply (%d bytes)", gateway, len(reply))
         return None
     _, opcode, result, _, private, public, lifetime = struct.unpack("!BBHIHHI", reply[:16])
     if opcode != 130 or result != 0 or private != port:
@@ -190,11 +196,13 @@ async def upnp_map(port: int, lease_s: int, http: httpx.AsyncClient, *, discover
             continue
         found = _find_wan_service(desc.text, loc)
         if found is None:
+            log.info("UPnP: %s has no WAN*Connection service", gateway)
             continue
         service_type, control = found
         client_ip = internal_ip or lan_ip(gateway)
         if client_ip is None:
-            return None
+            log.info("UPnP: could not determine this machine's address on %s", gateway)
+            continue
         headers, body = _soap("AddPortMapping", service_type, {
             "NewRemoteHost": "", "NewExternalPort": str(port), "NewProtocol": "TCP",
             "NewInternalPort": str(port), "NewInternalClient": client_ip, "NewEnabled": "1",
@@ -221,7 +229,7 @@ async def map_port(port: int, lease_s: int = 3600, http: httpx.AsyncClient | Non
     route's next hop; without one there is nobody to ask NAT-PMP, but SSDP is multicast and is
     still tried."""
     if gateway is None:
-        gateway = default_gateway()
+        gateway = await asyncio.to_thread(default_gateway)
     if gateway is not None:
         m = await natpmp(gateway, port, lease_s)
         if m is not None:

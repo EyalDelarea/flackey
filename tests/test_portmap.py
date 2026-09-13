@@ -92,6 +92,26 @@ async def test_upnp_map_returns_none_when_nothing_answers_ssdp():
         assert await upnp_map(50300, 3600, http, discover=discover, internal_ip="10.0.0.5") is None
 
 
+@respx.mock
+async def test_upnp_map_tries_the_next_gateway_when_lan_ip_fails_for_the_first(monkeypatch):
+    respx.get("http://10.0.0.1:1900/desc.xml").mock(return_value=httpx.Response(200, text=DESC))
+    respx.get("http://10.0.0.2:1900/desc.xml").mock(return_value=httpx.Response(200, text=DESC))
+    soap = respx.post("http://10.0.0.2:1900/ctl/IPConn").mock(return_value=httpx.Response(200, text="<ok/>"))
+
+    def fake_lan_ip(gateway=None):
+        return None if gateway == "10.0.0.1" else "10.0.0.5"
+
+    monkeypatch.setattr(portmap, "lan_ip", fake_lan_ip)
+
+    async def discover(timeout):
+        return ["http://10.0.0.1:1900/desc.xml", "http://10.0.0.2:1900/desc.xml"]
+
+    async with httpx.AsyncClient() as http:
+        m = await upnp_map(50300, 3600, http, discover=discover, internal_ip=None)
+    assert m is not None and m.gateway == "10.0.0.2"
+    assert soap.calls[0].request.content.decode().count("<NewInternalClient>10.0.0.5</NewInternalClient>") == 1
+
+
 async def test_map_port_tries_natpmp_first_then_upnp():
     calls = []
 
