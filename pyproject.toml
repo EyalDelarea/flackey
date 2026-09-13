@@ -72,6 +72,6 @@ layers = [
   "slskd_process",
   "slskd_binary",
   "slskd_config",
-  "portmap",
+  "portmap : portcheck",
 ]
 exhaustive = true
