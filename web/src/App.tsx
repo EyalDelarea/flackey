@@ -29,9 +29,13 @@ export default function App() {
   const [welcomeSeen, setWelcomeSeen] = useState(false)
   const [libraryRoot, setLibraryRoot] = useState('')
   const [setupError, setSetupError] = useState<string | null>(null)
-  const [soulseekPending, setSoulseekPending] = useState(false)   // saved, but not signed in yet
+  // What the Ready step is allowed to claim, and nothing else: each is set by the step it belongs to.
+  const [telegramSkipped, setTelegramSkipped] = useState(false)
+  const [soulseekState, setSoulseekState] = useState<'connected' | 'pending' | 'skipped'>('skipped')
   const h = live.health
   const authorized = h?.telegram_authorized ?? true
+  // A source the owner switched off is not signed out, so nothing about it is worth a banner.
+  const sourceOn = h?.source_enabled ?? true
   useEffect(() => { if (authorized) setReconnecting(false) }, [authorized])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   const mainScreen = !!h && h.setup_done && !reconnecting
@@ -68,14 +72,14 @@ export default function App() {
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
     return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 ? 'Waiting for Telegram…' : undefined}>
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
-      {current === 2 && <TelegramStep onDone={() => setStep(reconnecting ? 4 : 3)} />}
-      {current === 3 && <SoulseekStep onDone={c => { setSoulseekPending(!c); setStep(4) }} onSkip={() => setStep(4)} />}
-      {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} error={setupError} soulseekPending={soulseekPending} />}
+      {current === 2 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 4 : 3) }} onSkip={() => { setTelegramSkipped(true); setStep(3) }} />}
+      {current === 3 && <SoulseekStep onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
+      {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
-  const banner = !authorized ? <Banner tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} /> : undefined
+  const banner = sourceOn && !authorized ? <Banner tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} /> : undefined
   return (
-    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset}
+    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
       {tab === 'download' && <DownloadPage live={live} inset={inset} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} inset={inset} />}

@@ -72,3 +72,9 @@ it('collapses to Connected when Telegram is fine and Soulseek is not set up', ()
   show(undefined)
   expect(screen.getByText('Connected')).toBeInTheDocument()
 })
+
+it('says Telegram is off, not signed out, when the source is switched off', () => {
+  render(<Sidebar tab="download" onTab={() => {}} telegramAuthorized={false} sourceEnabled={false} inset={false} />)
+  expect(screen.getByText('Telegram off')).toBeInTheDocument()
+  expect(screen.queryByText('Telegram signed out')).not.toBeInTheDocument()
+})

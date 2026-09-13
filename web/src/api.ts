@@ -26,7 +26,10 @@ export interface ProviderHealth { name:string; status:string; username:string|nu
 export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
   attempts_24h:Record<string,number>; raw_mb:number }
 export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
-  setup_done:boolean; lossless?:LosslessHealth }
+  setup_done:boolean; lossless?:LosslessHealth
+  /** Whether this copy has Telegram API keys at all, and whether the owner left the source switched on.
+      Optional so a fixture written before they existed still type-checks. */
+  telegram_configured?:boolean; source_enabled?:boolean }
 export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
   speed_bps:number; pick:number; state:string
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */
@@ -96,6 +99,8 @@ export const api = {
   setupDone: () => post<{ setup_done: boolean }>('/api/setup/done'),
   setupReset: () => post<{ setup_done: boolean }>('/api/setup/reset'),
   telegramStatus: () => call<TelegramStatus>('/api/telegram/status'),
+  telegramKeys: (api_id: string, api_hash: string) => post<{ configured: boolean }>('/api/telegram/keys', { api_id, api_hash }),
+  skipTelegram: () => post<{ source_enabled: boolean }>('/api/telegram/skip'),
   qrStart: () => post<QrStart>('/api/telegram/qr'),
   qrState: (id: string) => call<{ state: 'waiting' | 'password_needed' | 'done' | 'expired' | 'unknown' }>(`/api/telegram/qr/${id}`),
   password: (password: string) => post<{ state: string }>('/api/telegram/password', { password }),

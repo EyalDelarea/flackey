@@ -4,8 +4,13 @@ import { api, ApiError } from '../../api'
 import Icon from '../Icon'
 
 type Mode = 'qr' | 'phone'
-export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => void; pollMs?: number }) {
+export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone: () => void; onSkip: () => void; pollMs?: number }) {
   const [mode, setMode] = useState<Mode>('qr')
+  // A build handed to someone else arrives without Telegram API keys: they belong to whoever compiled it,
+  // not to the app. So the step asks for a pair before it may touch Telegram at all.
+  const [needKeys, setNeedKeys] = useState(false)
+  const [apiId, setApiId] = useState(''); const [apiHash, setApiHash] = useState('')
+  const [keysErr, setKeysErr] = useState<string | null>(null)
   const [img, setImg] = useState<string | null>(null); const [qrErr, setQrErr] = useState<string | null>(null)
   const [needPw, setNeedPw] = useState(false); const [pw, setPw] = useState(''); const [err, setErr] = useState<string | null>(null)
   const [phone, setPhone] = useState(''); const [code, setCode] = useState(''); const [codeSent, setCodeSent] = useState(false)
@@ -20,13 +25,15 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
     // migrated install with a live session must never reach api.qrStart().
     let cancelled = false
     api.telegramStatus()
-      .then(s => { if (!cancelled) setConnected(s.authorized ? (s.phone_masked ?? '') : null) })
+      // Both in one handler: React batches them into a single render, and the QR effect below must never
+      // see the half-state where nobody is signed in and the keys have not been asked for yet.
+      .then(s => { if (!cancelled) { setConnected(s.authorized ? (s.phone_masked ?? '') : null); setNeedKeys(!s.configured) } })
       .catch(() => { if (!cancelled) setConnected(null) })
     return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
-    if (connected !== null) return
+    if (connected !== null || needKeys) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     async function start() {
@@ -49,7 +56,7 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
     }
     if (mode === 'qr') start()
     return () => { cancelled = true; if (timer) clearTimeout(timer) }
-  }, [mode, pollMs, connected])
+  }, [mode, pollMs, connected, needKeys])
 
   const fail = (e: unknown) => setErr(e instanceof ApiError ? e.message : 'Something went wrong. Try again.')
   const submitPw = () => {
@@ -68,6 +75,20 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
     api.signIn(phone, code).then(r => r.state === 'done' ? doneRef.current() : setNeedPw(true)).catch(fail).finally(() => setBusy(false))
   }
 
+  const saveKeys = () => {
+    if (busy) return
+    setBusy(true); setKeysErr(null)
+    api.telegramKeys(apiId.trim(), apiHash.trim()).then(() => setNeedKeys(false))
+      .catch(e => setKeysErr(e instanceof ApiError ? e.message : 'Could not save the keys. Try again.'))
+      .finally(() => setBusy(false))
+  }
+  const skip = () => {
+    if (busy) return
+    setBusy(true)
+    api.skipTelegram().then(() => onSkip()).catch(fail).finally(() => setBusy(false))
+  }
+  const skipRow = <div className="row-gap"><button className="btn-link" onClick={skip} disabled={busy}>Skip for now</button></div>
+
   const pwBox = needPw && (<div className="pw-box"><div className="k">Your account has a two-step password</div>
     <div className="row-gap"><input className="input" type="password" placeholder="Two-step password" value={pw} onChange={e => setPw(e.target.value)} />
     <button className="btn-primary" onClick={submitPw} disabled={busy}>Sign in</button></div></div>)
@@ -82,6 +103,24 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
       <h1>Telegram is already connected</h1>
       <p className="lead"><span className="status-dot" style={{ display: 'inline-block', marginRight: 8 }} />{connected ? `Connected as ${connected}` : 'Connected'}</p>
       <div className="row-gap"><button className="btn-primary" onClick={() => doneRef.current()}>Continue</button></div>
+    </div>)
+  }
+  // Below the already-connected branch on purpose: a copy that still has a live session does not need
+  // keys asked for. Above the QR grid because nothing may reach Telegram until a pair is saved.
+  if (needKeys) {
+    return (<div className="tg-done">
+      <h1>This copy needs Telegram API keys</h1>
+      <p className="lead">Telegram asks every app to identify itself. Sign in at <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org</a>, create an app under API development tools, and paste its id and hash here. They identify Flackey, not you.</p>
+      <div className="fields">
+        <div className="field"><label htmlFor="tg-api-id">API id</label>
+          <input id="tg-api-id" className="input" inputMode="numeric" value={apiId} onChange={e => setApiId(e.target.value)} disabled={busy} /></div>
+        <div className="field"><label htmlFor="tg-api-hash">API hash</label>
+          <input id="tg-api-hash" className="input" spellCheck={false} value={apiHash} onChange={e => setApiHash(e.target.value)} disabled={busy} /></div>
+      </div>
+      <div className="row-gap"><button className="btn-primary" onClick={saveKeys} disabled={busy || !apiId.trim() || !apiHash.trim()}>Save keys</button></div>
+      {keysErr && <div className="err">{keysErr}</div>}
+      {skipRow}
+      <div className="footnote">Skipping leaves Telegram off. Flackey then fetches from Soulseek only, and you can connect Telegram later from Settings.</div>
     </div>)
   }
   return (<div className="tg">
@@ -103,6 +142,9 @@ export default function TelegramStep({ onDone, pollMs = 1500 }: { onDone: () => 
       </>)}
       {mode === 'qr' && qrErr && <div className="err">{qrErr}</div>}
       {err && <div className="err">{err}</div>}
+      {/* Outside the mode ternary, like the footnote under it: the offer to leave Telegram off belongs to
+          the step, not to whichever of the two sign-in screens happens to be showing. */}
+      {skipRow}
       <div className="footnote">You are signing in with your own Telegram account. Unofficial apps are occasionally flagged by Telegram; a spare number works too.</div>
     </div>
   </div>)
