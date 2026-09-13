@@ -19,9 +19,11 @@ export default function UploadsPage({ inset }: { inset: boolean }) {
   const [error, setError] = useState<string | null>(null)
   const load = useCallback(async () => {
     // An empty page here reads as "nobody wants my files" when the real answer is often "nobody can
-    // reach you". The port answer rides along with the feed so the two arrive together.
-    setSharing(await api.sharing().catch(() => null))
+    // reach you", so the port answer is fetched alongside the feed -- started first and awaited last,
+    // because the feed is what the page is for and must not queue behind it.
+    const shared = api.sharing().catch(() => null)
     try { setFeed(await api.uploads()); setError(null) } catch { setError("Can't reach Flackey.") }
+    setSharing(await shared)
   }, [])
   useEffect(() => {
     load().catch(() => undefined)
