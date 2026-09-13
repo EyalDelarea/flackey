@@ -171,6 +171,32 @@ class Settings(BaseSettings):
 
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 
+# Telegram keys baked into a packaged build. CI writes this file from repository secrets before
+# PyInstaller runs (see .github/workflows and packaging/build_app.sh); a checkout has no such file and
+# reads .env instead. Lowest precedence of all: anything the owner sets, in the environment or in
+# settings.json, wins over what the build carries. Same location trick as desktop.APP_ICON -- inside the
+# bundle `__file__` is <MEIPASS>/flackey/config.pyc and the assets folder is unpacked beside it.
+BUILD_DEFAULTS_PATH = Path(__file__).with_name("assets") / "build.json"
+BUILD_DEFAULT_KEYS = ("telegram_api_id", "telegram_api_hash")
+
+
+def _read_build_defaults(path: Path = BUILD_DEFAULTS_PATH) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning("ignoring unreadable build defaults %s: %s", path, e)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    if isinstance(data.get("telegram_api_id"), int) and data["telegram_api_id"] > 0:
+        out["telegram_api_id"] = data["telegram_api_id"]
+    if isinstance(data.get("telegram_api_hash"), str) and data["telegram_api_hash"]:
+        out["telegram_api_hash"] = data["telegram_api_hash"]
+    return out
+
 
 def _read_settings_file(path: Path) -> dict:
     if not path.exists():
@@ -183,16 +209,19 @@ def _read_settings_file(path: Path) -> dict:
     return {k: v for k, v in data.items() if k in FILE_KEYS and v not in (None, "")}
 
 
-def load_settings(env_file: Path | None = None) -> Settings:
-    """Precedence: environment > .env > settings.json in the data folder > defaults. When nothing in
-    that chain set an API key, fall back to the one flackey already generated for itself in the
-    managed slskd.yml (see slskd_config.write_credentials) -- that file is the key's only copy."""
+def load_settings(env_file: Path | None = None, build_defaults: Path | None = None) -> Settings:
+    """Precedence: environment > .env > settings.json in the data folder > build.json inside a packaged
+    build > defaults. When nothing in that chain set an API key, fall back to the one flackey already
+    generated for itself in the managed slskd.yml (see slskd_config.write_credentials) -- that file is
+    the key's only copy."""
     if env_file is None:
         # `./.env` when run from the repo root; otherwise the repo's own .env, so `crate` works from any cwd
         env_file = Path(".env") if Path(".env").exists() else REPO_ENV
     base = Settings(_env_file=env_file)
     from_file = _read_settings_file(base.settings_path)
-    overrides = {k: v for k, v in from_file.items() if k not in base.model_fields_set}
+    from_build = _read_build_defaults(build_defaults or BUILD_DEFAULTS_PATH)
+    overrides = {k: v for k, v in from_build.items() if k not in base.model_fields_set}
+    overrides.update({k: v for k, v in from_file.items() if k not in base.model_fields_set})
     if not overrides:
         result = base
     else:

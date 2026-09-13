@@ -302,3 +302,49 @@ def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_p
 
     assert json.loads(s.settings_path.read_text())["source_enabled"] is False
     assert load_settings(_env(tmp_path)).source_enabled is False
+
+
+def test_build_defaults_fill_telegram_keys_when_nothing_else_does(tmp_path: Path):
+    env = tmp_path / ".env"
+    env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
+    build = tmp_path / "build.json"
+    build.write_text(json.dumps({"telegram_api_id": 4242, "telegram_api_hash": "a" * 32}))
+    s = load_settings(env, build_defaults=build)
+    assert s.telegram_api_id == 4242 and s.telegram_api_hash == "a" * 32
+    assert s.telegram_configured is True
+
+
+def test_settings_file_and_env_beat_build_defaults(tmp_path: Path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "settings.json").write_text(json.dumps({"telegram_api_hash": "from-file"}))
+    build = tmp_path / "build.json"
+    build.write_text(json.dumps({"telegram_api_id": 4242, "telegram_api_hash": "from-build"}))
+    # _env(tmp_path) also sets TELEGRAM_API_HASH, which would beat the settings file and defeat the
+    # point of this test (settings.json beating build.json for the hash); set only the id here.
+    env = tmp_path / ".env"
+    env.write_text(f"TELEGRAM_API_ID=123\nDATA_DIR={tmp_path / 'data'}\n")
+    s = load_settings(env, build_defaults=build)
+    assert s.telegram_api_id == 123 and s.telegram_api_hash == "from-file"
+
+
+def test_build_defaults_are_ignored_when_missing_or_broken(tmp_path: Path):
+    env = tmp_path / ".env"
+    env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
+    assert load_settings(env, build_defaults=tmp_path / "absent.json").telegram_api_id is None
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    assert load_settings(env, build_defaults=broken).telegram_api_id is None
+    other_keys = tmp_path / "other.json"
+    other_keys.write_text(json.dumps({"web_port": 1, "telegram_api_id": "not-an-int"}))
+    s = load_settings(env, build_defaults=other_keys)
+    assert s.web_port == 8765 and s.telegram_api_id is None   # only the two telegram keys, and only valid ones
+
+
+def test_build_defaults_never_land_in_settings_json(tmp_path: Path):
+    env = tmp_path / ".env"
+    env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
+    build = tmp_path / "build.json"
+    build.write_text(json.dumps({"telegram_api_id": 4242, "telegram_api_hash": "a" * 32}))
+    s = load_settings(env, build_defaults=build)
+    save_settings(s, library_root=tmp_path / "lib")
+    assert json.loads(s.settings_path.read_text()) == {"library_root": str(tmp_path / "lib")}

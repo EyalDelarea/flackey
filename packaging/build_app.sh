@@ -25,6 +25,20 @@ for size in 16 32 64 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$BUILD/Flackey.icns"
 
+echo "==> build defaults"
+# The Telegram keys a packaged copy carries. From CI these come from repository secrets; locally, export
+# FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before running this script, or leave them unset
+# to build a copy whose setup screen asks for keys.
+BUILD_JSON="src/flackey/assets/build.json"
+if [[ -n "${FLACKEY_TELEGRAM_API_ID:-}" && -n "${FLACKEY_TELEGRAM_API_HASH:-}" ]]; then
+  printf '{"telegram_api_id": %s, "telegram_api_hash": "%s"}\n' \
+    "$FLACKEY_TELEGRAM_API_ID" "$FLACKEY_TELEGRAM_API_HASH" > "$BUILD_JSON"
+  echo "    Telegram keys: baked in"
+else
+  rm -f "$BUILD_JSON"
+  echo "    Telegram keys: none (setup will ask)"
+fi
+
 echo "==> bundle"
 uv run --with pyinstaller pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \
