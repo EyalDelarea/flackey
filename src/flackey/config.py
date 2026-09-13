@@ -177,7 +177,6 @@ REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 # settings.json, wins over what the build carries. Same location trick as desktop.APP_ICON -- inside the
 # bundle `__file__` is <MEIPASS>/flackey/config.pyc and the assets folder is unpacked beside it.
 BUILD_DEFAULTS_PATH = Path(__file__).with_name("assets") / "build.json"
-BUILD_DEFAULT_KEYS = ("telegram_api_id", "telegram_api_hash")
 
 
 def _read_build_defaults(path: Path = BUILD_DEFAULTS_PATH) -> dict:
