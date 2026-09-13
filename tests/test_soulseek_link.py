@@ -143,3 +143,25 @@ async def test_a_probe_that_raises_is_treated_as_not_yet_up(tmp_path: Path, boom
     link.start_connect()
     await link._task
     assert link.state["state"] == "connected"
+
+
+async def test_a_rescan_reaches_every_provider_even_when_one_of_them_fails(tmp_path: Path):
+    """Told the library folder moved, each network gets asked to rescan. One that cannot be reached must
+    not stop the others, and nothing may escape: the caller is a settings save that has already been
+    written, and slskd's own file watch plus the daily maintenance rescan are the backstop."""
+    from flackey.source.lossless import LosslessError
+
+    class Provider:
+        def __init__(self, name, error=None):
+            self.name, self.error, self.calls = name, error, 0
+
+        async def rescan_shares(self):
+            self.calls += 1
+            if self.error is not None:
+                raise self.error
+
+    bad, good = Provider("bad", LosslessError("sidecar is not answering")), Provider("good")
+    link, worker, _, _ = make(tmp_path, ["ok"])
+    worker.providers = [bad, good]
+    await link.rescan_shares()
+    assert bad.calls == 1 and good.calls == 1

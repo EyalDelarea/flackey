@@ -170,3 +170,48 @@ async def test_supervisor_runs_the_worker_when_run_when_says_so_without_telegram
     await asyncio.sleep(0.05)
     assert runs == [True] and status["worker_running"] is False
     task.cancel()
+
+
+def test_boot_points_the_soulseek_share_at_the_library_folder(tmp_path):
+    """A copy set up before flackey wrote shares at all has a slskd.yml with no `shares` key, so it
+    offers peers nothing. Starting the app repairs that rather than waiting for a library move."""
+    import yaml
+
+    from flackey.app import repair_share
+    from flackey.config import Settings
+    from flackey.slskd_config import config_path, write_credentials
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        slskd_api_key="k")
+    write_credentials(settings.data_dir, "digger", "not-a-real-password")   # no share: the old shape
+    repair_share(settings)
+    data = yaml.safe_load(config_path(settings.data_dir).read_text())
+    assert data["shares"]["directories"] == [str(settings.library_root)]
+    assert data["soulseek"]["username"] == "digger"      # the repair touches nothing else
+
+    repair_share(settings)                               # every boot, so it has to stay a no-op
+    data = yaml.safe_load(config_path(settings.data_dir).read_text())
+    assert data["shares"]["directories"] == [str(settings.library_root)]
+
+
+def test_boot_writes_no_config_when_soulseek_was_never_set_up(tmp_path, caplog):
+    """Neither an install without Soulseek nor one whose slskd.yml cannot be parsed may stop a boot."""
+    from flackey.app import repair_share
+    from flackey.config import Settings
+    from flackey.slskd_config import config_path
+
+    off = Settings(_env_file=None, data_dir=tmp_path / "off", library_root=tmp_path / "lib")
+    repair_share(off)
+    assert not config_path(off.data_dir).exists()
+
+    on = Settings(_env_file=None, data_dir=tmp_path / "on", library_root=tmp_path / "lib",
+                  slskd_api_key="k")
+    repair_share(on)                                     # Soulseek on, but nothing written yet
+    assert not config_path(on.data_dir).exists()
+
+    path = config_path(on.data_dir)
+    path.parent.mkdir(parents=True)
+    path.write_text("- not\n- a mapping\n")
+    caplog.set_level("WARNING")
+    repair_share(on)                                     # must warn, not raise
+    assert "Soulseek share" in caplog.text

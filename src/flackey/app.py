@@ -20,6 +20,7 @@ from .inbox import Inbox
 from .logsetup import log_startup_banner
 from .notify import LogNotifier
 from .slskd_binary import SlskdBinaryError
+from .slskd_config import SlskdConfigError, write_share
 from .slskd_process import SlskdProcess
 from .soulseek_link import SoulseekLink
 from .source.deezer_bot import DeezerBotSource
@@ -133,11 +134,25 @@ def build_providers(settings: Settings, http: httpx.AsyncClient) -> list[Lossles
     return providers
 
 
+def repair_share(settings: Settings) -> None:
+    """Every start: make sure slskd is still sharing the library folder. Idempotent, and a no-op when
+    there is no slskd.yml, so a fresh or Telegram-only install pays nothing for it. It is here for the
+    copies set up before flackey wrote a share at all -- they would otherwise offer peers nothing (and
+    be refused uploads for it) until the owner happened to move their library folder."""
+    if not settings.soulseek_enabled:
+        return
+    try:
+        write_share(settings.data_dir, settings.library_root)
+    except SlskdConfigError as e:
+        log.warning("could not point the Soulseek share at the library folder: %s", e)
+
+
 async def _run(settings: Settings, handle: ServerHandle) -> None:
     migrate_legacy_data_dir(settings)
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.library_root,
               settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)
+    repair_share(settings)
     log_startup_banner(settings, __version__)
     store = Store(settings.db_path)
     bus = EventBus()

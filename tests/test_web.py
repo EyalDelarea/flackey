@@ -1052,3 +1052,40 @@ def test_soulseek_setup_shares_the_library(tmp_path: Path):
     assert r.status_code == 200
     data = yaml.safe_load(config_path(settings.data_dir).read_text())
     assert data["shares"]["directories"] == [str(settings.library_root)]
+
+
+def test_a_library_move_asks_a_wired_in_link_to_rescan_the_share(tmp_path: Path):
+    """Moving the folder rewrites slskd.yml, but the running sidecar is still indexing the old one until
+    something tells it otherwise -- so a link that is wired in gets asked to rescan. Only on a real
+    move: re-saving the same folder must not set a rescan going."""
+    import threading
+
+    import yaml
+
+    from flackey.slskd_config import config_path, write_credentials
+
+    class FakeLink:
+        def __init__(self):
+            self.state = {"state": "idle", "username": None, "error": None}
+            self.calls, self.rescanned = 0, threading.Event()
+
+        async def rescan_shares(self):
+            self.calls += 1
+            self.rescanned.set()
+
+    link = FakeLink()
+    app, _, settings = make(tmp_path, link=link)
+    write_credentials(settings.data_dir, "digger", "not-a-real-password",
+                      library_root=settings.library_root)
+    new = tmp_path / "moved"
+    with TestClient(app) as c:
+        assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
+        assert link.rescanned.wait(2), "the rescan task was scheduled but never ran"
+        assert link.calls == 1
+        data = yaml.safe_load(config_path(settings.data_dir).read_text())
+        assert data["shares"]["directories"] == [str(new)]
+
+        link.rescanned.clear()
+        assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
+        assert not link.rescanned.wait(0.2)      # same folder, nothing moved, nothing to rescan
+        assert link.calls == 1
