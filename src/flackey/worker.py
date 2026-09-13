@@ -319,8 +319,9 @@ class Worker:
             # outlive it, still writing to the store the app is closing. Each one puts itself back on the
             # queue as it unwinds (see `process`), so the next run picks up where this one stopped.
             await self._stop_all()
-        if self.settings.source_enabled:
-            log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
+        # Unguarded on purpose: reaching this line means the loop ended normally, which only happens
+        # when the source is on and Telegram is signed out (cancellation skips it entirely).
+        log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
 
     async def _stop_all(self) -> None:
         tasks = list(self._tasks.values())
