@@ -33,6 +33,7 @@ class LoginClient(Protocol):
                       password: str | None = None) -> Any: ...
     async def log_out(self) -> bool: ...
     async def connect(self) -> None: ...
+    async def disconnect(self) -> None: ...
     def is_connected(self) -> bool: ...
 
 
@@ -80,6 +81,12 @@ class TelegramLogin:
             self.configured = True
             return
         self._cancel_qr()
+        if self.client.is_connected():
+            # The worker reads the bot's messages through this very object (app.py dereferences
+            # `login.client` on every call), so an already-connected client has to be closed rather
+            # than abandoned with its MTProto socket and receive task still live. disconnect(), not
+            # log_out(): a re-save of the keys keeps the account signed in, only drops the socket.
+            await self.client.disconnect()
         self.client = self.make_client()
         self.configured = True
         await self.client.connect()

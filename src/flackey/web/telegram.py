@@ -81,8 +81,8 @@ def router(login: TelegramLogin | None, status: dict,
     @r.post("/skip")
     async def skip() -> dict:
         """The owner chose not to connect Telegram. The bot is one of two sources, so turning it
-        off is a real mode (worker.py checks `source_enabled`), not a missing step; signing in
-        later turns it on."""
+        off is a real mode (worker.py checks `source_enabled`), not a missing step. Turning it back
+        on is the sign-in path's job, see app.on_authorized."""
         if settings is None:
             raise HTTPException(503, "Settings are not available in this process")
         save_settings(settings, source_enabled=False)

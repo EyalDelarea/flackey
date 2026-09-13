@@ -991,6 +991,7 @@ def test_telegram_keys_route_saves_and_reconfigures(tmp_path: Path):
 
     class Client:
         async def connect(self): pass
+        async def disconnect(self): pass
         def is_connected(self): return True
         async def is_user_authorized(self): return False
 

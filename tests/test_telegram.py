@@ -282,3 +282,61 @@ async def test_reconfigure_rebuilds_and_connects_the_client():
     await login.reconfigure()
     assert login.configured is True and login.client is made[-1] and made[-1].connected
     assert (await login.status()) == {"authorized": False, "configured": True, "phone_masked": None}
+
+
+async def test_reconfigure_closes_a_connected_client_before_opening_the_new_one():
+    """The worker reads the bot's messages through login.client (app.py dereferences it on every
+    call), so a reconfigure while already connected must close that socket rather than abandon it --
+    and close it before the replacement dials in, so the two never share the session file."""
+    events = []
+
+    class Client:
+        def __init__(self, name, connected=False):
+            self.name, self.connected = name, connected
+
+        async def connect(self):
+            events.append(f"connect {self.name}")
+            self.connected = True
+
+        async def disconnect(self):
+            events.append(f"disconnect {self.name}")
+            self.connected = False
+
+        def is_connected(self):
+            return self.connected
+
+        async def is_user_authorized(self):
+            return False
+
+    old = Client("old", connected=True)
+    new = Client("new")
+    login = TelegramLogin(old, True, make_client=lambda: new)
+    await login.reconfigure()
+    assert events == ["disconnect old", "connect new"]
+    assert login.client is new and old.connected is False
+
+
+async def test_reconfigure_leaves_an_unconnected_client_alone():
+    """The first run's placeholder client was never connected (app.py skips connect() when the keys
+    are missing); calling disconnect() on it would be a pointless round trip."""
+    class Client:
+        def __init__(self):
+            self.connected = False
+            self.disconnects = 0
+
+        async def connect(self):
+            self.connected = True
+
+        async def disconnect(self):
+            self.disconnects += 1
+
+        def is_connected(self):
+            return self.connected
+
+        async def is_user_authorized(self):
+            return False
+
+    old = Client()
+    login = TelegramLogin(old, False, make_client=Client)
+    await login.reconfigure()
+    assert old.disconnects == 0 and login.client is not old
