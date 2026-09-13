@@ -46,10 +46,9 @@ situation you are in.
 
 The app opens on a setup screen, because it starts with nothing configured.
 
-**Telegram.** One of the two ways Flackey finds audio is a Telegram bot, and talking to Telegram
-needs an API id and hash. This build does not carry any, so you will need your own: sign in at
-[my.telegram.org](https://my.telegram.org) → **API development tools**, make an app (any name), and
-paste the `api_id` and `api_hash` into the setup screen. They identify the software, not you.
+**Telegram.** One of the two ways Flackey finds audio is a Telegram bot. This build already carries
+the keys Telegram needs to know which app is talking; you sign in with your own Telegram account by
+scanning a QR code, and that is all. You can skip it and use Soulseek only.
 
 **Soulseek.** The other source. The setup screen walks through it and downloads what it needs.
 
@@ -65,6 +64,15 @@ You can skip either one. With neither, the app runs but has nowhere to fetch fro
 
 If something goes wrong, that log file is the useful thing to send back — it records what the app was
 doing, and it is where any crash on startup ends up, since the app has no console to print to.
+
+## Sharing on Soulseek
+
+Soulseek is give and take: your DJ Library is shared read-only, and many users refuse to send to
+anyone who shares nothing. For people to reach you, one port has to be open on your router. Flackey
+asks the router to open it every time it starts and then checks from outside whether that worked.
+Settings › Sharing shows the answer. If it says the port is closed, forward TCP 50300 to this Mac on
+your router (the panel shows the addresses), or, if you are on a VPN, in the VPN's settings.
+Downloading works either way; sharing back is what needs the port.
 
 ## Known rough edges
 

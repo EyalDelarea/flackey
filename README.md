@@ -36,10 +36,12 @@ every command below works under either name.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
-phone number instead) — this authorizes your own Telegram account, via
-Telethon, as the account that talks to the source bot. `uv run flackey login`
-is an optional, terminal-only way to do that same sign-in instead of the
-setup screen; neither path stores the two-step verification password.
+phone number instead), then a Soulseek account. Either source can be
+skipped and turned on later from Settings; with both off the app files
+nothing. A packaged build carries Flackey's own Telegram API keys; from a
+checkout, put yours in `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) or
+paste them into the Telegram step, which offers fields whenever this copy
+has none.
 
 Then paste a YouTube or YouTube Music track/playlist link into the UI.
 Plain text is refused and queues nothing. Useful companions:
@@ -109,8 +111,14 @@ before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via So
    ```
 
    Start it with `./slskd --app-dir "~/Library/Application Support/Flackey/slskd"`. Sharing your library is
-   what makes peers serve you; forward TCP 50300 on the router so they can reach it (searching works without).
+   what makes peers serve you.
 3. Put the same key in `.env` as `SLSKD_API_KEY=` (or in `settings.json` as `slskd_api_key`). Restart.
+
+   The setup screen writes all of this for you, including `shares.directories`, which is the DJ Library:
+   sharing is what keeps a Soulseek account in good standing. Flackey also asks your router to open TCP
+   50300 (NAT-PMP, then UPnP) every time it starts, and checks from outside whether the port answers;
+   Settings › Sharing shows the result and, when the port is closed, what to forward by hand. Behind a
+   VPN the forward has to be made on the VPN's side.
 4. `/api/health` shows `lossless.provider.status` (`ok`, `not_logged_in`, `unreachable`), whether `fpcalc` is
    present, the last 24 h of attempt outcomes and the size of the raw attempt folder.
 
