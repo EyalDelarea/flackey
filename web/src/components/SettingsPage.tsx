@@ -38,6 +38,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [setupResetError, setSetupResetError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
   // The saved Soulseek password, once the owner asks for it. Held only in this component's state:
   // nothing fetches it until the button is pressed, and leaving Settings forgets it again.
   const [soulseekPassword, setSoulseekPassword] = useState<string | null>(null)
@@ -107,6 +108,10 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .then(() => { setApiId(''); setApiHash(''); setKeysSaved(true) })
       .catch(e => setKeysError(getErrorMessage(e, 'Could not save those keys.')))
       .finally(() => setKeysBusy(false))
+  }
+  const checkSharing = () => {
+    setCheckError(null)
+    api.checkSharing().catch(() => setCheckError('Could not start the check. Try again.'))
   }
   const showSoulseekPassword = () => {
     setPasswordBusy(true); setPasswordError(null)
@@ -179,7 +184,8 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             pull from is the one Soulseek eventually stops trusting. The state arrives on the status event,
             so the answer to a re-check lands here by itself and the response is discarded. */}
         {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Sharing</div>
-          <SharingPanel state={live.health?.sharing ?? null} onCheck={() => { api.checkSharing().catch(() => undefined) }} /></div></div>}
+          <SharingPanel state={live.health?.sharing ?? null} onCheck={checkSharing} />
+          {checkError && <p className="hint-row warn">{checkError}</p>}</div></div>}
         {/* Ports and the pick rules are the two things nobody needs until something is wrong, and stating
             them beside the format switch made the panel read as a control room. Folded away, not dropped:
             they are the first thing to ask for when a transfer never starts or a copy is refused. */}

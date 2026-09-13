@@ -35,7 +35,7 @@ export default function UploadsPage({ inset }: { inset: boolean }) {
   return (<>
     <Toolbar inset={inset}><h1>Uploads</h1></Toolbar>
     {error && <Banner tone="red" text={error} />}
-    {feed && !feed.enabled && <Banner tone="amber" text="Soulseek is off. Add your slskd key in Settings to share back." />}
+    {feed && !feed.enabled && <Banner tone="amber" text="Soulseek is off. Turn it on in Settings to share back." />}
     {feed?.error && <Banner tone="amber" text={`Can't read transfers from ${feed.provider ?? 'the sidecar'}: ${feed.error}`} />}
     {sharing?.reachable === false && <Banner tone="amber"
       text="Your Soulseek port is closed, so most people cannot download from you. Settings › Sharing shows how to open it." />}

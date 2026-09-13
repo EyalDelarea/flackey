@@ -238,6 +238,21 @@ describe('the Soulseek panel', () => {
     await waitFor(() => expect(check).toHaveBeenCalled())
   })
 
+  it('says the check could not start when the click itself fails', async () => {
+    vi.spyOn(api, 'checkSharing').mockRejectedValue(new Error('network error'))
+    show(lossless(), settings(), sharing({ reachable: false }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(screen.getByText('Could not start the check. Try again.')).toBeInTheDocument())
+  })
+
+  it('says nothing when the check starts fine', async () => {
+    const check = vi.spyOn(api, 'checkSharing').mockResolvedValue(sharing({ checking: true }))
+    show(lossless(), settings(), sharing({ reachable: false }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(check).toHaveBeenCalled())
+    expect(screen.queryByText('Could not start the check. Try again.')).not.toBeInTheDocument()
+  })
+
   it('has no sharing row when no Soulseek account was ever saved', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }), sharing({ reachable: false }))
     expect(screen.queryByText('Sharing')).not.toBeInTheDocument()

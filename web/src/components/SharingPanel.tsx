@@ -13,8 +13,10 @@ import type { SharingState } from '../api'
 export default function SharingPanel({ state, onCheck, compact = false }: { state: SharingState | null; onCheck: () => void; compact?: boolean }) {
   const s = state
   const checking = !!s?.checking
-  // A check that is running says so; a result that has not arrived is not the same as a closed port.
-  const closed = !checking && s?.reachable === false
+  // A result that has not arrived is not the same as a closed port -- but unlike `checking`, this stays
+  // true across a re-check, so the forward instructions do not vanish the moment the owner clicks
+  // "Check again" only to reappear when the new answer lands.
+  const closed = s?.reachable === false
   const sentence = checking ? 'Checking whether other people can reach you…'
     : s?.reachable === true ? 'Other Soulseek users can download from you.'
     : closed ? 'Your Soulseek port is closed, so most people cannot download from you.'

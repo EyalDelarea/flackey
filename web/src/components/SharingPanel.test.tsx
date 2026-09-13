@@ -43,6 +43,13 @@ it('Check again calls onCheck and is disabled while checking', () => {
   expect(screen.getByText('Checking whether other people can reach you…')).toBeInTheDocument()
 })
 
+it('keeps the forward instructions up while a re-check is running', () => {
+  render(<SharingPanel state={state({ checking: true, reachable: false, port: 50300,
+    lan_ip: '192.168.1.10', gateway: '192.168.1.1' })} onCheck={vi.fn()} />)
+  expect(screen.getByText('Checking whether other people can reach you…')).toBeInTheDocument()
+  expect(screen.getByText(/50300/)).toBeInTheDocument()
+})
+
 it('says nothing has been checked yet rather than claiming the port is shut', () => {
   render(<SharingPanel state={state()} onCheck={vi.fn()} />)
   expect(screen.getByText('Not checked yet.')).toBeInTheDocument()
