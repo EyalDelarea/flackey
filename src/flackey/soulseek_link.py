@@ -107,5 +107,14 @@ class SoulseekLink:
                 return
             await self._sleep(POLL_S)
 
+    async def rescan_shares(self) -> None:
+        """After the shared folder moved: ask the running providers to rescan. Best effort -- slskd
+        also watches its config file, and the daily maintenance rescan is the backstop."""
+        for p in list(self._worker.providers):
+            try:
+                await p.rescan_shares()
+            except (LosslessError, httpx.HTTPError, OSError) as e:
+                log.warning("%s: rescan after the library moved failed: %s", p.name, e)
+
     def _fail(self, message: str) -> None:
         self.state = {"state": "failed", "username": None, "error": message}

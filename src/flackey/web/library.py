@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from ..slskd_config import (
     read_password,
     read_username,
     write_credentials,
+    write_share,
 )
 from ..slskd_process import SlskdProcess
 from ..store import Store
@@ -73,6 +75,10 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     # only strings it can carry are SlskdBinaryError messages, which by construction never dump bytes
     # or secrets (see slskd_binary.py).
     slskd_install_state: dict = {"state": "idle", "done": 0, "total": 0, "error": None}
+
+    # Rescans started after a library move, held here for as long as they run: the event loop keeps only
+    # a weak reference to a task, so one nobody else holds can be collected half way through.
+    rescans: set[asyncio.Task] = set()
 
     def _install_slskd_in_background(data_dir: Path) -> None:
         """Runs on FastAPI's background threadpool (BackgroundTasks), so the tens-of-seconds
@@ -177,7 +183,20 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             extra["slskd_url"] = str(body["slskd_url"]).rstrip("/")
         if body.get("slskd_api_key"):
             extra["slskd_api_key"] = str(body["slskd_api_key"]).strip()
+        previous = settings.library_root
         save_settings(settings, library_root=path, **extra)
+        # The share follows the folder: leaving it pointed at the old path would offer peers a folder
+        # the owner no longer fills, and share nothing of the one they do.
+        if path != previous:
+            try:
+                moved = write_share(settings.data_dir, path, previous=previous)
+            except SlskdConfigError as e:
+                log.warning("library folder changed but the Soulseek share was not updated: %s", e)
+                moved = False
+            if moved and link is not None:
+                task = asyncio.create_task(link.rescan_shares())
+                rescans.add(task)
+                task.add_done_callback(rescans.discard)
         return settings_out()
 
     @r.post("/reveal")
@@ -238,7 +257,8 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         username = str(body.get("username") or "")
         password = str(body.get("password") or "")
         try:
-            key = write_credentials(settings.data_dir, username, password)
+            key = write_credentials(settings.data_dir, username, password,
+                                    library_root=settings.library_root)
         except SlskdConfigError as e:
             raise HTTPException(400, str(e))
         settings.slskd_api_key = key

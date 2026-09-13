@@ -117,9 +117,31 @@ def _submapping(parent: dict, key: str, path: Path) -> dict:
     return value
 
 
-def write_credentials(data_dir: Path, username: str, password: str) -> str:
+def _load_config(path: Path) -> dict:
+    """The config we are about to rewrite, or an empty one when there is no file yet. Unlike
+    `_load_or_none`, which answers questions and may shrug, this is the read before a write: an
+    unreadable or invalid file must stop the write, because overwriting it would throw away an
+    owner's settings we could not understand."""
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise SlskdConfigError(f"could not read {path}: {e.strerror or e}") from e
+    try:
+        loaded = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise SlskdConfigError(f"{path} does not hold a valid slskd configuration.") from e
+    if not isinstance(loaded, dict):
+        raise SlskdConfigError(f"{path} does not hold a valid slskd configuration.")
+    return loaded
+
+
+def write_credentials(data_dir: Path, username: str, password: str,
+                      library_root: Path | None = None) -> str:
     """Create or update the managed slskd.yml with these Soulseek credentials and return the
-    flackey API key -- generated on the first write, preserved on every later one. Raises
+    flackey API key -- generated on the first write, preserved on every later one. With a
+    `library_root`, that folder is also made one of the shared directories. Raises
     SlskdConfigError on invalid input or an unwritable path."""
     username = username.strip()
     if not username:
@@ -128,19 +150,7 @@ def write_credentials(data_dir: Path, username: str, password: str) -> str:
         raise SlskdConfigError("Soulseek password must not be empty.")
 
     path = config_path(data_dir)
-    config: dict = {}
-    if path.exists():
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except OSError as e:
-            raise SlskdConfigError(f"could not read {path}: {e.strerror or e}") from e
-        try:
-            loaded = yaml.safe_load(raw)
-        except yaml.YAMLError as e:
-            raise SlskdConfigError(f"{path} does not hold a valid slskd configuration.") from e
-        if not isinstance(loaded, dict):
-            raise SlskdConfigError(f"{path} does not hold a valid slskd configuration.")
-        config = loaded
+    config = _load_config(path)
 
     config.setdefault("remote_configuration", False)
     web = _submapping(config, "web", path)
@@ -174,6 +184,9 @@ def write_credentials(data_dir: Path, username: str, password: str) -> str:
     directories.setdefault("downloads", str(data_dir / "slskd" / "downloads"))
     directories.setdefault("incomplete", str(data_dir / "slskd" / "incomplete"))
 
+    if library_root is not None:
+        _set_share(config, path, library_root)
+
     _atomic_write(path, config)
     log.info("wrote slskd config: %s", path)
     return key_entry["key"]
@@ -191,6 +204,37 @@ def _atomic_write(path: Path, config: dict) -> None:
     except OSError as e:
         tmp.unlink(missing_ok=True)
         raise SlskdConfigError(f"could not write {path}: {e.strerror or e}") from e
+
+
+def _set_share(config: dict, path: Path, library_root: Path, previous: Path | None = None) -> None:
+    """Make the library folder one of slskd's shared directories. Sharing is what keeps a Soulseek
+    user in good standing -- many peers refuse anyone who offers nothing -- and the spec
+    (2026-09-07 §2) says the whole DJ Library is shared. Other entries are the owner's and stay; a
+    previous library folder goes, because it is the same share moved, not a second one."""
+    shares = _submapping(config, "shares", path)
+    dirs = shares.get("directories")
+    if not isinstance(dirs, list):
+        dirs = []
+    dirs = [d for d in dirs if isinstance(d, str)]
+    if previous is not None and str(previous) != str(library_root):
+        dirs = [d for d in dirs if d != str(previous)]
+    if str(library_root) not in dirs:
+        dirs.append(str(library_root))
+    shares["directories"] = dirs
+
+
+def write_share(data_dir: Path, library_root: Path, previous: Path | None = None) -> bool:
+    """Point the share at the library folder, on a config that already exists. False when Soulseek
+    was never set up (no file), so a folder change on a Telegram-only install writes nothing. Raises
+    SlskdConfigError when the file is present but unreadable or invalid."""
+    path = config_path(data_dir)
+    if not path.exists():
+        return False
+    config = _load_config(path)
+    _set_share(config, path, library_root, previous)
+    _atomic_write(path, config)
+    log.info("slskd share now %s", library_root)
+    return True
 
 
 def repoint_slskd_config(old_data_dir: Path, new_data_dir: Path) -> None:

@@ -162,3 +162,39 @@ def test_read_password_returns_what_was_written(tmp_path: Path):
     That is the whole reason this reader exists."""
     write_credentials(tmp_path, "digger", "not-a-real-password")
     assert read_password(tmp_path) == "not-a-real-password"
+
+
+def test_credentials_write_shares_the_library_folder(tmp_path: Path):
+    write_credentials(tmp_path, "digger", "not-a-real-password",
+                      library_root=tmp_path / "DJ Library")
+    data = yaml.safe_load(config_path(tmp_path).read_text())
+    assert data["shares"]["directories"] == [str(tmp_path / "DJ Library")]
+
+
+def test_credentials_write_keeps_a_hand_written_share_and_adds_the_library(tmp_path: Path):
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump({"shares": {"directories": ["/Volumes/Extra/Music"]}}))
+    write_credentials(tmp_path, "digger", "not-a-real-password",
+                      library_root=tmp_path / "DJ Library")
+    data = yaml.safe_load(path.read_text())
+    assert data["shares"]["directories"] == ["/Volumes/Extra/Music", str(tmp_path / "DJ Library")]
+
+
+def test_write_share_moves_the_share_with_the_library_folder(tmp_path: Path):
+    from flackey.slskd_config import write_share
+    old, new = tmp_path / "old", tmp_path / "new"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=old)
+    assert write_share(tmp_path, new, previous=old) is True
+    data = yaml.safe_load(config_path(tmp_path).read_text())
+    assert data["shares"]["directories"] == [str(new)]
+    assert data["soulseek"]["username"] == "digger"           # nothing else touched
+    assert config_path(tmp_path).stat().st_mode & 0o777 == 0o600
+    assert write_share(tmp_path, new, previous=old) is True   # idempotent
+    assert yaml.safe_load(config_path(tmp_path).read_text())["shares"]["directories"] == [str(new)]
+
+
+def test_write_share_does_nothing_without_a_config(tmp_path: Path):
+    from flackey.slskd_config import write_share
+    assert write_share(tmp_path, tmp_path / "lib") is False
+    assert not config_path(tmp_path).exists()

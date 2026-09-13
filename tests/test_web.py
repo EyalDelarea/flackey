@@ -1025,3 +1025,30 @@ def test_health_says_when_the_source_is_off(tmp_path: Path):
     app, _, settings = make(tmp_path)
     settings.source_enabled = False
     assert TestClient(app).get("/api/health").json()["source_enabled"] is False
+
+
+def test_changing_the_library_folder_moves_the_soulseek_share(tmp_path: Path):
+    import yaml
+
+    from flackey.slskd_config import config_path, write_credentials
+    app, _, settings = make(tmp_path)
+    write_credentials(settings.data_dir, "digger", "not-a-real-password",
+                      library_root=settings.library_root)
+    c = TestClient(app)
+    new = tmp_path / "moved"
+    assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
+    data = yaml.safe_load(config_path(settings.data_dir).read_text())
+    assert data["shares"]["directories"] == [str(new)]
+
+
+def test_soulseek_setup_shares_the_library(tmp_path: Path):
+    import yaml
+
+    from flackey.slskd_config import config_path
+    app, _, settings = make(tmp_path)
+    c = TestClient(app)
+    r = c.post("/api/setup/soulseek",
+               json={"username": "digger", "password": "not-a-real-password"})
+    assert r.status_code == 200
+    data = yaml.safe_load(config_path(settings.data_dir).read_text())
+    assert data["shares"]["directories"] == [str(settings.library_root)]
