@@ -251,7 +251,21 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .tech > summary:hover { color: var(--text); }
 .tech .k { margin-top: 10px; }
 .tech .k:first-of-type { margin-top: 6px; }
+/* The two API-key fields inside that disclosure. `.fields` is the setup form's 320px centred column and
+   would fight the row it sits in, so the pair gets its own narrow stack here. */
+.keys { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin-top: 8px; }
+.keys .field { display: flex; flex-direction: column; gap: 4px; }
+.keys label { font-size: 12px; font-weight: 500; color: var(--secondary); }
 .srow .actions { display: flex; gap: 8px; flex: none; }
+
+/* ---- Sharing: whether other Soulseek users can reach this Mac ---- */
+/* `.hint-row.ok` carries no colour of its own anywhere else, and `.hint-row.warn` is written for a setup
+   step -- centred, 460px wide. Both are corrected only inside `.sharing`, so nothing else moves. */
+.sharing .hint-row.ok { color: var(--green); }
+.sharing:not(.compact) .hint-row.warn { text-align: left; max-width: none; }
+/* The router instructions: a paragraph the owner reads once and acts on, so it wraps at a readable
+   measure rather than running the width of the panel. */
+.sharing-how { margin-top: 6px; max-width: 60ch; font-size: 12px; line-height: 1.45; color: var(--secondary); }
 
 /* ---- Setup ---- */
 .setup { height: 100%; display: flex; flex-direction: column; background: var(--window); }

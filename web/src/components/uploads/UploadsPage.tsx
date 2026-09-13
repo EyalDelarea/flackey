@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api'
-import type { UploadFeed } from '../../api'
+import type { SharingState, UploadFeed } from '../../api'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
 
@@ -15,8 +15,12 @@ const POLL_MS = 4000
  *  was chosen by a peer or by whoever named the file on disk. It is rendered as text and never acted on. */
 export default function UploadsPage({ inset }: { inset: boolean }) {
   const [feed, setFeed] = useState<UploadFeed | null>(null)
+  const [sharing, setSharing] = useState<SharingState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const load = useCallback(async () => {
+    // An empty page here reads as "nobody wants my files" when the real answer is often "nobody can
+    // reach you". The port answer rides along with the feed so the two arrive together.
+    setSharing(await api.sharing().catch(() => null))
     try { setFeed(await api.uploads()); setError(null) } catch { setError("Can't reach Flackey.") }
   }, [])
   useEffect(() => {
@@ -31,6 +35,8 @@ export default function UploadsPage({ inset }: { inset: boolean }) {
     {error && <Banner tone="red" text={error} />}
     {feed && !feed.enabled && <Banner tone="amber" text="Soulseek is off. Add your slskd key in Settings to share back." />}
     {feed?.error && <Banner tone="amber" text={`Can't read transfers from ${feed.provider ?? 'the sidecar'}: ${feed.error}`} />}
+    {sharing?.reachable === false && <Banner tone="amber"
+      text="Your Soulseek port is closed, so most people cannot download from you. Settings › Sharing shows how to open it." />}
     {s && (
       <div className="up-summary">
         <div className="up-stat"><span className="n">{s.active}</span><span className="k">sending now</span></div>

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
 import { api, ApiError } from '../api'
-import type { AppSettings, Health, LosslessHealth } from '../api'
+import type { AppSettings, Health, LosslessHealth, SharingState } from '../api'
 
 const makeLive = (over: { settings: AppSettings; health: Health }) =>
   ({ ...over, setSettings: mockSetSettings, refresh: mockRefresh } as never)
@@ -135,9 +135,13 @@ describe('the Soulseek panel', () => {
   const lossless = (over: Partial<LosslessHealth> = {}): LosslessHealth =>
     ({ enabled: true, provider: null, fpcalc: true, attempts_24h: {}, raw_mb: 0, ...over })
 
-  const show = (l?: LosslessHealth, st: AppSettings = settings()) =>
+  const sharing = (over: Partial<SharingState> = {}): SharingState =>
+    ({ port: 50300, enabled: true, checking: false, mapping: null, reachable: null,
+      public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null, ...over })
+
+  const show = (l?: LosslessHealth, st: AppSettings = settings(), sh: SharingState | null = null) =>
     render(<SettingsPage live={makeLive({ settings: st, health: { ok: true, version: '0.1.0',
-      telegram_authorized: true, worker_running: true, setup_done: true, lossless: l } })} onReconnect={vi.fn()} />)
+      telegram_authorized: true, worker_running: true, setup_done: true, lossless: l, sharing: sh } })} onReconnect={vi.fn()} />)
 
   it('names the account once the helper has actually answered', () => {
     show(lossless({ provider: { name: 'soulseek', status: 'ok', username: 'digger' } }))
@@ -217,5 +221,68 @@ describe('the Soulseek panel', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
     expect(screen.getByText(/Not set up — run setup again/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'WAV' })).not.toBeInTheDocument()
+  })
+
+  it('says whether other people can reach you, and how to open the port when they cannot', () => {
+    show(lossless(), settings(), sharing({ reachable: false, lan_ip: '10.0.0.5', gateway: '10.0.0.1' }))
+    expect(screen.getByText('Sharing')).toBeInTheDocument()
+    expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument()
+    expect(screen.getByText(/forward TCP port 50300 on your router to this Mac \(10\.0\.0\.5\)/)).toBeInTheDocument()
+  })
+
+  it('asks the server to check again on request', async () => {
+    const check = vi.spyOn(api, 'checkSharing').mockResolvedValue(sharing({ checking: true }))
+    show(lossless(), settings(), sharing({ reachable: true }))
+    expect(screen.getByText('Other Soulseek users can download from you.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(check).toHaveBeenCalled())
+  })
+
+  it('has no sharing row when no Soulseek account was ever saved', () => {
+    show(lossless({ enabled: false }), settings({ soulseek_enabled: false }), sharing({ reachable: false }))
+    expect(screen.queryByText('Sharing')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Your Soulseek port is closed/)).not.toBeInTheDocument()
+  })
+})
+
+describe('using your own Telegram API keys', () => {
+  const open = () => {
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    fireEvent.click(screen.getByText('Use your own Telegram API keys'))
+  }
+
+  it('saves the pair and tells the owner what to do next, without echoing the hash back', async () => {
+    // The hash is a secret the server keeps. Printing a saved one back into the field would put it on
+    // screen for anyone walking past, so the fields are cleared rather than refilled.
+    const keys = vi.spyOn(api, 'telegramKeys').mockResolvedValue({ configured: true })
+    open()
+    fireEvent.change(screen.getByLabelText('API ID'), { target: { value: '12345' } })
+    fireEvent.change(screen.getByLabelText('API hash'), { target: { value: 'not-a-real-hash' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save keys' }))
+    await waitFor(() => expect(screen.getByText('Saved. Sign in again from the Telegram row.')).toBeInTheDocument())
+    expect(keys).toHaveBeenCalledWith('12345', 'not-a-real-hash')
+    expect(screen.queryByDisplayValue('not-a-real-hash')).not.toBeInTheDocument()
+  })
+
+  it('shows the server\'s own reason when the keys are refused', async () => {
+    vi.spyOn(api, 'telegramKeys').mockRejectedValue(new ApiError(400, 'That API ID is not a number.'))
+    open()
+    fireEvent.change(screen.getByLabelText('API ID'), { target: { value: 'nope' } })
+    fireEvent.change(screen.getByLabelText('API hash'), { target: { value: 'not-a-real-hash' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save keys' }))
+    await waitFor(() => expect(screen.getByText('That API ID is not a number.')).toBeInTheDocument())
+    expect(screen.queryByText('Saved. Sign in again from the Telegram row.')).not.toBeInTheDocument()
+  })
+
+  it('stays folded away, and cannot be saved half-filled', () => {
+    // Almost nobody needs their own keys; the ones Flackey ships with work. So the override is folded
+    // shut on arrival, the same way the ports table is.
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    expect(screen.getByText('Use your own Telegram API keys').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByRole('button', { name: 'Save keys' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('API ID'), { target: { value: '12345' } })
+    expect(screen.getByRole('button', { name: 'Save keys' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('API hash'), { target: { value: 'not-a-real-hash' } })
+    expect(screen.getByRole('button', { name: 'Save keys' })).not.toBeDisabled()
   })
 })

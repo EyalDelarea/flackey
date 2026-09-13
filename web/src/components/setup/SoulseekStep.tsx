@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../../api'
-import type { SlskdProgress, SoulseekConnect } from '../../api'
+import type { SharingState, SlskdProgress, SoulseekConnect } from '../../api'
 import { generateAccount } from '../../soulseekAccount'
 import CopyButton from '../CopyButton'
+import SharingPanel from '../SharingPanel'
 
 const POLL_MS = 1000
 // Soulseek releases a name that goes a month without signing in (slsknet.org/news/node/748), and flackey
@@ -27,6 +28,9 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
   // Soulseek has no sign-up step: a username is claimed by signing in with it. So saving *is* creating
   // the account, and this is the only confirmation that it worked.
   const [connect, setConnect] = useState<SoulseekConnect | null>(null)
+  // Whether other users will be able to pull from this Mac. Only asked for once the account exists,
+  // because the port check needs the sidecar signed in to be worth anything.
+  const [sharing, setSharing] = useState<SharingState | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const connectTimer = useRef<number | undefined>(undefined)
   // The name that was already saved when this step opened, kept because `username` is overwritten the
@@ -116,6 +120,21 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
   const progressText = install?.state === 'extracting' ? 'Almost there…'
     : pct === null ? 'Getting things ready…' : `Getting things ready… ${pct}%`
   const connected = connect?.state === 'connected'
+  // The port check starts on the server the moment the sidecar signs in, so this only waits for it to
+  // finish: poll until the state stops saying `checking`, then stop. Its own effect rather than a branch
+  // of pollConnect, so leaving the step while a check is running cannot leave an interval behind.
+  useEffect(() => {
+    if (!connected) return
+    let stopped = false
+    let id: number | undefined
+    const stop = () => { stopped = true; if (id !== undefined) { clearInterval(id); id = undefined } }
+    const tick = () => api.sharing()
+      .then(s => { if (stopped) return; setSharing(s); if (!s.checking) stop() })
+      .catch(stop)   // nothing to tell the user here: the step is about the account, not the port
+    id = window.setInterval(tick, POLL_MS)
+    tick()
+    return stop
+  }, [connected])
   // Whatever was saved before this screen opened, a name flackey has just dealt is one being created --
   // so the screen stops describing itself as the account they already have.
   const existing = configured && !generated
@@ -158,6 +177,7 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
       {savedUsername.current && ` Creating it also replaces the account already saved (${savedUsername.current}) — copy that password from Settings first if you want to keep it.`}</div>}
     {connect?.state === 'connecting' && <div className="hint-row">Signing in to Soulseek…</div>}
     {connected && <div className="hint-row ok">Signed in as {connect?.username ?? username}. The account is yours.</div>}
+    {connected && sharing && <SharingPanel state={sharing} onCheck={() => {}} compact />}
     {connect?.state === 'failed' && (generated
       ? <div className="hint-row">That name was taken. Here is another one — try again.</div>
       : <div className="err">{connect.error}</div>)}

@@ -25,11 +25,19 @@ export interface Stats { tracks:number; bytes:number; playlists:number; rejectio
 export interface ProviderHealth { name:string; status:string; username:string|null }
 export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
   attempts_24h:Record<string,number>; raw_mb:number }
+/** Whether other Soulseek users can open a connection back to this Mac. `reachable` is the only answer
+    that matters; the addresses exist so the panel can tell the owner what to forward and where, and are
+    null whenever the router, the network or the check itself would not say. */
+export interface SharingState { port:number|null; enabled:boolean; checking:boolean; mapping:'natpmp'|'upnp'|null
+  reachable:boolean|null; public_ip:string|null; lan_ip:string|null; gateway:string|null; checked_at:string|null; error:string|null }
 export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
   setup_done:boolean; lossless?:LosslessHealth
   /** Whether this copy has Telegram API keys at all, and whether the owner left the source switched on.
       Optional so a fixture written before they existed still type-checks. */
-  telegram_configured?:boolean; source_enabled?:boolean }
+  telegram_configured?:boolean; source_enabled?:boolean
+  /** Pushed on every `status` event, so a panel reading it re-renders without polling. Null before the
+      sharing loop has published anything, absent in fixtures written before it existed. */
+  sharing?:SharingState|null }
 export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
   speed_bps:number; pick:number; state:string
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */
@@ -119,5 +127,9 @@ export const api = {
   slskdSetup: () => call<SlskdSetup>('/api/setup/slskd'),
   installSlskd: () => post<{ state: SlskdProgress['state'] }>('/api/setup/slskd'),
   slskdProgress: () => call<SlskdProgress>('/api/setup/slskd/progress'),
+  sharing: () => call<SharingState>('/api/sharing'),
+  // Answers with `checking: true` and does the work behind it: the result arrives on the status event,
+  // not in this response. 409 when there is no Soulseek account to share anything from.
+  checkSharing: () => post<SharingState>('/api/sharing/check'),
 }
 export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/spectrogram.png`

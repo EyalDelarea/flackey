@@ -4,6 +4,7 @@ import type { AppSettings, LosslessHealth, TelegramStatus } from '../api'
 import type { Live } from '../live'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
+import SharingPanel from './SharingPanel'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
 
@@ -42,6 +43,12 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [soulseekPassword, setSoulseekPassword] = useState<string | null>(null)
   const [passwordBusy, setPasswordBusy] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
+  // The owner's own Telegram API keys, if they would rather not use the ones Flackey ships with. Held
+  // only long enough to post them: the hash is never read back, so there is nothing to prefill from.
+  const [apiId, setApiId] = useState(''); const [apiHash, setApiHash] = useState('')
+  const [keysBusy, setKeysBusy] = useState(false)
+  const [keysError, setKeysError] = useState<string | null>(null)
+  const [keysSaved, setKeysSaved] = useState(false)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
@@ -92,6 +99,15 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setSoulseekError(getErrorMessage(e, "Couldn't reconnect to Soulseek.")))
       .finally(() => setReconnecting(false))
   }
+  const saveKeys = () => {
+    setKeysBusy(true); setKeysError(null); setKeysSaved(false)
+    api.telegramKeys(apiId.trim(), apiHash.trim())
+      // Cleared rather than left on screen: a hash that stays in a field is a secret anyone walking past
+      // can read, and the server never hands one back to refill it with.
+      .then(() => { setApiId(''); setApiHash(''); setKeysSaved(true) })
+      .catch(e => setKeysError(getErrorMessage(e, 'Could not save those keys.')))
+      .finally(() => setKeysBusy(false))
+  }
   const showSoulseekPassword = () => {
     setPasswordBusy(true); setPasswordError(null)
     api.soulseekPassword()
@@ -117,6 +133,25 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="v"><span className={`status-dot${authorized ? '' : ' amber'}`} />{telegramLine}</div></div>
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
+        {/* Flackey ships with keys of its own and almost nobody needs to replace them, so this is folded
+            away beside the ports table rather than sitting in the panel. It exists for the owner whose
+            copy was built without them, or who would rather sign in under keys they control. */}
+        <div className="srow"><div className="srow-body">
+          <details className="tech">
+            <summary>Use your own Telegram API keys</summary>
+            <div className="keys">
+              <div className="field"><label htmlFor="settings-tg-api-id">API ID</label>
+                <input id="settings-tg-api-id" className="input" autoComplete="off" spellCheck={false}
+                  value={apiId} onChange={e => { setApiId(e.target.value); setKeysSaved(false) }} /></div>
+              <div className="field"><label htmlFor="settings-tg-api-hash">API hash</label>
+                <input id="settings-tg-api-hash" className="input" type="password" autoComplete="off" spellCheck={false}
+                  value={apiHash} onChange={e => { setApiHash(e.target.value); setKeysSaved(false) }} /></div>
+            </div>
+            {keysError && <div className="err">{keysError}</div>}
+            {keysSaved && <div className="hint-row">Saved. Sign in again from the Telegram row.</div>}
+            <div className="row-gap"><button className="btn-secondary" onClick={saveKeys}
+              disabled={keysBusy || !apiId.trim() || !apiHash.trim()}>{keysBusy ? 'Saving…' : 'Save keys'}</button></div>
+          </details></div></div>
       </div>
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">Soulseek</div>
@@ -140,6 +175,11 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
               <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
             : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
                 {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>}
+        {/* Downloading works behind any router; being downloaded from does not, and an account nobody can
+            pull from is the one Soulseek eventually stops trusting. The state arrives on the status event,
+            so the answer to a re-check lands here by itself and the response is discarded. */}
+        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Sharing</div>
+          <SharingPanel state={live.health?.sharing ?? null} onCheck={() => { api.checkSharing().catch(() => undefined) }} /></div></div>}
         {/* Ports and the pick rules are the two things nobody needs until something is wrong, and stating
             them beside the format switch made the panel read as a control room. Folded away, not dropped:
             they are the first thing to ask for when a transfer never starts or a copy is refused. */}

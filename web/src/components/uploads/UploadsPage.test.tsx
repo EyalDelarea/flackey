@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { vi, afterEach } from 'vitest'
 import UploadsPage from './UploadsPage'
+import { api } from '../../api'
 import type { UploadFeed } from '../../api'
 
 const feed = (over: Partial<UploadFeed> = {}): UploadFeed => ({
@@ -8,7 +9,9 @@ const feed = (over: Partial<UploadFeed> = {}): UploadFeed => ({
   summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, ...over,
 })
 const serve = (f: UploadFeed) => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(f), { status: 200 })))
-afterEach(() => vi.unstubAllGlobals())
+// restoreAllMocks as well as unstubAllGlobals: the sharing test below spies on the api module, and a spy
+// left in place would answer for every test that runs after it.
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 it('lists who is pulling from the shared library, with the totals', async () => {
   serve(feed({
@@ -35,6 +38,23 @@ it('explains when Soulseek is switched off instead of looking broken', async () 
   serve(feed({ enabled: false, provider: null }))
   render(<UploadsPage inset={false} />)
   await waitFor(() => expect(screen.getByText(/Soulseek is off/)).toBeInTheDocument())
+})
+
+it('warns when the port is closed', async () => {
+  serve(feed())
+  vi.spyOn(api, 'sharing').mockResolvedValue({ port: 50300, enabled: true, checking: false, mapping: null, reachable: false,
+    public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null })
+  render(<UploadsPage inset={false} />)
+  await waitFor(() => expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument())
+})
+
+it('says nothing about the port when it is open', async () => {
+  serve(feed())
+  vi.spyOn(api, 'sharing').mockResolvedValue({ port: 50300, enabled: true, checking: false, mapping: 'natpmp', reachable: true,
+    public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null })
+  render(<UploadsPage inset={false} />)
+  await waitFor(() => expect(screen.getByText(/Nobody has downloaded from you yet/)).toBeInTheDocument())
+  expect(screen.queryByText(/Your Soulseek port is closed/)).not.toBeInTheDocument()
 })
 
 it('renders a peer name as text, never as markup', async () => {

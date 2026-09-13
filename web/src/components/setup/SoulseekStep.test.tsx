@@ -1,7 +1,7 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import SoulseekStep from './SoulseekStep'
 import { api } from '../../api'
-import type { SlskdProgress, SoulseekConnect } from '../../api'
+import type { SharingState, SlskdProgress, SoulseekConnect } from '../../api'
 
 const POLL_MS = 1000   // must match SoulseekStep's own interval
 
@@ -14,10 +14,17 @@ beforeEach(() => {
   // No live link by default, so Save behaves as it did before this build gained one; the tests that
   // exercise the sign-in turn `connecting` on themselves.
   vi.spyOn(api, 'soulseekConnectStatus').mockResolvedValue(connect())
+  // Every test that reaches the connected state starts the sharing poll; without this they would reach
+  // for the real fetch, the same reason slskdSetup is stubbed above.
+  vi.spyOn(api, 'sharing').mockResolvedValue(sharing())
 })
 
 const connect = (over: Partial<SoulseekConnect> = {}): SoulseekConnect =>
   ({ state: 'idle', username: null, error: null, ...over })
+
+const sharing = (over: Partial<SharingState> = {}): SharingState =>
+  ({ port: 50300, enabled: true, checking: false, mapping: null, reachable: null,
+    public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null, ...over })
 
 afterEach(() => { vi.useRealTimers() })
 
@@ -250,6 +257,37 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     await settle(POLL_MS)
     expect(screen.getByText('Signed in as digger. The account is yours.')).toBeInTheDocument()
     expect(screen.getByText('Continue')).not.toBeDisabled()
+  })
+
+  it('shows the sharing line once signed in', async () => {
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus').mockResolvedValue(connect({ state: 'connected', username: 'digger' }))
+    vi.spyOn(api, 'sharing').mockResolvedValue(sharing({ mapping: 'upnp', reachable: true, public_ip: '1.2.3.4' }))
+    renderWithFakeTimers()
+    await settle(0)
+    await fillAndSave()
+    await settle(POLL_MS)
+    await waitFor(() => expect(screen.getByText('Other Soulseek users can download from you.')).toBeInTheDocument())
+    // The step has no room for router instructions, and nothing to re-check mid-signup.
+    expect(screen.queryByText(/forward TCP port/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Check again')).not.toBeInTheDocument()
+  })
+
+  it('keeps asking about the port while the check is still running, then stops', async () => {
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus').mockResolvedValue(connect({ state: 'connected', username: 'digger' }))
+    const shared = vi.spyOn(api, 'sharing')
+      .mockResolvedValueOnce(sharing({ checking: true }))
+      .mockResolvedValue(sharing({ reachable: false }))
+    renderWithFakeTimers()
+    await settle(0)
+    await fillAndSave()
+    await settle(POLL_MS * 2)
+    await waitFor(() => expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument())
+    expect(screen.getByText(/Settings › Sharing/)).toBeInTheDocument()
+    const after = shared.mock.calls.length
+    await settle(POLL_MS * 5)
+    expect(shared.mock.calls.length).toBe(after)
   })
 
   it('stops polling once the answer arrives', async () => {
