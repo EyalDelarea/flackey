@@ -177,7 +177,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     client = make_client()
     if not settings.telegram_configured:
         status["telegram_authorized"] = False
-        log.error("Telegram credentials missing: add them to settings.json")
+        log.info("Telegram keys not configured: the setup screen asks for them, or set them in Settings")
         login = TelegramLogin(client, False, on_authorized=on_authorized, make_client=make_client)
     else:
         await client.connect()
