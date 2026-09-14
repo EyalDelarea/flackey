@@ -48,6 +48,14 @@ class Sharing:
         self.state = empty_state(port, bool(settings.soulseek_enabled))
         self._publish()
 
+    @property
+    def can_check(self) -> bool:
+        """Whether there is a port worth checking, read from the setting at call time. Not
+        `state["enabled"]`, which only turns true inside a refresh: the wizard's Soulseek step has the
+        account set up in memory at once, so gating on the state answered "Check again" with a 409 until
+        the next scheduled tick -- up to half an hour later."""
+        return bool(self._settings.soulseek_enabled)
+
     def _publish(self) -> None:
         # A copy, so a later mutation of `self.state` cannot change what was published without
         # going through _set (which is what makes the status dict's setitem fire an SSE event).

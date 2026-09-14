@@ -1118,6 +1118,8 @@ def test_sharing_routes_without_a_service(client):
 
 def test_sharing_routes_with_a_service(tmp_path: Path):
     class FakeSharing:
+        can_check = True
+
         def __init__(self):
             self.state = {"port": 50300, "enabled": True, "checking": False, "mapping": None,
                           "reachable": False, "public_ip": "1.2.3.4", "lan_ip": "10.0.0.5",
@@ -1135,18 +1137,42 @@ def test_sharing_routes_with_a_service(tmp_path: Path):
     assert c.post("/api/sharing/check").json()["checking"] is True and sharing.started == 1
 
 
+def _sharing_service(soulseek_enabled: bool):
+    """A real Sharing with the network parts faked out, so the route tests below gate on the same
+    `can_check` the app does."""
+    from flackey.portcheck import PortCheck
+    from flackey.sharing import Sharing
+
+    class Setting:
+        pass
+
+    async def mapper(port, lease_s, http, **k):
+        return None
+
+    async def checker(port, http):
+        return PortCheck(True, "1.2.3.4")
+
+    setting = Setting()
+    setting.soulseek_enabled = soulseek_enabled
+    return setting, Sharing(setting, {}, http=None, port=50300, mapper=mapper, checker=checker,
+                            gateway=lambda: "10.0.0.1", lan=lambda g=None: "10.0.0.5")
+
+
 def test_sharing_check_is_refused_while_soulseek_is_off(tmp_path: Path):
-    class OffSharing:
-        def __init__(self):
-            self.state = {"port": 50300, "enabled": False, "checking": False, "mapping": None,
-                          "reachable": None, "public_ip": None, "lan_ip": None, "gateway": None,
-                          "checked_at": None, "error": None}
-
-        def start_refresh(self):
-            raise AssertionError("must not be asked to check a port nobody listens on")
-
-    app, _, _ = make(tmp_path, sharing=OffSharing())
+    _, sharing = _sharing_service(soulseek_enabled=False)
+    app, _, _ = make(tmp_path, sharing=sharing)
     assert TestClient(app).post("/api/sharing/check").status_code == 409
+
+
+def test_sharing_check_follows_the_setting_not_the_last_refresh(tmp_path: Path):
+    """Setting Soulseek up puts the api key in memory at once, but `state["enabled"]` only turns true
+    inside a refresh -- the next of which can be half an hour away. Gating the button on the state made
+    "Check again" answer a 409 for all that time."""
+    setting, sharing = _sharing_service(soulseek_enabled=False)
+    setting.soulseek_enabled = True          # what POST /api/setup/soulseek does, before anything connects
+    assert sharing.state["enabled"] is False
+    app, _, _ = make(tmp_path, sharing=sharing)
+    assert TestClient(app).post("/api/sharing/check").status_code == 200
 
 
 def test_health_reports_the_sharing_state(tmp_path: Path):

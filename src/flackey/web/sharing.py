@@ -16,7 +16,7 @@ def router(sharing=None) -> APIRouter:
 
     @r.post("/check")
     async def check() -> dict:
-        if sharing is None or not sharing.state.get("enabled"):
+        if sharing is None or not sharing.can_check:
             raise HTTPException(409, "Soulseek isn't set up yet, so there is no port to check.")
         return sharing.start_refresh()
 

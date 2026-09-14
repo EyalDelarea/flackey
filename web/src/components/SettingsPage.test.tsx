@@ -238,7 +238,16 @@ describe('the Soulseek panel', () => {
     await waitFor(() => expect(check).toHaveBeenCalled())
   })
 
-  it('says the check could not start when the click itself fails', async () => {
+  it('shows the server\'s own reason when the check is refused', async () => {
+    vi.spyOn(api, 'checkSharing')
+      .mockRejectedValue(new ApiError(409, "Soulseek isn't set up yet, so there is no port to check."))
+    show(lossless(), settings(), sharing({ reachable: false }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(screen.getByText("Soulseek isn't set up yet, so there is no port to check."))
+      .toBeInTheDocument())
+  })
+
+  it('falls back to its own sentence when the failure carries no server message', async () => {
     vi.spyOn(api, 'checkSharing').mockRejectedValue(new Error('network error'))
     show(lossless(), settings(), sharing({ reachable: false }))
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))

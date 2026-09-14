@@ -111,7 +111,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   }
   const checkSharing = () => {
     setCheckError(null)
-    api.checkSharing().catch(() => setCheckError('Could not start the check. Try again.'))
+    api.checkSharing().catch(e => setCheckError(getErrorMessage(e, 'Could not start the check. Try again.')))
   }
   const showSoulseekPassword = () => {
     setPasswordBusy(true); setPasswordError(null)
