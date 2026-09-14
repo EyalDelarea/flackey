@@ -2,7 +2,7 @@
 
 `ffmpeg`, `ffprobe` and `fpcalc` are separate programs this app shells out to. From a clone they come
 from the PATH, which is what `brew install ffmpeg chromaprint` sets up. A packaged .app has no useful
-PATH -- Finder launches it with a bare one that does not include /opt/homebrew/bin -- and may carry its
+PATH -- Finder launches it with a bare one that does not include /opt/homebrew/bin -- and carries its
 own copies, so it looks inside itself first and only then at whatever the machine has.
 
 Resolving to an absolute path rather than passing a bare name also fixes the Finder case on its own:

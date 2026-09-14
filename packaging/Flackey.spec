@@ -21,6 +21,15 @@ datas = [
 ]
 datas += collect_data_files("curl_cffi")   # the bundled CA bundle; without it every HTTPS call fails
 
+# The helper programs `flackey.tools` looks for first: `bundled_bin_dir()` is `sys._MEIPASS / "bin"`, and
+# a destination of "bin" here is exactly that folder. build_app.sh fetches them; a spec run without them
+# would build an app that silently falls back to whatever Homebrew the machine has, so it refuses.
+HELPERS = ROOT / "packaging" / "build" / "bin"
+binaries = [(str(HELPERS / name), "bin") for name in ("ffmpeg", "ffprobe", "fpcalc") if (HELPERS / name).is_file()]
+if len(binaries) != 3:
+    raise SystemExit("helper binaries missing from packaging/build/bin: run packaging/build_app.sh, not pyinstaller directly")
+datas.append((str(HELPERS / "licenses"), "bin/licenses"))
+
 # uvicorn picks its loop and protocol implementations by string at run time, so the module graph cannot
 # see them and they have to be named. This is the classic way a frozen server starts and then does
 # nothing at all.
@@ -35,7 +44,7 @@ hiddenimports = collect_submodules("uvicorn") + [
 a = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "launch.py")],
     pathex=[str(ROOT / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
