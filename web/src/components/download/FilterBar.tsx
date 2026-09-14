@@ -14,12 +14,13 @@ interface Props {
   counts: Record<Bucket | 'all', number>
   onFilter: (f: Bucket | 'all') => void
   onClearFailed: () => void
+  view?: 'active' | 'history'
 }
 
-export default function FilterBar({ filter, counts, onFilter, onClearFailed }: Props) {
+export default function FilterBar({ filter, counts, onFilter, onClearFailed, view }: Props) {
   return (
     <div className="filterbar">
-      {CHIPS.map(c => {
+      {CHIPS.filter(c => !view || c.key === 'all' || (view === 'active' ? c.key === 'progress' || c.key === 'needs' : c.key === 'done' || c.key === 'failed')).map(c => {
         const count = counts[c.key]
         const toned = c.tone && count > 0 ? ` ${c.tone}` : ''
         return (
@@ -28,7 +29,7 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed }: P
           </button>
         )
       })}
-      <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>
+      {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>}
     </div>
   )
 }

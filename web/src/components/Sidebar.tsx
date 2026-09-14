@@ -4,32 +4,14 @@ import SidebarMark from './SidebarMark'
 import type { LosslessHealth } from '../api'
 export type Tab = 'download' | 'library' | 'uploads' | 'settings'
 
-/* Two different questions, and the footer must not confuse them: `enabled` means credentials are saved,
-   `provider.status` means the sidecar answered a probe just now. Before the worker's first probe lands
-   `provider` is null, which is neither -- so it says "starting", not "connected". */
-function soulseekLine(l: LosslessHealth): { ok: boolean; text: string } {
-  if (l.provider === null) return { ok: false, text: 'Soulseek starting' }
-  if (l.provider.status === 'ok') return { ok: true, text: 'Soulseek connected' }
-  if (l.provider.status === 'not_logged_in') return { ok: false, text: 'Soulseek signing in' }
-  return { ok: false, text: 'Soulseek unreachable' }
-}
-
-/* One line while everything works, because a healthy status list is a list nobody reads. It expands into
-   the specifics only when one of them is unhappy, and then it is a button: the detail lives in Settings,
-   so the footer's job is to say something is wrong and take you where you can see what. */
-function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEnabled = true): { ok: boolean; lines: string[] } {
-  // Switched off is a choice, not a fault: it never turns the footer amber, and it never reads "signed
-  // out" -- nobody is locked out of anything they asked for.
-  const parts = [
-    sourceEnabled ? { ok: telegramAuthorized, text: telegramAuthorized ? 'Telegram connected' : 'Telegram signed out' }
-      : { ok: true, text: 'Telegram off' },
-    ...(lossless?.enabled ? [soulseekLine(lossless)] : []),
-  ]
-  const bad = parts.filter(p => !p.ok)
-  if (bad.length) return { ok: false, lines: bad.map(p => p.text) }
-  // The healthy footer still collapses to one line, but "Connected" would be a claim about a source that
-  // is not running, so with Telegram off that line says so instead.
-  return { ok: true, lines: [sourceEnabled ? 'Connected' : 'Telegram off'] }
+/* The footer is an overall availability signal. Either usable source is enough to download; Settings
+   carries each source's detailed state. A saved account or an intentionally disabled source is not a
+   connection, so neither can turn the dot green by itself. */
+function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEnabled = true): { connected: boolean; text: string } {
+  const telegramConnected = sourceEnabled && telegramAuthorized
+  const soulseekConnected = !!lossless?.enabled && lossless.provider?.status === 'ok'
+  const connected = telegramConnected || soulseekConnected
+  return { connected, text: connected ? 'Connected' : 'Not connected' }
 }
 const ITEMS: { tab: Tab; label: string; icon: IconName }[] = [
   { tab: 'download', label: 'Download', icon: 'download' }, { tab: 'library', label: 'Library', icon: 'library' },
@@ -42,11 +24,11 @@ export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inse
       <div className="nav">{ITEMS.map(i => <button key={i.tab} className={`nav-item${tab === i.tab ? ' active' : ''}`} onClick={() => onTab(i.tab)}><Icon name={i.icon} />{i.label}</button>)}</div>
       {extra}
       <SidebarMark />
-      {status.ok
-        ? <div className="sidebar-footer"><div className="status-line"><span className="status-dot" />{status.lines[0]}</div></div>
+      {status.connected
+        ? <div className="sidebar-footer"><div className="status-line"><span className="status-dot" />{status.text}</div></div>
         : <button className="sidebar-footer bad" onClick={() => onTab('settings')}
-            title="Open Settings to see what's wrong">
-            {status.lines.map(l => <span key={l} className="status-line"><span className="status-dot amber" />{l}</span>)}
+            title="Open Settings to check connections">
+            <span className="status-line"><span className="status-dot red" />{status.text}</span>
           </button>}
     </nav>
   )

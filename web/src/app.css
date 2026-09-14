@@ -333,20 +333,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .welcome .lead { max-width: 380px; font-size: 14px; color: var(--secondary); line-height: 1.45; }
 .welcome .cta { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 6px; }
 .welcome .note { font-size: 11px; color: var(--tertiary); }
-.rig { position: relative; width: 560px; height: 239px; background: var(--window); animation: rise .7s cubic-bezier(.2,.7,.2,1) both, float 5s ease-in-out .7s infinite alternate; }
-.rig img { display: block; width: 100%; height: 100%; object-fit: cover; filter: url(#rig-keyout); }
-/* the placeholder crop has a light grey background; multiply melts it into the dark window */
-.ring { position: absolute; border-radius: 50%; mix-blend-mode: screen; background: conic-gradient(from 0deg, rgba(90,200,255,0) 0deg, rgba(90,200,255,0) 215deg, rgba(120,220,255,.95) 330deg, rgba(90,200,255,0) 360deg); animation: spin 1.8s linear infinite; }
-.screen { position: absolute; overflow: hidden; border-radius: 3px; mix-blend-mode: screen; -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); }
-.wave { position: absolute; inset: 0; background-repeat: repeat-x; background-position: 0 50%; opacity: .75; animation: scroll 3.2s linear infinite; }
-.playhead { position: absolute; left: 50%; top: 0; bottom: 0; width: 1.5px; background: rgba(255,255,255,.85); }
-.meter { position: absolute; top: 27%; width: 4px; height: 40px; border-radius: 2px; opacity: .85; background: linear-gradient(0deg, rgba(90,230,120,.9) 0 55%, rgba(255,200,60,.9) 55% 80%, rgba(255,80,60,.95) 80%); mix-blend-mode: screen; transform-origin: bottom; animation: vu .47s ease-in-out infinite; }
+.welcome-vinyl { display: block; width: min(470px, 100%); max-height: min(48vh, 310px); aspect-ratio: 3 / 2;
+  object-fit: contain; border-radius: 4px; animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes float { from { transform: translateY(0); } to { transform: translateY(-5px); } }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes scroll { from { background-position-x: 0; } to { background-position-x: -200px; } }
-@keyframes vu { 0%, 100% { transform: scaleY(.35); } 30% { transform: scaleY(.95); } 60% { transform: scaleY(.55); } }
-@media (prefers-reduced-motion: reduce) { .rig, .ring, .wave, .meter, .dot6.current { animation: none; } .rig { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .welcome-vinyl, .dot6.current { animation: none; } }
 
 /* A lossy row states its bitrate without the green check the verified lossless rows get: the check means
    "this is what it claims to be", and a 320 that lost its lossless race has not earned it. Amber, not red --

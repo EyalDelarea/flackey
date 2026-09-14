@@ -212,6 +212,18 @@ describe('the Soulseek panel', () => {
     expect(screen.queryByText('not-a-real-password')).not.toBeInTheDocument()
   })
 
+  it('distinguishes the helper web login from the Soulseek account password', async () => {
+    const credentials = vi.spyOn(api, 'slskdCredentials')
+      .mockResolvedValue({ username: 'flackey', password: 'helper-secret' })
+    show(lossless())
+    expect(credentials).not.toHaveBeenCalled()
+    expect(screen.getByText('Soulseek account password')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show login' }))
+    await waitFor(() => expect(screen.getByText('flackey · helper-secret')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(screen.queryByText('helper-secret')).not.toBeInTheDocument()
+  })
+
   it('has nothing to show when no Soulseek account was ever saved', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
     expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()

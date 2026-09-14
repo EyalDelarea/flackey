@@ -439,12 +439,35 @@ def test_setup_soulseek_password_is_404_until_one_is_saved_and_then_hands_it_bac
     c, _, _ = client
     assert c.get("/api/setup/soulseek/password").status_code == 404
     assert "password" not in c.get("/api/setup/soulseek").json()
-
     c.post("/api/setup/soulseek", json={"username": "digger", "password": "not-a-real-password"})
     assert c.get("/api/setup/soulseek/password").json() == {"username": "digger",
                                                             "password": "not-a-real-password"}
     assert "password" not in c.get("/api/setup/soulseek").json()
 
+
+def test_helper_web_login_is_separate_and_only_returned_on_demand(client):
+    c, _, settings = client
+    assert c.get("/api/setup/slskd/credentials").status_code == 404
+    from flackey.slskd_config import read_web_credentials, write_credentials
+    write_credentials(settings.data_dir, "digger", "soulseek-secret")
+    username, password = read_web_credentials(settings.data_dir)
+    assert username == "flackey" and password != "soulseek-secret"
+    assert c.get("/api/setup/slskd/credentials").json() == {"username": username, "password": password}
+    assert password not in c.get("/api/settings").text
+
+
+def test_refresh_library_forgets_files_removed_in_finder(client, tmp_path):
+    c, store, _ = client
+    file = tmp_path / "track.mp3"
+    file.write_bytes(b"audio")
+    tid = store.add_track(path=file, fmt="mp3", bitrate_kbps=320, cutoff_hz=18000,
+                          file_size=5, artist="A", title="T", mix_name="Original Mix",
+                          duration_s=100, isrc=None, catalog_track_id=None, request_id=None)
+    assert any(t["id"] == tid for t in c.get("/api/library").json())
+    file.unlink()
+    assert c.post("/api/library/refresh").json() == {"removed": 1}
+    assert c.get("/api/library").json() == []
+    assert c.get("/api/stats").json()["tracks"] == 0
 
 def test_setup_soulseek_post_asks_the_link_to_connect_when_one_is_wired_in(tmp_path: Path):
     """With a link the wizard can answer "did my account work?" on the spot: the POST starts a connect

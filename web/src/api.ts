@@ -93,6 +93,7 @@ export const api = {
     const qs = p.toString()
     return call<Track[]>(`/api/library${qs ? '?' + qs : ''}`)
   },
+  refreshLibrary: () => post<{ removed: number }>('/api/library/refresh'),
   upgradeTrack: (trackId: number) =>
     post<{ ok: boolean; message: string; upgraded: boolean }>(`/api/lossless/upgrade/${trackId}`),
   playlists: () => call<Playlist[]>('/api/playlists'),
@@ -122,6 +123,7 @@ export const api = {
   // Its own path, not a field on soulseekSetup: that one is polled, and a secret must not ride along
   // on a poll. It exists at all because Soulseek has no password reset -- see the route's docstring.
   soulseekPassword: () => call<SoulseekPassword>('/api/setup/soulseek/password'),
+  slskdCredentials: () => call<{ username: string; password: string }>('/api/setup/slskd/credentials'),
   soulseekConnectStatus: () => call<SoulseekConnect>('/api/setup/soulseek/status'),
   connectSoulseek: () => post<SoulseekConnect>('/api/setup/soulseek/connect'),
   slskdSetup: () => call<SlskdSetup>('/api/setup/slskd'),

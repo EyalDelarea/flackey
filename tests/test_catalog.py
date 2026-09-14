@@ -113,6 +113,18 @@ def test_best_match_prefers_earliest_release_among_equals():
     assert best_match(q, tracks).id == 2
 
 
+def test_same_named_reissues_use_source_isrc_before_release_date():
+    from dataclasses import replace
+
+    q = Query(raw="", artist="1200 Micrograms", title="Acid For Nothing", duration_s=420)
+    early = CatalogTrack(id=1, artist="1200 Micrograms", title="Acid For Nothing",
+                         mix_name="Original Mix", label="Starbox Music", genre="Psy-Trance",
+                         isrc="OLD", release_date="2003-01-01", duration_ms=420000)
+    tip = replace(early, id=2, label="Tip Records", isrc="TIP", release_date="2020-03-02")
+    assert best_match(q, [early, tip]).id == 1
+    assert best_match(q, [early, tip], preferred_isrc="tip").id == 2
+
+
 def test_best_match_treats_lengths_within_tolerance_as_equal():
     # 604 s vs 605 s is encoding slack, not a different recording: the earliest release still wins
     q = Query(raw="", artist="Celestial Intelligence", title="Inevitable Feelings", duration_s=605)

@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse
 
 from .. import __version__
 from ..config import FILING_FORMATS, Settings, save_settings
-from ..export import PLAYLIST_DIR, playlist_names
+from ..export import PLAYLIST_DIR, playlist_names, write_playlists
+from ..library import prune_missing_tracks
 from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
@@ -21,6 +22,7 @@ from ..slskd_config import (
     read_listen_port,
     read_password,
     read_username,
+    read_web_credentials,
     write_credentials,
     write_share,
 )
@@ -110,6 +112,14 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.get("/library")
     async def library(q: str | None = None, playlist_id: int | None = None) -> list:
         return [bundles.track(t.id) for t in store.list_tracks(search=q, limit=LIBRARY_LIMIT, playlist_id=playlist_id)]
+
+    @r.post("/library/refresh")
+    async def refresh_library() -> dict:
+        """Reconcile files removed in Finder and rewrite affected playlist exports."""
+        removed = prune_missing_tracks(store)
+        if removed:
+            write_playlists(store, settings.library_root)
+        return {"removed": len(removed)}
 
     @r.get("/playlists")
     async def playlists() -> list:
@@ -245,6 +255,14 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         if password is None:
             raise HTTPException(404, "No Soulseek password is saved.")
         return {"username": read_username(settings.data_dir), "password": password}
+
+    @r.get("/setup/slskd/credentials")
+    async def get_slskd_credentials() -> dict:
+        """Expose the local helper's web-login secret only on an explicit owner request."""
+        credentials = read_web_credentials(settings.data_dir)
+        if credentials is None:
+            raise HTTPException(404, "No Soulseek helper login is saved.")
+        return {"username": credentials[0], "password": credentials[1]}
 
     @r.post("/setup/soulseek")
     async def post_soulseek_setup(body: dict) -> dict:

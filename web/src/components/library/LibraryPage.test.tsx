@@ -56,6 +56,17 @@ it('shows a red banner when api.library fails', async () => {
   expect(screen.queryByText('Server error')).not.toBeInTheDocument()
 })
 
+it('refreshes missing files and re-reads the library without relaunching', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  const refreshApi = vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 1 })
+  const refreshLive = vi.fn().mockResolvedValue(undefined)
+  render(<LibraryPage live={{ ...makeLive(), refreshLibrary: refreshLive }} selectedPlaylist={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+  await waitFor(() => expect(refreshApi).toHaveBeenCalled())
+  await waitFor(() => expect(refreshLive).toHaveBeenCalled())
+  expect(screen.getByText('Removed 1 missing file from the library.')).toBeInTheDocument()
+})
+
 it('renders the toolbar drag layer only when inset, and search still works either way', async () => {
   vi.mocked(api.library).mockResolvedValue([])
   const { container, rerender } = render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)

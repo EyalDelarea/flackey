@@ -44,6 +44,8 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [soulseekPassword, setSoulseekPassword] = useState<string | null>(null)
   const [passwordBusy, setPasswordBusy] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [webLogin, setWebLogin] = useState<{ username: string; password: string } | null>(null)
+  const [webLoginError, setWebLoginError] = useState<string | null>(null)
   // The owner's own Telegram API keys, if they would rather not use the ones Flackey ships with. Held
   // only long enough to post them: the hash is never read back, so there is nothing to prefill from.
   const [apiId, setApiId] = useState(''); const [apiHash, setApiHash] = useState('')
@@ -120,6 +122,11 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setPasswordError(getErrorMessage(e, "Couldn't read the saved Soulseek password.")))
       .finally(() => setPasswordBusy(false))
   }
+  const showWebLogin = () => {
+    setWebLoginError(null)
+    api.slskdCredentials().then(setWebLogin)
+      .catch(e => setWebLoginError(getErrorMessage(e, "Couldn't read the helper login.")))
+  }
   return (
     <div className="scroll settings">
       {revealError && <Banner tone="red" text={revealError} action={{ label: 'Dismiss', onClick: () => setRevealError(null) }} />}
@@ -170,7 +177,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             Flackey generated both. So the owner has to be able to get this string back -- without it they
             cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
             printed in the panel, because a secret on screen is a secret over someone's shoulder. */}
-        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Password</div>
+        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Soulseek account password</div>
           {soulseekPassword
             ? <div className="v mono">{soulseekPassword}</div>
             : <div className="v">Soulseek cannot reset a password. Keep a copy of this one somewhere safe.</div>}
@@ -180,6 +187,12 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
               <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
             : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
                 {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>}
+        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Helper web login</div>
+          <div className="v">The local slskd web page uses a separate username and password, not your Soulseek account password.</div>
+          {webLogin && <div className="v mono">{webLogin.username} · {webLogin.password}</div>}
+          {webLoginError && <div className="err">{webLoginError}</div>}</div>
+          <div className="actions">{webLogin ? <><CopyButton value={webLogin.password} /><button className="btn-secondary" onClick={() => setWebLogin(null)}>Hide</button></>
+            : <button className="btn-secondary" onClick={showWebLogin}>Show login</button>}</div></div>}
         {/* Downloading works behind any router; being downloaded from does not, and an account nobody can
             pull from is the one Soulseek eventually stops trusting. The state arrives on the status event,
             so the answer to a re-check lands here by itself and the response is discarded. */}

@@ -103,6 +103,19 @@ def read_password(data_dir: Path) -> str | None:
     return password or None
 
 
+def read_web_credentials(data_dir: Path) -> tuple[str, str] | None:
+    """Credentials for slskd's own web login, distinct from the Soulseek network account."""
+    data = _load_or_none(config_path(data_dir))
+    if data is None:
+        return None
+    try:
+        auth = data["web"]["authentication"]
+        username, password = auth["username"], auth["password"]
+    except (KeyError, TypeError):
+        return None
+    return (username, password) if username and password else None
+
+
 def _submapping(parent: dict, key: str, path: Path) -> dict:
     """`parent[key]` as a dict, installing an empty one when the key is absent or explicitly null (a
     hand-written file's bare `web:` line parses to `None` -- that is just "nothing here yet", the same

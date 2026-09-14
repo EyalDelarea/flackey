@@ -43,18 +43,15 @@ async function reconnect(over: Partial<Health> = {}) {
 }
 
 describe('the sidebar after a Reconnect sign-in', () => {
-  it('stops saying Telegram is off as soon as the sign-in lands, with no banner behind it', async () => {
+  it('turns the overall indicator green as soon as sign-in lands', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ source_enabled: false, telegram_authorized: false }))
     render(<App />)
-    expect(await screen.findByText('Telegram off')).toBeInTheDocument()
-    // Switched off is a choice, not a fault: nothing to recover from, so no banner.
-    expect(screen.queryByText(/Telegram signed out/)).not.toBeInTheDocument()
+    expect(await screen.findByText('Not connected')).toBeInTheDocument()
 
     const es = FakeEventSource.last!
     es.emit('status', { telegram_authorized: true, source_enabled: true, worker_running: false, setup_done: true })
     await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument())
-    expect(screen.queryByText('Telegram off')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Telegram signed out/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Not connected')).not.toBeInTheDocument()
   })
 
   it('refetches health on the way out of the wizard, so an old event shape cannot strand it', async () => {

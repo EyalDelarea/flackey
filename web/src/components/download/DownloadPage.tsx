@@ -19,10 +19,12 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
+  const [view, setView] = useState<'active' | 'history'>('active')
   const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, now, whyOpen: false, fetchProgress: live.fetchProgress }
   const bundles = [...live.bundles.values()]
-  const counts = bucketCounts(bundles)
-  const groups = groupRows(bundles, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
+  const scoped = bundles.filter(b => view === 'history' ? ['done', 'duplicate', 'rejected', 'not_found', 'error', 'cancelled'].includes(b.request.state) : ['queued', 'identifying', 'awaiting_review', 'fetching', 'verifying', 'filing'].includes(b.request.state))
+  const counts = bucketCounts(scoped)
+  const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(err instanceof ApiError ? err.message : "That didn't work. Try again."))
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -34,11 +36,12 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   return (
     <>
       <PasteBar onSubmit={async url => (await api.submit(url)).summary} inset={inset} />
-      {bundles.length > 0 && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} />}
+      <div className="download-views" role="group" aria-label="Download view"><button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button><button className="chip" aria-pressed={view === 'history'} onClick={() => { setView('history'); setFilter('all') }}>History</button></div>
+      {bundles.length > 0 && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
-        {groups.length === 0 && bundles.length > 0 && <div className="empty">Nothing here.</div>}
+        {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress.'}</div>}
         {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => run(api.choose(rid, cid))} onTryNow={ids => ids.forEach(id => run(api.retry(id)))} />)}
       </div>
     </>
