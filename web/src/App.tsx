@@ -39,7 +39,11 @@ export default function App() {
   // Without keys the Telegram step is a form asking for them, and nothing is waiting on Telegram yet.
   // Absent in a payload written before the field existed, which is the configured case.
   const telegramConfigured = h?.telegram_configured ?? true
-  useEffect(() => { if (authorized) setReconnecting(false) }, [authorized])
+  // The refresh is belt and braces: the sign-in's own status event carries `source_enabled`, but a copy
+  // whose server predates that would leave the sidebar on "Telegram off" with no way back but a reload.
+  // Only on the way out of the wizard, so an ordinary start does not fetch everything twice.
+  const refresh = live.refresh
+  useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   const mainScreen = !!h && h.setup_done && !reconnecting
   // 600, not 540: the Soulseek step carries a heading, a lead, two fields, a warning about a password

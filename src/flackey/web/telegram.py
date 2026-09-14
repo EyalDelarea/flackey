@@ -86,6 +86,7 @@ def router(login: TelegramLogin | None, status: dict,
         if settings is None:
             raise HTTPException(503, "Settings are not available in this process")
         save_settings(settings, source_enabled=False)
+        status["source_enabled"] = False   # health reads it from here, so the sidebar hears about it
         return {"source_enabled": False}
 
     return r

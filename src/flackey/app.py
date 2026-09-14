@@ -148,6 +148,19 @@ def repair_share(settings: Settings) -> None:
         log.warning("could not point the Soulseek share at the library folder: %s", e)
 
 
+def make_on_authorized(settings: Settings, status: dict) -> Callable[[], None]:
+    """What a finished Telegram sign-in changes. `source_enabled` goes into `status` beside
+    `telegram_authorized`, in one update, so the single event that follows carries both: the page reads
+    the source flag from health, and a sign-in that published only "authorized" left the sidebar saying
+    "Telegram off" until the next full refresh."""
+    def on_authorized() -> None:
+        status.update(telegram_authorized=True, source_enabled=True)
+        if not settings.source_enabled:
+            # A sign-in after a skipped setup step: the bot is a source again.
+            save_settings(settings, source_enabled=True)
+    return on_authorized
+
+
 async def _run(settings: Settings, handle: ServerHandle) -> None:
     migrate_legacy_data_dir(settings)
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.library_root,
@@ -158,13 +171,9 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     store = Store(settings.db_path)
     bus = EventBus()
     status = Status(bus, telegram_authorized=True, worker_running=False,
-                    setup_done=store.get_setting("setup_done") == "1")
-
-    def on_authorized() -> None:
-        status["telegram_authorized"] = True
-        if not settings.source_enabled:
-            # A sign-in after a skipped setup step: the bot is a source again.
-            save_settings(settings, source_enabled=True)
+                    setup_done=store.get_setting("setup_done") == "1",
+                    source_enabled=settings.source_enabled)
+    on_authorized = make_on_authorized(settings, status)
 
     # Telethon's constructor rejects a falsy api_id/api_hash outright (`not api_id or not api_hash`
     # raises ValueError before any network use), so `0`/`""` would crash right here -- verified against

@@ -42,6 +42,34 @@ async function reconnect(over: Partial<Health> = {}) {
   await screen.findByText('Telegram')
 }
 
+describe('the sidebar after a Reconnect sign-in', () => {
+  it('stops saying Telegram is off as soon as the sign-in lands, with no banner behind it', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ source_enabled: false, telegram_authorized: false }))
+    render(<App />)
+    expect(await screen.findByText('Telegram off')).toBeInTheDocument()
+    // Switched off is a choice, not a fault: nothing to recover from, so no banner.
+    expect(screen.queryByText(/Telegram signed out/)).not.toBeInTheDocument()
+
+    const es = FakeEventSource.last!
+    es.emit('status', { telegram_authorized: true, source_enabled: true, worker_running: false, setup_done: true })
+    await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument())
+    expect(screen.queryByText('Telegram off')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Telegram signed out/)).not.toBeInTheDocument()
+  })
+
+  it('refetches health on the way out of the wizard, so an old event shape cannot strand it', async () => {
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: true, phone_masked: null })
+    await reconnect()
+    const health_ = vi.mocked(api.health)
+    const before = health_.mock.calls.length
+
+    health_.mockResolvedValue(health({ telegram_authorized: true, source_enabled: true }))
+    FakeEventSource.last!.emit('status', { telegram_authorized: true })
+    await waitFor(() => expect(health_.mock.calls.length).toBe(before + 1))
+    await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument())
+  })
+})
+
 describe('the setup hint on the Telegram step', () => {
   it('is absent while the step is still asking for API keys', async () => {
     vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })

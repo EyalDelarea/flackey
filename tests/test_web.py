@@ -1013,12 +1013,30 @@ def test_telegram_keys_route_saves_and_reconfigures(tmp_path: Path):
 
 
 def test_telegram_skip_route_turns_the_source_off(tmp_path: Path):
-    app, _, settings = make(tmp_path)
+    status = Status(None, telegram_authorized=True, worker_running=False, setup_done=False,
+                    source_enabled=True)
+    app, _, settings = make(tmp_path, status=status)
     c = TestClient(app)
     r = c.post("/api/telegram/skip")
     assert r.status_code == 200 and r.json() == {"source_enabled": False}
     assert settings.source_enabled is False
     assert json.loads(settings.settings_path.read_text())["source_enabled"] is False
+    # In `status` too, so the event that follows tells the page without a refresh -- and so health,
+    # which now reads the flag from there, agrees with the setting.
+    assert status["source_enabled"] is False
+    assert c.get("/api/health").json()["source_enabled"] is False
+
+
+def test_health_takes_the_source_flag_from_the_shared_status(tmp_path: Path):
+    """A Telegram sign-in flips `source_enabled` in `status` (app.make_on_authorized); health has to
+    read it from there, or the sidebar goes on saying "Telegram off" until the next restart."""
+    status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True,
+                    source_enabled=False)
+    app, _, _ = make(tmp_path, status=status)
+    c = TestClient(app)
+    assert c.get("/api/health").json()["source_enabled"] is False
+    status.update(telegram_authorized=True, source_enabled=True)
+    assert c.get("/api/health").json()["source_enabled"] is True
 
 
 def test_health_says_when_the_source_is_off(tmp_path: Path):

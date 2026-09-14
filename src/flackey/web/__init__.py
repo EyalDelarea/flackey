@@ -123,7 +123,9 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
                 "worker_running": bool(status.get("worker_running", False)),
                 "setup_done": bool(status.get("setup_done", False)),
                 "telegram_configured": settings.telegram_configured,
-                "source_enabled": settings.source_enabled,
+                # From `status`, so a sign-in or a skip reaches the page on the event that follows it;
+                # the setting is the fallback for a process that never puts the flag in `status`.
+                "source_enabled": bool(status.get("source_enabled", settings.source_enabled)),
                 "sharing": status.get("sharing"),
                 "lossless": {"enabled": settings.lossless_enabled, "provider": status.get("lossless_provider"),
                              "fpcalc": fpcalc_available(), "attempts_24h": store.attempt_counts(24),

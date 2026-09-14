@@ -215,3 +215,30 @@ def test_boot_writes_no_config_when_soulseek_was_never_set_up(tmp_path, caplog):
     caplog.set_level("WARNING")
     repair_share(on)                                     # must warn, not raise
     assert "Soulseek share" in caplog.text
+
+
+def test_on_authorized_turns_the_source_back_on_in_status_and_on_disk(tmp_path):
+    """Signing in after a skipped Telegram step is what makes the bot a source again. The page reads
+    `source_enabled` from health, so the flag has to reach `status` -- and in the same event as
+    `telegram_authorized`, or the sidebar keeps saying "Telegram off"."""
+    import json
+
+    from flackey.app import make_on_authorized
+    from flackey.config import Settings
+    from flackey.events import EventBus, Status
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        source_enabled=False)
+    published: list[dict] = []
+
+    class Recorder(EventBus):
+        def publish(self, name, data):
+            published.append(data)
+
+    status = Status(Recorder(), telegram_authorized=False, source_enabled=False)
+    make_on_authorized(settings, status)()
+
+    assert status["source_enabled"] is True and status["telegram_authorized"] is True
+    assert published == [{"telegram_authorized": True, "source_enabled": True}]
+    assert settings.source_enabled is True
+    assert json.loads(settings.settings_path.read_text())["source_enabled"] is True
