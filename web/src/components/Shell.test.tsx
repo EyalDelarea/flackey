@@ -19,9 +19,9 @@ it('renders the 28px title-bar spacer as a real drag region, only when inset', (
   expect(spacer).toHaveClass('pywebview-drag-region')
 })
 
-it('switches tabs and shows the Telegram state in the footer', () => {
+it('switches tabs and shows the overall connection state in the footer', () => {
   render(<Shell {...props} inset={false} telegramAuthorized={false}>x</Shell>)
-  expect(screen.getByText('Telegram signed out')).toBeInTheDocument()
+  expect(screen.getByText('Not connected')).toBeInTheDocument()
   fireEvent.click(screen.getByText('Library'))
   expect(props.onTab).toHaveBeenCalledWith('library')
 })

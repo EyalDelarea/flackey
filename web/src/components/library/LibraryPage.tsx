@@ -90,8 +90,8 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
       {note && <Banner tone="amber" text={note} action={{ label: 'Dismiss', onClick: () => setNote(null) }} />}
       {pl && <PlaylistCard playlist={pl} count={pl.track_ids.length} onShowFile={() => reveal(pl.file)} />}
       <div className="library-filters" aria-label="Library filters">
-        <label>Folder <select value={folders.includes(folder) ? folder : 'all'} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></label>
-        <label>Format <select value={formats.includes(format) ? format : 'all'} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></label>
+        <label>Folder <span className="picker"><select value={folders.includes(folder) ? folder : 'all'} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
+        <label>Format <span className="picker"><select value={formats.includes(format) ? format : 'all'} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
         <span className="counts">{visible.length} shown</span>
       </div>
       {folder === 'all' && !pl && !q
