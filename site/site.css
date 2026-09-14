@@ -122,6 +122,16 @@ p {
   transform: translateY(-2px);
   box-shadow: 0 7px 22px #007aff24;
 }
+.button.unavailable {
+  background: #e8eaf0;
+  box-shadow: none;
+  color: #666d78;
+  cursor: default;
+}
+.button.unavailable:hover {
+  transform: none;
+  box-shadow: none;
+}
 .compact {
   min-height: 44px;
   font-size: 15px;

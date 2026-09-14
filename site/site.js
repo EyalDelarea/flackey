@@ -1,12 +1,25 @@
 const release = document.querySelector("#release-line");
+const downloadLink = document.querySelector("#download-link");
 const command = document.querySelector("#xattr-command");
 const copy = document.querySelector("#copy-command");
 
 fetch("https://api.github.com/repos/EyalDelarea/flackey/releases/latest")
-  .then((response) => (response.ok ? response.json() : Promise.reject()))
+  .then((response) => {
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error("Release lookup failed");
+    return response.json();
+  })
   .then((data) => {
-    const asset = data.assets?.find((item) => item.name === "Flackey.zip");
-    if (!release || !asset) return;
+    const asset = data?.assets?.find((item) => item.name === "Flackey.zip");
+    if (!release || !downloadLink || !asset?.browser_download_url) {
+      if (release) release.textContent = "The first download is on its way.";
+      return;
+    }
+    downloadLink.href = asset.browser_download_url;
+    downloadLink.removeAttribute("aria-disabled");
+    downloadLink.classList.remove("unavailable");
+    downloadLink.innerHTML =
+      'Download for Mac <span aria-hidden="true">↓</span>';
     const version = String(data.tag_name || "").replace(/^v/, "");
     const size = `${(asset.size / 1e6).toFixed(1)} MB`;
     const date = new Intl.DateTimeFormat("en-GB", {
@@ -16,7 +29,10 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases/latest")
     }).format(new Date(data.published_at));
     release.textContent = `Version ${version} · ${size} · ${date}`;
   })
-  .catch(() => {});
+  .catch(() => {
+    if (release)
+      release.textContent = "Release details are temporarily unavailable.";
+  });
 
 copy?.addEventListener("click", async () => {
   const text = command?.textContent || "";
