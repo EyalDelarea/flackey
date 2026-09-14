@@ -97,7 +97,7 @@ describe('the account Flackey makes on the owner\'s behalf', () => {
     await waitFor(() => expect(screen.getByLabelText('Soulseek username')).toHaveValue('digger'))
     fireEvent.click(screen.getByText('Make me a new account'))
     expect(screen.getByText(/replaces the account already saved \(digger\)/)).toBeInTheDocument()
-    expect(screen.getByText(/from Settings/)).toBeInTheDocument()
+    expect(screen.getByText(/copy that password from Settings first/)).toBeInTheDocument()
   })
 })
 
@@ -121,6 +121,12 @@ it('Skip for now calls onSkip without saving', async () => {
   fireEvent.click(screen.getByText('Skip for now'))
   expect(onSkip).toHaveBeenCalled()
   expect(saveSoulseek).not.toHaveBeenCalled()
+})
+
+it('says a skipped Soulseek can be added later from Settings', async () => {
+  render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+  await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())
+  expect(screen.getByText(/Optional — you can add Soulseek later from Settings\./)).toBeInTheDocument()
 })
 
 it('shows the error and stays on the step when the save is rejected', async () => {

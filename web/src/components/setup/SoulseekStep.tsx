@@ -191,6 +191,6 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
       <button className="btn-link" onClick={onSkip}>Skip for now</button>
     </div>
     {err && <div className="err">{err}</div>}
-    <div className="footnote">Optional — Flackey keeps working on Deezer alone if you skip this. {RECYCLE_NOTE}</div>
+    <div className="footnote">Optional — you can add Soulseek later from Settings. {RECYCLE_NOTE}</div>
   </>)
 }
