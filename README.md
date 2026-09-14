@@ -73,8 +73,8 @@ careless drag destructive. Instead:
    Re-importing the same file after new tracks are added is also safe: cues
    set on tracks already in the collection are preserved.
 
-See `docs/superpowers/specs/2026-09-03-flackey-design.md` section 8 for
-the full reasoning.
+The important part is that Flackey writes files and playlists, not Rekordbox's
+database. Rekordbox stays the source of truth for performance metadata.
 
 ## Notes on Telegram behaviour
 
@@ -178,6 +178,6 @@ uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.to
 
 ## More
 
-- Design spec: `docs/superpowers/specs/2026-09-03-flackey-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-09-03-flackey-core.md`
 - Source bot protocol notes: `docs/source-bot-protocol.md`
+- Soulseek source research: `docs/research/2026-09-06-soulseek-as-audio-source.md`
+- Soulseek spike findings: `docs/research/2026-09-07-soulseek-spike-findings.md`
