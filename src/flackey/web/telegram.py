@@ -71,7 +71,7 @@ def router(login: TelegramLogin | None, status: dict,
         api_hash = str(body.get("api_hash") or "").strip()
         if not raw_id.isdigit() or int(raw_id) <= 0:
             raise HTTPException(400, "The API id is a number, for example 1234567.")
-        if len(api_hash) < 16:
+        if len(api_hash) != 32:   # my.telegram.org always hands out 32 hex characters
             raise HTTPException(
                 400, "The API hash is the long string next to the id at my.telegram.org.")
         save_settings(settings, telegram_api_id=int(raw_id), telegram_api_hash=api_hash)

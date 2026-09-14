@@ -1003,6 +1003,10 @@ def test_telegram_keys_route_saves_and_reconfigures(tmp_path: Path):
     c = TestClient(app)
     assert c.post("/api/telegram/keys", json={"api_id": "abc", "api_hash": "x"}).status_code == 400
     assert c.post("/api/telegram/keys", json={"api_id": 12, "api_hash": ""}).status_code == 400
+    # A real hash is exactly 32 hex characters, so a half-copied one is refused here rather than at
+    # the first call to Telegram, where the owner would have no idea which field was wrong.
+    assert c.post("/api/telegram/keys", json={"api_id": "4242", "api_hash": "b" * 16}).status_code == 400
+    assert c.post("/api/telegram/keys", json={"api_id": "4242", "api_hash": "b" * 33}).status_code == 400
     r = c.post("/api/telegram/keys", json={"api_id": "4242", "api_hash": "b" * 32})
     assert r.status_code == 200 and r.json() == {"configured": True}
     assert login.configured is True
