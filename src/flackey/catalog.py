@@ -104,7 +104,7 @@ def _length_pins_a_version(query: Query, tracks: list[CatalogTrack]) -> bool:
             and not any(_matches_length(t, query.duration_s) and _is_original(t.mix_name) for t in tracks))
 
 
-def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
+def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | None = None) -> CatalogTrack | None:
     if not tracks:
         return None
     want_version = _norm(query.version) if query.version else None
@@ -132,7 +132,11 @@ def best_match(query: Query, tracks: list[CatalogTrack]) -> CatalogTrack | None:
     if not scored:
         return None
     # equal scores: the earliest release (the original album, not a later compilation), then the lowest id
-    scored.sort(key=lambda x: (-round(x[0], 3), x[1].release_date or "9999", x[1].id))
+    # Identical artist/title/mix releases can have different masters and labels. When the source
+    # identifies the recording by ISRC, that evidence outranks a release-date tie-breaker.
+    scored.sort(key=lambda x: (-round(x[0], 3),
+                               0 if preferred_isrc and x[1].isrc and x[1].isrc.upper() == preferred_isrc.upper() else 1,
+                               x[1].release_date or "9999", x[1].id))
     s, t = scored[0]
     return t if s >= 70 else None
 

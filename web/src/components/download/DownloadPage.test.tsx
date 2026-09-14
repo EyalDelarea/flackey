@@ -35,6 +35,7 @@ const mk = (id: number, state: Request['state']): Bundle => ({
 it('shows a red banner with a dismiss action when a row action fails', async () => {
   vi.mocked(api.retry).mockRejectedValueOnce(new ApiError(409, 'That track is already being fetched.'))
   render(<DownloadPage live={makeLive([bundle])} />)
+  fireEvent.click(screen.getByRole('button', { name: 'History' }))
   fireEvent.click(screen.getByText('Try again'))
   await waitFor(() => expect(screen.getByText('That track is already being fetched.')).toBeInTheDocument())
   fireEvent.click(screen.getByText('Dismiss'))
@@ -47,6 +48,7 @@ describe('filter bar, remove and clear failed', () => {
   it('clicking Failed leaves only failed rows and hides the rest', async () => {
     render(<DownloadPage live={makeLive(mixed)} />)
     expect(screen.getByText('Artist – Track 1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
     fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
     await waitFor(() => expect(screen.queryByText('Artist – Track 1')).not.toBeInTheDocument())
     expect(screen.getByText('Artist – Track 4')).toBeInTheDocument()
@@ -57,6 +59,7 @@ describe('filter bar, remove and clear failed', () => {
     vi.mocked(api.removeRequest).mockResolvedValueOnce({ ok: true })
     const dropBundle = vi.fn()
     render(<DownloadPage live={makeLive([mk(4, 'error')], { dropBundle })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
     fireEvent.click(screen.getByText('Remove'))
     expect(api.removeRequest).toHaveBeenCalledWith(4)
     await waitFor(() => expect(dropBundle).toHaveBeenCalledWith(4))
@@ -66,6 +69,7 @@ describe('filter bar, remove and clear failed', () => {
     vi.mocked(api.removeRequest).mockRejectedValueOnce(new ApiError(409, 'That track is still being worked on. Skip it first.'))
     const dropBundle = vi.fn()
     render(<DownloadPage live={makeLive([mk(4, 'error')], { dropBundle })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => expect(screen.getByText('That track is still being worked on. Skip it first.')).toBeInTheDocument())
     expect(dropBundle).not.toHaveBeenCalled()
@@ -74,6 +78,7 @@ describe('filter bar, remove and clear failed', () => {
   it('Clear failed calls api.clearFailed', async () => {
     vi.mocked(api.clearFailed).mockResolvedValueOnce({ removed: [4] })
     render(<DownloadPage live={makeLive(mixed)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
     const clearBtn = screen.getByRole('button', { name: 'Clear failed' })
     expect(clearBtn).not.toBeDisabled()
     fireEvent.click(clearBtn)
@@ -82,13 +87,14 @@ describe('filter bar, remove and clear failed', () => {
 
   it('Clear failed is disabled when there are no failed rows', () => {
     render(<DownloadPage live={makeLive([mk(1, 'done')])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
     expect(screen.getByRole('button', { name: 'Clear failed' })).toBeDisabled()
   })
 
   it('shows "Nothing here." when a filter hides every row', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
-    expect(screen.getByText('Nothing here.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(screen.getByText('No completed downloads yet.')).toBeInTheDocument()
   })
 
   it('shows the paste prompt only when there are no requests at all', () => {

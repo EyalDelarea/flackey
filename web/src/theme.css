@@ -69,4 +69,12 @@ button { cursor: default; }
 .group { flex: none; background: var(--group); border: .5px solid var(--group-border); border-radius: 10px; overflow: hidden; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
 .status-dot.amber { background: var(--orange); }
+.status-dot.off { background: var(--tertiary); }
+.library-filters, .download-views { display: flex; align-items: center; gap: 12px; flex: none; }
+.library-filters { padding: 4px 2px; color: var(--secondary); }
+.library-filters label { display: inline-flex; align-items: center; gap: 6px; }
+.library-filters select { max-width: 230px; height: 25px; padding: 0 7px; border: .5px solid var(--well-border); border-radius: 5px; background: var(--well); color: var(--text); }
+.library-folder { flex: none; min-width: 0; }
+.library-folder h2 { font-size: 12px; font-weight: 600; padding: 10px 3px 6px; }
+.download-views { padding: 8px 16px 0; background: var(--content); }
 @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }

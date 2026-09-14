@@ -466,7 +466,8 @@ class Worker:
         else:
             self._set_state(req, RequestState.IDENTIFYING)
             try:
-                catalog = best_match(query, await self.catalog.search(query))
+                catalog_tracks = await self.catalog.search(query)
+                catalog = best_match(query, catalog_tracks)
             except CatalogUnavailable as e:
                 await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
                 return
@@ -520,6 +521,15 @@ class Worker:
                 return
 
             decision = decide(query, cands, catalog)
+            if decision.chosen and decision.chosen.isrc:
+                # The source's recording ID disambiguates equally named Beatport releases. Never
+                # substitute a loosely matched release: require the normal search score first.
+                matched_catalog = best_match(query, catalog_tracks, decision.chosen.isrc)
+                if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
+                    catalog = matched_catalog
+                    self.store.upsert_catalog_track(catalog)
+                    self.store.update_request(req.id, catalog_track_id=catalog.id)
+                    decision = decide(query, cands, catalog)
             saved = self.store.add_candidates(req.id, cands)
             self.store.update_request(req.id, confidence=decision.chosen.score if decision.chosen else None)
             if decision.chosen is None:

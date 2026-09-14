@@ -17,7 +17,7 @@ function soulseekLine(l: LosslessHealth): { ok: boolean; text: string } {
 /* One line while everything works, because a healthy status list is a list nobody reads. It expands into
    the specifics only when one of them is unhappy, and then it is a button: the detail lives in Settings,
    so the footer's job is to say something is wrong and take you where you can see what. */
-function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEnabled = true): { ok: boolean; lines: string[] } {
+function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEnabled = true): { ok: boolean; off: boolean; lines: string[] } {
   // Switched off is a choice, not a fault: it never turns the footer amber, and it never reads "signed
   // out" -- nobody is locked out of anything they asked for.
   const parts = [
@@ -26,10 +26,10 @@ function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEn
     ...(lossless?.enabled ? [soulseekLine(lossless)] : []),
   ]
   const bad = parts.filter(p => !p.ok)
-  if (bad.length) return { ok: false, lines: bad.map(p => p.text) }
+  if (bad.length) return { ok: false, off: false, lines: bad.map(p => p.text) }
   // The healthy footer still collapses to one line, but "Connected" would be a claim about a source that
   // is not running, so with Telegram off that line says so instead.
-  return { ok: true, lines: [sourceEnabled ? 'Connected' : 'Telegram off'] }
+  return { ok: true, off: !sourceEnabled, lines: [sourceEnabled ? 'Connected' : 'Telegram off'] }
 }
 const ITEMS: { tab: Tab; label: string; icon: IconName }[] = [
   { tab: 'download', label: 'Download', icon: 'download' }, { tab: 'library', label: 'Library', icon: 'library' },
@@ -43,7 +43,7 @@ export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inse
       {extra}
       <SidebarMark />
       {status.ok
-        ? <div className="sidebar-footer"><div className="status-line"><span className="status-dot" />{status.lines[0]}</div></div>
+        ? <div className="sidebar-footer"><div className="status-line"><span className={`status-dot${status.off ? ' off' : ''}`} />{status.lines[0]}</div></div>
         : <button className="sidebar-footer bad" onClick={() => onTab('settings')}
             title="Open Settings to see what's wrong">
             {status.lines.map(l => <span key={l} className="status-line"><span className="status-dot amber" />{l}</span>)}
