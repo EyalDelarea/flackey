@@ -30,5 +30,10 @@ data/
 .playwright-mcp/
 packaging/build/
 
+# Internal planning artifacts and raw research captures are useful locally, but
+# should not be published with the project.
+docs/superpowers/
+docs/research/spikes/
+
 # Telegram keys baked into a packaged build; written by CI or build_app.sh, never committed
 src/flackey/assets/build.json

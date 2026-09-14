@@ -645,7 +645,7 @@ Primary source: the Soulseek protocol as documented by the Nicotine+ project (th
   - "one of the loudest complaints is about fake lossless files and sketchy hi-fi claims" — https://houdinimagazine.net/july/the-rundown-soulseek (opinion/community reputation, not measured)
   - "Many files downloaded from Soulseek cannot be trusted, with supposedly lossless or 320kbps files often turning out to be upconverted low-bitrate ... rips" — https://vibesdj.io/dj-tools/audio-quality-checker (vendor blog for a DJ audio-quality-checker tool; treat as opinion/marketing, not data)
   - https://miseryconfusion.com/blog/2025/07/09/dont-get-fooled-by-fake-lossless-files-again/ — independent blog making the same claim; again anecdotal.
-- **How the existing spectral-cutoff check would catch it**: the flackey verification module already implements exactly the right kind of check for this, and it is format-agnostic (I read `/Users/delarea/Desktop/code/flackey/src/flackey/verify.py` directly, not a web source, to confirm this):
+- **How the existing spectral-cutoff check would catch it**: the Flackey verification module already implements exactly the right kind of check for this, and it is format-agnostic:
   - `spectral_cutoff_hz()` decodes the middle 60 s of audio to PCM regardless of container/codec, computes power in 250 Hz bands from 8 kHz up, and finds the highest frequency where level drops ≥20 dB within 500 Hz (`CLIFF_DB = 20`, `CLIFF_SEARCH_FROM_HZ = 8_000`) — the signature of a lossy encoder's brick-wall lowpass, since "natural music rolls off gradually... and never makes such a step" (comment in the source).
   - `verify()` applies `MIN_MP3_CUTOFF = 18_000` Hz for MP3 and `MIN_LOSSLESS_CUTOFF = 20_000` Hz for FLAC/WAV/AIFF, and explicitly reports `"lossless container but cutoff {cutoff} Hz: lossy source"` when a FLAC/WAV/AIFF fails the lossless threshold — this is precisely the "FLAC transcoded from MP3 shows a 16–19 kHz cutoff" case the task asked about, and it is already handled today, before adding Soulseek as a source.
   - Because the check works on decoded audio rather than trusting self-reported container/bitrate/sample-rate metadata, it is inherently more robust than metadata-based filters (the kind Soulseek search results themselves expose, see §1) — which is important because those metadata fields (bitrate, sample rate) are exactly what a faker/re-encoder controls and can spoof.
@@ -890,8 +890,8 @@ some torrent trackers use don't exist here.
   Soulseek server (it's a single, volunteer/community-run infrastructure, unlike
   Deezer's commercial CDN behind `@DeezerMusicBot`) — `UNVERIFIED` as to actual
   historical downtime, but structurally it is a smaller, less redundant
-  operation than Deezer's, and flackey's own error-handling section already
-  budgets for "source unavailable" (design spec §9, `docs/superpowers/specs/2026-09-03-flackey-design.md:329-331`).
+  operation than Deezer's. Flackey's error handling should continue treating a
+  source outage as recoverable rather than fatal.
 - **Single-account/single-login limitation — confirmed, not UNVERIFIED.** aioslsk's
   protocol documentation states the server's behavior on a duplicate login
   explicitly: if a peer with that username is already connected, the server sends
@@ -958,13 +958,8 @@ class Source(Protocol):
 
 plus three exception types (`SourceNotFound`, `SourceTimeout`,
 `SourceUnauthorized`) a source is expected to raise (`base.py:9-22`). This is
-already source-agnostic by design — the spec explicitly calls this out: "Direct
-Deezer subscription client (the source interface is designed for it)" is listed as
-deferred-but-anticipated (`docs/superpowers/specs/2026-09-03-flackey-design.md:41`),
-and the module table says `source` and `catalog` "are the two modules expected to
-break due to external changes, so they contain no business logic" (same file,
-line 176-178). A Soulseek source fits this shape mechanically without protocol
-changes.
+already source-agnostic by design. A Soulseek source fits this shape
+mechanically without protocol changes.
 
 `Query` (`src/flackey/models.py:57-71`) has `raw`, `artist`, `title`,
 `version`, `duration_s`, and a `search_text()` helper. A Soulseek search would use
@@ -1124,9 +1119,7 @@ through it for the existing Deezer-bot source per `EXT_BY_MIME`,
   `worker.py:141-218`) instead. Given `worker.py` already has fairly involved
   per-attempt state handling (`_retry_or_fail`, chosen-candidate persistence,
   parked/awaiting-review flow), a composite `Source` wrapper is the smaller,
-  more surgical change and keeps `worker.py` source-agnostic exactly as the design
-  spec's module table intends (`docs/superpowers/specs/2026-09-03-flackey-design.md:165-166`:
-  "Abstract `Source` interface... v1 implementation `DeezerBotSource`").
+  more surgical change and keeps `worker.py` source-agnostic.
 - **Store/DB, "does the requests table record the source?"**: no. Looking at the
   actual schema (`store.py:23-64`), `requests` has no `source` column at all
   (`store.py:23-31`); `candidates` **already has** `source TEXT NOT NULL`
