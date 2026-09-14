@@ -8,6 +8,12 @@ and files it under `~/Music/DJ Library/<Artist>/`, and writes M3U8 playlists
 for Rekordbox import. BPM and key are left to Rekordbox's analysis; genre and
 label are in the tags.
 
+## Download
+
+Built for Apple Silicon Macs: **[eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)** — one zip,
+one Terminal command to clear the download flag, and the setup screen does the rest. Everything below is
+for running from a checkout.
+
 ## Requirements
 
 - macOS

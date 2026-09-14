@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Flackey</title>
+    <meta name="description" content="Paste a YouTube link. Get the best copy that exists — lossless where Soulseek has it — tagged and filed where Rekordbox will find it.">
+    <link rel="icon" href="img/icon.png">
+    <link rel="stylesheet" href="site.css">
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <section class="hero" aria-labelledby="title">
+        <div class="wrap hero-grid">
+          <div class="intro">
+            <img class="icon" src="img/icon.png" alt="">
+            <h1 id="title">Flackey</h1>
+            <p class="lede">Paste a YouTube link. Get the best copy that exists — lossless where Soulseek has it — tagged and filed where Rekordbox will find it.</p>
+            <a class="download" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.zip">Download for Apple Silicon</a>
+            <p class="release" id="release-line">Latest release · macOS 12 or newer · Apple Silicon</p>
+            <p class="requirements">Apple Silicon Mac, macOS 12 or newer. A Telegram account, a Soulseek account, or both — the app makes the Soulseek one for you.</p>
+          </div>
+          <picture class="shot">
+            <source srcset="img/app-dark.png" media="(prefers-color-scheme: dark)">
+            <img src="img/app-light.png" alt="Flackey showing a download in progress">
+          </picture>
+        </div>
+      </section>
+
+      <section class="install wrap" aria-labelledby="install">
+        <h2 id="install">Install</h2>
+        <ol>
+          <li>Unzip <span class="mono">Flackey.zip</span>.</li>
+          <li>
+            <span>Run this in Terminal.</span>
+            <div class="command">
+              <code id="xattr-command">xattr -dr com.apple.quarantine ~/Downloads/Flackey.app</code>
+              <button type="button" id="copy-command">Copy</button>
+            </div>
+            <p>The app is not signed with an Apple Developer certificate yet, so macOS blocks it until you clear the download flag. Do this only for software you chose to install.</p>
+          </li>
+          <li>Open it.</li>
+        </ol>
+      </section>
+
+      <section class="features wrap" aria-labelledby="does">
+        <h2 id="does">What It Does</h2>
+        <div class="feature-grid">
+          <section>
+            <h3>Finds The Real Track</h3>
+            <p>A Telegram bot or Soulseek, matched and verified, not a YouTube rip.</p>
+          </section>
+          <section>
+            <h3>Lossless Where It Exists</h3>
+            <p>Soulseek copies are checked against the recording before they land in your library.</p>
+          </section>
+          <section>
+            <h3>Filed For Rekordbox</h3>
+            <p>One folder per artist, playlists as M3U8, tags filled with genre and label.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="sharing wrap" aria-labelledby="sharing">
+        <h2 id="sharing">Sharing Back</h2>
+        <p>Your DJ Library is shared read-only on Soulseek, so the account gives back while you search. The app opens the port for you or shows exactly what to forward.</p>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <a href="https://github.com/EyalDelarea/flackey">Source on GitHub</a>
+      <span>Licences of the bundled tools are inside the app</span>
+      <span>Made for one DJ's library. Early build.</span>
+    </footer>
+  </body>
+</html>

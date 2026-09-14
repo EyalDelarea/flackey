@@ -2,7 +2,8 @@
 
 You paste a link, it finds the track properly, tags it, and files it where Rekordbox will see it.
 This is an early build sent to you to try, not a finished product. It is unsigned, so macOS will
-refuse to open it until you tell it otherwise — the steps below are the whole of that.
+refuse to open it until you tell it otherwise — the steps below are the whole of that. The same steps,
+with the download button, are at [eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/).
 
 ## Before you start
 
