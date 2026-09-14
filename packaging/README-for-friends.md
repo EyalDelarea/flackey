@@ -2,23 +2,14 @@
 
 You paste a link, it finds the track properly, tags it, and files it where Rekordbox will see it.
 This is an early build sent to you to try, not a finished product. It is unsigned, so macOS will
-refuse to open it until you tell it otherwise — the steps below are the whole of that.
+refuse to open it until you tell it otherwise — the steps below are the whole of that. The same steps,
+with the download button, are at [eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/).
 
 ## Before you start
 
 **An Apple Silicon Mac.** This build is arm64 only. On an Intel Mac it will not launch at all.
 
-**Two helper programs.** Flackey shells out to ffmpeg and chromaprint to inspect and convert audio.
-If you have [Homebrew](https://brew.sh):
-
-```sh
-brew install ffmpeg chromaprint
-```
-
-Flackey looks in `/opt/homebrew/bin` and `/usr/local/bin` by name, so it finds them even though apps
-launched from Finder do not normally see your shell's PATH. Without them the app still opens and you can
-look around; anything that needs them stops with "ffmpeg is not installed" rather than a stack trace, the
-setup screen shows which are missing, and the log names them on startup.
+**Nothing else.** The audio tools Flackey uses (ffmpeg and chromaprint) are inside the app; their licences are in the bundle under `Contents/Frameworks/bin/licenses`.
 
 ## Installing it
 
@@ -80,5 +71,4 @@ Downloading works either way; sharing back is what needs the port.
 
 - Unsigned, hence the `xattr` step.
 - Apple Silicon only.
-- ffmpeg and chromaprint are not bundled; you install them yourself, as above.
 - Closing the window quits the app.

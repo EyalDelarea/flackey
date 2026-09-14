@@ -1,11 +1,16 @@
 # Every push and pull request: the four checks the README lists for development, plus a type-checked
-# build of the web UI. Green here is the gate for the macOS build job (added with the release work).
+# build of the web UI. On a push to main (or a version tag) the green checks gate a macOS build of the
+# app; on a version tag that build is published as a GitHub Release.
 name: checks
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: read
 
 concurrency:
   group: checks-${{ github.ref }}
@@ -45,3 +50,68 @@ jobs:
         run: npm --prefix web test -- --run
       - name: build
         run: npm --prefix web run build
+
+  mac:
+    name: Flackey.app (Apple Silicon)
+    needs: [python, web]
+    if: github.event_name == 'push'
+    runs-on: macos-14
+    env:
+      # Baked into the build by packaging/build_app.sh; never printed.
+      FLACKEY_TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      FLACKEY_TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Tag matches the version in the tree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: packaging/check_version.sh "$GITHUB_REF_NAME"
+      - name: Cache helper downloads
+        uses: actions/cache@v4
+        with:
+          path: packaging/build/helpers
+          key: helpers-${{ hashFiles('packaging/fetch_helpers.sh') }}
+      - name: Build
+        run: packaging/build_app.sh
+      - name: Smoke-launch
+        run: packaging/smoke.sh packaging/build/dist/Flackey.app
+      - name: Zip
+        run: |
+          ditto -c -k --keepParent packaging/build/dist/Flackey.app packaging/build/Flackey.zip
+          cd packaging/build && shasum -a 256 Flackey.zip > Flackey.zip.sha256 && cat Flackey.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Flackey.app
+          path: |
+            packaging/build/Flackey.zip
+            packaging/build/Flackey.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: mac
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Flackey.app
+          path: dist
+      - name: latest.json
+        run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.zip dist/Flackey.zip.sha256 | tee dist/latest.json
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Flackey.zip dist/Flackey.zip.sha256 dist/latest.json \
+            --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes

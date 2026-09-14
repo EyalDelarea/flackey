@@ -7,10 +7,13 @@ from flackey import portmap
 from flackey.portmap import Mapping, default_gateway, map_port, natpmp_map, unmap_port, upnp_map
 
 
-def test_default_gateway_parses_route_output_on_mac():
+def test_default_gateway_parses_route_output_on_mac(monkeypatch):
+    monkeypatch.setattr(portmap.sys, "platform", "darwin")
+
     class R:
         stdout = "   route to: default\ndestination: default\n       mask: default\n    gateway: 10.0.0.1\n  interface: en0\n"
         returncode = 0
+
     assert default_gateway(run=lambda *a, **k: R()) == "10.0.0.1"
 
 

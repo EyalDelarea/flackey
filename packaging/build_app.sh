@@ -39,6 +39,10 @@ else
   echo "    Telegram keys: none (setup will ask)"
 fi
 
+echo "==> helpers"
+# ffmpeg, ffprobe and fpcalc ride inside the app so nobody has to install Homebrew first.
+packaging/fetch_helpers.sh
+
 echo "==> bundle"
 uv run --with pyinstaller pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \

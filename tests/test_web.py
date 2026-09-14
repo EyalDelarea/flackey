@@ -676,7 +676,8 @@ def test_telegram_status_survives_a_client_that_was_never_connected(tmp_path):
     assert r.json() == {"authorized": False, "configured": False, "phone_masked": None}
 
 
-def test_pick_folder_with_fake_picker(tmp_path):
+def test_pick_folder_with_fake_picker(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
     fake_path = Path("/tmp/x")
     fake_picker = lambda initial: fake_path
     app, _, _ = make(tmp_path, picker=fake_picker)
@@ -685,7 +686,8 @@ def test_pick_folder_with_fake_picker(tmp_path):
     assert r.status_code == 200 and r.json() == {"path": "/tmp/x"}
 
 
-def test_pick_folder_returns_null_when_cancelled(tmp_path):
+def test_pick_folder_returns_null_when_cancelled(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
     fake_picker = lambda initial: None
     app, _, _ = make(tmp_path, picker=fake_picker)
     c = TestClient(app)
@@ -693,9 +695,12 @@ def test_pick_folder_returns_null_when_cancelled(tmp_path):
     assert r.status_code == 200 and r.json() == {"path": None}
 
 
-def test_pick_folder_returns_500_on_picker_error(tmp_path):
+def test_pick_folder_returns_500_on_picker_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+
     def failing_picker(initial):
         raise RuntimeError("boom")
+
     app, _, _ = make(tmp_path, picker=failing_picker)
     c = TestClient(app)
     r = c.post("/api/pick-folder", json={"initial": None})
