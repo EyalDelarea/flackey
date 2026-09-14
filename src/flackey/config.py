@@ -171,9 +171,10 @@ class Settings(BaseSettings):
 
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 
-# Telegram keys baked into a packaged build. CI writes this file from repository secrets before
-# PyInstaller runs (see .github/workflows and packaging/build_app.sh); a checkout has no such file and
-# reads .env instead. Lowest precedence of all: anything the owner sets, in the environment or in
+# Telegram keys baked into a packaged build. packaging/build_app.sh writes this file from
+# FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before PyInstaller runs; the release workflow
+# exports those from repository secrets. A checkout has no such file and reads .env instead.
+# Lowest precedence of all: anything the owner sets, in the environment or in
 # settings.json, wins over what the build carries. Same location trick as desktop.APP_ICON -- inside the
 # bundle `__file__` is <MEIPASS>/flackey/config.pyc and the assets folder is unpacked beside it.
 BUILD_DEFAULTS_PATH = Path(__file__).with_name("assets") / "build.json"

@@ -46,9 +46,11 @@ situation you are in.
 
 The app opens on a setup screen, because it starts with nothing configured.
 
-**Telegram.** One of the two ways Flackey finds audio is a Telegram bot. This build already carries
-the keys Telegram needs to know which app is talking; you sign in with your own Telegram account by
-scanning a QR code, and that is all. You can skip it and use Soulseek only.
+**Telegram.** One of the two ways Flackey finds audio is a Telegram bot. A build from Flackey's own
+releases already carries the keys Telegram needs to know which app is talking. A build someone made
+from a checkout without them asks for an API id and hash on the Telegram step, and that screen says
+where to get them. You sign in with your own Telegram account by scanning a QR code, and that is all.
+You can skip it and use Soulseek only.
 
 **Soulseek.** The other source. The setup screen walks through it and downloads what it needs.
 
