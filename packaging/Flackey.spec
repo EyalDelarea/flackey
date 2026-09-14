@@ -7,11 +7,17 @@ API credentials, and this bundle is made to hand to someone else. The app alread
 without them and show its setup screen, which is the correct experience for a second person anyway.
 """
 
+import re
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent  # noqa: F821 - SPECPATH is injected by PyInstaller
+VERSION = re.search(
+    r'^__version__ = "([^"]+)"',
+    (ROOT / "src" / "flackey" / "__init__.py").read_text(),
+    re.M,
+).group(1)
 
 datas = [
     # `resource_dir()` resolves to the unpacked bundle when frozen, so these two land exactly where
@@ -79,6 +85,8 @@ app = BUNDLE(  # noqa: F821
     info_plist={
         "CFBundleName": "Flackey",
         "CFBundleDisplayName": "Flackey",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "NSHighResolutionCapable": True,
         # The UI is served by a uvicorn on 127.0.0.1 and loaded over http. App Transport Security
         # blocks plain http by default, and this is the key that carves out the loopback case.
