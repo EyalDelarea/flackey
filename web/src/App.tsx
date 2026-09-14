@@ -36,6 +36,9 @@ export default function App() {
   const authorized = h?.telegram_authorized ?? true
   // A source the owner switched off is not signed out, so nothing about it is worth a banner.
   const sourceOn = h?.source_enabled ?? true
+  // Without keys the Telegram step is a form asking for them, and nothing is waiting on Telegram yet.
+  // Absent in a payload written before the field existed, which is the configured case.
+  const telegramConfigured = h?.telegram_configured ?? true
   useEffect(() => { if (authorized) setReconnecting(false) }, [authorized])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   const mainScreen = !!h && h.setup_done && !reconnecting
@@ -70,7 +73,7 @@ export default function App() {
       : reconnecting && current === 4 ? () => setStep(2)
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
-    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 ? 'Waiting for Telegram…' : undefined}>
+    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 && telegramConfigured ? 'Waiting for Telegram…' : undefined}>
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 4 : 3) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 4 : 3) }} />}
       {current === 3 && <SoulseekStep onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
