@@ -35,7 +35,11 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   }
   return (
     <>
-      <PasteBar onSubmit={async url => (await api.submit(url)).summary} inset={inset} />
+      <PasteBar onSubmit={async url => {
+        const submission = await api.submit(url)
+        await live.refresh()
+        return submission.summary
+      }} inset={inset} />
       <div className="download-views" role="group" aria-label="Download view"><button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button><button className="chip" aria-pressed={view === 'history'} onClick={() => { setView('history'); setFilter('all') }}>History</button></div>
       {bundles.length > 0 && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       <div className="scroll">

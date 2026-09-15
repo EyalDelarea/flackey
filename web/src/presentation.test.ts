@@ -141,7 +141,7 @@ describe('presentRow', () => {
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')
     expect(presentRow(bundle({ state: 'cancelled' }), opts).status).toBe('Skipped')
-    expect(presentRow(bundle({ state: 'not_found', error_message: 'no candidates from source' }), opts).status).toBe('Not available on Deezer — no candidates from source')
+    expect(presentRow(bundle({ state: 'not_found', error_message: 'no candidates from source' }), opts).status).toBe('No downloadable match found — no candidates from source')
     const e = presentRow(bundle({ state: 'error', error_message: 'boom' }), opts)
     expect(e.status).toBe('Failed — boom'); expect(e.statusTone).toBe('red'); expect(e.action).toEqual({ label: 'Try again', kind: 'retry' })
   })
@@ -241,14 +241,14 @@ describe('the lossy fallback is visible rather than silent', () => {
   it('names the format and why the lossless attempt missed', () => {
     const v = presentRow(filed({}, { outcome: 'transfer_failed' }), opts)
     expect(v.fallback).toEqual({
-      label: 'MP3 320 kbps — no lossless copy',
-      reason: 'Kept the Deezer copy because the people who had it would not send it.',
+      label: 'MP3 320 kbps — lossless unavailable',
+      reason: 'Kept the matched MP3 copy because the people who had it would not send it.',
     })
   })
 
   it('says so plainly when no lossless search ever ran', () => {
     expect(presentRow(filed({}, null), opts).fallback?.reason)
-      .toBe('Kept the Deezer copy because no lossless search ran for this one.')
+      .toBe('Kept the matched MP3 copy because no lossless search ran for this one.')
   })
 
   it('still explains an outcome it has no phrasing for, rather than saying nothing', () => {

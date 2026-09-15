@@ -10,6 +10,8 @@ class RequestKind(StrEnum):
     TEXT = "text"
     YT_TRACK = "yt_track"
     YT_PLAYLIST = "yt_playlist"
+    SPOTIFY_TRACK = "spotify_track"
+    SPOTIFY_PLAYLIST = "spotify_playlist"
 
 
 class RequestState(StrEnum):

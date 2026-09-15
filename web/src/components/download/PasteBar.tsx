@@ -19,7 +19,7 @@ export default function PasteBar({ onSubmit, inset }: { onSubmit: (url: string) 
   return (
     <Toolbar inset={inset}>
       <form className="pastebar" onSubmit={submit} aria-label="add link" role="form">
-        <input className="input" placeholder="Paste a YouTube or YouTube Music link" value={url} onChange={e => setUrl(e.target.value)} />
+        <input className="input" placeholder="Paste a YouTube, YouTube Music, or Spotify link" value={url} onChange={e => setUrl(e.target.value)} />
         <button className="btn-primary" type="submit" disabled={pending}>{pending ? 'Adding…' : 'Add'}</button>
       </form>
       {note && <div className={`note${note.error ? ' error' : ''}`}>{note.text}</div>}

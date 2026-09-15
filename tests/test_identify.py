@@ -17,6 +17,10 @@ from flackey.models import RequestKind
     ("https://music.youtube.com/playlist?list=PL123", RequestKind.YT_PLAYLIST),
     ("https://www.youtube.com/watch?v=abc&list=PL123", RequestKind.YT_PLAYLIST),
     ("check this https://youtu.be/abc123 great", RequestKind.YT_TRACK),
+    ("https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl?si=abc", RequestKind.SPOTIFY_TRACK),
+    ("https://open.spotify.com/intl-de/track/11dFghVXANMlKmJXsNCbNl?si=abc", RequestKind.SPOTIFY_TRACK),
+    ("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc", RequestKind.SPOTIFY_PLAYLIST),
+    ("https://open.spotify.com/intl-de/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc", RequestKind.SPOTIFY_PLAYLIST),
 ])
 def test_classify(text, kind):
     k, url = classify(text)
@@ -35,6 +39,16 @@ def test_classify_canonical_playlist_url_and_autoplay_mixes():
     assert classify("https://music.youtube.com/playlist?list=PL123")[1] == "https://www.youtube.com/playlist?list=PL123"
     k, url = classify("https://music.youtube.com/watch?v=abc123&list=RDAMVMabc123")
     assert k == RequestKind.YT_TRACK and url == "https://music.youtube.com/watch?v=abc123"
+
+
+def test_classify_canonical_spotify_track_url():
+    _, url = classify("check https://open.spotify.com/intl-de/track/11dFghVXANMlKmJXsNCbNl?si=abc")
+    assert url == "https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl"
+
+
+def test_classify_canonical_spotify_playlist_url():
+    _, url = classify("https://open.spotify.com/intl-de/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc")
+    assert url == "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 
 
 @pytest.mark.parametrize("title,expected", [
