@@ -3,6 +3,7 @@
   --ink: #101116;
   --muted: #727580;
   --blue: #007aff;
+  --wave: 0, 122, 255;
   --line: #e5e5e9;
   --sans:
     -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -241,91 +242,370 @@ p {
   padding: 22px 0 70px;
   scroll-margin-top: 20px;
 }
-.video-poster {
-  position: relative;
-  width: 100%;
-  height: clamp(255px, 23vw, 365px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 24px;
+.preview-card {
   border-radius: 20px;
   border: 1px solid #c8cbd2;
   background: radial-gradient(
-    ellipse at 50% 38%,
+    ellipse at 50% 0%,
     #fff 0%,
-    #f7f8fa 35%,
+    #f7f8fa 45%,
     #e9ebee 100%
   );
   box-shadow:
     inset 0 0 0 1px white,
     0 20px 27px -24px #373a46aa,
     0 6px 12px #35374908;
-  color: #55575e;
+  padding: clamp(28px, 4vw, 48px) clamp(20px, 4.5vw, 56px) clamp(32px, 4vw, 52px);
+}
+.preview-card .eyebrow {
+  margin-bottom: 10px;
+}
+.preview-card h3 {
+  font-size: clamp(20px, 2.4vw, 27px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  margin-bottom: clamp(20px, 3vw, 30px);
+}
+/* ---- Live app demo ----
+   A recreation of the app's download row, not a recording of it. The app's own
+   design tokens are redeclared here on the wrapper rather than in :root, because
+   the app and this site use different names for the same ideas (--text vs --ink)
+   and merging the two namespaces would quietly restyle the page around it. */
+.app-demo {
+  --ad-text: #1d1d1f;
+  --ad-secondary: rgba(0, 0, 0, 0.55);
+  --ad-tertiary: rgba(0, 0, 0, 0.28);
+  --ad-sep: rgba(0, 0, 0, 0.09);
+  --ad-accent: #007aff;
+  --ad-green: #34c759;
+  --ad-orange: #ff9500;
+  --ad-well-border: rgba(0, 0, 0, 0.16);
+  --ad-vinyl: #3a3a3c;
+  --ad-groove: rgba(255, 255, 255, 0.18);
+  --ad-platter-ink: #fff;
+  --ad-platter-track: rgba(0, 0, 0, 0.13);
+
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
   overflow: hidden;
-  transition: box-shadow 0.35s;
-}
-.video-poster:before {
-  content: "";
-  position: absolute;
-  inset: -80%;
-  background: linear-gradient(
-    115deg,
-    transparent 43%,
-    #ffffffa0 49%,
-    transparent 57%
-  );
-  transform: translateX(-35%);
-  transition: transform 1.2s;
+  color: var(--ad-text);
+  /* Decorative: it must not take focus, take a click, or offer text to select. */
   pointer-events: none;
+  user-select: none;
+  container-type: inline-size;
 }
-.video-poster:hover:before {
-  transform: translateX(35%);
+.ad-toolbar {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 20px;
+  border-bottom: 0.5px solid var(--ad-sep);
 }
-.poster-brand {
-  font-weight: 750;
-  font-size: 27px;
-  letter-spacing: -1.1px;
-  z-index: 1;
+.ad-pastebar {
+  flex: 1;
+  max-width: 640px;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
 }
-.glass-play {
-  width: 116px;
-  height: 116px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #ffffff8f, #d5d8de80);
-  border: 2px solid #ffffffd9;
-  box-shadow:
-    inset 0 2px 3px white,
-    0 14px 24px #383e541a;
-  transition: transform 0.3s;
+.ad-input {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  border: 0.5px solid var(--ad-well-border);
+  border-radius: 7px;
+  background: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
 }
-.glass-play svg {
+.ad-url {
+  overflow: hidden;
+  text-overflow: clip;
+}
+.ad-url.placeholder {
+  color: var(--ad-tertiary);
+}
+.ad-caret {
+  width: 1px;
+  height: 15px;
+  margin-left: 1px;
+  flex: none;
+  background: var(--ad-text);
+  opacity: 0;
+}
+.app-demo.typing .ad-caret {
+  animation: ad-blink 1.06s steps(1) infinite;
+}
+@keyframes ad-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+.ad-add {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  align-self: center;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: var(--ad-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 140ms ease;
+}
+.app-demo.pressing .ad-add {
+  transform: scale(0.94);
+  filter: brightness(0.88);
+}
+.ad-body {
+  padding: 18px 20px 22px;
+  min-height: 118px;
+}
+.ad-group {
+  background: #fff;
+  border: 0.5px solid var(--ad-sep);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ad-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 12px;
+}
+.ad-art {
   width: 36px;
   height: 36px;
-  fill: #63666d;
-  filter: drop-shadow(0 1px 0 white);
-  margin-left: -3px;
+  flex: none;
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #47608a, #1c2536);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15);
 }
-.video-poster:hover .glass-play {
-  transform: scale(1.07);
+.ad-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 420ms ease;
 }
-.duration {
+.ad-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ad-title {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ad-status {
+  font-size: 11px;
+  color: var(--ad-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ad-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.ad-step {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ad-tertiary);
+  white-space: nowrap;
+  transition:
+    color 300ms ease,
+    font-weight 300ms ease;
+}
+.ad-step + .ad-step {
+  margin-left: 6px;
+  padding-left: 10px;
+  position: relative;
+}
+.ad-step + .ad-step:before {
+  content: "";
   position: absolute;
-  bottom: 20px;
-  right: 27px;
-  color: #7d8390;
-  font-size: 18px;
+  left: 0;
+  top: 50%;
+  width: 6px;
+  border-top: 1px solid var(--ad-sep);
+}
+.ad-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ad-tertiary);
+  flex: none;
+  transition:
+    background 300ms ease,
+    transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ad-step.done {
+  color: var(--ad-secondary);
+}
+.ad-step.done .ad-mark {
+  background: var(--ad-green);
+}
+.ad-step.current {
+  color: var(--ad-orange);
+  font-weight: 600;
+}
+.ad-step.current .ad-mark {
+  background: var(--ad-orange);
+  animation: ad-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ad-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+.ad-xfer {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ad-secondary);
   font-variant-numeric: tabular-nums;
 }
-.poster-hint {
-  position: absolute;
-  bottom: 22px;
-  left: 27px;
-  color: #777e89;
+.ad-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 5px;
+}
+.ad-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ad-secondary);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 320ms ease,
+    transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ad-check b {
+  font-weight: 600;
+  color: var(--ad-text);
+}
+.ad-check svg,
+.ad-verified svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  fill: none;
+  stroke: var(--ad-green);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ad-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ad-platter {
+  flex: none;
+  line-height: 0;
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+.ad-vinyl {
+  fill: var(--ad-vinyl);
+}
+.ad-groove {
+  stroke: var(--ad-groove);
+}
+.ad-track {
+  stroke: var(--ad-platter-track);
+}
+/* No transition on stroke-dasharray here, unlike the app: the app receives progress
+   in occasional jumps and eases between them, while this draws a new value every
+   frame - a transition on top of that would only add lag. */
+.ad-arc {
+  stroke: var(--ad-accent);
+}
+.ad-spindle {
+  fill: var(--ad-platter-ink);
+  opacity: 0.5;
+}
+.ad-pct {
+  fill: var(--ad-platter-ink);
+  font-family: var(--sans);
   font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.app-demo.waiting .ad-arc {
+  stroke: var(--ad-tertiary);
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: ad-spin 1.9s linear infinite;
+}
+@keyframes ad-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ad-verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ad-green);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 320ms ease,
+    transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.preview-caption {
+  margin: 16px 2px 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 54ch;
+}
+/* The app's toolbar and row are laid out for a desktop window; below that the
+   demo would either clip or shrink its type past legibility, so it scales as a
+   whole instead - same layout, smaller. */
+@container (max-width: 560px) {
+  .ad-toolbar,
+  .ad-body {
+    zoom: 0.78;
+  }
 }
 .details {
   padding: 100px 0;
@@ -398,6 +678,108 @@ h2 {
 }
 .section-intro {
   margin-top: 25px;
+}
+/* ---- Spectrogram comparison ----
+   Spans the section's two columns, so it reads as the evidence for the claim
+   above rather than as a third item beside it. */
+.spectra {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: clamp(30px, 4vw, 48px);
+}
+.spectra-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(16px, 2.2vw, 26px);
+}
+.spec-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.spec-verdict {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.spec-verdict.ok {
+  color: #0a6c2f;
+  background: #e6f6ec;
+}
+.spec-verdict.bad {
+  color: #b3261e;
+  background: #fdecea;
+}
+.spec-name {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.spec-plot {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #05070d;
+  border: 1px solid var(--line);
+}
+.spec-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(140px, 17vw, 190px);
+}
+.spec-axis {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.spec-axis span {
+  position: absolute;
+  left: 9px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+/* 16 kHz of 22.05 kHz, measured from the bottom of the plot. */
+.spec-cut {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 27.4%;
+  border-top: 1px dashed rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+.spec-cut span {
+  position: absolute;
+  right: 9px;
+  top: 6px;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.78);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+.spectra figcaption {
+  margin-top: 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+.spectra figcaption code {
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f1f2f5;
+  color: var(--ink);
+}
+.spectra figcaption em {
+  font-style: normal;
+  color: #8c8f99;
 }
 .checks {
   list-style: none;
@@ -511,6 +893,127 @@ h2 {
 .install li {
   padding: 10px 0;
 }
+/* ---- Gatekeeper guide ----
+   Every user hits this until the build is notarized, so it is spelled out
+   rather than left as a sentence at the bottom of the install steps. */
+.gatekeeper {
+  margin: 4px 25px 26px 30px;
+  padding: 22px 24px 24px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #fafbfc;
+}
+.gatekeeper h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+.gatekeeper p {
+  margin: 0 0 14px;
+  color: #4a4e5a;
+}
+.gk-lead {
+  font-weight: 600;
+  color: var(--ink) !important;
+  margin-bottom: 4px !important;
+}
+.gk-dialog {
+  margin: 0 0 18px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+/* A diagram of the system dialog, not a copy of it: enough shape to be
+   recognised next to the real thing, with no attempt at Apple's own chrome. */
+.gk-sheet {
+  flex: none;
+  width: 260px;
+  padding: 18px 18px 16px;
+  border-radius: 12px;
+  border: 1px solid #d6d8de;
+  background: #f2f2f4;
+  box-shadow: 0 10px 24px -14px rgba(20, 22, 30, 0.5);
+  text-align: center;
+}
+.gk-title {
+  font-size: 13.5px !important;
+  font-weight: 700;
+  color: var(--ink) !important;
+  margin: 0 0 7px !important;
+}
+.gk-body {
+  font-size: 11.5px !important;
+  line-height: 1.45;
+  color: #5c606b !important;
+  margin: 0 0 14px !important;
+}
+.gk-buttons {
+  display: flex;
+  gap: 8px;
+}
+.gk-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gk-pick {
+  background: #fff;
+  border: 1px solid #c9ccd3;
+  color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.28);
+}
+.gk-default {
+  background: var(--blue);
+  color: #fff;
+}
+.gk-dialog figcaption {
+  flex: 1;
+  min-width: 210px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #4a4e5a;
+}
+.gk-dialog figcaption strong {
+  color: var(--ink);
+}
+.gk-steps {
+  padding: 0 0 0 22px !important;
+  margin: 0 0 16px;
+}
+.gk-steps li {
+  padding: 5px 0 !important;
+  color: #4a4e5a;
+}
+.gk-steps strong {
+  color: var(--ink);
+}
+.gk-steps em {
+  font-style: normal;
+  color: var(--ink);
+}
+.gk-note {
+  font-size: 13px !important;
+  line-height: 1.55;
+  color: var(--muted) !important;
+  margin: 0 0 10px !important;
+}
+.gk-note:last-child {
+  margin-bottom: 0 !important;
+}
+.gk-note strong {
+  color: #4a4e5a;
+}
+.gk-note a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .command {
   display: flex;
   gap: 10px;
@@ -553,46 +1056,6 @@ footer {
 footer > a:last-child {
   margin-left: auto;
 }
-dialog {
-  max-width: min(440px, 90vw);
-  padding: 48px 36px 36px;
-  text-align: center;
-  border: 1px solid #fff;
-  border-radius: 24px;
-  background: #fafafc;
-  box-shadow: 0 25px 100px #0003;
-  color: var(--ink);
-}
-dialog::backdrop {
-  background: #22273545;
-  backdrop-filter: blur(8px);
-}
-dialog h2 {
-  font-size: 36px;
-  margin-top: 20px;
-}
-dialog p {
-  font-size: 16px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 18px 0 24px;
-}
-dialog .button {
-  font-size: 16px;
-  min-height: 44px;
-}
-.close {
-  position: absolute;
-  right: 12px;
-  top: 12px;
-  border: 0;
-  border-radius: 50%;
-  background: #e9e9ee;
-  width: 30px;
-  height: 30px;
-  font-size: 22px;
-  color: #646772;
-}
 @keyframes rise {
   from {
     opacity: 0;
@@ -601,6 +1064,92 @@ dialog .button {
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ambient sound-wave motifs */
+.eq-curve {
+  position: absolute;
+  inset: 0;
+  width: 54%;
+  opacity: 0.35;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
+}
+.eq-curve svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.eq-curve .eq-grid-line {
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.18;
+  stroke-width: 1;
+}
+.eq-curve .eq-baseline {
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+}
+.eq-curve .eq-fill-a {
+  fill: rgb(var(--wave));
+  fill-opacity: 0.16;
+}
+.eq-curve .eq-fill-b {
+  fill: rgb(var(--wave));
+  fill-opacity: 0.09;
+}
+.eq-curve .eq-stroke-a {
+  fill: none;
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.55;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.eq-curve .eq-stroke-b {
+  fill: none;
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.3;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.eyebrow-row .eyebrow {
+  margin-bottom: 0;
+}
+.eq-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 130px;
+  height: 28px;
+  opacity: 0.77;
+  pointer-events: none;
+}
+.eq-bars i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: rgb(var(--wave));
+  animation: eq-bar-pulse 1.6s ease-in-out infinite;
+}
+@keyframes eq-bar-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
   }
 }
 @media (min-width: 1700px) {
@@ -653,6 +1202,13 @@ dialog .button {
   }
 }
 @media (max-width: 800px) {
+  .eq-curve {
+    width: 100%;
+  }
+  .eyebrow-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .header {
     height: auto;
     min-height: 110px;
@@ -730,29 +1286,33 @@ dialog .button {
     padding-top: 0;
     padding-bottom: 30px;
   }
-  .video-poster {
-    height: 255px;
+  .preview-card {
+    padding: 24px 20px 28px;
     border-radius: 16px;
   }
-  .glass-play {
-    width: 90px;
-    height: 90px;
+  .preview-card h3 {
+    font-size: 19px;
   }
-  .poster-brand {
-    font-size: 24px;
+  .app-demo {
+    border-radius: 10px;
   }
-  .poster-hint {
-    font-size: 11px;
-    left: 18px;
-  }
-  .duration {
-    font-size: 14px;
-    right: 18px;
+  .preview-caption {
+    font-size: 13px;
   }
   .details {
     padding: 65px 0;
     grid-template-columns: 1fr;
     gap: 38px;
+  }
+  .spectra-grid {
+    grid-template-columns: 1fr;
+  }
+  .gatekeeper {
+    margin: 4px 0 22px;
+    padding: 18px 16px 20px;
+  }
+  .gk-sheet {
+    width: 100%;
   }
   .verification,
   .help {

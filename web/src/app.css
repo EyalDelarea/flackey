@@ -342,10 +342,23 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .welcome .lead { max-width: 380px; font-size: 14px; color: var(--secondary); line-height: 1.45; }
 .welcome .cta { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 6px; }
 .welcome .note { font-size: 11px; color: var(--tertiary); }
-.welcome-vinyl { display: block; width: min(470px, 100%); max-height: min(48vh, 310px); aspect-ratio: 3 / 2;
-  object-fit: contain; border-radius: 4px; animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
+.welcome-vinyl { display: block; position: relative; width: min(470px, 100%); max-height: min(48vh, 310px); aspect-ratio: 3 / 2;
+  border-radius: 4px; overflow: hidden; animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
+/* The photo has a plain white studio background baked in (no alpha). Against light mode's near-white
+   --window that is nearly invisible already; multiply erases the rest of the seam. Dark mode's window is
+   too dark for the same trick -- multiply would just blacken the photo -- so there it gets an intentional
+   light card instead of fighting the white background. */
+.welcome-vinyl-photo { display: block; width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; }
+.welcome-vinyl-motion { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; mix-blend-mode: multiply; }
+.welcome-vinyl-disc-spin { transform-origin: 0 0; animation: welcome-vinyl-spin 40s linear infinite; }
+@keyframes welcome-vinyl-spin { to { transform: rotate(360deg); } }
+@media (prefers-color-scheme: dark) {
+  .welcome-vinyl { padding: 18px; box-sizing: border-box; border-radius: 14px; background: #f4f4f4;
+    box-shadow: 0 14px 34px rgba(0,0,0,.4); }
+  .welcome-vinyl-photo, .welcome-vinyl-motion { mix-blend-mode: normal; }
+}
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@media (prefers-reduced-motion: reduce) { .welcome-vinyl, .dot6.current { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .welcome-vinyl, .welcome-vinyl-disc-spin, .dot6.current { animation: none; } }
 
 /* A lossy row states its bitrate without the green check the verified lossless rows get: the check means
    "this is what it claims to be", and a 320 that lost its lossless race has not earned it. Amber, not red --
