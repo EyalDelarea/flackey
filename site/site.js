@@ -243,21 +243,23 @@ if (appDemo) {
   }
 }
 
-// The playlist variant. Same recreation one link further on: a playlist queues
-// every track at once, so the rows run the same state machine staggered in
-// time rather than each carrying its own cue sheet. The fourth track never
-// finds a lossless copy, because a batch is the only place the app's refusal
-// to save a lossy file as though it were lossless is visible.
+// The album variant. Same recreation one link further on: an album or playlist
+// link queues every track at once, so the rows run the same state machine
+// staggered in time rather than each carrying its own cue sheet. Nine tracks
+// are queued and four are shown, which is what a list scrolled to the top looks
+// like; the counter and the bar cover all nine. The third track finds a lossy
+// source first, so it is rejected and the search carries on - the one thing a
+// batch shows that a single track cannot.
 const plDemo = document.querySelector("#playlist-demo");
 if (plDemo) {
   const urlText = plDemo.querySelector(".ad-url");
   const summary = plDemo.querySelector(".ad-summary");
   const barFill = plDemo.querySelector(".ad-groupbar-fill");
-  const barBad = plDemo.querySelector(".ad-groupbar-bad");
+  const moreLine = plDemo.querySelector(".ad-more");
   const groupSec = plDemo.querySelector(".ad-groupsec");
   const rows = [...plDemo.querySelectorAll(".ad-row")];
 
-  const URL_TEXT = "open.spotify.com/playlist/37i9dQZF1DX6J5NfMJS675";
+  const URL_TEXT = "music.youtube.com/playlist?list=OLAK5uy_nq8bhlHsmgmKdzp5ZH5dkdv9x0_XGfQ3s";
   const PLACEHOLDER = "Paste a YouTube, YouTube Music, or Spotify link";
   const CIRC = 2 * Math.PI * 19; // matches Platter.tsx's geometry
 
@@ -267,28 +269,36 @@ if (plDemo) {
     typeEnd: 2.0,
     press: 2.25,
     groupIn: 2.5,
-    fadeOut: 15.6,
-    loop: 16.8,
+    fadeOut: 15.4,
+    loop: 16.6,
   };
 
-  // Per-track: when its row starts relative to groupIn, and the transfer it is
-  // working on. mb 0 marks the one with no lossless source to find.
+  // The album, in order. `at` is when the track's row starts relative to
+  // groupIn; only the first four have a row on the page, but all nine feed the
+  // counter and the bar. `reject` marks the one whose first source is lossy.
   const TRACKS = [
-    { at: 0.0, mb: 38.4, source: "Deezer" },
-    { at: 0.85, mb: 44.1, source: "Deezer" },
-    { at: 1.7, mb: 51.7, source: "Qobuz" },
-    { at: 2.55, mb: 0, source: null },
-    { at: 3.4, mb: 41.2, source: "Qobuz" },
+    { at: 0.0, mb: 42.8, source: "Deezer" },
+    { at: 0.5, mb: 51.3, source: "Qobuz" },
+    { at: 1.0, mb: 47.6, source: "Qobuz", reject: true },
+    { at: 1.5, mb: 39.2, source: "Deezer" },
+    { at: 2.0, mb: 55.1, source: "Qobuz" },
+    { at: 2.5, mb: 44.9, source: "Deezer" },
+    { at: 3.0, mb: 61.4, source: "Qobuz" },
+    { at: 3.5, mb: 38.7, source: "Deezer" },
+    { at: 4.0, mb: 49.5, source: "Qobuz" },
   ];
 
-  // Row-local cue sheet: seconds after that row's own start.
-  const R = {
-    found: 1.35,
-    dlStart: 1.85,
-    dlEnd: 5.6,
-    verify: 6.0,
-    done: 6.7,
-    fail: 2.9,
+  // Row-local cue sheets, in seconds after that row's own start. A rejected
+  // source costs the track about a second and a half of extra searching.
+  const PLAIN = { found: 1.35, dlStart: 1.85, dlEnd: 5.6, verify: 6.0, done: 6.7 };
+  const RETRY = {
+    lossy: 1.35,
+    rejected: 1.95,
+    found: 2.85,
+    dlStart: 3.35,
+    dlEnd: 7.0,
+    verify: 7.4,
+    done: 8.1,
   };
 
   const last = {};
@@ -306,63 +316,76 @@ if (plDemo) {
   const clamp01 = (n) => (n < 0 ? 0 : n > 1 ? 1 : n);
   const ramp = (t, from, to) => clamp01((t - from) / (to - from));
 
+  const cuesFor = (track) => (track.reject ? RETRY : PLAIN);
+
+  // Phase is worked out for all nine tracks, including the five with no row on
+  // the page, so the counter and the bar describe the whole album.
+  const phaseOf = (i, t) => {
+    const track = TRACKS[i];
+    const c = cuesFor(track);
+    const lt = t - T.groupIn - track.at;
+    if (lt >= c.done) return "done";
+    if (lt >= c.verify) return "verify";
+    if (lt >= c.dlStart) return "download";
+    if (lt >= c.found) return "found";
+    if (track.reject && lt >= c.rejected) return "rejected";
+    if (track.reject && lt >= c.lossy) return "lossy";
+    return "search";
+  };
+
   const renderRow = (row, i, t) => {
     const track = TRACKS[i];
-    const failing = track.mb === 0;
-    // Row-local clock. Negative means this track has not been reached yet.
-    const lt = t - T.groupIn - track.at;
+    const c = cuesFor(track);
+    const lt = t - T.groupIn - track.at; // negative until this track is reached
+    const phase = phaseOf(i, t);
 
     const rowIn = ramp(lt, 0, 0.4);
     setStyle(row, `o${i}`, "opacity", String(rowIn));
     setStyle(row, `y${i}`, "transform", `translateY(${((1 - rowIn) * 5).toFixed(2)}px)`);
 
-    const phase = failing
-      ? lt >= R.fail
-        ? "failed"
-        : "search"
-      : lt >= R.done
-        ? "done"
-        : lt >= R.verify
-          ? "verify"
-          : lt >= R.dlStart
-            ? "download"
-            : lt >= R.found
-              ? "found"
-              : "search";
-
-    const s = ramp(lt, R.dlStart, R.dlEnd);
+    const s = ramp(lt, c.dlStart, c.dlEnd);
     // Same decelerating curve as the single-track demo, so both read as the
-    // same app rather than two different fakes.
+    // same app rather than as two different fakes.
     const pct =
       phase === "download"
         ? clamp01(1 - Math.pow(1 - s, 1.75) + Math.sin(s * 11.3 + i) * 0.014 * (1 - s)) * 100
         : null;
     const doneMb = ((pct ?? 0) / 100) * track.mb;
 
+    const statusEl = row.querySelector(".ad-status");
     put(
-      row.querySelector(".ad-status"),
+      statusEl,
       `s${i}`,
       {
         search: "Working out what this is…",
+        lossy: "Best match is 320 kbps",
+        rejected: "Not lossless — looking for another source",
         found: `Found on ${track.source}`,
         download: `Downloading from ${track.source} · ${doneMb.toFixed(1)} of ${track.mb.toFixed(1)} MB`,
         verify: "Checking the file…",
         done: "Saved to your library",
-        failed: "No lossless copy found · skipped",
       }[phase],
     );
-    toggle(row.querySelector(".ad-status"), "amber", phase === "failed");
-    toggle(row, "washed", phase === "failed");
+    toggle(statusEl, "amber", phase === "lossy" || phase === "rejected");
+    toggle(row, "washed", phase === "lossy" || phase === "rejected");
 
-    // A failed track got as far as searching and no further, so Search stays
-    // ticked and nothing is marked current - there is no step in progress.
-    const stage = { search: 0, found: 1, download: 1, verify: 2, done: 4, failed: 1 }[phase];
+    // A track still hunting for a source has finished Search and is not yet
+    // downloading, so Download is the step in progress throughout.
+    const stage = {
+      search: 0,
+      lossy: 1,
+      rejected: 1,
+      found: 1,
+      download: 1,
+      verify: 2,
+      done: 4,
+    }[phase];
     [...row.querySelectorAll(".ad-step")].forEach((step, n) => {
       toggle(step, "done", n < stage);
-      toggle(step, "current", phase !== "failed" && n === stage);
+      toggle(step, "current", n === stage);
     });
 
-    const showPlatter = lt >= 0 && phase !== "done" && phase !== "failed";
+    const showPlatter = lt >= 0 && phase !== "done";
     setStyle(row.querySelector(".ad-platter"), `p${i}`, "opacity", showPlatter ? "1" : "0");
     toggle(row, "waiting", pct === null);
 
@@ -373,19 +396,10 @@ if (plDemo) {
     setStyle(row.querySelector(".ad-spindle"), `n${i}`, "opacity", pct === null ? "0.5" : "0");
     put(row.querySelector(".ad-pct"), `c${i}`, pct === null ? "" : String(Math.round(pct)));
 
-    const v = ramp(lt, R.done, R.done + 0.35);
-    setStyle(row.querySelector(".ad-verified"), `v${i}`, "opacity", String(v));
-    setStyle(
-      row.querySelector(".ad-verified"),
-      `vt${i}`,
-      "transform",
-      `translateY(${((1 - v) * 2).toFixed(2)}px)`,
-    );
-    const tag = row.querySelector(".ad-tag");
-    put(tag, `g${i}`, failing ? "320 kbps only" : "");
-    setStyle(tag, `go${i}`, "opacity", String(ramp(lt, R.fail, R.fail + 0.35)));
-
-    return phase;
+    const v = ramp(lt, c.done, c.done + 0.35);
+    const badge = row.querySelector(".ad-verified");
+    setStyle(badge, `v${i}`, "opacity", String(v));
+    setStyle(badge, `vt${i}`, "transform", `translateY(${((1 - v) * 2).toFixed(2)}px)`);
   };
 
   const render = (t) => {
@@ -401,25 +415,21 @@ if (plDemo) {
     const outP = 1 - ramp(t, T.fadeOut, T.fadeOut + 0.6);
     setStyle(groupSec, "grp", "opacity", String(inP * outP));
 
-    const phases = rows.map((row, i) => renderRow(row, i, t));
-    const saved = phases.filter((p) => p === "done").length;
-    const skipped = phases.filter((p) => p === "failed").length;
+    rows.forEach((row, i) => renderRow(row, i, t));
 
-    put(
-      summary,
-      "sum",
-      `${TRACKS.length} tracks · ${saved} lossless${skipped ? ` · ${skipped} skipped` : ""}`,
-    );
-    // The bar steps as tracks land, the way the app's own does, rather than
-    // gliding - a smooth bar would imply progress the app is not tracking.
+    const saved = TRACKS.filter((_, i) => phaseOf(i, t) === "done").length;
+    const queued = TRACKS.length - rows.length;
+    put(summary, "sum", `${TRACKS.length} tracks · ${saved} lossless`);
+    put(moreLine, "more", `+ ${queued} more below`);
+    // The bar steps as tracks land, the way the app's own does; the width
+    // transition in CSS is what smooths it between steps.
     setStyle(barFill, "bf", "width", `${((saved / TRACKS.length) * 100).toFixed(1)}%`);
-    setStyle(barBad, "bb", "width", `${((skipped / TRACKS.length) * 100).toFixed(1)}%`);
   };
 
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    // Reduced motion gets the finished playlist instead of the run: four saved,
-    // one flagged, which is the whole point of the sequence anyway.
-    render(T.groupIn + TRACKS[TRACKS.length - 1].at + R.done + 1);
+    // Reduced motion gets the finished album instead of the run: every track
+    // saved, which is where the sequence ends up anyway.
+    render(T.groupIn + TRACKS[TRACKS.length - 1].at + RETRY.done + 1);
   } else {
     let start = null;
     let running = false;

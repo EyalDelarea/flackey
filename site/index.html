@@ -162,14 +162,17 @@
             </div>
           </div>
           <p class="preview-caption">
-            Paste a YouTube link and Flackey finds the track, downloads it,
-            checks the audio is really lossless, and files it in your library.
+            Paste a track link from YouTube, YouTube Music, or Spotify and
+            Flackey finds it, downloads it, checks the audio is really
+            lossless, and files it in your library.
           </p>
-          <h3 class="preview-sub">Or paste a whole playlist.</h3>
-          <!-- The same live recreation, one link further on: a playlist queues
-               every track at once. The fourth row is deliberate - the honest
-               thing a batch shows that a single track cannot is what happens
-               when no lossless copy exists. -->
+          <h3 class="preview-sub">Or paste a whole album.</h3>
+          <!-- The same live recreation, one link further on: an album or
+               playlist link queues every track at once. Only the first four
+               rows are shown - the counter and the bar cover all nine, the way
+               a list scrolled to the top would. The third track is the
+               interesting one: the first source it finds is lossy, so it is
+               rejected and the search carries on. -->
           <div class="app-demo pl-demo" id="playlist-demo" aria-hidden="true">
             <div class="ad-toolbar">
               <div class="ad-pastebar">
@@ -182,17 +185,15 @@
             <div class="ad-body">
               <div class="ad-groupsec">
                 <div class="ad-grouphead">
-                  <h4>Friday warmup</h4>
+                  <h4>Shpongle – Tales of the Inexpressible</h4>
                   <span class="ad-summary"></span>
                 </div>
-                <div class="ad-groupbar">
-                  <i class="ad-groupbar-fill"></i><i class="ad-groupbar-bad"></i>
-                </div>
+                <div class="ad-groupbar"><i class="ad-groupbar-fill"></i></div>
                 <div class="ad-group">
                   <div class="ad-row">
                     <div class="ad-art"></div>
                     <div class="ad-text">
-                      <div class="ad-title">Bicep – Glue</div>
+                      <div class="ad-title">1. Dorset Perception</div>
                       <div class="ad-status"></div>
                     </div>
                     <div class="ad-stepcell">
@@ -218,13 +219,13 @@
                       </div>
                       <span class="ad-verified"
                         ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
-                      ><span class="ad-tag"></span>
+                      >
                     </div>
                   </div>
                   <div class="ad-row">
                     <div class="ad-art"></div>
                     <div class="ad-text">
-                      <div class="ad-title">Overmono – So U Kno</div>
+                      <div class="ad-title">2. Star Shpongled Banner</div>
                       <div class="ad-status"></div>
                     </div>
                     <div class="ad-stepcell">
@@ -250,13 +251,13 @@
                       </div>
                       <span class="ad-verified"
                         ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
-                      ><span class="ad-tag"></span>
+                      >
                     </div>
                   </div>
                   <div class="ad-row">
                     <div class="ad-art"></div>
                     <div class="ad-text">
-                      <div class="ad-title">Four Tet – Baby</div>
+                      <div class="ad-title">3. A New Way To Say ‘Hooray’</div>
                       <div class="ad-status"></div>
                     </div>
                     <div class="ad-stepcell">
@@ -282,13 +283,13 @@
                       </div>
                       <span class="ad-verified"
                         ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
-                      ><span class="ad-tag"></span>
+                      >
                     </div>
                   </div>
                   <div class="ad-row">
                     <div class="ad-art"></div>
                     <div class="ad-text">
-                      <div class="ad-title">Skee Mask – Rev8617</div>
+                      <div class="ad-title">4. Room 23</div>
                       <div class="ad-status"></div>
                     </div>
                     <div class="ad-stepcell">
@@ -314,49 +315,19 @@
                       </div>
                       <span class="ad-verified"
                         ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
-                      ><span class="ad-tag"></span>
+                      >
                     </div>
                   </div>
-                  <div class="ad-row">
-                    <div class="ad-art"></div>
-                    <div class="ad-text">
-                      <div class="ad-title">Floating Points – Vocoder</div>
-                      <div class="ad-status"></div>
-                    </div>
-                    <div class="ad-stepcell">
-                      <ul class="ad-steps">
-                        <li class="ad-step"><i class="ad-mark"></i>Search</li>
-                        <li class="ad-step"><i class="ad-mark"></i>Download</li>
-                        <li class="ad-step"><i class="ad-mark"></i>Verify</li>
-                        <li class="ad-step"><i class="ad-mark"></i>Done</li>
-                      </ul>
-                    </div>
-                    <div class="ad-right">
-                      <div class="ad-platter">
-                        <svg viewBox="0 0 44 44" width="44" height="44">
-                          <circle class="ad-vinyl" cx="22" cy="22" r="17.8" />
-                          <circle class="ad-groove" cx="22" cy="22" r="14.4" fill="none" stroke-width="1" />
-                          <g transform="rotate(-90 22 22)">
-                            <circle class="ad-track" cx="22" cy="22" r="19" fill="none" stroke-width="3.2" />
-                            <circle class="ad-arc" cx="22" cy="22" r="19" fill="none" stroke-width="3.2" stroke-linecap="round" />
-                          </g>
-                          <circle class="ad-spindle" cx="22" cy="22" r="1.6" />
-                          <text class="ad-pct" x="22" y="22" dy=".355em" text-anchor="middle"></text>
-                        </svg>
-                      </div>
-                      <span class="ad-verified"
-                        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
-                      ><span class="ad-tag"></span>
-                    </div>
-                  </div>
+                  <p class="ad-more"></p>
                 </div>
               </div>
             </div>
           </div>
           <p class="preview-caption">
-            A playlist link queues every track at once. Anything Flackey can
-            only find as a lossy file is flagged and left out, rather than
-            quietly saved as though it were lossless.
+            An album or playlist link from YouTube Music or Spotify queues every
+            track at once. When the first source Flackey finds is lossy, it says
+            so and keeps looking, rather than quietly saving a 320 kbps file as
+            though it were lossless.
           </p>
         </div>
       </section>

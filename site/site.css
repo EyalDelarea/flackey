@@ -280,7 +280,6 @@ p {
   --ad-accent: #007aff;
   --ad-green: #34c759;
   --ad-orange: #ff9500;
-  --ad-red: #ff3b30;
   --ad-orange-wash: rgba(255, 149, 0, 0.08);
   --ad-well-border: rgba(0, 0, 0, 0.16);
   --ad-vinyl: #3a3a3c;
@@ -653,21 +652,25 @@ p {
   background: rgba(0, 0, 0, 0.08);
   overflow: hidden;
 }
-.ad-groupbar-fill,
-.ad-groupbar-bad {
+.ad-groupbar-fill {
   position: absolute;
+  left: 0;
   top: 0;
   bottom: 0;
   border-radius: 2px;
-}
-.ad-groupbar-fill {
-  left: 0;
   background: var(--ad-green);
+  /* The width is written per frame but only changes when a track lands, so the
+     transition is what carries the bar between steps. */
+  transition: width 240ms ease;
 }
-.ad-groupbar-bad {
-  right: 0;
-  background: var(--ad-red);
-  opacity: 0.7;
+/* The app's list scrolls; the demo shows the top of it and says so, rather than
+   implying the album is four tracks long. */
+.ad-more {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 0.5px solid var(--ad-sep);
+  font-size: 11px;
+  color: var(--ad-tertiary);
 }
 .pl-demo .ad-row + .ad-row {
   border-top: 0.5px solid var(--ad-sep);
@@ -680,15 +683,8 @@ p {
 .ad-status.amber {
   color: var(--ad-orange);
 }
-.ad-tag {
-  font-size: 11px;
-  color: var(--ad-tertiary);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 320ms ease;
-}
-/* Five sleeves with no artwork would read as five missing images, so each row
-   gets its own colourway instead - placeholder, plainly. */
+/* Sleeves with no artwork would read as missing images, so each row gets its
+   own colourway instead - placeholder, plainly. */
 .pl-demo .ad-row:nth-child(2) .ad-art {
   background: linear-gradient(135deg, #8a5a47, #2e1d16);
 }
@@ -697,9 +693,6 @@ p {
 }
 .pl-demo .ad-row:nth-child(4) .ad-art {
   background: linear-gradient(135deg, #7a6a45, #262016);
-}
-.pl-demo .ad-row:nth-child(5) .ad-art {
-  background: linear-gradient(135deg, #6b4a7a, #221629);
 }
 /* The app narrows its own row below 980px by dropping the stepper onto a second
    line under the title (see .row-main in app.css). The demo does the same at the
@@ -749,12 +742,6 @@ p {
    already says which stage the track is at, so the stepper goes instead. */
 @container (max-width: 380px) {
   .ad-stepcell {
-    display: none;
-  }
-  /* The amber status line already reads "No lossless copy found - skipped", so
-     the bitrate tag is the one thing here that can go without losing meaning.
-     It is wider than the column and was overhanging the title. */
-  .ad-tag {
     display: none;
   }
   .ad-grouphead {
