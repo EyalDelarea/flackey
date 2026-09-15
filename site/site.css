@@ -280,6 +280,7 @@ p {
   --ad-accent: #007aff;
   --ad-green: #34c759;
   --ad-orange: #ff9500;
+  --ad-orange-wash: rgba(255, 149, 0, 0.08);
   --ad-well-border: rgba(0, 0, 0, 0.16);
   --ad-vinyl: #3a3a3c;
   --ad-groove: rgba(255, 255, 255, 0.18);
@@ -382,8 +383,12 @@ p {
   border-radius: 10px;
   overflow: hidden;
 }
+/* Mirrors .row-main in the app: art, text, stepper and platter each own a
+   column, so the stepper stays put instead of shifting as the status text
+   under it grows and shrinks. */
 .ad-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 36px minmax(180px, 1fr) minmax(200px, 300px) 112px;
   align-items: center;
   gap: 12px;
   min-height: 54px;
@@ -407,11 +412,17 @@ p {
   transition: opacity 420ms ease;
 }
 .ad-text {
-  flex: 1;
+  grid-column: 2;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+.ad-stepcell {
+  grid-column: 3;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
 }
 .ad-title {
   font-size: 13px;
@@ -430,9 +441,11 @@ p {
 .ad-steps {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   list-style: none;
-  margin: 6px 0 0;
+  width: 100%;
+  margin: 0;
   padding: 0;
 }
 .ad-step {
@@ -530,9 +543,11 @@ p {
   stroke-linejoin: round;
 }
 .ad-right {
-  flex: none;
+  grid-column: 4;
+  min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 .ad-platter {
@@ -567,7 +582,8 @@ p {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.app-demo.waiting .ad-arc {
+.app-demo.waiting .ad-arc,
+.pl-demo .ad-row.waiting .ad-arc {
   stroke: var(--ad-tertiary);
   transform-box: view-box;
   transform-origin: 50% 50%;
@@ -598,13 +614,131 @@ p {
   color: var(--muted);
   max-width: 54ch;
 }
-/* The app's toolbar and row are laid out for a desktop window; below that the
-   demo would either clip or shrink its type past legibility, so it scales as a
-   whole instead - same layout, smaller. */
-@container (max-width: 560px) {
-  .ad-toolbar,
-  .ad-body {
-    zoom: 0.78;
+/* ---- Playlist demo ----
+   The group header, progress bar and stacked rows mirror .group-section in the
+   app: one bar per playlist, green for saved and a red tail for anything that
+   could not be had losslessly. */
+.preview-card h3.preview-sub {
+  margin: clamp(34px, 5vw, 52px) 0 clamp(18px, 2.6vw, 26px);
+}
+.ad-groupsec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ad-grouphead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px;
+}
+.ad-grouphead h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ad-text);
+}
+.ad-summary {
+  font-size: 12px;
+  color: var(--ad-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.ad-groupbar {
+  position: relative;
+  height: 3px;
+  margin: 0 2px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+.ad-groupbar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--ad-green);
+  /* The width is written per frame but only changes when a track lands, so the
+     transition is what carries the bar between steps. */
+  transition: width 240ms ease;
+}
+/* The app's list scrolls; the demo shows the top of it and says so, rather than
+   implying the album is four tracks long. */
+.ad-more {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 0.5px solid var(--ad-sep);
+  font-size: 11px;
+  color: var(--ad-tertiary);
+}
+.pl-demo .ad-row + .ad-row {
+  border-top: 0.5px solid var(--ad-sep);
+}
+/* The app washes a row it had to flag, so the list reads at a glance without
+   anyone having to parse five status lines. */
+.pl-demo .ad-row.washed {
+  background: var(--ad-orange-wash);
+}
+.ad-status.amber {
+  color: var(--ad-orange);
+}
+/* The app narrows its own row below 980px by dropping the stepper onto a second
+   line under the title (see .row-main in app.css). The demo does the same at the
+   width where its four columns stop fitting, so a phone shows the layout the app
+   would actually use rather than a shrunken copy of the desktop one. */
+@container (max-width: 700px) {
+  .ad-row {
+    grid-template-columns: 36px minmax(0, 1fr) 52px;
+    row-gap: 4px;
+  }
+  /* Rows are pinned rather than auto-placed: an item spanning 2/4 moves the
+     auto-placement cursor past column 3, which would push .ad-right onto a
+     third row instead of leaving it beside the title. */
+  .ad-art {
+    grid-area: 1 / 1;
+  }
+  .ad-text {
+    grid-area: 1 / 2;
+  }
+  .ad-right {
+    grid-area: 1 / 3;
+  }
+  .ad-stepcell {
+    grid-area: 2 / 2 / 3 / 4;
+    justify-content: flex-start;
+  }
+  .ad-steps {
+    justify-content: flex-start;
+  }
+  /* The platter and the FLAC badge never both mean anything at once - one is
+     the transfer, the other is the result - so at this width they share a cell
+     and hand over by crossfade. Side by side they need 112px, which they do not
+     get here, and the platter was overflowing the column onto the title. */
+  .ad-right {
+    display: grid;
+    grid-template-areas: "slot";
+    justify-content: end;
+    align-items: center;
+  }
+  .ad-right > * {
+    grid-area: slot;
+  }
+}
+/* A phone-width card cannot give the stepper the ~240px it needs, and wrapping
+   it strands "Done" on a line of its own behind a leading connector, which
+   reads as breakage rather than as a step. The status line under the title
+   already says which stage the track is at, so the stepper goes instead. */
+@container (max-width: 380px) {
+  .ad-stepcell {
+    display: none;
+  }
+  .ad-grouphead {
+    flex-wrap: wrap;
+    gap: 1px 10px;
+  }
+  .ad-grouphead h4 {
+    width: 100%;
   }
 }
 .details {
@@ -1211,22 +1345,30 @@ footer > a:last-child {
   }
   .header {
     height: auto;
-    min-height: 110px;
+    min-height: 0;
     flex-wrap: wrap;
-    gap: 10px;
-    padding-top: 12px;
-    padding-bottom: 14px;
+    gap: 0;
+    padding-top: 14px;
+    padding-bottom: 6px;
+  }
+  /* The hero's "Download for Mac" sits in the same first screen on a phone,
+     so the header's copy is dropped rather than squeezed next to the brand.
+     That hands the whole second row to the nav, which needs it. */
+  .header .compact {
+    display: none;
   }
   .header nav {
     order: 3;
     width: 100%;
     margin: 0;
     justify-content: space-between;
-    font-size: 13px;
-    gap: 12px;
+    font-size: 14px;
+    gap: 4px;
   }
-  .compact {
-    margin-left: auto;
+  /* 13px text on a 15px-tall row was the actual mobile breakage: the links
+     were unreadable and untappable. Padding brings each one to ~40px. */
+  .header nav a {
+    padding: 11px 2px;
   }
   .brand {
     font-size: 27px;
