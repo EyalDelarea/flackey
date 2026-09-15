@@ -55,4 +55,4 @@ codesign --force --deep --sign - "$BUILD/dist/Flackey.app"
 
 echo
 echo "Built $BUILD/dist/Flackey.app"
-echo "To send it:  ditto -c -k --keepParent '$BUILD/dist/Flackey.app' '$BUILD/Flackey.zip'"
+echo "To send it: copy Flackey.app and packaging/README.txt into a folder, then zip that folder."

@@ -84,7 +84,10 @@ jobs:
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
       - name: Zip
         run: |
-          ditto -c -k --keepParent packaging/build/dist/Flackey.app packaging/build/Flackey.zip
+          mkdir -p packaging/build/release
+          ditto packaging/build/dist/Flackey.app packaging/build/release/Flackey.app
+          cp packaging/README.txt packaging/build/release/README.txt
+          ditto -c -k --sequesterRsrc packaging/build/release packaging/build/Flackey.zip
           cd packaging/build && shasum -a 256 Flackey.zip > Flackey.zip.sha256 && cat Flackey.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
