@@ -274,7 +274,7 @@ if (plDemo) {
   };
 
   // The album, in order. `at` is when the track's row starts relative to
-  // groupIn; only the first four have a row on the page, but all nine feed the
+  // groupIn; only the first three have a row on the page, but all nine feed the
   // counter and the bar. `reject` marks the one whose first source is lossy.
   const TRACKS = [
     { at: 0.0, mb: 42.8, source: "Deezer" },
