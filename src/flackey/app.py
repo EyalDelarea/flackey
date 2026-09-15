@@ -233,7 +233,14 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     server = uvicorn.Server(uvicorn.Config(api, host=settings.web_host, port=settings.web_port,
                                            log_level="warning", log_config=None))
 
-    url = f"http://localhost:{settings.web_port}"
+    # Must match `settings.web_host` exactly, not just resolve to the same machine: "localhost" can
+    # resolve to the IPv6 loopback first, and if anything else is listening on this port over IPv6 (a
+    # stray dev server, say), the window silently loads that instead of failing to connect. The
+    # exception is a wildcard bind (Docker's web_host="0.0.0.0"): nothing there is directly connectable,
+    # so the desktop-window/browser-opening and log-message cases both want "localhost" instead --
+    # and open_browser is never true in that mode anyway (`crate start --no-browser`).
+    display_host = "localhost" if settings.web_host in ("0.0.0.0", "::") else settings.web_host
+    url = f"http://{display_host}:{settings.web_port}"
 
     worker_runs = status["telegram_authorized"] or not settings.source_enabled
     log.info("flackey started%s", ", worker running" if worker_runs else "")

@@ -9,6 +9,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from flackey import __version__
 from flackey.config import Settings
 from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
@@ -70,7 +71,7 @@ def client_with_worker(tmp_path: Path):
 def test_health(client):
     c, _, _ = client
     from flackey.fingerprint import fpcalc_available
-    assert c.get("/api/health").json() == {"ok": True, "version": "0.1.0", "telegram_authorized": True,
+    assert c.get("/api/health").json() == {"ok": True, "version": __version__, "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
                                           "telegram_configured": True, "source_enabled": True,
                                           "sharing": None,
@@ -91,13 +92,13 @@ def test_health_reflects_shared_status(tmp_path):
 def test_update_reports_new_installer(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
-        "draft": False, "prerelease": True, "tag_name": "v0.1.1",
+        "draft": False, "prerelease": True, "tag_name": "v9.9.9",
         "published_at": "2026-09-15T10:00:00Z",
         "assets": [{"name": "Flackey.pkg", "size": 12345678,
                     "browser_download_url": "https://example.test/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
-        "ok": True, "current": "0.1.0", "available": True, "latest": "0.1.1",
+        "ok": True, "current": __version__, "available": True, "latest": "9.9.9",
         "url": "https://example.test/Flackey.pkg", "size": 12345678,
         "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
         "published_date": "2026-09-15", "prerelease": True,
@@ -373,7 +374,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
     c, _, settings = client
     s = c.get("/api/settings").json()
     assert s == {"library_root": str(settings.library_root), "data_dir": str(settings.data_dir),
-                 "version": "0.1.0", "telegram_configured": True,
+                 "version": __version__, "telegram_configured": True,
                  "log_path": str(settings.data_dir / "flackey.log"),
                  "soulseek_enabled": False, "slskd_url": settings.slskd_url,
                  "slskd_downloads_dir": str(settings.slskd_downloads),

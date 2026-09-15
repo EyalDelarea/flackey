@@ -242,3 +242,44 @@ def test_on_authorized_turns_the_source_back_on_in_status_and_on_disk(tmp_path):
     assert published == [{"telegram_authorized": True, "source_enabled": True}]
     assert settings.source_enabled is True
     assert json.loads(settings.settings_path.read_text())["source_enabled"] is True
+
+
+async def test_desktop_window_url_uses_the_exact_host_the_server_bound_to(tmp_path):
+    """"localhost" can resolve to the IPv6 loopback before 127.0.0.1 -- if anything else on the machine
+    is listening on the same port over IPv6, a webview pointed at "localhost" silently loads that instead
+    of Flackey. The URL handed to the window (and to `webbrowser.open`) must name the literal host the
+    server bound to, `settings.web_host`, not a hostname that can resolve to a different address."""
+    from flackey.app import ServerHandle, run
+    from flackey.config import Settings
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        web_host="127.0.0.1", web_port=0, source_enabled=False)
+    handle = ServerHandle()
+    task = asyncio.create_task(run(settings, open_browser=False, handle=handle))
+    await asyncio.wait_for(asyncio.to_thread(handle.started.wait, 10.0), 15.0)
+    try:
+        assert handle.error is None
+        assert handle.url is not None and handle.url.startswith(f"http://{settings.web_host}:")
+        assert "localhost" not in handle.url
+    finally:
+        handle.stop()
+        await asyncio.wait_for(task, 5.0)
+
+
+async def test_desktop_window_url_falls_back_to_localhost_for_a_wildcard_bind(tmp_path):
+    """Docker binds web_host="0.0.0.0"; nothing is directly connectable at that address, so the URL
+    handed to on_started (and logged) should still say "localhost", not the wildcard itself."""
+    from flackey.app import ServerHandle, run
+    from flackey.config import Settings
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        web_host="0.0.0.0", web_port=0, source_enabled=False)
+    handle = ServerHandle()
+    task = asyncio.create_task(run(settings, open_browser=False, handle=handle))
+    await asyncio.wait_for(asyncio.to_thread(handle.started.wait, 10.0), 15.0)
+    try:
+        assert handle.error is None
+        assert handle.url is not None and handle.url.startswith("http://localhost:")
+    finally:
+        handle.stop()
+        await asyncio.wait_for(task, 5.0)
