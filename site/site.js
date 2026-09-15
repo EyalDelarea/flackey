@@ -76,24 +76,3 @@ preview?.addEventListener("click", (event) => {
   )
     preview.close();
 });
-
-const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-const finePointer = window.matchMedia("(pointer: fine)");
-const hero = document.querySelector(".hero");
-const vinyl = document.querySelector(".vinyl");
-hero?.addEventListener("pointermove", (event) => {
-  if (motion.matches || !finePointer.matches || !vinyl) return;
-  const bounds = hero.getBoundingClientRect();
-  vinyl.style.setProperty(
-    "--ry",
-    `${((event.clientX - bounds.left) / bounds.width - 0.5) * 5}deg`,
-  );
-  vinyl.style.setProperty(
-    "--rx",
-    `${((event.clientY - bounds.top) / bounds.height - 0.5) * -3}deg`,
-  );
-});
-hero?.addEventListener("pointerleave", () => {
-  vinyl?.style.setProperty("--rx", "0deg");
-  vinyl?.style.setProperty("--ry", "0deg");
-});

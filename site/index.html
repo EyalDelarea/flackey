@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
-    <title>Flackey — From link to library.</title>
+    <title>Flackey — From link to FLAC.</title>
     <meta
       name="description"
-      content="Your music. Beautifully organised. Flackey finds, verifies and files tracks into your DJ library on Mac."
+      content="Paste a YouTube or YouTube Music link. Flackey finds and verifies the best-quality download available, with lossless FLAC whenever possible."
     />
-    <link rel="icon" href="img/icon.png" />
-    <link rel="preload" as="image" href="img/silver-vinyl.png" />
+    <link rel="icon" href="img/logo.svg" type="image/svg+xml" />
+    <link rel="preload" as="image" href="img/silver-vinyl-branded.png" />
     <link rel="stylesheet" href="site.css" />
     <script src="site.js" defer></script>
   </head>
@@ -18,13 +18,14 @@
     <a class="skip-link" href="#overview">Skip to content</a>
     <header class="header wrap">
       <a class="brand" href="#overview" aria-label="Flackey home"
-        ><img src="img/icon.png" width="56" height="56" alt="" /><span
+        ><img src="img/logo.svg" width="56" height="56" alt="" /><span
           >flackey</span
         ></a
       >
       <nav aria-label="Main navigation">
-        <a href="#overview">Overview</a><a href="#preview">Preview</a
-        ><a href="#how-it-works">How does it work</a><a href="#about">About</a>
+        <a href="#overview">Overview</a><a href="#how-it-works">How it works</a
+        ><a href="#verification">Verification</a><a href="#about">About</a
+        ><a href="#help">Help</a>
       </nav>
       <a class="button compact" href="#download">Download for Mac</a>
     </header>
@@ -32,8 +33,8 @@
       <section class="hero" id="overview" aria-labelledby="title">
         <div class="hero-inner wrap">
           <div class="intro">
-            <h1 id="title">From link<br />to library.</h1>
-            <p class="lede">Your music. Beautifully organised.</p>
+            <h1 id="title">From link<br />to FLAC.</h1>
+            <p class="lede">High-quality tracks. Ready to download.</p>
             <div class="hero-actions">
               <a class="button" href="#download">Download for Mac</a
               ><a class="watch" href="#preview"
@@ -43,15 +44,50 @@
             </div>
           </div>
           <div class="art-stage">
-            <div class="art-float">
-              <img
-                class="vinyl"
-                src="img/silver-vinyl.png"
-                width="1536"
-                height="1024"
-                alt="A silver vinyl record emerging from a translucent Flackey sleeve"
-                fetchpriority="high"
-              />
+            <div class="art-static">
+              <div class="vinyl">
+                <img
+                  class="vinyl-photo"
+                  src="img/silver-vinyl-branded.png"
+                  width="1536"
+                  height="1024"
+                  alt="A silver vinyl record emerging from a translucent Flackey sleeve"
+                  fetchpriority="high"
+                />
+                <!-- Rotate a complete circular record in the photo's perspective.
+                     The sleeve occludes the moving layer and remains stationary. -->
+                <svg
+                  class="vinyl-motion"
+                  viewBox="0 0 1536 1024"
+                  aria-hidden="true"
+                >
+                  <defs>
+                    <clipPath id="record-exposed">
+                      <path d="M0 0H638L647 82L730 850H0Z" />
+                    </clipPath>
+                    <clipPath id="record-edge">
+                      <circle r="378" />
+                    </clipPath>
+                  </defs>
+                  <g clip-path="url(#record-exposed)">
+                    <g
+                      transform="translate(542 478) matrix(.923 0 .177 .96 0 0)"
+                    >
+                      <g clip-path="url(#record-edge)">
+                        <g class="vinyl-disc-spin">
+                          <image
+                            href="img/silver-record-spin.png"
+                            x="-398.4"
+                            y="-398.4"
+                            width="796.8"
+                            height="796.8"
+                          />
+                        </g>
+                      </g>
+                    </g>
+                  </g>
+                </svg>
+              </div>
             </div>
           </div>
         </div>
@@ -82,7 +118,7 @@
       >
         <div class="section-heading">
           <p class="eyebrow">How does it work</p>
-          <h2 id="how-title">A link. A track.<br />A place in your library.</h2>
+          <h2 id="how-title">Paste a link.<br />Get the best-quality track.</h2>
         </div>
         <ol class="steps">
           <li>
@@ -95,19 +131,69 @@
           <li>
             <span>02</span>
             <div>
-              <h3>Find the recording.</h3>
+              <h3>Find the best copy.</h3>
               <p>
-                Flackey searches your connected sources and verifies the audio.
+                Flackey searches your connected sources for the right recording.
               </p>
             </div>
           </li>
           <li>
             <span>03</span>
             <div>
-              <h3>Keep it organised.</h3>
+              <h3>Download with confidence.</h3>
               <p>
-                Tracks are tagged and filed by artist, with playlists ready for
-                Rekordbox.
+                The audio is verified before you get it, with lossless FLAC
+                whenever available.
+              </p>
+              <a class="step-link" href="#verification"
+                >See how verification works <span aria-hidden="true">↓</span></a
+              >
+            </div>
+          </li>
+        </ol>
+      </section>
+      <section
+        class="verification wrap"
+        id="verification"
+        aria-labelledby="verification-title"
+      >
+        <div class="section-heading">
+          <p class="eyebrow">How we verify audio</p>
+          <h2 id="verification-title">A FLAC label<br />isn’t proof.</h2>
+          <p class="section-intro">
+            Flackey looks inside every file before accepting it. A renamed or
+            upscaled track doesn’t pass just because its filename says FLAC.
+          </p>
+        </div>
+        <ol class="checks">
+          <li>
+            <span>01</span>
+            <div>
+              <h3>Confirm the recording.</h3>
+              <p>
+                When a Deezer preview is available, Chromaprint compares its
+                audio fingerprint with the downloaded file to make sure it’s the
+                same track and version.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span>02</span>
+            <div>
+              <h3>Inspect the spectrum.</h3>
+              <p>
+                Flackey analyzes the frequencies in the audio to spot a lossy
+                file disguised inside a lossless container.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span>03</span>
+            <div>
+              <h3>Enforce the quality floor.</h3>
+              <p>
+                Fake lossless files and MP3s below 320 kbps are rejected. You
+                get the best verified source Flackey can find.
               </p>
             </div>
           </li>
@@ -116,16 +202,63 @@
       <section class="about wrap" id="about" aria-labelledby="about-title">
         <p class="eyebrow">About Flackey</p>
         <h2 id="about-title">
-          Made for the collection<br />you keep building.
+          We didn’t reinvent music sharing.<br />We made it easier.
         </h2>
         <p>
-          A personal DJ library builder for Mac. Find music through Telegram or
-          Soulseek, keep the best verified copy available, and share your DJ
-          library back on Soulseek.
+          Flackey is powered by
+          <a href="https://www.slsknet.org/" target="_blank" rel="noreferrer"
+            >Soulseek</a
+          >, an independent, community-powered network where music lovers share
+          rare and high-quality recordings directly with one another. Flackey
+          takes part in that exchange by sharing your downloaded tracks back
+          with the network. When a lossless copy isn’t available, it falls back
+          to a verified 320 kbps MP3 from Deezer.
+        </p>
+        <p>
+          We didn’t invent the wheel—we’re making these great sources more
+          accessible. Flackey will grow around what its users actually ask for.
         </p>
         <a class="text-link" href="https://github.com/EyalDelarea/flackey"
           >Explore the project <span aria-hidden="true">↗</span></a
         >
+      </section>
+      <section class="help wrap" id="help" aria-labelledby="help-title">
+        <div class="section-heading">
+          <p class="eyebrow">Help shape Flackey</p>
+          <h2 id="help-title">
+            Found a problem?<br />Tell us in plain language.
+          </h2>
+          <p class="section-intro">
+            You don’t need to be a developer. Choose what you want to share and
+            GitHub will guide you through a short form.
+          </p>
+        </div>
+        <div class="help-actions">
+          <a
+            href="https://github.com/EyalDelarea/flackey/issues/new?template=bug-report.yml"
+          >
+            <span
+              ><strong>Report a bug</strong>Something didn’t work as
+              expected.</span
+            >
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a
+            href="https://github.com/EyalDelarea/flackey/issues/new?template=question.yml"
+          >
+            <span><strong>Ask a question</strong>Get help using Flackey.</span>
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a
+            href="https://github.com/EyalDelarea/flackey/issues/new?template=feature-request.yml"
+          >
+            <span
+              ><strong>Request a feature</strong>Tell us what would make Flackey
+              better.</span
+            >
+            <span aria-hidden="true">↗</span>
+          </a>
+        </div>
       </section>
       <section
         class="download-section wrap"
@@ -133,8 +266,10 @@
         aria-labelledby="download-title"
       >
         <div>
-          <img src="img/icon.png" width="76" height="76" alt="" />
-          <h2 id="download-title">Make room for more music.</h2>
+          <img src="img/logo.svg" width="76" height="76" alt="" />
+          <h2 id="download-title">
+            Get the best quality available. Share it back.
+          </h2>
           <p>Apple Silicon Mac · macOS 12 or newer · Beta</p>
           <a class="button unavailable" id="download-link" aria-disabled="true"
             >Download coming soon</a

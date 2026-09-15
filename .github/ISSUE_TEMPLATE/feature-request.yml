@@ -1,0 +1,27 @@
+name: Request a feature
+description: Suggest a way to make Flackey better.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Flackey grows around real user needs. Tell us about the outcome you want, even if you are not sure how it should work.
+  - type: textarea
+    id: need
+    attributes:
+      label: What would you like Flackey to do?
+      placeholder: It would help me if Flackey could…
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why would this be useful?
+      description: Tell us about the problem this would solve for you.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Do you have an example?
+      description: A link, screenshot, or description is welcome, but optional.

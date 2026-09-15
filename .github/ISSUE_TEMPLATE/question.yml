@@ -1,0 +1,25 @@
+name: Ask a question
+description: Get help using Flackey.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: Ask in your own words. You do not need to know technical terms.
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like help with?
+      placeholder: I’m trying to…
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried so far?
+      description: Optional, but it can help us answer faster.
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else we should know?
+      description: Add a screenshot if it helps. Please remove private information before uploading.

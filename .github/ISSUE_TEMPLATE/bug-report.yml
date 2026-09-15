@@ -1,0 +1,43 @@
+name: Report a bug
+description: Tell us about something that did not work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve Flackey. No technical knowledge is required—just tell us what happened.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw and what you expected instead.
+      placeholder: I pasted a link, and then…
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we reproduce it?
+      description: List the steps you took before the problem appeared.
+      placeholder: "1. Open Flackey\n2. Paste…\n3. Click…"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Flackey version
+      description: If you know it, copy the version shown in Flackey.
+  - type: dropdown
+    id: source
+    attributes:
+      label: Which source were you using?
+      options:
+        - Soulseek
+        - Deezer
+        - Both
+        - I’m not sure
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else?
+      description: Screenshots and error messages are helpful, but optional. Please remove private information before uploading.
