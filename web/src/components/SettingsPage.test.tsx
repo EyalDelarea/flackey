@@ -17,6 +17,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: true, configured: true, phone_masked: '+31 6 •••• ••42' })
   vi.spyOn(api, 'pickFolderAvailable').mockResolvedValue({ available: true })
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', available: false, latest: '0.1.0',
+    url: 'https://example.test/Flackey.pkg', size: 123, size_label: '123 B', published_at: null,
+    published_date: null, prerelease: true })
   mockRefresh.mockResolvedValue(undefined)
 })
 
@@ -34,6 +37,22 @@ it('shows the four cards and saves a new folder', async () => {
   expect(mockSetSettings).toHaveBeenCalledWith(result)
   expect(screen.queryByDisplayValue('/tmp/new')).not.toBeInTheDocument()
   expect(screen.getByText('Change')).toBeInTheDocument()
+})
+
+it('shows an available app update', async () => {
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', available: true, latest: '0.1.1',
+    url: 'https://example.test/Flackey.pkg', size: 12345678, size_label: '12.3 MB',
+    published_at: '2026-09-15T10:00:00Z', published_date: '2026-09-15', prerelease: true })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/Version 0.1.1 is available/)).toBeInTheDocument())
+  fireEvent.click(screen.getByText('Download update'))
+  expect(open).toHaveBeenCalledWith('https://example.test/Flackey.pkg', '_blank', 'noopener,noreferrer')
+})
+
+it('says when the app is up to date', async () => {
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Up to date.')).toBeInTheDocument())
 })
 
 it('shows error message when saveSettings fails with ApiError', async () => {

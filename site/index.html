@@ -272,28 +272,22 @@
           </h2>
           <p>Apple Silicon Mac · macOS 12 or newer · Beta</p>
           <a class="button unavailable" id="download-link" aria-disabled="true"
-            >Download coming soon</a
+            >Installer coming soon</a
           >
           <p class="release" id="release-line">Checking for a release…</p>
         </div>
         <details class="install">
-          <summary>Installation instructions</summary>
+          <summary>Installing Flackey</summary>
           <ol>
-            <li>Unzip <strong>Flackey.zip</strong>.</li>
-            <li>
-              Run this in Terminal:
-              <div class="command">
-                <code id="xattr-command"
-                  >xattr -dr com.apple.quarantine ~/Downloads/Flackey.app</code
-                ><button id="copy-command" type="button">Copy</button>
-              </div>
-              <p>
-                The app is not signed with an Apple Developer certificate yet.
-                This clears the download flag for the app you chose to install.
-              </p>
-            </li>
+            <li>Download and open <strong>Flackey.pkg</strong>.</li>
+            <li>Follow the macOS Installer steps. Flackey is placed in Applications.</li>
             <li>Open Flackey and connect Telegram, Soulseek, or both.</li>
           </ol>
+          <p>
+            Beta builds are not notarized yet. If macOS says the installer is
+            from an unidentified developer, control-click it, choose Open, and
+            confirm that you want to continue.
+          </p>
         </details>
       </section>
     </main>

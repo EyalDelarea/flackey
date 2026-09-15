@@ -63,6 +63,9 @@ export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 
   username: string | null; error: string | null }
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
+export interface UpdateStatus { ok:boolean; current:string; available:boolean; latest:string|null; url:string|null;
+  size:number|null; size_label:string|null; published_at:string|null; published_date:string|null; prerelease:boolean;
+  error?:string }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -99,6 +102,7 @@ export const api = {
   playlists: () => call<Playlist[]>('/api/playlists'),
   stats: () => call<Stats>('/api/stats'),
   settings: () => call<AppSettings>('/api/settings'),
+  update: () => call<UpdateStatus>('/api/update'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

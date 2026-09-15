@@ -1,6 +1,6 @@
 # Every push and pull request: the four checks the README lists for development, plus a type-checked
-# build of the web UI. On a push to main (or a version tag) the green checks gate a macOS build of the
-# app; on a version tag that build is published as a GitHub Release.
+# build of the web UI. On a push to main (or a version tag) the green checks gate a macOS installer
+# build; on a version tag that installer is published as a GitHub Release.
 name: checks
 
 on:
@@ -52,7 +52,7 @@ jobs:
         run: npm --prefix web run build
 
   mac:
-    name: Flackey.app (Apple Silicon)
+    name: Flackey installer (Apple Silicon)
     needs: [python, web]
     if: github.event_name == 'push'
     runs-on: macos-14
@@ -82,19 +82,16 @@ jobs:
         run: packaging/build_app.sh
       - name: Smoke-launch
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
-      - name: Zip
+      - name: Installer
         run: |
-          mkdir -p packaging/build/release
-          ditto packaging/build/dist/Flackey.app packaging/build/release/Flackey.app
-          cp packaging/README.txt packaging/build/release/README.txt
-          ditto -c -k --sequesterRsrc packaging/build/release packaging/build/Flackey.zip
-          cd packaging/build && shasum -a 256 Flackey.zip > Flackey.zip.sha256 && cat Flackey.zip.sha256
+          packaging/build_installer.sh
+          cd packaging/build && shasum -a 256 Flackey.pkg > Flackey.pkg.sha256 && cat Flackey.pkg.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: Flackey.app
+          name: Flackey.installer
           path: |
-            packaging/build/Flackey.zip
-            packaging/build/Flackey.zip.sha256
+            packaging/build/Flackey.pkg
+            packaging/build/Flackey.pkg.sha256
           if-no-files-found: error
 
   release:
@@ -108,13 +105,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: Flackey.app
+          name: Flackey.installer
           path: dist
       - name: latest.json
-        run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.zip dist/Flackey.zip.sha256 | tee dist/latest.json
+        run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 | tee dist/latest.json
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Flackey.zip dist/Flackey.zip.sha256 dist/latest.json \
+          gh release create "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json \
             --verify-tag --prerelease --title "Flackey ${GITHUB_REF_NAME#v}v (Beta)" --generate-notes

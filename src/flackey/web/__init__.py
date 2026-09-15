@@ -81,7 +81,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
                status: Status | dict | None = None, bus: EventBus | None = None, opener=None, picker=None,
                login: TelegramLogin | None = None, link=None, sharing=None) -> FastAPI:
     # here, not at module top: the routers import `Bundles` from this module
-    from . import library, lossless, pick, requests, stream, telegram
+    from . import library, lossless, pick, requests, stream, telegram, update
     from . import sharing as sharing_web  # aliased: `sharing` here is the service, not the module
 
     bus = bus if bus is not None else EventBus()
@@ -139,6 +139,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(pick.router(**({"picker": picker} if picker else {})))
     app.include_router(lossless.router(store, worker))
     app.include_router(sharing_web.router(sharing))
+    app.include_router(update.router())
 
     if ui_dir is not None and ui_dir.exists():
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")

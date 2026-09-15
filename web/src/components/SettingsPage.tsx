@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { AppSettings, LosslessHealth, TelegramStatus } from '../api'
+import type { AppSettings, LosslessHealth, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
@@ -52,12 +52,21 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [keysBusy, setKeysBusy] = useState(false)
   const [keysError, setKeysError] = useState<string | null>(null)
   const [keysSaved, setKeysSaved] = useState(false)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updateChecking, setUpdateChecking] = useState(true)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
   useEffect(() => {
     api.pickFolderAvailable().then(r => setPickerAvailable(r.available)).catch(() => {})
   }, [])
+  useEffect(() => {
+    setUpdateChecking(true)
+    api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', available: false,
+      latest: null, url: null, size: null, size_label: null, published_at: null, published_date: null,
+      prerelease: false, error: 'Could not check for updates.' }))
+      .finally(() => setUpdateChecking(false))
+  }, [s?.version])
   if (!s) return null
   async function save() {
     try { live.setSettings(await api.saveSettings(path)); setEditing(false); setErr(null) }
@@ -114,6 +123,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const checkSharing = () => {
     setCheckError(null)
     api.checkSharing().catch(e => setCheckError(getErrorMessage(e, 'Could not start the check. Try again.')))
+  }
+  const openUpdate = () => {
+    if (update?.url) window.open(update.url, '_blank', 'noopener,noreferrer')
   }
   const showSoulseekPassword = () => {
     setPasswordBusy(true); setPasswordError(null)
@@ -218,7 +230,18 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           </details></div></div>}
       </div>
       <div className="group">
-        <div className="srow"><div className="srow-body"><div className="k">App version</div><div className="v">Flackey {s.version}</div></div></div>
+        <div className="srow"><div className="srow-body"><div className="k">App version</div>
+          <div className="v">Flackey {s.version}</div>
+          {updateChecking && <div className="v">Checking for updates…</div>}
+          {!updateChecking && update?.ok && !update.available && <div className="v">Up to date.</div>}
+          {!updateChecking && update?.ok && update.available && <div className="v">
+            Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
+          </div>}
+          {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
+        </div>
+          {update?.available && update.url && <div className="actions">
+            <button className="btn-secondary" onClick={openUpdate}>Download update</button>
+          </div>}</div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
           <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
       </div>

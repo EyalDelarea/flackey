@@ -1,7 +1,5 @@
 const release = document.querySelector("#release-line");
 const downloadLink = document.querySelector("#download-link");
-const command = document.querySelector("#xattr-command");
-const copy = document.querySelector("#copy-command");
 
 // GitHub's /releases/latest endpoint deliberately excludes prereleases. Flackey is
 // still in beta, so read the release list and select the newest published build.
@@ -15,7 +13,7 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
     const data = Array.isArray(releases)
       ? releases.find((item) => !item.draft)
       : null;
-    const asset = data?.assets?.find((item) => item.name === "Flackey.zip");
+    const asset = data?.assets?.find((item) => item.name === "Flackey.pkg");
     if (!release || !downloadLink || !asset?.browser_download_url) {
       if (release) release.textContent = "The first download is on its way.";
       return;
@@ -24,7 +22,7 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
     downloadLink.removeAttribute("aria-disabled");
     downloadLink.classList.remove("unavailable");
     downloadLink.innerHTML =
-      'Download for Mac <span aria-hidden="true">↓</span>';
+      'Download Mac installer <span aria-hidden="true">↓</span>';
     const version = String(data.tag_name || "").replace(/^v/, "");
     const size = `${(asset.size / 1e6).toFixed(1)} MB`;
     const date = new Intl.DateTimeFormat("en-GB", {
@@ -33,30 +31,12 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       year: "numeric",
     }).format(new Date(data.published_at));
     const status = data.prerelease ? "Beta" : "Stable";
-    release.textContent = `Version ${version}v · ${status} · ${size} · ${date}`;
+    release.textContent = `Version ${version}v · ${status} installer · ${size} · ${date}`;
   })
   .catch(() => {
     if (release)
       release.textContent = "Release details are temporarily unavailable.";
   });
-
-copy?.addEventListener("click", async () => {
-  const text = command?.textContent || "";
-  try {
-    await navigator.clipboard.writeText(text);
-    copy.textContent = "Copied";
-  } catch {
-    const range = document.createRange();
-    range.selectNodeContents(command);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    copy.textContent = "Selected";
-  }
-  window.setTimeout(() => {
-    copy.textContent = "Copy";
-  }, 1600);
-});
 
 const preview = document.querySelector("#preview-dialog");
 document

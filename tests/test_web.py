@@ -4,7 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from flackey.config import Settings
@@ -14,6 +16,7 @@ from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
 from flackey.store import Store
 from flackey.web import create_app
+from flackey.web.update import RELEASES_URL
 from flackey.worker import Worker
 from flackey.youtube import YouTubeEntry, YouTubeError
 
@@ -82,6 +85,36 @@ def test_health_reflects_shared_status(tmp_path):
     assert c.get("/api/health").json()["telegram_authorized"] is False
     status["telegram_authorized"] = True
     assert c.get("/api/health").json()["telegram_authorized"] is True
+
+
+@respx.mock
+def test_update_reports_new_installer(client):
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": True, "tag_name": "v0.1.1",
+        "published_at": "2026-09-15T10:00:00Z",
+        "assets": [{"name": "Flackey.pkg", "size": 12345678,
+                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+    }]))
+    assert c.get("/api/update").json() == {
+        "ok": True, "current": "0.1.0", "available": True, "latest": "0.1.1",
+        "url": "https://example.test/Flackey.pkg", "size": 12345678,
+        "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
+        "published_date": "2026-09-15", "prerelease": True,
+    }
+
+
+@respx.mock
+def test_update_says_current_release_is_up_to_date(client):
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": True, "tag_name": "v0.1.0",
+        "published_at": "2026-09-15T10:00:00Z",
+        "assets": [{"name": "Flackey.pkg", "size": 123,
+                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+    }]))
+    body = c.get("/api/update").json()
+    assert body["ok"] is True and body["available"] is False and body["latest"] == "0.1.0"
 
 
 def test_cors_allows_vite_dev_server(client):

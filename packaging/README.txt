@@ -2,31 +2,26 @@ FLACKEY — BETA
 ==============
 
 Flackey is an early beta for Apple Silicon Macs running macOS 12 or newer.
-It has an ad-hoc signature, but it is not signed or notarized with an Apple
-Developer account. macOS therefore blocks the downloaded app by default.
+It has an ad-hoc app signature, but the installer is not signed or notarized
+with an Apple Developer account. macOS may therefore ask you to confirm that
+you want to open it.
 
-HOW TO OPEN FLACKEY
--------------------
+HOW TO INSTALL FLACKEY
+----------------------
 
-1. Leave Flackey.app in this folder, or move it to Applications.
+1. Open Flackey.pkg.
 
-2. Open Terminal (Applications > Utilities > Terminal).
+2. Follow the macOS Installer steps. Flackey.app is installed in Applications.
 
-3. Type the following, including the space at the end:
+3. Open Flackey from Applications.
 
-       xattr -dr com.apple.quarantine 
-
-4. Drag Flackey.app from Finder onto the Terminal window. Terminal will add
-   the app's exact path. Press Return.
-
-5. Open Flackey.app normally.
-
-Only use the command above for this Flackey.app downloaded from the official
-release page:
+If macOS says the installer is from an unidentified developer, control-click
+Flackey.pkg, choose Open, and confirm that you want to continue. Only do that
+for Flackey downloaded from the official release page:
 
 https://github.com/EyalDelarea/flackey/releases
 
-The ad-hoc signature protects the integrity of the app bundle after it is
+The ad-hoc app signature protects the integrity of the app bundle after it is
 built. It cannot establish a trusted developer identity; that requires a paid
 Apple Developer account and notarization.
 

@@ -13,25 +13,14 @@ with the download button, are at [eyaldelarea.github.io/flackey](https://eyaldel
 
 ## Installing it
 
-1. Unzip `Flackey.zip`. **Don't open the app yet** — do step 2 first.
-2. Run this in Terminal, which is what stops macOS blocking it. Drag the app onto the Terminal window
-   after typing the first part and it will fill in the path for you:
+1. Open `Flackey.pkg`.
+2. Follow the macOS Installer steps. It puts `Flackey.app` in `/Applications`.
+3. Open Flackey from Applications and connect Telegram, Soulseek, or both.
 
-   ```sh
-   xattr -dr com.apple.quarantine ~/Downloads/Flackey.app
-   ```
-
-   That path is wherever the app actually is. If you moved it to Applications first, it is
-   `/Applications/Flackey.app` instead — and moving it there may ask for your admin password, which is
-   macOS, not this app. Leaving it in Downloads is fine.
-
-3. Now open it normally.
-
-Step 2 is not optional and there is no way around it from the GUI on a current macOS. The app is
-signed only ad-hoc — there is no Apple Developer account behind this build, so macOS cannot check who
-made it and refuses by default. The command removes the "downloaded from the internet" flag that
-triggers that check. Run it only for software someone you trust handed you on purpose, which is the
-situation you are in.
+The installer is not signed or notarized with an Apple Developer account yet. If macOS says it is from
+an unidentified developer, control-click `Flackey.pkg`, choose Open, and confirm that you want to
+continue. Do this only for software someone you trust handed you on purpose, which is the situation
+you are in.
 
 ## First run
 
@@ -69,6 +58,6 @@ Downloading works either way; sharing back is what needs the port.
 
 ## Known rough edges
 
-- Unsigned, hence the `xattr` step.
+- Unsigned and not notarized yet, so macOS may ask for the control-click Open flow.
 - Apple Silicon only.
 - Closing the window quits the app.
