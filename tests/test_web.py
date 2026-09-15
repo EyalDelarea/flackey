@@ -377,6 +377,7 @@ def test_library_playlists_stats(client, tmp_path: Path):
     assert [t["id"] for t in c.get("/api/library").json()] == [other, tid]
     pl = c.get("/api/playlists").json()[0]
     assert pl["track_ids"] == [tid] and pl["file"] == str(settings.library_root / "Playlists" / "Goa Set.m3u8")
+    assert pl["track_positions"] == [1]
     s = c.get("/api/stats").json()
     assert s["tracks"] == 2 and s["bytes"] == 10 and s["by_genre"] == {"G": 1} and s["playlists"] == 1
     assert s["library_root"] == str(settings.library_root)
@@ -1103,6 +1104,32 @@ def test_telegram_skip_route_turns_the_source_off(tmp_path: Path):
     # which now reads the flag from there, agrees with the setting.
     assert status["source_enabled"] is False
     assert c.get("/api/health").json()["source_enabled"] is False
+
+
+def test_telegram_source_can_be_enabled_without_signing_in_again(tmp_path: Path):
+    status = Status(None, telegram_authorized=True, worker_running=True, setup_done=True,
+                    source_enabled=False)
+    login = FakeLogin()
+    login.authorized = True
+    app, _, settings = make(tmp_path, status=status, login=login)
+    c = TestClient(app)
+    r = c.post("/api/telegram/source", json={"enabled": True})
+    assert r.status_code == 200 and r.json() == {"source_enabled": True}
+    assert settings.source_enabled is True and status["source_enabled"] is True
+    assert json.loads(settings.settings_path.read_text())["source_enabled"] is True
+    assert c.get("/api/health").json()["source_enabled"] is True
+    assert c.post("/api/telegram/source", json={"enabled": False}).json() == {"source_enabled": False}
+
+
+def test_telegram_source_cannot_be_enabled_without_an_authorized_session(tmp_path: Path):
+    status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True,
+                    source_enabled=False)
+    app, _, settings = make(tmp_path, status=status, login=FakeLogin())
+    settings.source_enabled = False
+    c = TestClient(app)
+    r = c.post("/api/telegram/source", json={"enabled": True})
+    assert r.status_code == 409 and "Sign in to Telegram" in r.json()["detail"]
+    assert settings.source_enabled is False
 
 
 def test_health_takes_the_source_flag_from_the_shared_status(tmp_path: Path):

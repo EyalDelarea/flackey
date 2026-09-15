@@ -219,6 +219,7 @@ class Playlist:
     created_at: str
     updated_at: str
     track_ids: list[int] = field(default_factory=list)
+    track_positions: list[int] = field(default_factory=list)
 
 
 @dataclass

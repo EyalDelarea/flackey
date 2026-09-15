@@ -116,7 +116,7 @@ def test_playlists(store: Store, tmp_path: Path):
     store.add_playlist_track(pid, tid, 1)
     store.add_playlist_track(pid, tid, 1)  # idempotent
     p = store.get_playlist(pid)
-    assert p.name == "Goa Set renamed" and p.track_ids == [tid]
+    assert p.name == "Goa Set renamed" and p.track_ids == [tid] and p.track_positions == [1]
     assert [x.id for x in store.list_playlists()] == [pid]
 
 

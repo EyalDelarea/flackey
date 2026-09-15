@@ -141,13 +141,15 @@ describe('presentRow', () => {
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')
     expect(presentRow(bundle({ state: 'cancelled' }), opts).status).toBe('Skipped')
-    expect(presentRow(bundle({ state: 'not_found', error_message: 'no candidates from source' }), opts).status).toBe('No downloadable match found — no candidates from source')
+    expect(presentRow(bundle({ state: 'not_found', error_message: 'no candidates from source' }), opts)).toMatchObject({
+      status: 'No downloadable match found — no candidates from source', action: { label: 'Try again', kind: 'retry' },
+    })
     const e = presentRow(bundle({ state: 'error', error_message: 'boom' }), opts)
     expect(e.status).toBe('Failed — boom'); expect(e.statusTone).toBe('red'); expect(e.action).toEqual({ label: 'Try again', kind: 'retry' })
   })
   it('backoff row counts down and paused rows say so when Telegram is signed out', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)
-    expect(v.status).toBe('Beatport unreachable — trying again in 25 seconds'); expect(v.retryInSeconds).toBe(25)
+    expect(v.status).toBe('Trying again in 25 seconds — previous attempt: Beatport unreachable'); expect(v.retryInSeconds).toBe(25)
     const p = presentRow(bundle({ state: 'fetching' }), { ...opts, telegramAuthorized: false })
     // The tag counted rungs -- "step 3 of 6" -- against a ladder that has five, and the count was the
     // wrong thing to say anyway: the rung is right there beside it. It names where the row stopped.
@@ -307,7 +309,7 @@ describe('a queued track', () => {
   it('keeps its countdown when it is on a retry backoff, and offers no Stop over it', () => {
     const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
       flag_reason: 'Beatport unreachable, will retry' }), opts)
-    expect(v.status).toContain('trying again in 60 seconds')
+    expect(v.status).toContain('Trying again in 60 seconds')
     expect(v.retryInSeconds).toBe(60)
   })
 })

@@ -232,6 +232,12 @@ class Store:
             (source_url,)).fetchone()
         return None if r is None else self._row_to_request(r)
 
+    def latest_playlist_request_for_url(self, playlist_id: int, source_url: str) -> Request | None:
+        r = self.conn.execute(
+            "SELECT * FROM requests WHERE playlist_id=? AND source_url=? ORDER BY id DESC LIMIT 1",
+            (playlist_id, source_url)).fetchone()
+        return None if r is None else self._row_to_request(r)
+
     def update_request(self, request_id: int, **fields) -> None:
         fields["updated_at"] = _now()
         cols = ", ".join(f"{k}=?" for k in fields)
@@ -456,9 +462,11 @@ class Store:
         r = self.conn.execute("SELECT * FROM playlists WHERE id=?", (playlist_id,)).fetchone()
         if r is None:
             raise KeyError(playlist_id)
-        ids = [row[0] for row in self.conn.execute(
-            "SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (playlist_id,))]
-        return Playlist(**dict(r), track_ids=ids)
+        tracks = self.conn.execute(
+            "SELECT track_id, position FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (playlist_id,)
+        ).fetchall()
+        return Playlist(**dict(r), track_ids=[row[0] for row in tracks],
+                        track_positions=[row[1] for row in tracks])
 
     def list_playlists(self) -> list[Playlist]:
         ids = [r[0] for r in self.conn.execute("SELECT id FROM playlists ORDER BY id")]

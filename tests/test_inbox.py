@@ -107,6 +107,20 @@ async def test_playlist_link_reuses_previously_filed_source_url(inbox):
     assert store.get_playlist(s.playlist_id).track_ids == [tid]
 
 
+async def test_reimport_retries_a_failed_playlist_request_instead_of_duplicating_it(inbox):
+    ib, store = inbox
+    first = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    failed_id = first.request_ids[0]
+    store.set_state(failed_id, RequestState.NOT_FOUND, error_message="Deezer bot was off")
+
+    again = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+
+    assert failed_id in again.request_ids
+    assert store.get_request(failed_id).state is RequestState.QUEUED
+    assert len([r for r in store.list_recent_requests() if r.playlist_id == first.playlist_id]) == 2
+    assert again.already_queued == 1
+
+
 async def test_spotify_playlist_link_queues_each_entry_and_skips_library_hits(inbox):
     ib, store = inbox
     store.add_track(path=Path("/x.mp3"), fmt="mp3", bitrate_kbps=320, cutoff_hz=20000, file_size=1,
@@ -139,6 +153,20 @@ async def test_spotify_playlist_link_reuses_previously_filed_source_url(inbox):
 
     assert s.already_in_library == 1
     assert store.get_playlist(s.playlist_id).track_ids == [tid]
+
+
+async def test_spotify_reimport_retries_a_failed_request_without_adding_a_duplicate(inbox):
+    ib, store = inbox
+    first = await ib.submit("https://open.spotify.com/playlist/pl1")
+    failed_id = first.request_ids[0]
+    store.set_state(failed_id, RequestState.NOT_FOUND, error_message="no match")
+
+    again = await ib.submit("https://open.spotify.com/playlist/pl1")
+
+    assert failed_id in again.request_ids
+    assert store.get_request(failed_id).state is RequestState.QUEUED
+    assert len([r for r in store.list_recent_requests() if r.playlist_id == first.playlist_id]) == 2
+    assert again.already_queued == 1
 
 
 async def test_unreadable_links_are_bad_links(inbox):

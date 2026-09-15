@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .identify import classify, parse_version, parse_youtube_title
-from .models import Query, RequestKind
+from .models import Query, RequestKind, RequestState
 from .spotify import (
     SpotifyError,
     SpotifyPlaylist,
@@ -65,6 +65,16 @@ class Inbox:
             return True
         return False
 
+    def _retry_failed_playlist_request(self, playlist_id: int, source_url: str, position: int) -> int | None:
+        """Reuse this playlist position's failed request instead of growing duplicate history on re-import."""
+        previous = self.store.latest_playlist_request_for_url(playlist_id, source_url)
+        if previous is None or previous.state not in {RequestState.ERROR, RequestState.NOT_FOUND}:
+            return None
+        self.store.update_request(previous.id, state=RequestState.QUEUED, playlist_position=position,
+                                  attempts=0, retry_after=None, error_message=None, flag_reason=None,
+                                  lossless_retry=1)
+        return previous.id
+
     @staticmethod
     def _spotify_query(track: SpotifyTrack) -> Query:
         title, version = parse_version(track.title)
@@ -110,6 +120,10 @@ class Inbox:
                     self.store.add_playlist_track(pid, existing.id, pos)
                     sub.already_in_library += 1
                     continue
+                retried = self._retry_failed_playlist_request(pid, track.source_url, pos)
+                if retried is not None:
+                    sub.request_ids.append(retried)
+                    continue
                 if self.store.open_request_for_url(track.source_url):
                     sub.already_queued += 1
                     continue
@@ -141,6 +155,10 @@ class Inbox:
             if existing:
                 self.store.add_playlist_track(pid, existing.id, pos)
                 sub.already_in_library += 1
+                continue
+            retried = self._retry_failed_playlist_request(pid, e.url, pos)
+            if retried is not None:
+                sub.request_ids.append(retried)
                 continue
             if self.store.open_request_for_url(e.url):  # the same playlist sent twice while still in flight
                 sub.already_queued += 1

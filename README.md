@@ -58,6 +58,9 @@ uv run flackey status                                     # queue counts and lib
 uv run flackey export                                     # rewrite every M3U8 playlist file
 ```
 
+Flackey connects to Telegram directly through its saved Telethon session. Telegram Desktop does not need
+to be open while Flackey searches or downloads; the Deezer bot source can be switched on or off in Settings.
+
 ## Rekordbox import
 
 No `rekordbox.xml` is written, on purpose: Rekordbox's XML bridge is a
