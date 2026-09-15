@@ -38,24 +38,210 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       release.textContent = "Release details are temporarily unavailable.";
   });
 
-const preview = document.querySelector("#preview-dialog");
-document
-  .querySelector("#preview-button")
-  ?.addEventListener("click", () => preview?.showModal());
-preview
-  ?.querySelector(".close")
-  ?.addEventListener("click", () => preview.close());
-preview?.addEventListener("click", (event) => {
-  if (event.target !== preview) return;
-  const bounds = preview.getBoundingClientRect();
-  if (
-    event.clientX < bounds.left ||
-    event.clientX > bounds.right ||
-    event.clientY < bounds.top ||
-    event.clientY > bounds.bottom
-  )
-    preview.close();
-});
+// The app-walkthrough demo. Every value below is interpolated per frame rather
+// than stepped between a handful of states: the percentage, the arc that draws
+// it, the byte counter and the speed all move continuously, which is what keeps
+// this from reading as a recording of a few screenshots.
+const appDemo = document.querySelector("#app-demo");
+if (appDemo) {
+  const el = (sel) => appDemo.querySelector(sel);
+  const urlText = el(".ad-url");
+  const statusText = el(".ad-status");
+  const xferText = el(".ad-xfer");
+  const artImg = el(".ad-art img");
+  const platter = el(".ad-platter");
+  const arc = el(".ad-arc");
+  const spindle = el(".ad-spindle");
+  const pctText = el(".ad-pct");
+  const verified = el(".ad-verified");
+  const group = el(".ad-group");
+  const row = el(".ad-row");
+  const steps = [...appDemo.querySelectorAll(".ad-step")];
+  const checks = [...appDemo.querySelectorAll(".ad-check")];
+
+  const URL_TEXT = "music.youtube.com/watch?v=KrbGBz8MlXo";
+  const PLACEHOLDER = "Paste a YouTube or YouTube Music link";
+  const CIRC = 2 * Math.PI * 19; // matches Platter.tsx's geometry
+  const SIZE_MB = 61.0;
+
+  // Cue sheet, in seconds. The gaps are the point: a phase that changes nothing
+  // for a beat is what makes the next change read as a step forward.
+  const T = {
+    typeStart: 0.5,
+    typeEnd: 1.9,
+    press: 2.15,
+    rowIn: 2.4,
+    found: 3.9,
+    dlStart: 4.7,
+    dlEnd: 9.5,
+    verify: 10.1,
+    check1: 10.9,
+    check2: 11.4,
+    done: 12.1,
+    fadeOut: 15.2,
+    loop: 16.2,
+  };
+
+  // Written through a cache because these are strings: reassigning identical
+  // text every frame would dirty layout 60 times a second for no visible change.
+  const last = {};
+  const put = (node, key, value) => {
+    if (last[key] === value) return;
+    last[key] = value;
+    node.textContent = value;
+  };
+  const toggle = (node, cls, on) => node.classList.toggle(cls, on);
+
+  const clamp01 = (n) => (n < 0 ? 0 : n > 1 ? 1 : n);
+  // Between two cues, 0 → 1 on the app's own easing curve.
+  const ramp = (t, from, to) => clamp01((t - from) / (to - from));
+
+  let speed = 0;
+  let prevDone = 0;
+  let prevT = 0;
+
+  const render = (t) => {
+    const typing = t >= T.typeStart && t < T.press;
+    const typed = Math.round(ramp(t, T.typeStart, T.typeEnd) * URL_TEXT.length);
+    // Before the first keystroke the field shows its placeholder; after the
+    // submit it is empty again, the way the real one clears itself.
+    const empty = t >= T.press;
+    put(
+      urlText,
+      "url",
+      empty ? "" : typed === 0 ? PLACEHOLDER : URL_TEXT.slice(0, typed),
+    );
+    toggle(urlText, "placeholder", !empty && typed === 0);
+    toggle(appDemo, "typing", typing);
+    toggle(appDemo, "pressing", t >= T.press && t < T.press + 0.18);
+
+    // The row arrives on a short rise and leaves on a plain fade. The card it
+    // sits in fades with it, because an empty bordered box waiting for content
+    // reads as a bug rather than as an app that has nothing to show yet.
+    const rowIn = ramp(t, T.rowIn, T.rowIn + 0.45);
+    const rowOut = 1 - ramp(t, T.fadeOut, T.fadeOut + 0.6);
+    group.style.opacity = String(rowIn * rowOut);
+    row.style.transform = `translateY(${((1 - rowIn) * 6).toFixed(2)}px)`;
+
+    artImg.style.opacity = String(ramp(t, T.found, T.found + 0.45));
+
+    const phase =
+      t >= T.done
+        ? "done"
+        : t >= T.verify
+          ? "verify"
+          : t >= T.dlStart
+            ? "download"
+            : t >= T.found
+              ? "found"
+              : "search";
+
+    put(
+      statusText,
+      "status",
+      {
+        search: "Working out what this is…",
+        found: "Found on Beatport · Deezer has a copy",
+        download: "Downloading from Deezer",
+        verify: "Checking the file…",
+        done: "Saved to your library",
+      }[phase],
+    );
+
+    const stage = { search: 0, found: 1, download: 1, verify: 2, done: 4 }[phase];
+    steps.forEach((step, i) => {
+      toggle(step, "done", i < stage);
+      toggle(step, "current", i === stage);
+    });
+
+    // Progress: decelerating, with a little speed jitter that fades out as the
+    // transfer settles. A perfectly linear sweep is the tell that it is a fake.
+    const s = ramp(t, T.dlStart, T.dlEnd);
+    const pct =
+      phase === "download"
+        ? clamp01(
+            1 - Math.pow(1 - s, 1.75) + Math.sin(s * 11.3) * 0.014 * (1 - s),
+          ) * 100
+        : null;
+    const showPlatter = t >= T.rowIn && t < T.done;
+    platter.style.opacity = String(showPlatter ? 1 : 0);
+    toggle(appDemo, "waiting", pct === null);
+
+    const swept = pct === null ? CIRC * 0.22 : (CIRC * pct) / 100;
+    arc.setAttribute("stroke-dasharray", `${swept.toFixed(2)} ${CIRC.toFixed(2)}`);
+    spindle.style.opacity = pct === null ? "0.5" : "0";
+    put(pctText, "pct", pct === null ? "" : String(Math.round(pct)));
+
+    // Speed is read off the counter rather than invented, so the number and the
+    // arc always tell the same story. Scaled down because the demo compresses a
+    // real transfer into five seconds, and the unscaled rate that falls out of
+    // that is about 13 MB/s - a figure no one should read off a marketing page.
+    const doneMb = ((pct ?? 0) / 100) * SIZE_MB;
+    const dt = t - prevT;
+    if (dt > 0 && dt < 0.2 && phase === "download") {
+      const instant = ((doneMb - prevDone) / dt) * 0.51;
+      speed = speed ? speed + (instant - speed) * 0.08 : instant;
+    }
+    prevDone = doneMb;
+    prevT = t;
+
+    put(
+      xferText,
+      "xfer",
+      phase === "found"
+        ? "Connecting to Deezer…"
+        : phase === "download"
+          ? `${doneMb.toFixed(1)} of ${SIZE_MB.toFixed(1)} MB · ${speed.toFixed(1)} MB/s`
+          : phase === "verify"
+            ? "Comparing against the source"
+            : "",
+    );
+
+    [T.check1, T.check2].forEach((cue, i) => {
+      const p = ramp(t, cue, cue + 0.35);
+      checks[i].style.opacity = String(p);
+      checks[i].style.transform = `translateY(${((1 - p) * 3).toFixed(2)}px)`;
+    });
+
+    const v = ramp(t, T.done, T.done + 0.35);
+    verified.style.opacity = String(v);
+    verified.style.transform = `translateY(${((1 - v) * 2).toFixed(2)}px)`;
+  };
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    // The site's reduced-motion rules already kill every CSS animation in here.
+    // This loop is the only moving part left, so it renders the finished state
+    // once instead: the same information, arrived at rather than performed.
+    render(T.done + 1);
+  } else {
+    let start = null;
+    let running = false;
+    let frame = 0;
+    const tick = (now) => {
+      if (!running) return;
+      if (start === null) start = now;
+      render(((now - start) / 1000) % T.loop);
+      frame = requestAnimationFrame(tick);
+    };
+    // The hero curve already runs a permanent rAF loop; this one only runs while
+    // the demo is actually on screen.
+    new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting === running) return;
+        running = entry.isIntersecting;
+        if (running) {
+          start = null;
+          prevT = 0;
+          frame = requestAnimationFrame(tick);
+        } else {
+          cancelAnimationFrame(frame);
+        }
+      },
+      { threshold: 0.15 },
+    ).observe(appDemo);
+    render(0);
+  }
+}
 
 // Ambient sound-wave motifs: a breathing EQ curve behind the hero title, and a small
 // pulsing EQ meter next to "How we verify audio". Purely decorative (aria-hidden).

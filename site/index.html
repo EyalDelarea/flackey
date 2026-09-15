@@ -96,23 +96,74 @@
         </div>
       </section>
       <section class="preview wrap" id="preview" aria-label="App showcase">
-        <button
-          class="video-poster"
-          id="preview-button"
-          type="button"
-          aria-haspopup="dialog"
-          aria-label="Flackey preview — coming soon"
-        >
-          <span class="poster-brand">flackey</span
-          ><span class="glass-play" aria-hidden="true"
-            ><svg viewBox="0 0 32 32">
-              <path
-                d="M10 5a2 2 0 0 1 3-1l17 10a2.3 2.3 0 0 1 0 4L13 28a2 2 0 0 1-3-1Z"
-              /></svg
-          ></span>
-          <span class="duration">0:10</span
-          ><span class="poster-hint">Preview coming soon</span>
-        </button>
+        <div class="preview-card">
+          <p class="eyebrow">See it in action</p>
+          <h3>Paste a link. Get the FLAC.</h3>
+          <!-- A live recreation of the app's own download row rather than a screen
+               recording: it animates at the display's refresh rate, stays sharp at
+               any size, and is driven by the same rAF loop style as the hero curve.
+               Decorative in full - the sentence below it carries the same meaning. -->
+          <div class="app-demo" id="app-demo" aria-hidden="true">
+            <div class="ad-toolbar">
+              <div class="ad-pastebar">
+                <div class="ad-input">
+                  <span class="ad-url"></span><i class="ad-caret"></i>
+                </div>
+                <div class="ad-add">Add</div>
+              </div>
+            </div>
+            <div class="ad-body">
+              <div class="ad-group">
+                <div class="ad-row">
+                  <div class="ad-art">
+                    <img src="img/walkthrough-cover.jpg" alt="" width="240" height="240" loading="lazy" decoding="async" />
+                  </div>
+                  <div class="ad-text">
+                    <div class="ad-title">Shpongle – Star Shpongled Banner</div>
+                    <div class="ad-status"></div>
+                    <ul class="ad-steps">
+                      <li class="ad-step"><i class="ad-mark"></i>Search</li>
+                      <li class="ad-step"><i class="ad-mark"></i>Download</li>
+                      <li class="ad-step"><i class="ad-mark"></i>Verify</li>
+                      <li class="ad-step"><i class="ad-mark"></i>Done</li>
+                    </ul>
+                    <div class="ad-xfer"></div>
+                    <div class="ad-checks">
+                      <span class="ad-check"
+                        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Match
+                        <b>98%</b></span
+                      ><span class="ad-check"
+                        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Cutoff
+                        <b>21.8 kHz</b></span
+                      >
+                    </div>
+                  </div>
+                  <div class="ad-right">
+                    <div class="ad-platter">
+                      <svg viewBox="0 0 44 44" width="44" height="44">
+                        <circle class="ad-vinyl" cx="22" cy="22" r="17.8" />
+                        <circle class="ad-groove" cx="22" cy="22" r="14.4" fill="none" stroke-width="1" />
+                        <g transform="rotate(-90 22 22)">
+                          <circle class="ad-track" cx="22" cy="22" r="19" fill="none" stroke-width="3.2" />
+                          <circle class="ad-arc" cx="22" cy="22" r="19" fill="none" stroke-width="3.2" stroke-linecap="round" />
+                        </g>
+                        <circle class="ad-spindle" cx="22" cy="22" r="1.6" />
+                        <text class="ad-pct" x="22" y="22" dy=".355em" text-anchor="middle"></text>
+                      </svg>
+                    </div>
+                    <span class="ad-verified"
+                      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>FLAC</span
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="preview-caption">
+            Paste a YouTube link and Flackey finds the track, downloads it,
+            checks the audio is really lossless, and files it in your library.
+          </p>
+        </div>
       </section>
       <section
         class="details wrap"
@@ -302,14 +353,5 @@
       ><span>Made for the music.</span
       ><a href="https://github.com/EyalDelarea/flackey">GitHub ↗</a>
     </footer>
-    <dialog id="preview-dialog" aria-labelledby="preview-title">
-      <button class="close" type="button" aria-label="Close preview">×</button
-      ><img src="img/icon.png" alt="" width="64" height="64" />
-      <h2 id="preview-title">A little preview.<br />Coming soon.</h2>
-      <p>Our 10-second Flackey showcase is on its way.</p>
-      <form method="dialog">
-        <button class="button" type="submit">Got it</button>
-      </form>
-    </dialog>
   </body>
 </html>
