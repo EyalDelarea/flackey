@@ -3,6 +3,7 @@
   --ink: #101116;
   --muted: #727580;
   --blue: #007aff;
+  --wave: 0, 122, 255;
   --line: #e5e5e9;
   --sans:
     -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -603,6 +604,92 @@ dialog .button {
     transform: none;
   }
 }
+
+/* ambient sound-wave motifs */
+.eq-curve {
+  position: absolute;
+  inset: 0;
+  width: 54%;
+  opacity: 0.35;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
+}
+.eq-curve svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.eq-curve .eq-grid-line {
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.18;
+  stroke-width: 1;
+}
+.eq-curve .eq-baseline {
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+}
+.eq-curve .eq-fill-a {
+  fill: rgb(var(--wave));
+  fill-opacity: 0.16;
+}
+.eq-curve .eq-fill-b {
+  fill: rgb(var(--wave));
+  fill-opacity: 0.09;
+}
+.eq-curve .eq-stroke-a {
+  fill: none;
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.55;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.eq-curve .eq-stroke-b {
+  fill: none;
+  stroke: rgb(var(--wave));
+  stroke-opacity: 0.3;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.eyebrow-row .eyebrow {
+  margin-bottom: 0;
+}
+.eq-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 130px;
+  height: 28px;
+  opacity: 0.77;
+  pointer-events: none;
+}
+.eq-bars i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: rgb(var(--wave));
+  animation: eq-bar-pulse 1.6s ease-in-out infinite;
+}
+@keyframes eq-bar-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
 @media (min-width: 1700px) {
   .art-stage {
     right: -3%;
@@ -653,6 +740,13 @@ dialog .button {
   }
 }
 @media (max-width: 800px) {
+  .eq-curve {
+    width: 100%;
+  }
+  .eyebrow-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .header {
     height: auto;
     min-height: 110px;

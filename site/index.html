@@ -31,6 +31,9 @@
     </header>
     <main>
       <section class="hero" id="overview" aria-labelledby="title">
+        <div class="eq-curve" aria-hidden="true">
+          <svg id="eq-curve-svg" viewBox="0 0 1000 340" preserveAspectRatio="none"></svg>
+        </div>
         <div class="hero-inner wrap">
           <div class="intro">
             <h1 id="title">From link<br />to FLAC.</h1>
@@ -158,7 +161,10 @@
         aria-labelledby="verification-title"
       >
         <div class="section-heading">
-          <p class="eyebrow">How we verify audio</p>
+          <div class="eyebrow-row">
+            <p class="eyebrow">How we verify audio</p>
+            <div class="eq-bars" id="eq-bars" aria-hidden="true"></div>
+          </div>
           <h2 id="verification-title">A FLAC label<br />isn’t proof.</h2>
           <p class="section-intro">
             Flackey looks inside every file before accepting it. A renamed or
