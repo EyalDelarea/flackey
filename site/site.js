@@ -343,6 +343,17 @@ if (plDemo) {
     setStyle(row, `o${i}`, "opacity", String(rowIn));
     setStyle(row, `y${i}`, "transform", `translateY(${((1 - rowIn) * 5).toFixed(2)}px)`);
 
+    // Every row is the same record, so they share the single-track demo's
+    // sleeve. It arrives when the track is identified, which for a rejected
+    // source is the lossy match rather than the lossless one that replaces it.
+    const artAt = track.reject ? c.lossy : c.found;
+    setStyle(
+      row.querySelector(".ad-art img"),
+      `a${i}`,
+      "opacity",
+      String(ramp(lt, artAt, artAt + 0.45)),
+    );
+
     const s = ramp(lt, c.dlStart, c.dlEnd);
     // Same decelerating curve as the single-track demo, so both read as the
     // same app rather than as two different fakes.

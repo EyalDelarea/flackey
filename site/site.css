@@ -683,14 +683,6 @@ p {
 .ad-status.amber {
   color: var(--ad-orange);
 }
-/* Sleeves with no artwork would read as missing images, so each row gets its
-   own colourway instead - placeholder, plainly. */
-.pl-demo .ad-row:nth-child(2) .ad-art {
-  background: linear-gradient(135deg, #8a5a47, #2e1d16);
-}
-.pl-demo .ad-row:nth-child(3) .ad-art {
-  background: linear-gradient(135deg, #4a7a63, #16261f);
-}
 /* The app narrows its own row below 980px by dropping the stepper onto a second
    line under the title (see .row-main in app.css). The demo does the same at the
    width where its four columns stop fitting, so a phone shows the layout the app
