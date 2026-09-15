@@ -25,6 +25,15 @@ def _clean_url(url: str) -> str:
     return urlunparse((p.scheme, p.netloc, p.path, "", urlencode(keep, doseq=True), ""))
 
 
+def _spotify_entity_id(path: str, entity_type: str) -> str | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[0] == entity_type:
+        return parts[1]
+    if len(parts) >= 3 and re.fullmatch(r"intl-[a-z]{2}", parts[0], re.IGNORECASE) and parts[1] == entity_type:
+        return parts[2]
+    return None
+
+
 def classify(text: str) -> tuple[RequestKind, str | None]:
     m = _URL_RE.search(text)
     if not m:
@@ -32,6 +41,14 @@ def classify(text: str) -> tuple[RequestKind, str | None]:
     url = m.group(0).rstrip(".,;)")
     p = urlparse(url)
     host = p.netloc.lower()
+    if host == "open.spotify.com":
+        track_id = _spotify_entity_id(p.path, "track")
+        if track_id:
+            return RequestKind.SPOTIFY_TRACK, f"https://open.spotify.com/track/{track_id}"
+        playlist_id = _spotify_entity_id(p.path, "playlist")
+        if playlist_id:
+            return RequestKind.SPOTIFY_PLAYLIST, f"https://open.spotify.com/playlist/{playlist_id}"
+        return RequestKind.TEXT, None
     if not any(h in host for h in ("youtube.com", "youtu.be")):
         return RequestKind.TEXT, None
     q = parse_qs(p.query)

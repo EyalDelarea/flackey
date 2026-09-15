@@ -20,13 +20,13 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         <div className="row-text">
           <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
-          {showSteps && <Stepper steps={v.steps!} />}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}
           {v.fallback && <div className="fallback" title={v.fallback.reason}>{v.fallback.reason}</div>}
           <Checks checks={v.checks} />
         </div>
+        {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}
         <div className="row-right">
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>

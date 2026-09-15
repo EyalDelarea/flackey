@@ -226,6 +226,12 @@ class Store:
             [source_url] + [str(s) for s in TERMINAL_STATES]).fetchone()
         return None if r is None else self._row_to_request(r)
 
+    def filed_request_for_url(self, source_url: str) -> Request | None:
+        r = self.conn.execute(
+            "SELECT * FROM requests WHERE source_url=? AND track_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (source_url,)).fetchone()
+        return None if r is None else self._row_to_request(r)
+
     def update_request(self, request_id: int, **fields) -> None:
         fields["updated_at"] = _now()
         cols = ", ".join(f"{k}=?" for k in fields)

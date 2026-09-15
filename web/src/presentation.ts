@@ -91,7 +91,7 @@ function fallbackOf(b: Bundle): FallbackView | null {
   const outcome = b.attempt?.outcome
   const reason = outcome ? MISS_REASON[outcome] ?? `the lossless attempt ended in ${outcome}`
     : 'no lossless search ran for this one'
-  return { label: `${head} — no lossless copy`, reason: `Kept the Deezer copy because ${reason}.` }
+  return { label: `${head} — lossless unavailable`, reason: `Kept the matched MP3 copy because ${reason}.` }
 }
 
 const kbps = (bps: number) => bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} kB/s`
@@ -276,7 +276,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       break
     }
     case 'cancelled': v.status = 'Skipped'; v.dimmed = true; break
-    case 'not_found': v.status = `Not available on Deezer${r.error_message ? ' — ' + r.error_message : ''}`; break
+    case 'not_found': v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`; break
     case 'error':
       v.status = `Failed — ${r.error_message || 'unknown error'}`; v.statusTone = 'red'
       v.action = { label: 'Try again', kind: 'retry' }

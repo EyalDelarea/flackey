@@ -6,7 +6,7 @@ import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn() } }
+  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn() } }
 })
 
 function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
@@ -40,6 +40,27 @@ it('shows a red banner with a dismiss action when a row action fails', async () 
   await waitFor(() => expect(screen.getByText('That track is already being fetched.')).toBeInTheDocument())
   fireEvent.click(screen.getByText('Dismiss'))
   expect(screen.queryByText('That track is already being fetched.')).not.toBeInTheDocument()
+})
+
+it('refreshes queue and playlists after a paste submission returns', async () => {
+  vi.mocked(api.submit).mockResolvedValueOnce({
+    summary: 'Queued 3 of 3 from "Spotify Set" (0 already in library)',
+    request_ids: [1, 2, 3],
+    playlist_id: 9,
+    name: 'Spotify Set',
+    total: 3,
+    already_in_library: 0,
+    already_queued: 0,
+  })
+  const refresh = vi.fn(async () => undefined)
+  render(<DownloadPage live={makeLive([], { refresh })} />)
+  fireEvent.change(screen.getByPlaceholderText('Paste a YouTube, YouTube Music, or Spotify link'), {
+    target: { value: 'https://open.spotify.com/playlist/pl1' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  await waitFor(() => expect(api.submit).toHaveBeenCalledWith('https://open.spotify.com/playlist/pl1'))
+  await waitFor(() => expect(refresh).toHaveBeenCalled())
+  expect(await screen.findByText('Queued 3 of 3 from "Spotify Set" (0 already in library)')).toBeInTheDocument()
 })
 
 describe('filter bar, remove and clear failed', () => {
