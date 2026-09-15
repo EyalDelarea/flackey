@@ -60,7 +60,7 @@ if (appDemo) {
   const checks = [...appDemo.querySelectorAll(".ad-check")];
 
   const URL_TEXT = "music.youtube.com/watch?v=KrbGBz8MlXo";
-  const PLACEHOLDER = "Paste a YouTube or YouTube Music link";
+  const PLACEHOLDER = "Paste a YouTube, YouTube Music, or Spotify link";
   const CIRC = 2 * Math.PI * 19; // matches Platter.tsx's geometry
   const SIZE_MB = 61.0;
 
@@ -239,6 +239,210 @@ if (appDemo) {
       },
       { threshold: 0.15 },
     ).observe(appDemo);
+    render(0);
+  }
+}
+
+// The playlist variant. Same recreation one link further on: a playlist queues
+// every track at once, so the rows run the same state machine staggered in
+// time rather than each carrying its own cue sheet. The fourth track never
+// finds a lossless copy, because a batch is the only place the app's refusal
+// to save a lossy file as though it were lossless is visible.
+const plDemo = document.querySelector("#playlist-demo");
+if (plDemo) {
+  const urlText = plDemo.querySelector(".ad-url");
+  const summary = plDemo.querySelector(".ad-summary");
+  const barFill = plDemo.querySelector(".ad-groupbar-fill");
+  const barBad = plDemo.querySelector(".ad-groupbar-bad");
+  const groupSec = plDemo.querySelector(".ad-groupsec");
+  const rows = [...plDemo.querySelectorAll(".ad-row")];
+
+  const URL_TEXT = "open.spotify.com/playlist/37i9dQZF1DX6J5NfMJS675";
+  const PLACEHOLDER = "Paste a YouTube, YouTube Music, or Spotify link";
+  const CIRC = 2 * Math.PI * 19; // matches Platter.tsx's geometry
+
+  // Master cue sheet, in seconds.
+  const T = {
+    typeStart: 0.5,
+    typeEnd: 2.0,
+    press: 2.25,
+    groupIn: 2.5,
+    fadeOut: 15.6,
+    loop: 16.8,
+  };
+
+  // Per-track: when its row starts relative to groupIn, and the transfer it is
+  // working on. mb 0 marks the one with no lossless source to find.
+  const TRACKS = [
+    { at: 0.0, mb: 38.4, source: "Deezer" },
+    { at: 0.85, mb: 44.1, source: "Deezer" },
+    { at: 1.7, mb: 51.7, source: "Qobuz" },
+    { at: 2.55, mb: 0, source: null },
+    { at: 3.4, mb: 41.2, source: "Qobuz" },
+  ];
+
+  // Row-local cue sheet: seconds after that row's own start.
+  const R = {
+    found: 1.35,
+    dlStart: 1.85,
+    dlEnd: 5.6,
+    verify: 6.0,
+    done: 6.7,
+    fail: 2.9,
+  };
+
+  const last = {};
+  const put = (node, key, value) => {
+    if (last[key] === value) return;
+    last[key] = value;
+    node.textContent = value;
+  };
+  const setStyle = (node, key, prop, value) => {
+    if (last[key] === value) return;
+    last[key] = value;
+    node.style[prop] = value;
+  };
+  const toggle = (node, cls, on) => node.classList.toggle(cls, on);
+  const clamp01 = (n) => (n < 0 ? 0 : n > 1 ? 1 : n);
+  const ramp = (t, from, to) => clamp01((t - from) / (to - from));
+
+  const renderRow = (row, i, t) => {
+    const track = TRACKS[i];
+    const failing = track.mb === 0;
+    // Row-local clock. Negative means this track has not been reached yet.
+    const lt = t - T.groupIn - track.at;
+
+    const rowIn = ramp(lt, 0, 0.4);
+    setStyle(row, `o${i}`, "opacity", String(rowIn));
+    setStyle(row, `y${i}`, "transform", `translateY(${((1 - rowIn) * 5).toFixed(2)}px)`);
+
+    const phase = failing
+      ? lt >= R.fail
+        ? "failed"
+        : "search"
+      : lt >= R.done
+        ? "done"
+        : lt >= R.verify
+          ? "verify"
+          : lt >= R.dlStart
+            ? "download"
+            : lt >= R.found
+              ? "found"
+              : "search";
+
+    const s = ramp(lt, R.dlStart, R.dlEnd);
+    // Same decelerating curve as the single-track demo, so both read as the
+    // same app rather than two different fakes.
+    const pct =
+      phase === "download"
+        ? clamp01(1 - Math.pow(1 - s, 1.75) + Math.sin(s * 11.3 + i) * 0.014 * (1 - s)) * 100
+        : null;
+    const doneMb = ((pct ?? 0) / 100) * track.mb;
+
+    put(
+      row.querySelector(".ad-status"),
+      `s${i}`,
+      {
+        search: "Working out what this is…",
+        found: `Found on ${track.source}`,
+        download: `Downloading from ${track.source} · ${doneMb.toFixed(1)} of ${track.mb.toFixed(1)} MB`,
+        verify: "Checking the file…",
+        done: "Saved to your library",
+        failed: "No lossless copy found · skipped",
+      }[phase],
+    );
+    toggle(row.querySelector(".ad-status"), "amber", phase === "failed");
+    toggle(row, "washed", phase === "failed");
+
+    // A failed track got as far as searching and no further, so Search stays
+    // ticked and nothing is marked current - there is no step in progress.
+    const stage = { search: 0, found: 1, download: 1, verify: 2, done: 4, failed: 1 }[phase];
+    [...row.querySelectorAll(".ad-step")].forEach((step, n) => {
+      toggle(step, "done", n < stage);
+      toggle(step, "current", phase !== "failed" && n === stage);
+    });
+
+    const showPlatter = lt >= 0 && phase !== "done" && phase !== "failed";
+    setStyle(row.querySelector(".ad-platter"), `p${i}`, "opacity", showPlatter ? "1" : "0");
+    toggle(row, "waiting", pct === null);
+
+    const swept = pct === null ? CIRC * 0.22 : (CIRC * pct) / 100;
+    row
+      .querySelector(".ad-arc")
+      .setAttribute("stroke-dasharray", `${swept.toFixed(2)} ${CIRC.toFixed(2)}`);
+    setStyle(row.querySelector(".ad-spindle"), `n${i}`, "opacity", pct === null ? "0.5" : "0");
+    put(row.querySelector(".ad-pct"), `c${i}`, pct === null ? "" : String(Math.round(pct)));
+
+    const v = ramp(lt, R.done, R.done + 0.35);
+    setStyle(row.querySelector(".ad-verified"), `v${i}`, "opacity", String(v));
+    setStyle(
+      row.querySelector(".ad-verified"),
+      `vt${i}`,
+      "transform",
+      `translateY(${((1 - v) * 2).toFixed(2)}px)`,
+    );
+    const tag = row.querySelector(".ad-tag");
+    put(tag, `g${i}`, failing ? "320 kbps only" : "");
+    setStyle(tag, `go${i}`, "opacity", String(ramp(lt, R.fail, R.fail + 0.35)));
+
+    return phase;
+  };
+
+  const render = (t) => {
+    const typing = t >= T.typeStart && t < T.press;
+    const typed = Math.round(ramp(t, T.typeStart, T.typeEnd) * URL_TEXT.length);
+    const empty = t >= T.press;
+    put(urlText, "url", empty ? "" : typed === 0 ? PLACEHOLDER : URL_TEXT.slice(0, typed));
+    toggle(urlText, "placeholder", !empty && typed === 0);
+    toggle(plDemo, "typing", typing);
+    toggle(plDemo, "pressing", t >= T.press && t < T.press + 0.18);
+
+    const inP = ramp(t, T.groupIn, T.groupIn + 0.4);
+    const outP = 1 - ramp(t, T.fadeOut, T.fadeOut + 0.6);
+    setStyle(groupSec, "grp", "opacity", String(inP * outP));
+
+    const phases = rows.map((row, i) => renderRow(row, i, t));
+    const saved = phases.filter((p) => p === "done").length;
+    const skipped = phases.filter((p) => p === "failed").length;
+
+    put(
+      summary,
+      "sum",
+      `${TRACKS.length} tracks · ${saved} lossless${skipped ? ` · ${skipped} skipped` : ""}`,
+    );
+    // The bar steps as tracks land, the way the app's own does, rather than
+    // gliding - a smooth bar would imply progress the app is not tracking.
+    setStyle(barFill, "bf", "width", `${((saved / TRACKS.length) * 100).toFixed(1)}%`);
+    setStyle(barBad, "bb", "width", `${((skipped / TRACKS.length) * 100).toFixed(1)}%`);
+  };
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    // Reduced motion gets the finished playlist instead of the run: four saved,
+    // one flagged, which is the whole point of the sequence anyway.
+    render(T.groupIn + TRACKS[TRACKS.length - 1].at + R.done + 1);
+  } else {
+    let start = null;
+    let running = false;
+    let frame = 0;
+    const tick = (now) => {
+      if (!running) return;
+      if (start === null) start = now;
+      render(((now - start) / 1000) % T.loop);
+      frame = requestAnimationFrame(tick);
+    };
+    new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting === running) return;
+        running = entry.isIntersecting;
+        if (running) {
+          start = null;
+          frame = requestAnimationFrame(tick);
+        } else {
+          cancelAnimationFrame(frame);
+        }
+      },
+      { threshold: 0.15 },
+    ).observe(plDemo);
     render(0);
   }
 }
