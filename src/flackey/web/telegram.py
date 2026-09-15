@@ -89,4 +89,24 @@ def router(login: TelegramLogin | None, status: dict,
         status["source_enabled"] = False   # health reads it from here, so the sidebar hears about it
         return {"source_enabled": False}
 
+    @r.post("/source")
+    async def source(body: dict) -> dict:
+        """Toggle the Deezer bot source without signing Telegram out and back in."""
+        if settings is None:
+            raise HTTPException(503, "Settings are not available in this process")
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(400, "enabled must be true or false")
+        if enabled:
+            try:
+                tg = await need().status()
+            except Exception:
+                log.exception("could not check Telegram before enabling the Deezer source")
+                raise HTTPException(503, "Telegram isn't reachable right now. Try again in a moment.") from None
+            if not tg.get("authorized"):
+                raise HTTPException(409, "Sign in to Telegram before enabling the Deezer bot.")
+        save_settings(settings, source_enabled=enabled)
+        status["source_enabled"] = enabled
+        return {"source_enabled": enabled}
+
     return r

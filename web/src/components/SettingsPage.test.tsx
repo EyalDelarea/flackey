@@ -91,6 +91,17 @@ it('signs out on click', async () => {
   await waitFor(() => expect(api.logout).toHaveBeenCalled())
 })
 
+it('lets an already signed-in account turn the Deezer bot source back on', async () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const offline = makeLive({ ...current, health: { ...current.health, source_enabled: false } })
+  vi.spyOn(api, 'telegramSource').mockResolvedValue({ source_enabled: true })
+  render(<SettingsPage live={offline} onReconnect={() => {}} />)
+  expect(screen.getByText('Off — requests use Soulseek only')).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Turn on'))
+  await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
+  expect(mockRefresh).toHaveBeenCalled()
+})
+
 it('shows a banner when checking the Telegram connection fails', async () => {
   vi.spyOn(api, 'telegramStatus').mockRejectedValue(new ApiError(503, 'Telegram is unavailable right now'))
   render(<SettingsPage live={live} onReconnect={() => {}} />)

@@ -20,7 +20,7 @@ export interface Attempt { id:number; request_id:number; provider:string; create
   fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
 export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string }
 export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null }
-export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; file:string }
+export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; track_positions?:number[]; file:string }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
 export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
@@ -113,6 +113,7 @@ export const api = {
   setupReset: () => post<{ setup_done: boolean }>('/api/setup/reset'),
   telegramStatus: () => call<TelegramStatus>('/api/telegram/status'),
   telegramKeys: (api_id: string, api_hash: string) => post<{ configured: boolean }>('/api/telegram/keys', { api_id, api_hash }),
+  telegramSource: (enabled: boolean) => post<{ source_enabled: boolean }>('/api/telegram/source', { enabled }),
   skipTelegram: () => post<{ source_enabled: boolean }>('/api/telegram/skip'),
   qrStart: () => post<QrStart>('/api/telegram/qr'),
   qrState: (id: string) => call<{ state: 'waiting' | 'password_needed' | 'done' | 'expired' | 'unknown' }>(`/api/telegram/qr/${id}`),

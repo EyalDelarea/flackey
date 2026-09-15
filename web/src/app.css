@@ -202,6 +202,15 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .pl-card .how { flex: 1; font-size: 12px; color: var(--secondary); line-height: 1.5; }
 .pl-card h2 { margin-bottom: 4px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 .pl-card h2 span { font-weight: 400; color: var(--secondary); }
+.playlist-import-status { margin: 0 20px 16px; padding: 16px 18px; border: 1px solid var(--sep); border-radius: 10px; background: var(--content); }
+.playlist-import-status h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.playlist-import-status h2 span { margin-left: 8px; color: var(--secondary); font-size: 12px; font-weight: 400; }
+.playlist-import-status p { margin: 0 0 10px; color: var(--secondary); font-size: 12px; }
+.playlist-import-status ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.playlist-import-status li { display: flex; align-items: center; gap: 12px; min-height: 30px; font-size: 12px; }
+.playlist-import-status li .ellipsis { flex: 1; }
+.playlist-status-reason { display: block; margin-top: 2px; color: var(--secondary); font-size: 11px; white-space: normal; }
+.playlist-import-status li .btn-secondary { padding: 4px 9px; font-size: 11px; }
 .table { background: var(--content); }
 /* The last column holds the row's buttons, and it is sized for the widest case -- "Find lossless" beside
    "Show in Finder" (measured 93.5px + 104.2px + the gap). Sizing it for one button, as it was, let the

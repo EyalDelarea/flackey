@@ -365,10 +365,12 @@ class Worker:
         req = self.store.get_request(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:
             self.store.update_request(request_id, retry_after=None)
-        elif req.state == RequestState.ERROR:
+        elif req.state in {RequestState.ERROR, RequestState.NOT_FOUND}:
             # `lossless_retry`: "Try again" on a failure is the owner asking for another look at the
-            # providers, which is exactly what `_lossless_miss_line` tells them the button does. Without it
-            # a request whose attempt ended in a non-retryable outcome could never reach Soulseek again.
+            # providers, which is exactly what `_lossless_miss_line` tells them the button does. A
+            # not-found row can also become actionable after its source is enabled or a catalog changes.
+            # Without this flag a request whose last pass did not find a candidate could never reach
+            # Soulseek again.
             # Granted whatever the last outcome was, including `verify_failed`: the pick loop starts again
             # at the first survivor, so a press can re-download a file already proven wrong. That is the
             # price of the button meaning what it says -- peers come and go, so the same search an hour
