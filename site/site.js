@@ -246,8 +246,8 @@ if (appDemo) {
 // The album variant. Same recreation one link further on: an album or playlist
 // link queues every track at once, so the rows run the same state machine
 // staggered in time rather than each carrying its own cue sheet. Nine tracks
-// are queued and four are shown, which is what a list scrolled to the top looks
-// like; the counter and the bar cover all nine. The third track finds a lossy
+// are queued and three are shown, which is what a list scrolled to the top
+// looks like; the counter and the bar cover all nine. The third track finds a lossy
 // source first, so it is rejected and the search carries on - the one thing a
 // batch shows that a single track cannot.
 const plDemo = document.querySelector("#playlist-demo");

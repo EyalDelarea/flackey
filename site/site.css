@@ -691,9 +691,6 @@ p {
 .pl-demo .ad-row:nth-child(3) .ad-art {
   background: linear-gradient(135deg, #4a7a63, #16261f);
 }
-.pl-demo .ad-row:nth-child(4) .ad-art {
-  background: linear-gradient(135deg, #7a6a45, #262016);
-}
 /* The app narrows its own row below 980px by dropping the stepper onto a second
    line under the title (see .row-main in app.css). The demo does the same at the
    width where its four columns stop fitting, so a phone shows the layout the app
