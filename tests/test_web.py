@@ -147,6 +147,18 @@ def test_queue_bundles(client, tmp_path):
     assert c.get("/api/requests/999").status_code == 404
 
 
+def test_queue_reads_spotify_requests_from_the_persisted_database(client):
+    c, store, _ = client
+    rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,
+                            source_url="https://open.spotify.com/track/example")
+
+    response = c.get("/api/queue")
+
+    assert response.status_code == 200
+    assert response.json()[0]["request"]["id"] == rid
+    assert response.json()[0]["request"]["kind"] == "spotify_track"
+
+
 def test_queue_keeps_every_open_request_even_past_the_recent_window(client):
     c, store, _ = client
     old = store.add_request("old open", RequestKind.TEXT)
