@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
 import type { RowView } from '../../presentation'
@@ -14,6 +14,21 @@ it('renders title, status and tag', () => {
   expect(screen.getByText('Ace Ventura – Rezonate')).toBeInTheDocument()
   expect(screen.getByText('Starting…')).toBeInTheDocument()
   expect(screen.getByText('queued')).toBeInTheDocument()
+})
+
+it('shows the retry timer separately and counts it down', () => {
+  vi.useFakeTimers()
+  try {
+    const view: RowView = { ...base, status: 'Previous attempt: No Soulseek match; alternate source unavailable',
+      statusTone: 'amber', retryInSeconds: 61 }
+    render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} />)
+    expect(screen.getByText('Previous attempt: No Soulseek match; alternate source unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Retry in 1m 1s')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(screen.getByText('Retry in 1m 0s')).toBeInTheDocument()
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('fires the row action and candidate choice', () => {

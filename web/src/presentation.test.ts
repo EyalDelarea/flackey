@@ -149,7 +149,7 @@ describe('presentRow', () => {
   })
   it('backoff row counts down and paused rows say so when Telegram is signed out', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)
-    expect(v.status).toBe('Trying again in 25 seconds — previous attempt: Beatport unreachable'); expect(v.retryInSeconds).toBe(25)
+    expect(v.status).toBe('Previous attempt: Beatport unreachable'); expect(v.retryInSeconds).toBe(25)
     const p = presentRow(bundle({ state: 'fetching' }), { ...opts, telegramAuthorized: false })
     // The tag counted rungs -- "step 3 of 6" -- against a ladder that has five, and the count was the
     // wrong thing to say anyway: the rung is right there beside it. It names where the row stopped.
@@ -309,8 +309,15 @@ describe('a queued track', () => {
   it('keeps its countdown when it is on a retry backoff, and offers no Stop over it', () => {
     const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
       flag_reason: 'Beatport unreachable, will retry' }), opts)
-    expect(v.status).toContain('Trying again in 60 seconds')
+    expect(v.status).toBe('Previous attempt: Beatport unreachable')
     expect(v.retryInSeconds).toBe(60)
+  })
+
+  it('shortens the verbose Soulseek fallback warning without losing its meaning', () => {
+    const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
+      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback' }), opts)
+    expect(v.status).toBe('Previous attempt: No Soulseek match; alternate source unavailable')
+    expect(v.retryInSeconds).toBe(25)
   })
 })
 
