@@ -255,6 +255,49 @@
             </div>
           </li>
         </ol>
+        <!-- The argument the section is making, shown rather than described: the
+             same music through both files, so the only difference on screen is
+             the one the check actually looks for. -->
+        <figure class="spectra" id="spectra">
+          <div class="spectra-grid">
+            <div class="spec">
+              <div class="spec-head">
+                <span class="spec-verdict ok">Accepted</span>
+                <span class="spec-name">Real lossless — content up to 21.8 kHz</span>
+              </div>
+              <div class="spec-plot">
+                <canvas class="spec-canvas" data-cutoff="0" aria-hidden="true"></canvas>
+                <div class="spec-axis" aria-hidden="true">
+                  <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
+                  ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
+                </div>
+              </div>
+            </div>
+            <div class="spec">
+              <div class="spec-head">
+                <span class="spec-verdict bad">Rejected</span>
+                <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
+              </div>
+              <div class="spec-plot">
+                <canvas class="spec-canvas" data-cutoff="16000" aria-hidden="true"></canvas>
+                <div class="spec-axis" aria-hidden="true">
+                  <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
+                  ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
+                </div>
+                <div class="spec-cut" aria-hidden="true">
+                  <span>nothing above this line</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <figcaption>
+            Frequency runs bottom to top, time scrolls left to right. A real
+            lossless file carries content all the way up; an MP3 throws the top
+            octave away to save space, and renaming it to <code>.flac</code>
+            doesn't put it back. That empty band is what Flackey looks for.
+            <em>Illustration — not a recording of a specific track.</em>
+          </figcaption>
+        </figure>
       </section>
       <section class="about wrap" id="about" aria-labelledby="about-title">
         <p class="eyebrow">About Flackey</p>
@@ -333,18 +376,80 @@
           >
           <p class="release" id="release-line">Checking for a release…</p>
         </div>
-        <details class="install">
+        <details class="install" open>
           <summary>Installing Flackey</summary>
           <ol>
             <li>Download and open <strong>Flackey.pkg</strong>.</li>
+            <li>
+              macOS will block it the first time — see below. This is expected.
+            </li>
             <li>Follow the macOS Installer steps. Flackey is placed in Applications.</li>
             <li>Open Flackey and connect Telegram, Soulseek, or both.</li>
           </ol>
-          <p>
-            Beta builds are not notarized yet. If macOS says the installer is
-            from an unidentified developer, control-click it, choose Open, and
-            confirm that you want to continue.
-          </p>
+          <div class="gatekeeper">
+            <h3>macOS will say it can’t verify Flackey</h3>
+            <p>
+              Flackey isn’t notarized yet, which needs a paid Apple Developer
+              account. macOS blocks anything unnotarized by default, so you’ll
+              see this the first time you open the installer:
+            </p>
+            <!-- A plain diagram of the system dialog, drawn rather than
+                 screenshotted, so the one destructive button can be called out
+                 directly. The blue button is the default, and it deletes the
+                 download - which is the whole reason this section exists. -->
+            <figure class="gk-dialog">
+              <div class="gk-sheet" aria-hidden="true">
+                <p class="gk-title">“Flackey.pkg” Not Opened</p>
+                <p class="gk-body">
+                  Apple could not verify “Flackey.pkg” is free of malware that
+                  may harm your Mac or compromise your privacy.
+                </p>
+                <div class="gk-buttons">
+                  <span class="gk-btn gk-pick">Done</span
+                  ><span class="gk-btn gk-default">Move to Trash</span>
+                </div>
+              </div>
+              <figcaption>
+                <strong>Click “Done.”</strong> “Move to Trash” is the blue
+                default button, and it deletes the installer you just
+                downloaded.
+              </figcaption>
+            </figure>
+            <p class="gk-lead">Then allow it once:</p>
+            <ol class="gk-steps">
+              <li>
+                Open <strong>System Settings</strong> →
+                <strong>Privacy &amp; Security</strong>, and scroll down to
+                <strong>Security</strong>.
+              </li>
+              <li>
+                Next to <em>“Flackey.pkg was blocked to protect your Mac,”</em>
+                click <strong>Open Anyway</strong>.
+              </li>
+              <li>Authenticate with Touch ID or your password.</li>
+              <li>
+                Click <strong>Open Anyway</strong> once more when the warning
+                comes back. The installer then runs normally.
+              </li>
+            </ol>
+            <p class="gk-note">
+              <strong>If you don’t see an “Open Anyway” button,</strong> it has
+              expired — it only appears for about an hour after macOS blocks
+              something. Double-click <strong>Flackey.pkg</strong> again, click
+              <strong>Done</strong>, and go straight back to Privacy &amp;
+              Security.
+            </p>
+            <p class="gk-note">
+              On macOS 14 and earlier you could control-click the installer and
+              choose Open. macOS 15 removed that, so Privacy &amp; Security is
+              now the only route.
+            </p>
+            <p class="gk-note">
+              Rather not take our word for it? Flackey is open source — you can
+              read the code and
+              <a href="https://github.com/EyalDelarea/flackey">build it yourself</a>.
+            </p>
+          </div>
         </details>
       </section>
     </main>

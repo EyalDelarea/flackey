@@ -243,6 +243,207 @@ if (appDemo) {
   }
 }
 
+// The spectrogram comparison in the verification section. Both panels are drawn
+// from one synthetic spectrum, so the only difference between them is the thing
+// the check actually looks for: the lossy panel discards everything above its
+// cutoff. Illustrative, not an analysis of a real file - the caption says so.
+const spectra = document.querySelector("#spectra");
+if (spectra) {
+  const NYQUIST = 22050;
+  const MS_PER_COLUMN = 16; // one column per ~16ms, so the scroll speed does not
+  // depend on whether the display runs at 60 or 120Hz
+
+  // Dark ground through the site's blue to white, so the loud parts read as heat
+  // and the panel still belongs to the page around it.
+  const RAMP = [
+    [0.0, [5, 7, 13]],
+    [0.25, [11, 42, 94]],
+    [0.5, [10, 92, 196]],
+    [0.72, [47, 168, 255]],
+    [0.88, [159, 224, 255]],
+    [1.0, [255, 255, 255]],
+  ];
+  // 256 steps, baked once: a spectrogram asks for a colour per pixel per column,
+  // and interpolating the ramp each time is the one thing here that would cost.
+  const LUT = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const v = i / 255;
+    let k = 0;
+    while (k < RAMP.length - 2 && v > RAMP[k + 1][0]) k++;
+    const [p0, c0] = RAMP[k];
+    const [p1, c1] = RAMP[k + 1];
+    const f = (v - p0) / (p1 - p0);
+    for (let c = 0; c < 3; c++) LUT[i * 3 + c] = c0[c] + (c1[c] - c0[c]) * f;
+  }
+
+  // A spectrogram of real music is three things at once: sustained tones as
+  // horizontal lines, transients as vertical stripes, and a noise bed that thins
+  // out with frequency. Modelling those three is enough to look like music.
+  const VOICES = [
+    { root: 82.41, partials: 16, gain: 1.0, rate: 0.37 },
+    { root: 164.81, partials: 11, gain: 0.62, rate: 0.55 },
+    { root: 246.94, partials: 9, gain: 0.44, rate: 0.28 },
+    { root: 329.63, partials: 8, gain: 0.34, rate: 0.83 },
+  ];
+  const SEMITONES = [0, 3, 5, 7, 10, 7, 5, 3];
+
+  // A sixteenth-note grid, so the transients land in a pattern instead of on a
+  // metronome - an evenly spaced tick every beat reads as a test signal.
+  const STEP = 0.125;
+  const KICK = [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+  const SNARE = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1];
+  const HAT = [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1];
+
+  // Seconds since this drum last fired. Decays are short, the way percussion
+  // actually behaves: a slow one smears every hit into a full-height band.
+  const age = (pattern, t) => {
+    const now = Math.floor(t / STEP);
+    for (let k = 0; k < 16; k++) {
+      const i = now - k;
+      if (pattern[((i % 16) + 16) % 16]) return t - i * STEP;
+    }
+    return 99;
+  };
+  const envelopes = (t) => ({
+    kick: Math.exp(-age(KICK, t) * 24),
+    snare: Math.exp(-age(SNARE, t) * 17),
+    hat: Math.exp(-age(HAT, t) * 60),
+  });
+
+  // `binHz` is how much frequency one pixel row covers. Partials narrower than a
+  // row fall between the rows being sampled and flicker in and out instead of
+  // drawing a line, so they are widened to straddle one.
+  const spectrum = (freq, t, binHz, env) => {
+    let v = 0.008 * (0.3 + 0.7 / (1 + freq / 4000)); // noise bed
+    // Cymbal wash: the sustained top end that a lossy encoder throws away, and
+    // the reason the two panels differ at all. Breathes slightly so the upper
+    // band looks recorded rather than painted on.
+    v +=
+      0.012 *
+      (0.8 + 0.2 * Math.sin(t * 1.7)) *
+      Math.exp(-Math.pow((freq - 16000) / 7000, 2));
+    v += env.kick * 1.0 * Math.exp(-freq / 170);
+    v += env.snare * 0.45 * Math.exp(-Math.pow((freq - 2200) / 2600, 2));
+    v += env.snare * 0.1 * Math.exp(-Math.pow((freq - 7000) / 4000, 2));
+    // Narrow in frequency, or every hit is a stripe up the whole panel.
+    v += env.hat * 0.34 * Math.exp(-Math.pow((freq - 14500) / 5000, 2));
+    for (const voice of VOICES) {
+      const step = SEMITONES[Math.floor(t * voice.rate) % SEMITONES.length];
+      const root = voice.root * Math.pow(2, step / 12);
+      for (let n = 1; n <= voice.partials; n++) {
+        const pf = root * n;
+        if (pf > NYQUIST) break;
+        const width = Math.max(1.6 * binHz, 24 + pf * 0.014);
+        v +=
+          (voice.gain / Math.pow(n, 1.22)) *
+          Math.exp(-Math.pow((freq - pf) / width, 2));
+      }
+    }
+    return v;
+  };
+
+  // Starts well above zero so that pre-filling a panel with history still asks
+  // the model for positive times.
+  let clock = 600;
+
+  const panels = [...spectra.querySelectorAll(".spec-canvas")].map((canvas) => ({
+    canvas,
+    ctx: canvas.getContext("2d", { alpha: false }),
+    cutoff: Number(canvas.dataset.cutoff) || 0,
+    column: null,
+    w: 0,
+    h: 0,
+  }));
+
+  const drawColumn = (panel, t) => {
+    const { ctx, h, cutoff, column } = panel;
+    const data = column.data;
+    const binHz = NYQUIST / h;
+    const env = envelopes(t); // once per column, not once per pixel
+    for (let y = 0; y < h; y++) {
+      const freq = (1 - y / (h - 1)) * NYQUIST;
+      let m = spectrum(freq, t, binHz, env);
+      // What a lossy encoder actually leaves behind: not pure silence, but a
+      // floor far below anything musical.
+      if (cutoff && freq > cutoff) m *= 0.015;
+      // Decibels over a 48 dB window, the way an analyser shows it: linear
+      // magnitude spends almost its whole range on the loudest few percent and
+      // renders as a solid wash instead of as structure.
+      const level = Math.max(0, Math.min(1, (Math.log10(m) * 20 + 45) / 45));
+      const i = (level * 255) | 0;
+      const o = y * 4;
+      data[o] = LUT[i * 3];
+      data[o + 1] = LUT[i * 3 + 1];
+      data[o + 2] = LUT[i * 3 + 2];
+      data[o + 3] = 255;
+    }
+    // Scroll by one pixel, then stamp the new column at the right edge. `copy`
+    // so the shifted image replaces rather than blends with what is under it.
+    ctx.globalCompositeOperation = "copy";
+    ctx.drawImage(ctx.canvas, -1, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.putImageData(column, panel.w - 1, 0);
+  };
+
+  const resize = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    for (const panel of panels) {
+      const rect = panel.canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (w === panel.w && h === panel.h) continue;
+      panel.canvas.width = w;
+      panel.canvas.height = h;
+      panel.w = w;
+      panel.h = h;
+      panel.column = panel.ctx.createImageData(1, h);
+      // Fill the panel with history so it opens as a spectrogram already
+      // running, rather than as a black rectangle wiping itself in. Counted
+      // forward from a positive base: the voices index a pattern with `%`, and
+      // a negative time indexes off the front of it.
+      for (let x = 0; x < w; x++)
+        drawColumn(panel, clock - (w - x) * (MS_PER_COLUMN / 1000));
+    }
+  };
+
+  resize();
+  window.addEventListener("resize", resize);
+
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    let carry = 0;
+    let previous = 0;
+    let running = false;
+    let frame = 0;
+    const tick = (now) => {
+      if (!running) return;
+      // Clamped: coming back to a backgrounded tab should resume, not redraw
+      // every column that would have been dropped while it was away.
+      carry += Math.min(160, now - previous);
+      previous = now;
+      while (carry >= MS_PER_COLUMN) {
+        carry -= MS_PER_COLUMN;
+        clock += MS_PER_COLUMN / 1000;
+        for (const panel of panels) drawColumn(panel, clock);
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting === running) return;
+        running = entry.isIntersecting;
+        if (running) {
+          previous = performance.now();
+          carry = 0;
+          frame = requestAnimationFrame(tick);
+        } else {
+          cancelAnimationFrame(frame);
+        }
+      },
+      { threshold: 0.1 },
+    ).observe(spectra);
+  }
+}
+
 // Ambient sound-wave motifs: a breathing EQ curve behind the hero title, and a small
 // pulsing EQ meter next to "How we verify audio". Purely decorative (aria-hidden).
 const eqBars = document.querySelector("#eq-bars");
