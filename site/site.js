@@ -3,13 +3,18 @@ const downloadLink = document.querySelector("#download-link");
 const command = document.querySelector("#xattr-command");
 const copy = document.querySelector("#copy-command");
 
-fetch("https://api.github.com/repos/EyalDelarea/flackey/releases/latest")
+// GitHub's /releases/latest endpoint deliberately excludes prereleases. Flackey is
+// still in beta, so read the release list and select the newest published build.
+fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
   .then((response) => {
     if (response.status === 404) return null;
     if (!response.ok) throw new Error("Release lookup failed");
     return response.json();
   })
-  .then((data) => {
+  .then((releases) => {
+    const data = Array.isArray(releases)
+      ? releases.find((item) => !item.draft)
+      : null;
     const asset = data?.assets?.find((item) => item.name === "Flackey.zip");
     if (!release || !downloadLink || !asset?.browser_download_url) {
       if (release) release.textContent = "The first download is on its way.";
@@ -27,7 +32,8 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases/latest")
       month: "long",
       year: "numeric",
     }).format(new Date(data.published_at));
-    release.textContent = `Version ${version} · ${size} · ${date}`;
+    const status = data.prerelease ? "Beta" : "Stable";
+    release.textContent = `Version ${version}v · ${status} · ${size} · ${date}`;
   })
   .catch(() => {
     if (release)
