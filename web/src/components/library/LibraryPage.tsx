@@ -35,7 +35,7 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
   if (!total) return null
   const active = unresolved.filter(b => ACTIVE_STATES.has(b.request.state)).length
   const failed = unresolved.length - active
-  return <section className="playlist-import-status" aria-label="Playlist import status">
+  return <section className="group playlist-import-status" aria-label="Playlist import status">
     <h2>Import status <span>{filed.size} of {total} in library{active ? ` · ${active} processing` : ''}{failed ? ` · ${failed} not in library` : ''}</span></h2>
     {unresolved.length
       ? <><p>These entries haven’t been added yet. Completed entries are listed in the playlist above.</p>
