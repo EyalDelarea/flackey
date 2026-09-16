@@ -8,6 +8,9 @@ import FilterBar from './FilterBar'
 import Group from './Group'
 import PasteBar from './PasteBar'
 
+const FAILED_STATES = ['rejected', 'not_found', 'error', 'cancelled']
+const TERMINAL_STATES = ['done', 'duplicate', ...FAILED_STATES]
+
 function useNow(ms: number) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setNow(new Date()), ms); return () => clearInterval(t) }, [ms])
@@ -20,13 +23,19 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const [actionError, setActionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
+  // What History has already shown: a fresh id that lands in a terminal state while the owner is looking
+  // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
+  const [seenHistoryIds, setSeenHistoryIds] = useState<Set<number>>(new Set())
   const soulseekConnected = live.health?.lossless?.enabled && live.health.lossless.provider?.status === 'ok'
   const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress }
   const bundles = [...live.bundles.values()]
   const scoped = bundles.filter(b => view === 'active'
     ? ['queued', 'identifying', 'awaiting_review', 'fetching', 'verifying', 'filing'].includes(b.request.state)
-    : view === 'failed' ? ['rejected', 'not_found', 'error', 'cancelled'].includes(b.request.state)
-    : ['done', 'duplicate', 'rejected', 'not_found', 'error', 'cancelled'].includes(b.request.state))
+    : view === 'failed' ? FAILED_STATES.includes(b.request.state)
+    : TERMINAL_STATES.includes(b.request.state))
+  const historyIds = bundles.filter(b => TERMINAL_STATES.includes(b.request.state)).map(b => b.request.id)
+  const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
+  const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)
   const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(err instanceof ApiError ? err.message : "That didn't work. Try again."))
@@ -45,7 +54,11 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
         return submission.summary
       }} inset={inset} />
       {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
-      <div className="download-views" role="group" aria-label="Download view"><button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button><button className="chip" aria-pressed={view === 'history'} onClick={() => { setView('history'); setFilter('all') }}>History</button>{view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(b => ['rejected', 'not_found', 'error', 'cancelled'].includes(b.request.state)).length}</span></button>}</div>
+      <div className="download-views" role="group" aria-label="Download view">
+        <button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button>
+        <button className="chip" aria-pressed={view === 'history'} onClick={openHistory}>History{newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}</button>
+        {view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(b => FAILED_STATES.includes(b.request.state)).length}</span></button>}
+      </div>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       <div className="scroll">

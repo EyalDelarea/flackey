@@ -122,6 +122,17 @@ describe('filter bar, remove and clear failed', () => {
     expect(screen.getByRole('button', { name: 'Clear failed' })).toBeDisabled()
   })
 
+  it('badges History when a request finishes while the owner is watching Downloads, and clears on open', () => {
+    const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'fetching')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+
+    rerender(<DownloadPage live={makeLive([mk(1, 'done')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).toHaveTextContent('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+  })
+
   it('shows "Nothing here." when a filter hides every row', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
     fireEvent.click(screen.getByRole('button', { name: 'History' }))
