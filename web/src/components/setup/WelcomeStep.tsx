@@ -29,7 +29,7 @@ export default function WelcomeStep({ onStart }: { onStart: () => void }) {
       </div>
       <div className="pitch">
         <h1>Flackey</h1>
-        <p className="lead">Paste a YouTube link. Get the best copy that exists — lossless where Soulseek has it — tagged and filed where Rekordbox will find it.</p>
+        <p className="lead">Paste a YouTube link. Get the best copy that exists — lossless where Soulseek has it — tagged and filed in your library folder, ready to drag into Rekordbox.</p>
       </div>
       <div className="cta">
         <button className="btn-primary lg" onClick={onStart}>Get started</button>

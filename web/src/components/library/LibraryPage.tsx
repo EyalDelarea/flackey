@@ -60,6 +60,15 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
   const [refreshing, setRefreshing] = useState(false)
   const [format, setFormat] = useState('all')
   const [folder, setFolder] = useState('all')
+  // A first-time owner has nowhere else to learn that Flackey does not do the Rekordbox import itself --
+  // shown once, next to the first track that makes the question real, then dismissed for good.
+  const [showRekordboxGuide, setShowRekordboxGuide] = useState(() => {
+    try { return localStorage.getItem('flackey.rekordboxGuideSeen') !== '1' } catch { return true }
+  })
+  const dismissRekordboxGuide = () => {
+    setShowRekordboxGuide(false)
+    try { localStorage.setItem('flackey.rekordboxGuideSeen', '1') } catch { /* private window or blocked storage */ }
+  }
   const requestCounter = useRef(0)
 
   useEffect(() => {
@@ -146,6 +155,17 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))
       }} />}
+      {!pl && s && s.tracks > 0 && showRekordboxGuide && (
+        <div className="group pl-card">
+          <span className="pl-icon"><Icon name="folder" size={22} /></span>
+          <div className="how"><h2>Ready for Rekordbox</h2>
+            Drag your library folder into the Rekordbox collection to bring tracks in — Rekordbox skips
+            tracks it already knows, so this is safe to repeat, and it handles BPM and key analysis for you.
+          </div>
+          <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Show in Finder</button>
+          <button className="btn-link muted" onClick={dismissRekordboxGuide}>Got it</button>
+        </div>
+      )}
       <div className="library-filters" aria-label="Library filters">
         <label>Folder <span className="picker"><select value={folder} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
         <label>Format <span className="picker"><select value={format} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>

@@ -116,6 +116,19 @@ it('offers Clear filters and explains an empty first library differently from an
   expect(screen.getByLabelText('search library')).toHaveValue('')
 })
 
+it('offers a Rekordbox import guide once tracks exist, pointing at the library folder', async () => {
+  vi.mocked(api.library).mockResolvedValueOnce([])
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await screen.findByText('Ready for Rekordbox')
+
+  vi.mocked(api.reveal).mockResolvedValue({ ok: true })
+  fireEvent.click(screen.getByText('Show in Finder'))
+  await waitFor(() => expect(api.reveal).toHaveBeenCalledWith('/lib'))
+
+  fireEvent.click(screen.getByText('Got it'))
+  expect(screen.queryByText('Ready for Rekordbox')).not.toBeInTheDocument()
+})
+
 it('shows failed and in-progress playlist entries beside the filed tracks', async () => {
   vi.mocked(api.library).mockResolvedValue([])
   const playlist: Playlist = { id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '', track_ids: [1], track_positions: [1, 4], file: '/lib/Goa.m3u8' }
