@@ -40,11 +40,19 @@ it('says what is connected', async () => {
   expect(screen.getByText(/next time you open Flackey/)).toBeInTheDocument()
 })
 
-it('says there is nowhere to fetch from when both sources were skipped', async () => {
+it('offers Connect a source, not Start digging, when both sources were skipped', async () => {
   vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: true, ffprobe: true, yt_dlp: true })
-  render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="skipped" soulseek="skipped" />)
+  const onConnectSource = vi.fn(); const onStart = vi.fn().mockResolvedValue(undefined)
+  render(<ReadyStep libraryRoot="/tmp/lib" onStart={onStart} onConnectSource={onConnectSource} telegram="skipped" soulseek="skipped" />)
   await waitFor(() => expect(screen.getByText(/nowhere to fetch from yet/)).toBeInTheDocument())
-  expect(screen.getByText('Start digging')).toBeInTheDocument()   // still allowed to finish
+  expect(screen.queryByText('Start digging')).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByText('Connect a source'))
+  expect(onConnectSource).toHaveBeenCalled()
+  expect(onStart).not.toHaveBeenCalled()
+
+  fireEvent.click(screen.getByText('Explore the app'))   // still allowed to finish without a source
+  expect(onStart).toHaveBeenCalled()
 })
 
 it('names the saved Soulseek account rather than claiming sources in general', async () => {

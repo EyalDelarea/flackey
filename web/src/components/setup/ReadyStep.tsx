@@ -6,7 +6,7 @@ import type { Tools } from '../../api'
 const NAME: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', yt_dlp: 'yt-dlp' }
 const BREW: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffmpeg', yt_dlp: 'yt-dlp' }
 
-export default function ReadyStep({ libraryRoot, onStart, error, telegram, soulseek }: { libraryRoot: string; onStart: () => Promise<void>; error?: string | null; telegram: 'connected' | 'skipped'; soulseek: 'connected' | 'pending' | 'skipped' }) {
+export default function ReadyStep({ libraryRoot, onStart, onConnectSource, error, telegram, soulseek }: { libraryRoot: string; onStart: () => Promise<void>; onConnectSource?: () => void; error?: string | null; telegram: 'connected' | 'skipped'; soulseek: 'connected' | 'pending' | 'skipped' }) {
   const [tools, setTools] = useState<Tools | null>(null)
   const [checkFailed, setCheckFailed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -43,7 +43,7 @@ export default function ReadyStep({ libraryRoot, onStart, error, telegram, souls
     soulseek === 'connected' ? 'Soulseek is connected' : soulseek === 'pending' ? 'Soulseek is saved' : null]
     .filter(Boolean).join(' and ')
   return (<>
-    <div className="ready-disc"><Icon name="check" size={26} stroke={2.4} /></div>
+    <div className={`ready-disc${nothing ? ' neutral' : ''}`}><Icon name={nothing ? 'download' : 'check'} size={26} stroke={2.4} /></div>
     <h1>{nothing ? 'Almost set' : "You're set"}</h1>
     <p className="lead">{nothing
       ? 'There is nowhere to fetch from yet: Telegram and Soulseek are both off. You can turn either on later from Settings. Your music will be filed into'
@@ -54,7 +54,12 @@ export default function ReadyStep({ libraryRoot, onStart, error, telegram, souls
         Say so plainly rather than letting the user wonder why nothing lossless ever arrives. */}
     {soulseek === 'pending' && <div className="hint-row">Soulseek is saved. It starts looking for lossless copies the
       next time you open Flackey.</div>}
-    <button className="btn-primary lg" onClick={start} disabled={!tools || busy}>Start digging</button>
+    {nothing
+      ? <div className="row-gap">
+          <button className="btn-primary lg" onClick={onConnectSource} disabled={!tools}>Connect a source</button>
+          <button className="btn-link" onClick={start} disabled={!tools || busy}>Explore the app</button>
+        </div>
+      : <button className="btn-primary lg" onClick={start} disabled={!tools || busy}>Start digging</button>}
     {err && <div className="err">{err}</div>}
     {error && <div className="err">{error}</div>}
   </>)
