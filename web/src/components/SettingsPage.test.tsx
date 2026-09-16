@@ -219,12 +219,13 @@ describe('the Soulseek panel', () => {
     expect(screen.queryByRole('button', { name: /Reconnect|Try again/ })).not.toBeInTheDocument()
   })
 
-  it('offers no format to choose: on a Mac there is one right answer', () => {
-    // Rekordbox reads no ID3 tag out of a WAV, so a WAV files with no artist, genre or cover -- and FLAC is
-    // not playable on every CDJ. AIFF is the only one that is both, which leaves nothing to ask the owner.
+  it('lets the owner choose the future lossless filing format', async () => {
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ lossless_filing_format: 'wav' }))
     show(lossless())
-    expect(screen.queryByRole('group', { name: 'File format' })).not.toBeInTheDocument()
-    expect(screen.queryByText('File format')).not.toBeInTheDocument()
+    expect(screen.getByText(/New lossless tracks will be filed as AIFF/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /WAV/ }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { lossless_filing_format: 'wav' }))
+    expect(mockSetSettings).toHaveBeenCalledWith(expect.objectContaining({ lossless_filing_format: 'wav' }))
   })
 
   it('does not fetch the saved password until it is asked for, and hides it again', async () => {
@@ -259,10 +260,11 @@ describe('the Soulseek panel', () => {
     expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
   })
 
-  it('hides the format and ranking rows when no account is set up, and says why', () => {
+  it('hides the ranking diagnostics when no account is set up, but still allows choosing a future format', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
     expect(screen.getByText(/Not set up — run setup again/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'WAV' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /WAV/ })).toBeInTheDocument()
+    expect(screen.queryByText(/keeps a copy only if its fingerprint matches/)).not.toBeInTheDocument()
   })
 
   it('says whether other people can reach you, and how to open the port when they cannot', () => {

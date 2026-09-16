@@ -53,6 +53,17 @@ def test_write_and_read_tags(tmp_path: Path, ext: str):
 
 
 @requires_ffmpeg
+def test_wav_carries_rekordbox_documented_riff_info(tmp_path: Path):
+    p = _make(tmp_path, "wav")
+    write_tags(p, CT, V, PNG_1x1, "image/png")
+    raw = p.read_bytes()
+    assert b"LIST" in raw and b"INFO" in raw
+    for marker in (b"INAM", b"IART", b"IPRD", b"IGNR", b"ICRD", b"ICMT", b"ISRC", b"IPUB", b"ICAT", b"IMIX"):
+        assert marker in raw
+    assert read_tags(p)["title"] == "Into the Void"
+
+
+@requires_ffmpeg
 def test_remix_goes_into_title(tmp_path: Path):
     p = _make(tmp_path, "mp3")
     ct = CatalogTrack(**{**CT.__dict__, "mix_name": "Vini Vici Remix"})

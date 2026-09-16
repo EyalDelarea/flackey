@@ -4,6 +4,7 @@ import type { AppSettings, LosslessHealth, TelegramStatus, UpdateStatus } from '
 import type { Live } from '../live'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
+import FormatOptions, { FORMAT_LABELS, formatNote } from './FormatOptions'
 import SharingPanel from './SharingPanel'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
@@ -40,6 +41,8 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [setupResetError, setSetupResetError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
+  const [formatBusy, setFormatBusy] = useState(false)
+  const [formatError, setFormatError] = useState<string | null>(null)
   const [checkError, setCheckError] = useState<string | null>(null)
   // The saved Soulseek password, once the owner asks for it. Held only in this component's state:
   // nothing fetches it until the button is pressed, and leaving Settings forgets it again.
@@ -120,6 +123,16 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .then(() => live.refresh())
       .catch(e => setSoulseekError(getErrorMessage(e, "Couldn't reconnect to Soulseek.")))
       .finally(() => setReconnecting(false))
+  }
+  const formats = s.filing_formats ?? ['aiff', 'wav', 'flac']
+  const currentFormat = s.lossless_filing_format ?? 'aiff'
+  const saveFormat = (format: string) => {
+    if (format === currentFormat) return
+    setFormatBusy(true); setFormatError(null)
+    api.saveSettings(s.library_root, { lossless_filing_format: format })
+      .then(next => live.setSettings(next))
+      .catch(e => setFormatError(getErrorMessage(e, 'Could not save that format.')))
+      .finally(() => setFormatBusy(false))
   }
   const saveKeys = () => {
     setKeysBusy(true); setKeysError(null); setKeysSaved(false)
@@ -202,6 +215,10 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="actions">{lossless?.enabled &&
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
+        <div className="srow"><div className="srow-body"><div className="k">File format</div>
+          <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}. {formatNote(currentFormat)}</div>
+          <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} />
+          {formatError && <div className="err">{formatError}</div>}</div></div>
         {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
             Flackey generated both. So the owner has to be able to get this string back -- without it they
             cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
