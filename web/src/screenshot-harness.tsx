@@ -64,6 +64,16 @@ function scenarioSetup() {
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async (q?: string) => (q ? [] : [track({})]))
       break
+    case 'setup':
+      vi_spy(api, 'health', async () => health({ setup_done: false, telegram_authorized: false }))
+      vi_spy(api, 'pickFolderAvailable', async () => ({ available: false }))
+      vi_spy(api, 'saveSettings', async (library_root: string) => ({ ...settings, library_root }))
+      vi_spy(api, 'telegramStatus', async () => ({ authorized: false, configured: true, phone_masked: null }))
+      vi_spy(api, 'skipTelegram', async () => ({ source_enabled: false }))
+      vi_spy(api, 'soulseekSetup', async () => ({ configured: false, username: null }))
+      vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))
+      vi_spy(api, 'tools', async () => ({ ffmpeg: true, ffprobe: true, yt_dlp: true }))
+      break
     default:
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
