@@ -13,7 +13,7 @@ function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
   const health: Health = { ok: true, version: '0', telegram_authorized: true, worker_running: true, setup_done: true }
   return {
     health, bundles: new Map(bundles.map(b => [b.request.id, b])), playlists: [], stats: null, settings: null,
-    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false, connected: true, lastSeen: null,
     upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
@@ -55,7 +55,7 @@ it('refreshes queue and playlists after a paste submission returns', async () =>
   })
   const refresh = vi.fn(async () => undefined)
   render(<DownloadPage live={makeLive([], { refresh })} />)
-  fireEvent.change(screen.getByPlaceholderText('Paste a YouTube, YouTube Music, or Spotify link'), {
+  fireEvent.change(screen.getByLabelText('Track or playlist link'), {
     target: { value: 'https://open.spotify.com/playlist/pl1' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'Add' }))

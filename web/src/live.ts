@@ -27,6 +27,11 @@ export function useLive(): Live {
   const [connected, setConnected] = useState(false)
   const [lastSeen, setLastSeen] = useState<Date | null>(null)
   const firstOpen = useRef(true)
+  const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const markAlive = useCallback(() => {
+    if (staleTimer.current) { clearTimeout(staleTimer.current); staleTimer.current = null }
+    setConnected(true); setLastSeen(new Date())
+  }, [])
 
   const refreshLibrary = useCallback(async () => {
     const [p, s] = await Promise.all([api.playlists(), api.stats()])
@@ -36,7 +41,7 @@ export function useLive(): Live {
     try {
       const [h, q, st] = await Promise.all([api.health(), api.queue(), api.settings()])
       setHealth(h); setBundles(new Map(q.map(b => [b.request.id, b]))); setSettings(st)
-      setConnected(true); setLastSeen(new Date())
+      markAlive()
       await refreshLibrary()
       setLoadError(null)
     } catch (e) {
@@ -56,11 +61,11 @@ export function useLive(): Live {
     const es = new EventSource('/api/events')
     es.addEventListener('request', e => {
       const b = JSON.parse((e as MessageEvent).data) as Bundle
-      setConnected(true); setLastSeen(new Date())
+      markAlive()
       setBundles(prev => { const next = new Map(prev); next.set(b.request.id, b); return next })
     })
-    es.addEventListener('track', () => { setConnected(true); setLastSeen(new Date()); refreshLibrary().catch(() => undefined) })
-    es.addEventListener('queue', () => { setConnected(true); setLastSeen(new Date()); api.queue().then(q => setBundles(new Map(q.map(b => [b.request.id, b])))).catch(() => undefined); refreshLibrary().catch(() => undefined) })
+    es.addEventListener('track', () => { markAlive(); refreshLibrary().catch(() => undefined) })
+    es.addEventListener('queue', () => { markAlive(); api.queue().then(q => setBundles(new Map(q.map(b => [b.request.id, b])))).catch(() => undefined); refreshLibrary().catch(() => undefined) })
     es.addEventListener('status', e => {
       // The server's status dict is flat and /api/health is nested, so `lossless_provider` has to be
       // folded into `lossless.provider` by hand. Spreading it straight in put a stray top-level key on
@@ -70,7 +75,7 @@ export function useLive(): Live {
         JSON.parse((e as MessageEvent).data) as Partial<Health> &
           { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress[] | null }
       if (fetching !== undefined) setFetchProgress(fetching ?? [])
-      setConnected(true); setLastSeen(new Date())
+      markAlive()
       setHealth(prev => {
         if (!prev) return prev
         const next: Health = { ...prev, ...flags }
@@ -78,9 +83,14 @@ export function useLive(): Live {
         return next
       })
     })
-    es.onopen = () => { setConnected(true); setLastSeen(new Date()); if (firstOpen.current) { firstOpen.current = false; return } refresh().catch(() => undefined) }
-    es.onerror = () => setConnected(false)
-    return () => es.close()
+    es.onopen = () => { markAlive(); if (firstOpen.current) { firstOpen.current = false; return } refresh().catch(() => undefined) }
+    // EventSource fires `error` on every transient retry attempt, not just real outages, so a short
+    // grace period keeps the reconnecting banner from flashing during routine reconnects.
+    es.onerror = () => {
+      if (staleTimer.current) return
+      staleTimer.current = setTimeout(() => { setConnected(false); staleTimer.current = null }, 5000)
+    }
+    return () => { if (staleTimer.current) clearTimeout(staleTimer.current); es.close() }
   }, [refresh, refreshLibrary])
 
   return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }

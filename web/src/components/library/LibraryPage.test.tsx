@@ -14,7 +14,7 @@ function makeLive(): Live {
   return {
     health: null, bundles: new Map(), playlists: [],
     stats, settings: null,
-    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false, connected: true, lastSeen: null,
     upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
