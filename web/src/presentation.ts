@@ -216,7 +216,12 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       if (r.retry_after) {
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
-        v.status = `${(r.flag_reason || 'Will retry').replace(/, will retry$/, '')} — trying again in ${secs} seconds`
+        const reason = (r.flag_reason || 'could not complete')
+          .replace(/, will retry$/, '')
+          .replace(/^no way to fetch this track:\s*/i, '')
+          .replace(/nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback/i,
+            'No Soulseek match; alternate source unavailable')
+        v.status = `Previous attempt: ${reason}`
         v.statusTone = 'amber'
       } else {
         // There is no line any more: every queued track is picked up on the worker's next pass, so this
@@ -276,7 +281,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       break
     }
     case 'cancelled': v.status = 'Skipped'; v.dimmed = true; break
-    case 'not_found': v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`; break
+    case 'not_found':
+      v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`
+      v.action = { label: 'Try again', kind: 'retry' }
+      break
     case 'error':
       v.status = `Failed — ${r.error_message || 'unknown error'}`; v.statusTone = 'red'
       v.action = { label: 'Try again', kind: 'retry' }

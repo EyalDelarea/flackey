@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import Artwork from './Artwork'
 import CandidateCard from './CandidateCard'
 import Checks from './Checks'
@@ -6,6 +7,20 @@ import Stepper from './Stepper'
 import Platter from './Platter'
 import Icon from '../Icon'
 import type { RowAction, RowView } from '../../presentation'
+
+function RetryCountdown({ seconds }: { seconds: number }) {
+  const [remaining, setRemaining] = useState(seconds)
+  useEffect(() => {
+    setRemaining(seconds)
+    if (seconds <= 0) return
+    const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000)
+    return () => window.clearInterval(timer)
+  }, [seconds])
+  const label = remaining <= 0 ? 'Retrying now' : remaining >= 60
+    ? `Retry in ${Math.floor(remaining / 60)}m ${remaining % 60}s`
+    : `Retry in ${remaining}s`
+  return <div className="retry-countdown" aria-live="off">{label}</div>
+}
 
 interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, candidateId: number) => void }
 
@@ -20,6 +35,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         <div className="row-text">
           <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
+          {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}

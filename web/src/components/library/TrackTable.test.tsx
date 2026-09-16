@@ -105,6 +105,7 @@ describe('a track still on the lossy copy', () => {
     render(<TrackTable tracks={[lossy, { ...lossy, id: 2, title: 'Second' }]} onReveal={() => {}} onUpgrade={onUpgrade} />)
     fireEvent.click(screen.getAllByText('Find lossless')[0])
     expect(await screen.findByText('Searching…')).toBeInTheDocument()
+    expect(screen.getAllByText('Searching…')[0].closest('.trow')).toHaveClass('selected')
     // one search at a time: the worker serializes lossless downloads, so a second is queued behind it anyway
     fireEvent.click(screen.getByText('Find lossless'))
     expect(onUpgrade).toHaveBeenCalledTimes(1)

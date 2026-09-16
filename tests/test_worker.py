@@ -455,6 +455,9 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     store.set_state(rid, RequestState.DONE)
     with pytest.raises(ValueError):
         await w.retry(rid)
+    store.set_state(rid, RequestState.NOT_FOUND, error_message="Deezer was switched off")
+    r = await w.retry(rid)
+    assert r.state == RequestState.QUEUED and r.error_message is None and r.lossless_retry == 1
 
 
 def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():

@@ -14,6 +14,7 @@ function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
   return {
     health, bundles: new Map(bundles.map(b => [b.request.id, b])), playlists: [], stats: null, settings: null,
     fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
     ...overrides,
@@ -74,6 +75,15 @@ describe('filter bar, remove and clear failed', () => {
     await waitFor(() => expect(screen.queryByText('Artist – Track 1')).not.toBeInTheDocument())
     expect(screen.getByText('Artist – Track 4')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Failed/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('refreshes Downloads after retrying a failed request', async () => {
+    vi.mocked(api.retry).mockResolvedValueOnce({ ...baseRequest, state: 'queued' } as any)
+    const refresh = vi.fn(async () => undefined)
+    render(<DownloadPage live={makeLive([mk(4, 'error')], { refresh })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByText('Try again'))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
 
   it('Remove on a failed row calls api.removeRequest, then drops it from live.bundles once the call succeeds', async () => {

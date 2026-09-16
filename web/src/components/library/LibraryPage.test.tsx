@@ -1,12 +1,12 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import LibraryPage from './LibraryPage'
 import { ApiError, api } from '../../api'
-import type { Stats } from '../../api'
+import type { Bundle, Playlist, Stats } from '../../api'
 import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, library: vi.fn(), reveal: vi.fn() } }
+  return { ...actual, api: { ...actual.api, library: vi.fn(), reveal: vi.fn(), retry: vi.fn() } }
 })
 
 function makeLive(): Live {
@@ -15,6 +15,7 @@ function makeLive(): Live {
     health: null, bundles: new Map(), playlists: [],
     stats, settings: null,
     fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
   }
@@ -77,4 +78,25 @@ it('renders the toolbar drag layer only when inset, and search still works eithe
 
   fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'abc' } })
   await waitFor(() => expect(api.library).toHaveBeenCalledWith('abc', null))
+})
+
+it('shows failed and in-progress playlist entries beside the filed tracks', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  const playlist: Playlist = { id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '', track_ids: [1], track_positions: [1, 4], file: '/lib/Goa.m3u8' }
+  const request = (id: number, position: number, raw_text: string, state: Bundle['request']['state']) => ({
+    request: { id, playlist_id: 7, playlist_position: position, raw_text, state },
+  }) as Bundle
+  const live = { ...makeLive(), playlists: [playlist], bundles: new Map([
+    [2, request(2, 2, 'Unmatched track', 'not_found')],
+    [3, request(3, 3, 'Still searching', 'fetching')],
+    [4, request(4, 4, 'Old failure, now filed', 'not_found')],
+  ]) }
+  render(<LibraryPage live={live} selectedPlaylist={7} />)
+  expect(await screen.findByText('Import status')).toBeInTheDocument()
+  expect(screen.getByText('Unmatched track')).toBeInTheDocument()
+  expect(screen.getByText('No match found')).toBeInTheDocument()
+  expect(screen.getByText('Still searching')).toBeInTheDocument()
+  expect(screen.queryByText('Old failure, now filed')).not.toBeInTheDocument()
+  expect(screen.getByText('Getting file')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
 })

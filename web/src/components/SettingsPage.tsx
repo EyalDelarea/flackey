@@ -32,6 +32,8 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [tg, setTg] = useState<TelegramStatus | null>(null)
   const [tgError, setTgError] = useState<string | null>(null)
   const [signingOut, setSigningOut] = useState(false)
+  const [sourceBusy, setSourceBusy] = useState(false)
+  const [sourceError, setSourceError] = useState<string | null>(null)
   const [pickerAvailable, setPickerAvailable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [resettingSetup, setResettingSetup] = useState(false)
@@ -102,6 +104,14 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .finally(() => setResettingSetup(false))
   }
   const telegramLine = authorized ? (tg?.phone_masked ? `Connected as ${tg.phone_masked}` : 'Connected') : 'Signed out'
+  const sourceEnabled = live.health?.source_enabled ?? true
+  const toggleTelegramSource = () => {
+    setSourceBusy(true); setSourceError(null)
+    api.telegramSource(!sourceEnabled)
+      .then(() => live.refresh())
+      .catch(err => setSourceError(getErrorMessage(err, "Couldn't change the Deezer bot setting.")))
+      .finally(() => setSourceBusy(false))
+  }
   const lossless: LosslessHealth | undefined = live.health?.lossless
   const soulseek = soulseekLine(lossless)
   const reconnectSoulseek = () => {
@@ -157,6 +167,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="v"><span className={`status-dot${authorized ? '' : ' amber'}`} />{telegramLine}</div></div>
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
+        <div className="srow"><div className="srow-body"><div className="k">Deezer bot</div>
+          <div className="v"><span className={`status-dot${sourceEnabled ? '' : ' amber'}`} />{sourceEnabled ? 'On — Flackey can search and fetch through Telegram' : 'Off — requests use Soulseek only'}</div>
+          {sourceError && <div className="err">{sourceError}</div>}</div>
+          <div className="actions">{!sourceEnabled && !authorized
+            ? <button className="btn-secondary" onClick={onReconnect}>Reconnect Telegram</button>
+            : <button className="btn-secondary" onClick={toggleTelegramSource} disabled={sourceBusy}>
+                {sourceBusy ? 'Saving…' : sourceEnabled ? 'Turn off' : 'Turn on'}</button>}</div></div>
         {/* Flackey ships with keys of its own and almost nobody needs to replace them, so this is folded
             away beside the ports table rather than sitting in the panel. It exists for the owner whose
             copy was built without them, or who would rather sign in under keys they control. */}

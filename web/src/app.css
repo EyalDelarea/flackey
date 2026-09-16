@@ -104,6 +104,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row .title .version { font-weight: 400; color: var(--secondary); }
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.amber { color: var(--orange); } .status.red { color: var(--red); } .status.green { color: var(--green); }
+.row .retry-countdown { color: var(--orange); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green); white-space: nowrap; }
 .tag { font-size: 11px; color: var(--tertiary); }
@@ -202,7 +203,16 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .pl-card .how { flex: 1; font-size: 12px; color: var(--secondary); line-height: 1.5; }
 .pl-card h2 { margin-bottom: 4px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 .pl-card h2 span { font-weight: 400; color: var(--secondary); }
-.table { background: var(--content); }
+.playlist-import-status { margin: 0; padding: 16px 18px; }
+.playlist-import-status h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.playlist-import-status h2 span { margin-left: 8px; color: var(--secondary); font-size: 12px; font-weight: 400; }
+.playlist-import-status p { margin: 0 0 10px; color: var(--secondary); font-size: 12px; }
+.playlist-import-status ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.playlist-import-status li { display: flex; align-items: center; gap: 12px; min-height: 30px; font-size: 12px; }
+.playlist-import-status li .ellipsis { flex: 1; }
+.playlist-status-reason { display: block; margin-top: 2px; color: var(--secondary); font-size: 11px; white-space: normal; }
+.playlist-import-status li .btn-secondary { padding: 4px 9px; font-size: 11px; }
+.table { background: var(--content); overflow-x: auto; }
 /* The last column holds the row's buttons, and it is sized for the widest case -- "Find lossless" beside
    "Show in Finder" (measured 93.5px + 104.2px + the gap). Sizing it for one button, as it was, let the
    second one overflow left across the Kbps value and sit on top of the number. Every row is its own grid,
@@ -213,6 +223,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    Format -- `fr` is safe where `auto` was not, because it resolves from the container and so comes out
    the same on every row. The floors keep Year, Kbps and Format from shrinking under their own values. */
 .thead, .trow { display: grid; grid-template-columns: 36px minmax(0, 2.8fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(48px, .5fr) minmax(56px, .6fr) minmax(52px, .55fr) var(--actions, 210px); gap: 12px; align-items: center; padding: 0 12px; }
+.thead, .trow { min-width: 900px; }
 .thead { height: 26px; font-size: 11px; font-weight: 500; color: var(--secondary); border-bottom: .5px solid var(--sep); }
 /* Every column but the track name is a short value in a wide track, and left-aligning them left the whole
    table hugging its left edge against the empty actions column. Centring the metadata columns -- headers
@@ -235,6 +246,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    them, so a click no longer pins one row's buttons open. */
 .trow .reveal { display: flex; justify-content: flex-end; gap: 6px; opacity: 0; }
 .trow:hover .reveal, .trow.selected .reveal, .trow .reveal:focus-within { opacity: 1; }
+.trow.lossy-row .reveal { opacity: 1; }
 .trow.selected, .trow.selected:nth-child(odd) { background: var(--accent); color: var(--accent-text); }
 .trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
 
@@ -333,6 +345,12 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .fields .field-row { display: flex; align-items: center; gap: 6px; }
 .fields .field-row .input { flex: 1; min-width: 0; }
 .fields label { font-size: 12px; font-weight: 500; color: var(--secondary); }
+.telegram-key-help { width: 440px; max-width: 100%; padding: 12px 14px; border: .5px solid var(--well-border); border-radius: 8px; background: var(--well); text-align: left; font-size: 12px; line-height: 1.45; color: var(--secondary); }
+.telegram-key-help strong { color: var(--text); font-weight: 600; }
+.telegram-key-help ol { margin: 7px 0; padding-left: 20px; }
+.telegram-key-help li + li { margin-top: 4px; }
+.telegram-key-help b { color: var(--text); font-weight: 500; }
+.telegram-key-help a { color: var(--accent); }
 
 /* ---- Welcome ---- */
 .welcome .setup-title { border-bottom: 0; }
