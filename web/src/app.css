@@ -343,6 +343,12 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .fields .field-row { display: flex; align-items: center; gap: 6px; }
 .fields .field-row .input { flex: 1; min-width: 0; }
 .fields label { font-size: 12px; font-weight: 500; color: var(--secondary); }
+.telegram-key-help { width: 440px; max-width: 100%; padding: 12px 14px; border: .5px solid var(--well-border); border-radius: 8px; background: var(--well); text-align: left; font-size: 12px; line-height: 1.45; color: var(--secondary); }
+.telegram-key-help strong { color: var(--text); font-weight: 600; }
+.telegram-key-help ol { margin: 7px 0; padding-left: 20px; }
+.telegram-key-help li + li { margin-top: 4px; }
+.telegram-key-help b { color: var(--text); font-weight: 500; }
+.telegram-key-help a { color: var(--accent); }
 
 /* ---- Welcome ---- */
 .welcome .setup-title { border-bottom: 0; }

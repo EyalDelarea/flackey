@@ -110,7 +110,16 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
   if (needKeys) {
     return (<div className="tg-done">
       <h1>This copy needs Telegram API keys</h1>
-      <p className="lead">Telegram asks every app to identify itself. Sign in at <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org</a>, create an app under API development tools, and paste its id and hash here. They identify Flackey, not you.</p>
+      <p className="lead">These keys are free developer credentials for Flackey. Telegram creates them for you; we can’t generate them on your behalf.</p>
+      <div className="telegram-key-help">
+        <strong>Get your keys in about a minute</strong>
+        <ol>
+          <li>Open <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a> and sign in with your Telegram number.</li>
+          <li>Choose <b>API development tools</b>, then create an app if you don’t already have one.</li>
+          <li>Copy the <b>App api_id</b> into the first field and the <b>api_hash</b> into the second.</li>
+        </ol>
+        <span>They identify this Flackey installation, not your Telegram account.</span>
+      </div>
       <div className="fields">
         <div className="field"><label htmlFor="tg-api-id">API id</label>
           <input id="tg-api-id" className="input" inputMode="numeric" value={apiId} onChange={e => setApiId(e.target.value)} disabled={busy} /></div>

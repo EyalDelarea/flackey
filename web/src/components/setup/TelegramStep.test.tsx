@@ -59,6 +59,8 @@ it('asks for the API keys when this copy has none, then goes on to the QR', asyn
   vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
   render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={10} />)
   await waitFor(() => expect(screen.getByText(/needs Telegram API keys/)).toBeInTheDocument())
+  expect(screen.getByText('Get your keys in about a minute')).toBeInTheDocument()
+  expect(screen.getByText(/API development tools/)).toBeInTheDocument()
   expect(qrStart).not.toHaveBeenCalled()
   expect(screen.getByRole('link', { name: /my\.telegram\.org/ })).toHaveAttribute('href', 'https://my.telegram.org/apps')
   fireEvent.change(screen.getByLabelText('API id'), { target: { value: '4242' } })
