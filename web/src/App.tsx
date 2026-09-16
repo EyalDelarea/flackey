@@ -80,7 +80,7 @@ export default function App() {
     return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 && telegramConfigured ? 'Waiting for Telegram…' : undefined}>
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 4 : 3) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 4 : 3) }} />}
-      {current === 3 && <SoulseekStep onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
+      {current === 3 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
       {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
