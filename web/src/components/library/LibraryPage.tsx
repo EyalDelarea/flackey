@@ -110,7 +110,7 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
   // A found copy re-paths the file, so the row must be re-read rather than patched in place; a miss says
   // why in the same banner instead of leaving the click looking like it did nothing.
   const upgrade = async (t: Track) => {
-    setNote(null); setActionError(null)
+    setNote(`Searching for a lossless copy of ${t.artist} – ${t.title}…`); setActionError(null)
     try {
       const res = await api.upgradeTrack(t.id)
       setNote(`${t.artist} – ${t.title}: ${res.message}`)
