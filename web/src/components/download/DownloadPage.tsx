@@ -32,7 +32,7 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
     else if (kind === 'reveal' && path) run(api.reveal(path))
-    else if (kind === 'retry') run(api.retry(id))
+    else if (kind === 'retry') run(api.retry(id).then(() => live.refresh()))
     else if (kind === 'cancel') run(api.cancel(id))
     else if (kind === 'remove') run(api.removeRequest(id).then(() => live.dropBundle(id)))
   }
