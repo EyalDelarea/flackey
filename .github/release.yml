@@ -1,0 +1,25 @@
+# Groups `gh release create --generate-notes` output (checks.yml's release job) by PR label.
+# See docs/RELEASING.md for the full release process.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+  categories:
+    - title: 🚀 Features
+      labels:
+        - enhancement
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+    - title: 📝 Documentation
+      labels:
+        - documentation
+    - title: 🧹 Chores
+      labels:
+        - chore
+    - title: Other Changes
+      labels:
+        - "*"

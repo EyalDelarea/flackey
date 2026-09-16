@@ -181,6 +181,7 @@ uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.to
 
 ## More
 
+- Release process (PR labels, version bump, tagging): `docs/RELEASING.md`
 - Source bot protocol notes: `docs/source-bot-protocol.md`
 - Soulseek source research: `docs/research/2026-09-06-soulseek-as-audio-source.md`
 - Soulseek spike findings: `docs/research/2026-09-07-soulseek-spike-findings.md`
