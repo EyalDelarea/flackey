@@ -41,6 +41,7 @@ export interface GroupSummary { filed: number; total: number; needsChoice: numbe
 export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[]; beatportDown: { seconds: number; requestIds: number[] } | null }
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
+  soulseekConnected?: boolean
   /** One entry per track currently transferring; the row picks out its own by request id. */
   fetchProgress?: FetchProgress[] | null
 }
@@ -199,9 +200,15 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
   }
   const step = stepIndex(r.state)
-  if (!opts.telegramAuthorized && (IN_FLIGHT.includes(r.state) || r.state === 'queued')) {
-    v.status = r.state === 'queued' ? 'Paused — will start when you reconnect'
-                                    : 'Paused — will continue after you reconnect'
+  const hasAnySource = opts.telegramAuthorized || opts.soulseekConnected
+  const sourceUnavailable = r.state === 'fetching' && r.fetch_source === 'soulseek'
+    ? !opts.soulseekConnected
+    : !hasAnySource
+  if (sourceUnavailable && (IN_FLIGHT.includes(r.state) || r.state === 'queued')) {
+    v.status = r.state === 'queued' ? 'Paused — connect a source to start'
+                                    : r.fetch_source === 'soulseek'
+                                      ? 'Paused — Soulseek is not connected'
+                                      : 'Paused — connect a source to continue'
     // The rung, not a count of them: "step 3 of 6" outlived the six-rung ladder, and the ladder beside
     // this tag already shows how far along it is. What the tag adds is the name of the rung it stopped on.
     // `stepIndex` counts positions in the full STEPS vocabulary, not in this row's drawn ladder, which may
@@ -209,6 +216,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     // second conditional rung one day and this still names correctly, but do not turn it back into "of N".
     v.tag = r.state === 'queued' ? 'queued' : `paused at ${STEPS[step ?? 0]}`
     v.dimmed = true
+    if (r.state === 'identifying' || r.state === 'fetching') v.action = STOP
     return v
   }
   switch (r.state) {

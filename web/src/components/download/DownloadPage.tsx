@@ -20,7 +20,8 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const [actionError, setActionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
-  const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, now, whyOpen: false, fetchProgress: live.fetchProgress }
+  const soulseekConnected = live.health?.lossless?.enabled && live.health.lossless.provider?.status === 'ok'
+  const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress }
   const bundles = [...live.bundles.values()]
   const scoped = bundles.filter(b => view === 'active'
     ? ['queued', 'identifying', 'awaiting_review', 'fetching', 'verifying', 'filing'].includes(b.request.state)
@@ -43,13 +44,14 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
         await live.refresh()
         return submission.summary
       }} inset={inset} />
+      {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
       <div className="download-views" role="group" aria-label="Download view"><button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button><button className="chip" aria-pressed={view === 'history'} onClick={() => { setView('history'); setFilter('all') }}>History</button>{view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(b => ['rejected', 'not_found', 'error', 'cancelled'].includes(b.request.state)).length}</span></button>}</div>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
-        {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress.'}</div>}
+        {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => run(api.choose(rid, cid))} onTryNow={ids => ids.forEach(id => run(api.retry(id)))} />)}
       </div>
     </>
