@@ -110,6 +110,7 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
   // A found copy re-paths the file, so the row must be re-read rather than patched in place; a miss says
   // why in the same banner instead of leaving the click looking like it did nothing.
   const upgrade = async (t: Track) => {
+    live.setUpgradeActivity(`Searching for a lossless copy of ${t.artist} – ${t.title}…`)
     setNote(`Searching for a lossless copy of ${t.artist} – ${t.title}…`); setActionError(null)
     try {
       const res = await api.upgradeTrack(t.id)
@@ -117,6 +118,8 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
       if (res.upgraded) setTracks(await api.library(q, selectedPlaylist))
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Couldn't search for a lossless copy. Try again.")
+    } finally {
+      live.setUpgradeActivity(null)
     }
   }
 

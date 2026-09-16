@@ -8,6 +8,7 @@ export interface Live {
   health: Health | null; bundles: Map<number, Bundle>; playlists: Playlist[]; stats: Stats | null; settings: AppSettings | null
   fetchProgress: FetchProgress[]
   libraryVersion: number; loadError: string | null; loading: boolean
+  upgradeActivity: string | null; setUpgradeActivity: (message: string | null) => void
   refresh: () => Promise<void>; refreshLibrary: () => Promise<void>; retry: () => Promise<void>
   setHealth: (h: Health) => void; setSettings: (s: AppSettings) => void; dropBundle: (id: number) => void
 }
@@ -22,6 +23,7 @@ export function useLive(): Live {
   const [libraryVersion, setLibraryVersion] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [upgradeActivity, setUpgradeActivity] = useState<string | null>(null)
   const firstOpen = useRef(true)
 
   const refreshLibrary = useCallback(async () => {
@@ -75,5 +77,5 @@ export function useLive(): Live {
     return () => es.close()
   }, [refresh, refreshLibrary])
 
-  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
+  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, upgradeActivity, setUpgradeActivity, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
 }

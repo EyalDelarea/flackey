@@ -14,6 +14,7 @@ function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
   return {
     health, bundles: new Map(bundles.map(b => [b.request.id, b])), playlists: [], stats: null, settings: null,
     fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
     ...overrides,
