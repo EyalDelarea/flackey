@@ -14,7 +14,7 @@ interface Props {
   counts: Record<Bucket | 'all', number>
   onFilter: (f: Bucket | 'all') => void
   onClearFailed: () => void
-  view?: 'active' | 'history'
+  view?: 'active' | 'history' | 'failed'
 }
 
 export default function FilterBar({ filter, counts, onFilter, onClearFailed, view }: Props) {

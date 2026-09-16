@@ -212,7 +212,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .playlist-import-status li .ellipsis { flex: 1; }
 .playlist-status-reason { display: block; margin-top: 2px; color: var(--secondary); font-size: 11px; white-space: normal; }
 .playlist-import-status li .btn-secondary { padding: 4px 9px; font-size: 11px; }
-.table { background: var(--content); }
+.table { background: var(--content); overflow-x: auto; }
 /* The last column holds the row's buttons, and it is sized for the widest case -- "Find lossless" beside
    "Show in Finder" (measured 93.5px + 104.2px + the gap). Sizing it for one button, as it was, let the
    second one overflow left across the Kbps value and sit on top of the number. Every row is its own grid,
@@ -223,6 +223,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    Format -- `fr` is safe where `auto` was not, because it resolves from the container and so comes out
    the same on every row. The floors keep Year, Kbps and Format from shrinking under their own values. */
 .thead, .trow { display: grid; grid-template-columns: 36px minmax(0, 2.8fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(48px, .5fr) minmax(56px, .6fr) minmax(52px, .55fr) var(--actions, 210px); gap: 12px; align-items: center; padding: 0 12px; }
+.thead, .trow { min-width: 900px; }
 .thead { height: 26px; font-size: 11px; font-weight: 500; color: var(--secondary); border-bottom: .5px solid var(--sep); }
 /* Every column but the track name is a short value in a wide track, and left-aligning them left the whole
    table hugging its left edge against the empty actions column. Centring the metadata columns -- headers
@@ -245,6 +246,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    them, so a click no longer pins one row's buttons open. */
 .trow .reveal { display: flex; justify-content: flex-end; gap: 6px; opacity: 0; }
 .trow:hover .reveal, .trow.selected .reveal, .trow .reveal:focus-within { opacity: 1; }
+.trow.lossy-row .reveal { opacity: 1; }
 .trow.selected, .trow.selected:nth-child(odd) { background: var(--accent); color: var(--accent-text); }
 .trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
 

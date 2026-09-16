@@ -45,7 +45,7 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
     {tracks.map(t => {
       const c = t.catalog
       const lossy = isLossy(t)
-      return (<div className={`trow${selected === t.id ? ' selected' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
+      return (<div className={`trow${selected === t.id ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
         <div className="cell"><div className="t">{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div></div>
         <span className="ellipsis" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
