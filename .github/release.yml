@@ -7,6 +7,7 @@ changelog:
       - invalid
       - wontfix
       - question
+      - ignore-for-release
   categories:
     - title: 🚀 Features
       labels:

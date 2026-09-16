@@ -8,7 +8,11 @@ can group it:
 - `enhancement` — new feature or user-facing improvement
 - `bug` — bug fix
 - `documentation` — docs, site, README changes
-- `chore` — everything else (refactor, CI, deps, tooling)
+- `chore` — everything else worth a line in the changelog (refactor with
+  user-visible effect, dependency bump, CI change worth noting)
+- `ignore-for-release` — merges that shouldn't appear in release notes at all
+  (typo fixes, WIP follow-ups, docs-for-contributors, anything with zero
+  user-facing meaning). Excluded outright by `.github/release.yml`.
 
 `enhancement` and `bug` are already auto-applied by the feature-request and
 bug-report issue templates, so PRs fixing/implementing those issues usually
@@ -16,6 +20,17 @@ just need the same label carried over. The `pr-labels` workflow
 (`.github/workflows/pr-labels.yml`) flags a PR with none of these labels; it's
 advisory and doesn't block merging. An unlabeled PR still shows up in release
 notes, just under "Other Changes" instead of its own section.
+
+### Title PRs for the changelog, not for yourself
+
+The release notes generator pulls the **PR title verbatim** into the
+changelog. If a PR is labeled `enhancement`, `bug`, or `documentation`, its
+title becomes a line a user reads under "what's new" — so title it as what
+changed for them ("Fix downloads silently failing when Soulseek disconnects"),
+not the internal mechanism ("Fix race in retry queue") or a file/module name.
+The PR template (`.github/pull_request_template.md`) repeats this reminder.
+`chore` and `ignore-for-release` PRs aren't held to this — nobody outside the
+project reads those lines the same way.
 
 ## Decide the version bump
 

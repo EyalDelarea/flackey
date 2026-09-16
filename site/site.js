@@ -1,5 +1,61 @@
 const release = document.querySelector("#release-line");
 const downloadLink = document.querySelector("#download-link");
+const notesList = document.querySelector("#release-notes-list");
+
+const formatReleaseDate = (iso) =>
+  new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(iso));
+
+// Turns the "## Heading" / "* item" / "**bold**" / bare-PR-URL markdown that
+// gh release create --generate-notes produces (grouped by .github/release.yml,
+// e.g. "* Title by @user in https://github.com/.../pull/7") into markup.
+// Escapes first, so nothing in a PR title can inject HTML -- markdown syntax
+// is only ever matched against already-escaped text, and the whole line is
+// scanned in one replace() pass so an inserted <a>/<strong> is never rescanned.
+function renderReleaseBody(body) {
+  const esc = (s) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (s) =>
+    esc(s).replace(
+      /\*\*(.+?)\*\*|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+))\b|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:compare|commits)\/(\S+))|(https?:\/\/\S+)/g,
+      (match, bold, prUrl, prNum, diffUrl, diffRange, anyUrl) => {
+        if (bold !== undefined) return `<strong>${bold}</strong>`;
+        if (prUrl)
+          return `<a href="${prUrl}" target="_blank" rel="noopener">#${prNum}</a>`;
+        if (diffUrl)
+          return `<a href="${diffUrl}" target="_blank" rel="noopener">${diffRange}</a>`;
+        return `<a href="${anyUrl}" target="_blank" rel="noopener">${anyUrl}</a>`;
+      },
+    );
+  let html = "";
+  let inList = false;
+  const closeList = () => {
+    if (inList) html += "</ul>";
+    inList = false;
+  };
+  for (const raw of (body || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("## ")) {
+      closeList();
+      html += `<h4>${inline(line.slice(3))}</h4>`;
+    } else if (line.startsWith("* ")) {
+      if (!inList) {
+        html += "<ul>";
+        inList = true;
+      }
+      html += `<li>${inline(line.slice(2))}</li>`;
+    } else {
+      closeList();
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  closeList();
+  return html;
+}
 
 // GitHub's /releases/latest endpoint deliberately excludes prereleases. Flackey is
 // still in beta, so read the release list and select the newest published build.
@@ -10,32 +66,52 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
     return response.json();
   })
   .then((releases) => {
-    const data = Array.isArray(releases)
-      ? releases.find((item) => !item.draft)
-      : null;
+    const published = Array.isArray(releases)
+      ? releases.filter((item) => !item.draft)
+      : [];
+    const data = published[0] || null;
     const asset = data?.assets?.find((item) => item.name === "Flackey.pkg");
     if (!release || !downloadLink || !asset?.browser_download_url) {
       if (release) release.textContent = "The first download is on its way.";
-      return;
+    } else {
+      downloadLink.href = asset.browser_download_url;
+      downloadLink.removeAttribute("aria-disabled");
+      downloadLink.classList.remove("unavailable");
+      downloadLink.innerHTML =
+        'Download Mac installer <span aria-hidden="true">↓</span>';
+      const version = String(data.tag_name || "").replace(/^v/, "");
+      const size = `${(asset.size / 1e6).toFixed(1)} MB`;
+      const status = data.prerelease ? "Beta" : "Stable";
+      release.textContent = `Version ${version}v · ${status} installer · ${size} · ${formatReleaseDate(data.published_at)}`;
     }
-    downloadLink.href = asset.browser_download_url;
-    downloadLink.removeAttribute("aria-disabled");
-    downloadLink.classList.remove("unavailable");
-    downloadLink.innerHTML =
-      'Download Mac installer <span aria-hidden="true">↓</span>';
-    const version = String(data.tag_name || "").replace(/^v/, "");
-    const size = `${(asset.size / 1e6).toFixed(1)} MB`;
-    const date = new Intl.DateTimeFormat("en-GB", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    }).format(new Date(data.published_at));
-    const status = data.prerelease ? "Beta" : "Stable";
-    release.textContent = `Version ${version}v · ${status} installer · ${size} · ${date}`;
+
+    if (notesList) {
+      if (!published.length) {
+        notesList.innerHTML =
+          '<p class="release-notes-status">No releases published yet.</p>';
+      } else {
+        notesList.innerHTML = published
+          .slice(0, 5)
+          .map((item) => {
+            const version = String(item.tag_name || "").replace(/^v/, "");
+            return `<article class="release-note">
+              <h3>
+                <a href="${item.html_url}" target="_blank" rel="noopener">v${version}</a>
+                <time datetime="${item.published_at}">${formatReleaseDate(item.published_at)}</time>
+              </h3>
+              ${renderReleaseBody(item.body)}
+            </article>`;
+          })
+          .join("");
+      }
+    }
   })
   .catch(() => {
     if (release)
       release.textContent = "Release details are temporarily unavailable.";
+    if (notesList)
+      notesList.innerHTML =
+        '<p class="release-notes-status">Release notes are temporarily unavailable.</p>';
   });
 
 // The app-walkthrough demo. Every value below is interpolated per frame rather
