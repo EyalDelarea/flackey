@@ -49,7 +49,7 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
       const compactMeta = [c?.genre, c?.label, year].filter(Boolean).join(' · ')
       return (<div className={`trow${selected === t.id ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
-        <div className="cell"><div className="t">{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div>
+        <div className="cell"><div className="t" title={`${t.artist} – ${t.title}`}>{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div>
           {compactMeta && <div className="v compact-meta">{compactMeta}</div>}</div>
         <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
         <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span className="col-optional">{year}</span>

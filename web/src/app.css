@@ -252,6 +252,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .trow.lossy-row .reveal { opacity: 1; }
 .trow.selected, .trow.selected:nth-child(odd) { background: var(--accent-fill); color: var(--accent-text); }
 .trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
+/* .kbps.lossy's own color (below) is the same specificity as .trow.selected .kbps and follows it in the
+   sheet, so without this it would win over white text on the selected row's blue fill. */
+.trow.selected .kbps.lossy { color: var(--accent-text); }
 
 /* At the declared minimum window (720x540) the sidebar alone leaves ~460px for the table: the full
    8-column grid's floors (artwork + year/kbps/format minimums + the actions column) already add up to
