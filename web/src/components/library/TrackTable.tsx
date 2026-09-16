@@ -41,15 +41,18 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
   // library that is entirely lossless can hand those ~100px back to the track and genre names.
   const width = tracks.some(isLossy) && onUpgrade ? '210px' : '110px'
   return (<div className="group table" style={{ '--actions': width } as React.CSSProperties}>
-    <div className="thead"><span /><span>Track</span><span>Genre</span><span>Label</span><span>Year</span><span>Kbps</span><span>Format</span><span /></div>
+    <div className="thead"><span /><span>Track</span><span className="col-optional">Genre</span><span className="col-optional">Label</span><span className="col-optional">Year</span><span>Kbps</span><span>Format</span><span /></div>
     {tracks.map(t => {
       const c = t.catalog
       const lossy = isLossy(t)
+      const year = c?.release_date?.slice(0, 4) ?? ''
+      const compactMeta = [c?.genre, c?.label, year].filter(Boolean).join(' · ')
       return (<div className={`trow${selected === t.id ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
-        <div className="cell"><div className="t">{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div></div>
-        <span className="ellipsis" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
-        <span className="ellipsis" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span>{c?.release_date?.slice(0, 4) ?? ''}</span>
+        <div className="cell"><div className="t">{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div>
+          {compactMeta && <div className="v compact-meta">{compactMeta}</div>}</div>
+        <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
+        <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span className="col-optional">{year}</span>
         <span className={lossy ? 'kbps lossy' : 'kbps'} title={lossy ? 'Filed from Deezer — no lossless copy was obtained' : undefined}>
           {t.bitrate_kbps}{!lossy && t.verified_at && <Icon name="check" size={12} stroke={2.4} />}
         </span>

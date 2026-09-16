@@ -89,8 +89,16 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
   }
   const folders = [...new Set(tracks.map(relativeFolder))].sort((a, b) => a.localeCompare(b))
   const formats = [...new Set(tracks.map(t => t.fmt.toUpperCase()))].sort()
+  // A folder or format the last result set offered can vanish from a new one (a different search, a
+  // playlist switch). Left alone, the picker falls back to displaying "All ..." while `folder`/`format`
+  // still hold the stale value, so the filter below silently keeps applying it -- the query looks
+  // unrestricted but returns nothing. Resetting the state itself, not just its display, keeps them in sync.
+  useEffect(() => { if (folder !== 'all' && !folders.includes(folder)) setFolder('all') }, [folders, folder])
+  useEffect(() => { if (format !== 'all' && !formats.includes(format)) setFormat('all') }, [formats, format])
   const visible = tracks.filter(t => (format === 'all' || t.fmt.toUpperCase() === format) &&
     (folder === 'all' || relativeFolder(t) === folder))
+  const filtered = q || folder !== 'all' || format !== 'all'
+  const clearFilters = () => { setQ(''); setFolder('all'); setFormat('all') }
   const refresh = async () => {
     setRefreshing(true); setActionError(null)
     try {
@@ -139,11 +147,18 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))
       }} />}
       <div className="library-filters" aria-label="Library filters">
-        <label>Folder <span className="picker"><select value={folders.includes(folder) ? folder : 'all'} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
-        <label>Format <span className="picker"><select value={formats.includes(format) ? format : 'all'} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
+        <label>Folder <span className="picker"><select value={folder} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
+        <label>Format <span className="picker"><select value={format} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
         <span className="counts">{visible.length} shown</span>
+        {filtered && <button className="btn-link" onClick={clearFilters}>Clear filters</button>}
       </div>
-      {folder === 'all' && !pl && !q
+      {tracks.length === 0
+        ? <div className="empty">{filtered
+            ? <>No tracks match these filters. <button className="btn-link" onClick={clearFilters}>Clear filters</button></>
+            : 'Your finished tracks will appear here. Paste a link on the Downloads tab to add your first one.'}</div>
+        : visible.length === 0
+        ? <div className="empty">No tracks match these filters. <button className="btn-link" onClick={clearFilters}>Clear filters</button></div>
+        : folder === 'all' && !pl && !q
         ? folders.map(f => <section key={f} className="library-folder"><h2>{f} <span className="counts">{visible.filter(t => relativeFolder(t) === f).length}</span></h2><TrackTable tracks={visible.filter(t => relativeFolder(t) === f)} onReveal={reveal} onUpgrade={upgrade} /></section>)
         : <TrackTable tracks={visible} onReveal={reveal} onUpgrade={upgrade} />}
     </div>

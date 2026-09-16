@@ -20,6 +20,13 @@
   --platter-ink: #FFFFFF; --platter-track: rgba(0,0,0,.13);
   --orange: #FF9500; --green: #34C759; --red: #FF3B30;
   --orange-wash: rgba(255,149,0,.08); --red-wash: rgba(255,59,48,.07);
+  /* --orange/--green read fine as small dots and icons, but at ~2.2:1 they fail WCAG AA for actual text
+     on a light background -- the dot stays vivid, the word beside it needs to be darker to be read. */
+  --orange-text: #B45309; --green-text: #157A32;
+  /* The house blue is ~4:1 as white-on-fill, just under the 4.5:1 normal text needs. Buttons, the selected
+     table row and the setup step's current disc put white text directly on this, so those three get a
+     value that clears the bar; --accent itself is untouched everywhere it is used as text/border/focus. */
+  --accent-fill: #0060DF;
   --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, monospace;
 }
@@ -39,6 +46,9 @@
     --platter-ink: rgba(255,255,255,.92); --platter-track: rgba(255,255,255,.16);
     --orange: #FF9F0A; --green: #30D158; --red: #FF453A;
     --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
+    /* Dark mode's vivid orange/green already clear 4.5:1 against the dark window -- the light-mode
+       override above exists because white, not the window colour, is what they sit on there. */
+    --orange-text: var(--orange); --green-text: var(--green);
   }
 }
 * { box-sizing: border-box; }
@@ -53,7 +63,7 @@ button { cursor: default; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .muted { color: var(--secondary); } .faint { color: var(--tertiary); }
 .err { color: var(--red); font-size: 12px; }
-.btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 500; box-shadow: var(--button-shadow); white-space: nowrap; }
+.btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--accent-fill); color: var(--accent-text); font-size: 13px; font-weight: 500; box-shadow: var(--button-shadow); white-space: nowrap; }
 .btn-primary.lg { height: 30px; padding: 0 22px; border-radius: 7px; font-size: 14px; }
 .btn-secondary { display: inline-flex; align-items: center; justify-content: center; height: 22px; padding: 0 10px; border: .5px solid var(--button-border); border-radius: 5px; background: var(--button); color: var(--text); font-size: 12px; box-shadow: var(--button-shadow); white-space: nowrap; }
 .btn-primary:active { filter: brightness(.92); } .btn-secondary:active { background: var(--selection); }
