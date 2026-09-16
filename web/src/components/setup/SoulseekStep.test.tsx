@@ -31,6 +31,13 @@ afterEach(() => { vi.useRealTimers() })
 const progress = (over: Partial<SlskdProgress> = {}): SlskdProgress =>
   ({ state: 'downloading', done: 0, total: 0, error: null, ...over })
 
+it('discloses folder sharing before an account is created, naming the selected folder', async () => {
+  render(<SoulseekStep libraryRoot="/Users/dj/Music/DJ Library" onDone={vi.fn()} onSkip={vi.fn()} />)
+  await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())
+  expect(screen.getByText(/other Soulseek users can download files/)).toBeInTheDocument()
+  expect(screen.getByText('/Users/dj/Music/DJ Library')).toBeInTheDocument()
+})
+
 it('disables Save and continue until both fields are filled', async () => {
   render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
   await waitFor(() => expect(api.soulseekSetup).toHaveBeenCalled())

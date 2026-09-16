@@ -25,3 +25,9 @@ it('switches tabs and shows the overall connection state in the footer', () => {
   fireEvent.click(screen.getByText('Library'))
   expect(props.onTab).toHaveBeenCalledWith('library')
 })
+
+it('marks the active tab with aria-current for assistive tech, and only that one', () => {
+  render(<Shell {...props} inset={false}>x</Shell>)
+  expect(screen.getByText('Download').closest('button')).toHaveAttribute('aria-current', 'page')
+  expect(screen.getByText('Library').closest('button')).not.toHaveAttribute('aria-current')
+})

@@ -20,7 +20,7 @@ export default function FolderStep({ initial, onDone }: { initial: string; onDon
   }
   return (<>
     <h1>Where should your music live?</h1>
-    <p className="lead">Every finished track is filed here, one folder per artist. Rekordbox reads straight from this folder.</p>
+    <p className="lead">Every finished track is filed here, one folder per artist. Drag this folder into Rekordbox's collection whenever you want to import what's new.</p>
     <div className="folder">
       <div className="folder-well"><Icon name="folder" size={18} /><input value={path} onChange={e => setPath(e.target.value)} aria-label="library folder" /></div>
       <div className="hint-row">Type or paste the full folder path{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}</div>

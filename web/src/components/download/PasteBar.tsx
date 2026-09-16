@@ -7,7 +7,11 @@ export default function PasteBar({ onSubmit, inset }: { onSubmit: (url: string) 
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!url.trim() || pending) return
+    if (!url.trim()) {
+      setNote({ text: 'Paste a YouTube, YouTube Music, or Spotify link first.', error: true })
+      return
+    }
+    if (pending) return
     setPending(true); setNote(null)
     try {
       const summary = await onSubmit(url.trim())
@@ -19,10 +23,13 @@ export default function PasteBar({ onSubmit, inset }: { onSubmit: (url: string) 
   return (
     <Toolbar inset={inset}>
       <form className="pastebar" onSubmit={submit} aria-label="add link" role="form">
-        <input className="input" placeholder="Paste a YouTube, YouTube Music, or Spotify link" value={url} onChange={e => setUrl(e.target.value)} />
-        <button className="btn-primary" type="submit" disabled={pending}>{pending ? 'Adding…' : 'Add'}</button>
+        <label className="paste-label" htmlFor="download-link">Track or playlist link</label>
+        <div className="paste-controls">
+          <input id="download-link" className="input" placeholder="YouTube, YouTube Music, or Spotify" value={url} onChange={e => setUrl(e.target.value)} />
+          <button className="btn-primary" type="submit" disabled={pending}>{pending ? 'Adding…' : 'Add'}</button>
+        </div>
       </form>
-      {note && <div className={`note${note.error ? ' error' : ''}`}>{note.text}</div>}
+      {note && <div className={`note${note.error ? ' error' : ''}`} role="status" aria-live={note.error ? 'assertive' : 'polite'}>{note.text}</div>}
     </Toolbar>
   )
 }

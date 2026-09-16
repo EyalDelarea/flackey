@@ -61,8 +61,12 @@ describe('presentRow', () => {
     expect(v.steps![1].state).toBe('current')
   })
   it('a fetching row says which network the bytes are coming from', () => {
-    expect(presentRow(bundle({ state: 'fetching', fetch_source: 'soulseek' }), opts).status).toBe('Downloading the file from Soulseek')
+    expect(presentRow(bundle({ state: 'fetching', fetch_source: 'soulseek' }), { ...opts, soulseekConnected: true }).status).toBe('Downloading the file from Soulseek')
     expect(presentRow(bundle({ state: 'fetching', fetch_source: 'deezer' }), opts).status).toBe('Downloading the file from Deezer')
+  })
+  it('a soulseek row that loses its connection mid-fetch is paused even while Telegram stays authorized', () => {
+    const v = presentRow(bundle({ state: 'fetching', fetch_source: 'soulseek' }), { ...opts, soulseekConnected: false })
+    expect(v.status).toBe('Paused — Soulseek is not connected'); expect(v.dimmed).toBe(true)
   })
   it('the Done rung reads as reached when the request is done (it indexed past the array before)', () => {
     expect(presentRow(bundle({ state: 'done', reviewed: 1 }), opts).steps).toEqual(
@@ -153,7 +157,7 @@ describe('presentRow', () => {
     const p = presentRow(bundle({ state: 'fetching' }), { ...opts, telegramAuthorized: false })
     // The tag counted rungs -- "step 3 of 6" -- against a ladder that has five, and the count was the
     // wrong thing to say anyway: the rung is right there beside it. It names where the row stopped.
-    expect(p.status).toBe('Paused — will continue after you reconnect'); expect(p.tag).toBe('paused at Download'); expect(p.dimmed).toBe(true)
+    expect(p.status).toBe('Paused — connect a source to continue'); expect(p.tag).toBe('paused at Download'); expect(p.dimmed).toBe(true)
   })
 })
 

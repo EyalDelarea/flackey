@@ -67,6 +67,20 @@ describe('the sidebar after a Reconnect sign-in', () => {
   })
 })
 
+describe('reconnect and a live Soulseek connection', () => {
+  it('never claims Soulseek was skipped, since reconnect only re-runs the Telegram step', async () => {
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: true, phone_masked: null })
+    vi.spyOn(api, 'skipTelegram').mockResolvedValue({ source_enabled: false })
+    await reconnect({ lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 } })
+
+    fireEvent.click(screen.getByText('Skip for now'))   // skips Telegram, legitimately -- the Soulseek step never opens
+    await screen.findByText("You're set")   // not "Almost set" -- Soulseek is actually connected
+    expect(screen.queryByText('Connect a source')).not.toBeInTheDocument()
+    const soulseekStep = [...document.querySelectorAll('.step')].find(el => el.textContent?.includes('Soulseek'))
+    expect(soulseekStep).not.toHaveClass('skipped')
+  })
+})
+
 describe('the setup hint on the Telegram step', () => {
   it('is absent while the step is still asking for API keys', async () => {
     vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })

@@ -45,6 +45,13 @@ export default function App() {
   const refresh = live.refresh
   useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
+  // Reconnect only re-runs the Telegram step (see `current` below) -- Soulseek's own step never opens, so
+  // nothing in the wizard would otherwise set `soulseekState` away from its unvisited default of
+  // 'skipped', and Ready would falsely tell a Soulseek-connected owner they skipped it.
+  useEffect(() => {
+    if (!reconnecting) return
+    setSoulseekState(h?.lossless?.provider?.status === 'ok' ? 'connected' : h?.lossless?.enabled ? 'pending' : 'skipped')
+  }, [reconnecting])
   const mainScreen = !!h && h.setup_done && !reconnecting
   // 600, not 540: the Soulseek step carries a heading, a lead, two fields, a warning about a password
   // nothing can reset, two buttons and a footnote, and at 540 that column did not fit -- which is how
@@ -77,11 +84,12 @@ export default function App() {
       : reconnecting && current === 4 ? () => setStep(2)
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
-    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 && telegramConfigured ? 'Waiting for Telegram…' : undefined}>
+    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
+      skipped={{ 2: telegramSkipped, 3: soulseekState === 'skipped' }}>
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 4 : 3) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 4 : 3) }} />}
-      {current === 3 && <SoulseekStep onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
-      {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
+      {current === 3 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
+      {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(2)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
   const banner = sourceOn && !authorized ? <Banner tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} /> : undefined

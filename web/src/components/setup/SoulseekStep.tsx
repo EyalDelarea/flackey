@@ -10,7 +10,7 @@ const POLL_MS = 1000
 // signs in every time it starts -- so this is a real condition on keeping the account, not a footnote.
 const RECYCLE_NOTE = 'Open Flackey at least once a month: Soulseek releases a name that goes 30 days without a sign-in.'
 
-export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: boolean) => void; onSkip: () => void }) {
+export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryRoot?: string; onDone: (connected: boolean) => void; onSkip: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [configured, setConfigured] = useState(false)
@@ -185,6 +185,10 @@ export default function SoulseekStep({ onDone, onSkip }: { onDone: (connected: b
       ? <div className="hint-row">Couldn't finish getting Soulseek ready. You can carry on — Soulseek stays
           off until this succeeds. <button className="btn-link" onClick={startInstall}>Try again</button></div>
       : <div className="hint-row">{progressText}</div>)}
+    {!connected && <div className="hint-row">While Flackey is running, other Soulseek users can download files
+      from your DJ Library folder{libraryRoot ? <> (<span className="mono">{libraryRoot}</span>)</> : ''}.
+      Changing that folder later changes what's shared too. Review or turn this off any time from
+      Settings › Sharing.</div>}
     <div className="row-gap">
       <button className="btn-primary lg" onClick={connected ? () => onDone(true) : save}
         disabled={!connected && (busy || !username || !password)}>{saveLabel}</button>

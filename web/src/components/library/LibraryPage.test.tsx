@@ -14,7 +14,7 @@ function makeLive(): Live {
   return {
     health: null, bundles: new Map(), playlists: [],
     stats, settings: null,
-    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false, connected: true, lastSeen: null,
     upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
@@ -78,6 +78,55 @@ it('renders the toolbar drag layer only when inset, and search still works eithe
 
   fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'abc' } })
   await waitFor(() => expect(api.library).toHaveBeenCalledWith('abc', null))
+})
+
+it('resets the folder filter, not just its display, when the folder disappears from a new result set', async () => {
+  const trackIn = (folder: string, id: number, title: string) => ({
+    id, path: `/lib/${folder}/${title}.mp3`, fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 20000, file_size: 100,
+    artist: 'Artist', title, mix_name: '', duration_s: 180, isrc: null, catalog_track_id: null,
+    request_id: null, added_at: '', verified_at: null, spectrogram_path: null, catalog: null,
+    source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null,
+  })
+  vi.mocked(api.library).mockResolvedValueOnce([trackIn('Example Artist', 1, 'Old Track'), trackIn('Other Artist', 2, 'Other Track')])
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await screen.findByText('Artist – Old Track')
+
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: 'Example Artist' } })
+  await waitFor(() => expect(screen.queryByText('Artist – Other Track')).not.toBeInTheDocument())
+
+  // A search that only matches a track outside the selected folder: the new result set no longer offers
+  // "Example Artist" as an option at all.
+  vi.mocked(api.library).mockResolvedValueOnce([trackIn('Other Artist', 3, 'Summer Anthem')])
+  fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'Summer' } })
+
+  await screen.findByText('Artist – Summer Anthem')
+  expect(screen.getByLabelText('Folder')).toHaveValue('all')
+})
+
+it('offers Clear filters and explains an empty first library differently from an over-filtered one', async () => {
+  vi.mocked(api.library).mockResolvedValueOnce([])
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await screen.findByText(/Your finished tracks will appear here/)
+  expect(screen.queryByText('Clear filters')).not.toBeInTheDocument()
+
+  vi.mocked(api.library).mockResolvedValueOnce([])
+  fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'nothing matches' } })
+  await screen.findByText(/No tracks match these filters/)
+  fireEvent.click(screen.getAllByText('Clear filters')[0])
+  expect(screen.getByLabelText('search library')).toHaveValue('')
+})
+
+it('offers a Rekordbox import guide once tracks exist, pointing at the library folder', async () => {
+  vi.mocked(api.library).mockResolvedValueOnce([])
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await screen.findByText('Ready for Rekordbox')
+
+  vi.mocked(api.reveal).mockResolvedValue({ ok: true })
+  fireEvent.click(screen.getByText('Show in Finder'))
+  await waitFor(() => expect(api.reveal).toHaveBeenCalledWith('/lib'))
+
+  fireEvent.click(screen.getByText('Got it'))
+  expect(screen.queryByText('Ready for Rekordbox')).not.toBeInTheDocument()
 })
 
 it('shows failed and in-progress playlist entries beside the filed tracks', async () => {

@@ -23,6 +23,16 @@ it('marks the new Soulseek step current at step 3', () => {
   expect(steps[3]).not.toHaveClass('done')
 })
 
+it('marks a skipped source step neutrally instead of with the done checkmark', () => {
+  const { container } = render(<SetupShell step={4} skipped={{ 2: true, 3: true }}>body</SetupShell>)
+  const steps = container.querySelectorAll('.step')
+  expect(steps[1]).toHaveClass('skipped')
+  expect(steps[1]).not.toHaveClass('done')
+  expect(steps[2]).toHaveClass('skipped')
+  expect(steps[2]).not.toHaveClass('done')
+  expect(screen.getAllByText('Skipped')).toHaveLength(2)
+})
+
 it('shows Back and the hint in the bottom bar when given', () => {
   const onBack = vi.fn()
   render(<SetupShell step={2} onBack={onBack} hint="Waiting for Telegram…">body</SetupShell>)

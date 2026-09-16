@@ -32,8 +32,8 @@
 @media (prefers-reduced-motion: reduce) {
   .platter.waiting .arc { animation: none; }
 }
-.fallback { margin-top: 4px; font-size: 12px; color: var(--orange); }
-.tag.amber { color: var(--orange); font-weight: 500; }
+.fallback { margin-top: 4px; font-size: 12px; color: var(--orange-text); }
+.tag.amber { color: var(--orange-text); font-weight: 500; }
 
 /* ---- Shell ---- */
 .app { height: 100%; display: flex; min-height: 0; }
@@ -77,21 +77,23 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .banner .text { flex: 1; }
 
 /* ---- Download ---- */
-.pastebar { flex: 1; max-width: 640px; display: flex; gap: 10px; min-width: 0; }
-.toolbar .note { flex: none; max-width: 40%; font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pastebar { flex: 1; max-width: 640px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.paste-label { font-size: 12px; color: var(--secondary); }
+.paste-controls { display: flex; gap: 10px; min-width: 0; }
+.toolbar .note { flex: none; max-width: 100%; font-size: 12px; color: var(--secondary); white-space: normal; overflow: visible; text-overflow: clip; }
 .toolbar .note.error { color: var(--red); }
 .filterbar { display: flex; align-items: center; gap: 6px; flex: none; height: 38px; padding: 0 20px; border-bottom: .5px solid var(--sep); }
 .chip { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px; border: 0; border-radius: 11px; background: none; color: var(--secondary); font-size: 12px; transition: background 120ms; }
 .chip:hover { background: color-mix(in srgb, var(--selection) 50%, transparent); }
 .chip[aria-pressed="true"] { background: var(--selection); color: var(--text); font-weight: 500; }
-.chip .count { font-size: 11px; color: var(--tertiary); }
-.chip .count.amber { color: var(--orange); } .chip .count.red { color: var(--red); }
+.chip .count { font-size: 12px; color: var(--secondary); }
+.chip .count.amber { color: var(--orange-text); } .chip .count.red { color: var(--red); }
 .filterbar .btn-secondary { margin-left: auto; }
 .group-section { display: flex; flex-direction: column; gap: 8px; }
 .group-head { display: flex; align-items: baseline; gap: 10px; padding: 0 2px; }
 .group-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .group-head .summary { font-size: 12px; color: var(--secondary); }
-.group-head .needs { color: var(--orange); } .group-head .rej { color: var(--red); }
+.group-head .needs { color: var(--orange-text); } .group-head .rej { color: var(--red); }
 .row { display: flex; flex-direction: column; border-top: .5px solid var(--sep); }
 .row:first-child { border-top: 0; }
 .row.washed { background: var(--orange-wash); } .row.dimmed { opacity: .6; }
@@ -103,10 +105,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .title .version { font-weight: 400; color: var(--secondary); }
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status.amber { color: var(--orange); } .status.red { color: var(--red); } .status.green { color: var(--green); }
-.row .retry-countdown { color: var(--orange); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status.amber { color: var(--orange-text); } .status.red { color: var(--red); } .status.green { color: var(--green-text); }
+.row .retry-countdown { color: var(--orange-text); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green); white-space: nowrap; }
+.verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green-text); white-space: nowrap; }
 .tag { font-size: 11px; color: var(--tertiary); }
 /* One ladder: name and state together, so nothing has to be paired up by counting. */
 .stepper { margin-top: 6px; }
@@ -121,7 +123,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .step-tip-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .step-mark { width: 6px; height: 6px; border-radius: 50%; background: var(--tertiary); flex: none; }
 .step.done { color: var(--secondary); } .step.done .step-mark { background: var(--green); }
-.step.current { color: var(--orange); font-weight: 600; }
+.step.current { color: var(--orange-text); font-weight: 600; }
 .step.current .step-mark { background: var(--orange); animation: pulse 1.2s infinite; }
 /* A help tag the app draws itself, because the native window's WKWebView draws none. Placed in viewport
    coordinates from the rung's own rect: the ladder sits inside a scrolling pane that would clip it. The
@@ -240,6 +242,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .trow .kbps { display: inline-flex; justify-content: center; align-items: center; gap: 4px; color: var(--text); }
 .trow .fmt { font-variant-numeric: tabular-nums; font-size: 11px; letter-spacing: .02em; }
 .trow .kbps svg { color: var(--green); }
+.compact-meta { display: none; }
 /* No transition: an animated opacity is what left previously-hovered rows still showing their buttons
    after the pointer had moved on, and a fade earns nothing here. `:focus-within` stays so the buttons can
    still be reached with the keyboard -- they are focusable at opacity 0 -- and the click handlers blur
@@ -247,8 +250,29 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .trow .reveal { display: flex; justify-content: flex-end; gap: 6px; opacity: 0; }
 .trow:hover .reveal, .trow.selected .reveal, .trow .reveal:focus-within { opacity: 1; }
 .trow.lossy-row .reveal { opacity: 1; }
-.trow.selected, .trow.selected:nth-child(odd) { background: var(--accent); color: var(--accent-text); }
+.trow.selected, .trow.selected:nth-child(odd) { background: var(--accent-fill); color: var(--accent-text); }
 .trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
+/* .kbps.lossy's own color (below) is the same specificity as .trow.selected .kbps and follows it in the
+   sheet, so without this it would win over white text on the selected row's blue fill. */
+.trow.selected .kbps.lossy { color: var(--accent-text); }
+
+/* At the declared minimum window (720x540) the sidebar alone leaves ~460px for the table: the full
+   8-column grid's floors (artwork + year/kbps/format minimums + the actions column) already add up to
+   more than that, so Genre/Label/Year get squeezed to nothing and the row lines run together. Below this
+   the table drops those three columns -- their values move into a compact line under the track title
+   instead of disappearing -- and the actions buttons shrink so both can still sit on one line. */
+@media (max-width: 900px) {
+  .toolbar { flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 6px; padding: 10px 16px; }
+  .toolbar .search { flex: 1 1 140px; width: auto; }
+  .toolbar .counts { order: 3; flex-basis: 100%; }
+  .library-filters { flex-wrap: wrap; row-gap: 6px; }
+  .thead, .trow { grid-template-columns: 32px minmax(0, 1fr) minmax(44px, auto) minmax(44px, auto) var(--actions, 110px); gap: 8px; padding: 0 10px; min-width: 0; }
+  .thead .col-optional, .trow .col-optional { display: none; }
+  .compact-meta { display: block; margin-top: 1px; color: var(--tertiary); }
+  .trow { height: auto; min-height: 44px; padding: 6px 10px; }
+  .trow .reveal { flex-wrap: wrap; justify-content: flex-end; }
+  .trow .reveal .btn-secondary { padding: 0 7px; font-size: 11px; }
+}
 
 /* ---- Settings ---- */
 .settings { max-width: 640px; gap: 14px; padding: 22px 20px; }
@@ -286,7 +310,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .sharing:not(.compact) .hint-row { font-size: 12px; color: var(--secondary); }
 /* `.hint-row.ok` carries no colour of its own anywhere else, and `.hint-row.warn` is written for a setup
    step -- centred, 460px wide. Both are corrected only inside `.sharing`, so nothing else moves. */
-.sharing .hint-row.ok { color: var(--green); }
+.sharing .hint-row.ok { color: var(--green-text); }
 .sharing:not(.compact) .hint-row.warn { text-align: left; max-width: none; }
 /* The router instructions: a paragraph the owner reads once and acts on, so it wraps at a readable
    measure rather than running the width of the panel. */
@@ -305,7 +329,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--secondary); }
 .step.cur { color: var(--text); font-weight: 500; }
 .disc { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 8px; background: var(--chip); color: var(--secondary); font-size: 10px; }
-.step.cur .disc { background: var(--accent); color: #fff; } .step.done .disc { background: var(--green); color: #fff; }
+.step.cur .disc { background: var(--accent-fill); color: #fff; } .step.done .disc { background: var(--green); color: #fff; }
+.step-skipped { color: var(--tertiary); font-size: 10px; }
 /* Centred while it fits, scrolled from the top when it does not. `justify-content: center` overflows
    *both* ends of an overfull box, and the top half of that spill is drawn over the stepper -- which is
    how the Soulseek step's heading ended up on top of "Telegram". Auto margins collapse to zero when
@@ -317,12 +342,16 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .setup .lead { max-width: 440px; font-size: 13px; color: var(--secondary); line-height: 1.5; }
 .setup .err { margin-top: 8px; }
 .setup-bar { display: flex; justify-content: space-between; align-items: center; min-height: 22px; }
-.setup-bar .hint { font-size: 12px; color: var(--tertiary); }
+.setup-bar .hint { font-size: 13px; color: var(--secondary); }
 .folder { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .folder-well { width: 440px; max-width: 100%; display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); }
 .folder-well svg { color: var(--secondary); }
 .folder-well input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: 12px var(--mono); color: var(--text); }
-.hint-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--tertiary); }
+/* The well itself carries no visible focus ring, so a keyboard user tabbing into the plain-text input
+   inside it saw nothing change. `:focus-within` lets the *well* show the ring the bare `.input` class
+   would have given it, without changing this element's markup or losing the mono/no-border input styling. */
+.folder-well:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.hint-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--secondary); }
 /* A hint the owner is meant to act on before moving off the screen, not one they may skim. */
 .hint-row.warn { display: block; color: var(--secondary); max-width: 460px; text-align: center; line-height: 1.45; }
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -333,12 +362,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .qr-card { width: 220px; height: 220px; padding: 12px; border-radius: 8px; background: #fff; border: .5px solid rgba(0,0,0,.15); display: grid; place-items: center; }
 .qr-card img { display: block; width: 196px; height: 196px; }
 .qr-card.phone { background: var(--well); border-color: var(--well-border); color: var(--tertiary); }
-.qr-hint { margin-top: 8px; font-size: 11px; color: var(--tertiary); text-align: center; }
+.qr-hint { margin-top: 8px; font-size: 12px; color: var(--secondary); text-align: center; }
 .pw-box { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: var(--orange-wash); border: .5px solid var(--orange); }
 .pw-box .k { font-size: 13px; font-weight: 500; }
-.footnote { padding-top: 10px; border-top: .5px solid var(--sep); font-size: 11px; color: var(--tertiary); line-height: 1.5; }
+.footnote { padding-top: 10px; border-top: .5px solid var(--sep); font-size: 12px; color: var(--secondary); line-height: 1.5; }
 .ready-disc { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .ready-disc.bad { background: var(--red-wash); color: var(--red); }
+.ready-disc.neutral { background: var(--chip); color: var(--secondary); }
 .path-well { padding: 8px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); font: 12px var(--mono); }
 .fields { display: flex; flex-direction: column; gap: 12px; width: 320px; max-width: 100%; text-align: left; }
 .fields .field { display: flex; flex-direction: column; gap: 4px; }
@@ -359,7 +389,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .welcome .pitch { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .welcome .lead { max-width: 380px; font-size: 14px; color: var(--secondary); line-height: 1.45; }
 .welcome .cta { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 6px; }
-.welcome .note { font-size: 11px; color: var(--tertiary); }
+.welcome .note { font-size: 12px; color: var(--secondary); }
 .welcome-vinyl { display: block; position: relative; width: min(470px, 100%); max-height: min(48vh, 310px); aspect-ratio: 3 / 2;
   border-radius: 4px; overflow: hidden; animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
 /* The photo has a plain white studio background baked in (no alpha). Against light mode's near-white
@@ -376,9 +406,11 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   .welcome-vinyl-photo, .welcome-vinyl-motion { mix-blend-mode: normal; }
 }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@media (prefers-reduced-motion: reduce) { .welcome-vinyl, .welcome-vinyl-disc-spin, .dot6.current { animation: none; } }
+/* `.dot6.current` matched nothing -- the current-step pulse moved to `.step.current .step-mark` and this
+   rule was never updated, so reduced-motion never actually silenced it. */
+@media (prefers-reduced-motion: reduce) { .welcome-vinyl, .welcome-vinyl-disc-spin, .step.current .step-mark { animation: none; } }
 
 /* A lossy row states its bitrate without the green check the verified lossless rows get: the check means
    "this is what it claims to be", and a 320 that lost its lossless race has not earned it. Amber, not red --
    the file plays fine, it is just not the copy that was wanted. */
-.kbps.lossy { color: var(--orange); }
+.kbps.lossy { color: var(--orange-text); }

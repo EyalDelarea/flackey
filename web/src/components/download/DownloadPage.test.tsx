@@ -13,7 +13,7 @@ function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
   const health: Health = { ok: true, version: '0', telegram_authorized: true, worker_running: true, setup_done: true }
   return {
     health, bundles: new Map(bundles.map(b => [b.request.id, b])), playlists: [], stats: null, settings: null,
-    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false,
+    fetchProgress: [], libraryVersion: 0, loadError: null, loading: false, connected: true, lastSeen: null,
     upgradeActivity: null, setUpgradeActivity: () => undefined,
     refresh: async () => undefined, refreshLibrary: async () => undefined, retry: async () => undefined,
     setHealth: () => undefined, setSettings: () => undefined, dropBundle: () => undefined,
@@ -55,7 +55,7 @@ it('refreshes queue and playlists after a paste submission returns', async () =>
   })
   const refresh = vi.fn(async () => undefined)
   render(<DownloadPage live={makeLive([], { refresh })} />)
-  fireEvent.change(screen.getByPlaceholderText('Paste a YouTube, YouTube Music, or Spotify link'), {
+  fireEvent.change(screen.getByLabelText('Track or playlist link'), {
     target: { value: 'https://open.spotify.com/playlist/pl1' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'Add' }))
@@ -120,6 +120,22 @@ describe('filter bar, remove and clear failed', () => {
     render(<DownloadPage live={makeLive([mk(1, 'done')])} />)
     fireEvent.click(screen.getByRole('button', { name: 'History' }))
     expect(screen.getByRole('button', { name: 'Clear failed' })).toBeDisabled()
+  })
+
+  it('badges History when a request finishes while the owner is watching Downloads, and clears on open', () => {
+    const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'fetching')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+
+    rerender(<DownloadPage live={makeLive([mk(1, 'done')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).toHaveTextContent('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+  })
+
+  it('does not badge History for completions that were already there on the first load', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'done'), mk(2, 'not_found')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
   })
 
   it('shows "Nothing here." when a filter hides every row', () => {
