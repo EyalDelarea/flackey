@@ -56,7 +56,7 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
         <span className="fmt">{t.fmt.toUpperCase()}</span>
         <span className="reveal">
           {lossy && onUpgrade && (
-            <button className="btn-secondary" disabled={busy !== null} onClick={e => { releasePointer(e); upgrade(e, t) }}>
+            <button className="btn-secondary" disabled={busy !== null} onClick={e => { e.stopPropagation(); setSelected(t.id); upgrade(e, t) }}>
               {busy === t.id ? 'Searching…' : 'Find lossless'}
             </button>
           )}
