@@ -133,6 +133,11 @@ describe('filter bar, remove and clear failed', () => {
     expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
   })
 
+  it('does not badge History for completions that were already there on the first load', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'done'), mk(2, 'not_found')])} />)
+    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+  })
+
   it('shows "Nothing here." when a filter hides every row', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
     fireEvent.click(screen.getByRole('button', { name: 'History' }))

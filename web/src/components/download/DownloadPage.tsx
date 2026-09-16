@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
 import { bucketCounts, groupRows } from '../../presentation'
@@ -34,6 +34,14 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
     : view === 'failed' ? FAILED_STATES.includes(b.request.state)
     : TERMINAL_STATES.includes(b.request.state))
   const historyIds = bundles.filter(b => TERMINAL_STATES.includes(b.request.state)).map(b => b.request.id)
+  // The first snapshot this launch is history the owner already knows about, not a batch that "just"
+  // finished -- otherwise a returning owner with a long history sees it all counted as new on open.
+  const seededHistory = useRef(false)
+  useEffect(() => {
+    if (seededHistory.current || bundles.length === 0) return
+    seededHistory.current = true
+    setSeenHistoryIds(new Set(historyIds))
+  }, [bundles.length])
   const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)

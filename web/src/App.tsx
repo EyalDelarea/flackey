@@ -45,6 +45,13 @@ export default function App() {
   const refresh = live.refresh
   useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
+  // Reconnect only re-runs the Telegram step (see `current` below) -- Soulseek's own step never opens, so
+  // nothing in the wizard would otherwise set `soulseekState` away from its unvisited default of
+  // 'skipped', and Ready would falsely tell a Soulseek-connected owner they skipped it.
+  useEffect(() => {
+    if (!reconnecting) return
+    setSoulseekState(h?.lossless?.provider?.status === 'ok' ? 'connected' : h?.lossless?.enabled ? 'pending' : 'skipped')
+  }, [reconnecting])
   const mainScreen = !!h && h.setup_done && !reconnecting
   // 600, not 540: the Soulseek step carries a heading, a lead, two fields, a warning about a password
   // nothing can reset, two buttons and a footnote, and at 540 that column did not fit -- which is how
