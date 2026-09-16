@@ -114,4 +114,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json \
-            --verify-tag --prerelease --title "Flackey ${GITHUB_REF_NAME#v}v (Beta)" --generate-notes
+            --verify-tag --prerelease --title "Flackey ${GITHUB_REF_NAME#v} (Beta)" --generate-notes
