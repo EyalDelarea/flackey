@@ -23,7 +23,16 @@ beforeEach(() => {
   mockRefresh.mockResolvedValue(undefined)
 })
 
-it('shows the four cards and saves a new folder', async () => {
+/* The whole point of the Connections section is where things sit, and a `getByText` passes just as
+   happily when the three connections are scattered over three cards again. Everything below asks which
+   box, and in what order, rather than only whether the words are on screen. */
+const connections = () => screen.getByRole('heading', { name: 'Connections' }).nextElementSibling as HTMLElement
+/* Scoped to that box on purpose: "Soulseek" is both a connection row and the heading of the box holding
+   everything else about it, so an unscoped lookup would have two answers. */
+const connRow = (name: string) => within(connections()).getByText(name).closest('.srow') as HTMLElement
+const dot = (r: HTMLElement) => r.querySelector('.status-dot') as HTMLElement
+
+it('shows the settings cards and saves a new folder', async () => {
   const result = { library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/flackey.log' }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
   render(<SettingsPage live={live} onReconnect={() => {}} />)
@@ -126,9 +135,78 @@ it('lets an already signed-in account turn the Deezer bot source back on', async
   vi.spyOn(api, 'telegramSource').mockResolvedValue({ source_enabled: true })
   render(<SettingsPage live={offline} onReconnect={() => {}} />)
   expect(screen.getByText('Off — requests use Soulseek only')).toBeInTheDocument()
+  // Switched off on purpose is not a fault: grey, not the amber that means something needs attention.
+  expect(dot(connRow('Deezer bot'))).toHaveClass('off')
   fireEvent.click(screen.getByText('Turn on'))
   await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
   expect(mockRefresh).toHaveBeenCalled()
+})
+
+describe('the Connections section', () => {
+  const signedOut = (over: Partial<Health> = {}) => {
+    const current = live as unknown as { settings: AppSettings; health: Health }
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: true, phone_masked: null })
+    return makeLive({ ...current, health: { ...current.health, telegram_authorized: false, ...over } })
+  }
+
+  it('gathers every account into one titled box, and leaves the library folder out of it', () => {
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    const box = connections()
+    expect(box).toHaveClass('group')
+    for (const name of ['Telegram', 'Deezer bot', 'Soulseek']) {
+      expect(box).toContainElement(within(box).getByText(name))
+    }
+    expect(box).not.toContainElement(screen.getByText('Library folder'))
+    // Three connections, three status lines, one column: the dots are what the owner counts.
+    expect(box.querySelectorAll('.status-dot')).toHaveLength(3)
+  })
+
+  it('nests the Deezer bot under Telegram and says what it is and what it needs', () => {
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    const bot = connRow('Deezer bot')
+    expect(bot).toHaveClass('sub')
+    expect(connRow('Telegram').nextElementSibling).toBe(bot)
+    expect(within(bot).getByText(/A bot Flackey messages inside Telegram/)).toBeInTheDocument()
+    expect(within(bot).getByText(/needs the Telegram account above/)).toBeInTheDocument()
+  })
+
+  it('keeps the API keys with the Telegram connection, still folded shut', () => {
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    const details = screen.getByText('Use your own Telegram API keys').closest('details')!
+    expect(details).not.toHaveAttribute('open')
+    expect(connections()).toContainElement(details)
+    // After the two Telegram rows it belongs to, and before the unrelated Soulseek one.
+    expect(connRow('Deezer bot').nextElementSibling).toBe(details.closest('.srow'))
+    expect(details.closest('.srow')!.nextElementSibling).toBe(connRow('Soulseek'))
+  })
+
+  it('does not let the Deezer bot look fine while Telegram is signed out', async () => {
+    // The dependent state, told honestly: the bot is still switched on, but it is reached through an
+    // account that is gone, so the row is amber and points at Telegram rather than at itself.
+    render(<SettingsPage live={signedOut()} onReconnect={() => {}} />)
+    await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
+    const bot = connRow('Deezer bot')
+    expect(within(bot).getByText(/On, but Telegram is signed out — sign in above/)).toBeInTheDocument()
+    expect(dot(bot)).toHaveClass('amber')
+    expect(dot(bot).className).not.toBe('status-dot')
+  })
+
+  it('says a switched-off bot is signed out too, and offers the way back', () => {
+    const onReconnect = vi.fn()
+    render(<SettingsPage live={signedOut({ source_enabled: false })} onReconnect={onReconnect} />)
+    const bot = connRow('Deezer bot')
+    expect(within(bot).getByText('Off — and Telegram is signed out')).toBeInTheDocument()
+    expect(dot(bot)).toHaveClass('off')
+    fireEvent.click(within(bot).getByRole('button', { name: 'Reconnect Telegram' }))
+    expect(onReconnect).toHaveBeenCalled()
+  })
+
+  it('leaves the rest of Soulseek in its own titled box, below', () => {
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    const soulseek = screen.getByRole('heading', { name: 'Soulseek' }).nextElementSibling as HTMLElement
+    expect(soulseek).toContainElement(screen.getByText('File format'))
+    expect(soulseek).not.toContainElement(connRow('Soulseek'))
+  })
 })
 
 it('shows a banner when checking the Telegram connection fails', async () => {

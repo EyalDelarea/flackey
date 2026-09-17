@@ -277,8 +277,24 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* ---- Settings ---- */
 .settings { max-width: 640px; gap: 14px; padding: 22px 20px; }
 .settings h1 { margin-bottom: 4px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+/* System Settings labels a box when its rows share a subject that no single row can state, and leaves the
+   rest to name themselves in their first line. Two boxes here need it -- the connections, and what is
+   left of Soulseek once its status row moves up -- so the folder, version and setup boxes stay bare.
+   The negative bottom margin eats most of the column's 14px gap: a heading spaced equally from the box
+   above and the box below belongs to neither. */
+.settings h2 { margin: 4px 2px -7px; font-size: 12px; font-weight: 600; color: var(--secondary); }
 .srow { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 14px; border-top: .5px solid var(--sep); }
 .srow:first-child { border-top: 0; }
+/* A row that depends on the row above it rather than standing beside it: the Deezer bot is a chat held
+   inside the Telegram account, not a fourth thing to sign into, and as a peer row it read as one. The
+   separator goes -- a rule between them would cut the parent off from its child -- and an elbow drawn
+   in --tertiary runs from the parent's row down and into the key, which is the same hairline weight
+   Finder uses for a disclosed child and quiet enough not to become a second border. The 19px is the
+   centre of that first line (10px of padding, half a 17px line) rather than half the row: the row grows
+   with the sentence under the status, and an elbow at 50% would drift down the page with it. */
+.srow.sub { position: relative; padding-left: 40px; border-top: 0; }
+.srow.sub::before { content: ''; position: absolute; left: 22px; top: 0; height: 19px; border-left: 1px solid var(--tertiary); }
+.srow.sub::after { content: ''; position: absolute; left: 22px; top: 19px; width: 9px; border-top: 1px solid var(--tertiary); }
 .srow-body { flex: 1; min-width: 0; }
 .srow .k { font-size: 13px; }
 .srow .v { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 12px; color: var(--secondary); }

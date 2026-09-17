@@ -26,6 +26,17 @@ function soulseekLine(l: LosslessHealth | undefined): { ok: boolean; text: strin
   return { ok: false, text: 'Not reachable', hint: 'The Soulseek helper is not answering on this Mac.' }
 }
 
+/* Four readings, not two. The bot is reached *through* the Telegram account above it, so "on" is only
+   the whole truth while that account is signed in -- on its own, "On" beside a green dot told an owner
+   whose Telegram had dropped that the thing was working. Off is grey rather than amber because the owner
+   chose it and nothing is wrong; on-but-unreachable is amber, and names Telegram rather than the bot,
+   because Telegram is where the fix is. */
+function deezerBotLine(authorized: boolean, enabled: boolean): { dot: string; text: string } {
+  if (!enabled) return { dot: ' off', text: authorized ? 'Off — requests use Soulseek only' : 'Off — and Telegram is signed out' }
+  if (!authorized) return { dot: ' amber', text: 'On, but Telegram is signed out — sign in above and the bot answers again' }
+  return { dot: '', text: 'On — Flackey can search and fetch through Telegram' }
+}
+
 export default function SettingsPage({ live, onReconnect }: { live: Live; onReconnect: () => void }) {
   const s = live.settings; const authorized = live.health?.telegram_authorized ?? true
   const [editing, setEditing] = useState(false); const [path, setPath] = useState(''); const [err, setErr] = useState<string | null>(null)
@@ -110,6 +121,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   }
   const telegramLine = authorized ? (tg?.phone_masked ? `Connected as ${tg.phone_masked}` : 'Connected') : 'Signed out'
   const sourceEnabled = live.health?.source_enabled ?? true
+  const bot = deezerBotLine(authorized, sourceEnabled)
   const toggleTelegramSource = () => {
     setSourceBusy(true); setSourceError(null)
     api.telegramSource(!sourceEnabled)
@@ -181,28 +193,30 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       {tgError && <Banner tone="red" text={tgError} action={{ label: 'Dismiss', onClick: () => setTgError(null) }} />}
       {setupResetError && <Banner tone="red" text={setupResetError} action={{ label: 'Dismiss', onClick: () => setSetupResetError(null) }} />}
       <h1>Settings</h1>
-      <div className="group">
-        <div className="srow"><div className="srow-body"><div className="k">Library folder</div>
-          {editing ? <><input className="input" value={path} onChange={e => setPath(e.target.value)} />{err && <div className="err">{err}</div>}</> : <div className="v mono">{s.library_root}</div>}</div>
-          <div className="actions">{editing
-            ? <>{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}<button className="btn-secondary" onClick={() => { setEditing(false); setErr(null) }} disabled={busy}>Cancel</button><button className="btn-primary" onClick={save} disabled={busy}>Save</button></>
-            : <button className="btn-secondary" onClick={() => { setPath(s.library_root); setEditing(true); setErr(null) }}>Change</button>}</div></div>
-      </div>
+      {/* Every account Flackey holds, in one box and one column of dots. They were spread over two cards
+          with the library folder between them, which left the owner counting green dots in two places and
+          guessing what the Deezer bot had to do with the Telegram row above it. */}
+      <h2>Connections</h2>
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">Telegram</div>
           <div className="v"><span className={`status-dot${authorized ? '' : ' amber'}`} />{telegramLine}</div></div>
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
-        <div className="srow"><div className="srow-body"><div className="k">Deezer bot</div>
-          <div className="v"><span className={`status-dot${sourceEnabled ? '' : ' amber'}`} />{sourceEnabled ? 'On — Flackey can search and fetch through Telegram' : 'Off — requests use Soulseek only'}</div>
+        {/* Indented under Telegram, not beside it: the bot is not a fourth account to sign into, it is a
+            chat Flackey holds inside the account above. The sentence says so as well, because a reader
+            who has never met the bot should not have to infer it from an indent. */}
+        <div className="srow sub"><div className="srow-body"><div className="k">Deezer bot</div>
+          <div className="v"><span className={`status-dot${bot.dot}`} />{bot.text}</div>
+          <div className="v">A bot Flackey messages inside Telegram to search for and fetch tracks. It needs the Telegram account above.</div>
           {sourceError && <div className="err">{sourceError}</div>}</div>
           <div className="actions">{!sourceEnabled && !authorized
             ? <button className="btn-secondary" onClick={onReconnect}>Reconnect Telegram</button>
             : <button className="btn-secondary" onClick={toggleTelegramSource} disabled={sourceBusy}>
                 {sourceBusy ? 'Saving…' : sourceEnabled ? 'Turn off' : 'Turn on'}</button>}</div></div>
-        {/* Flackey ships with keys of its own and almost nobody needs to replace them, so this is folded
-            away beside the ports table rather than sitting in the panel. It exists for the owner whose
-            copy was built without them, or who would rather sign in under keys they control. */}
+        {/* Flackey ships with keys of its own and almost nobody needs to replace them, so this stays
+            folded away rather than sitting open in the panel. It belongs to the Telegram connection --
+            it decides which keys the sign-in above uses -- so it follows those two rows and nothing else.
+            It exists for the owner whose copy was built without keys, or who would rather use their own. */}
         <div className="srow"><div className="srow-body">
           <details className="tech">
             <summary>Use your own Telegram API keys</summary>
@@ -219,8 +233,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             <div className="row-gap"><button className="btn-secondary" onClick={saveKeys}
               disabled={keysBusy || !apiId.trim() || !apiHash.trim()}>{keysBusy ? 'Saving…' : 'Save keys'}</button></div>
           </details></div></div>
-      </div>
-      <div className="group">
+        {/* The other account, and the other green dot. Everything else Soulseek needs -- its password,
+            the helper login, sharing, the ports -- is a box of its own further down: this row answers
+            only "is it connected", which is the question the whole section is here to answer. */}
         <div className="srow"><div className="srow-body"><div className="k">Soulseek</div>
           <div className="v"><span className={`status-dot${soulseek.ok ? '' : ' amber'}`} />{soulseek.text}</div>
           {soulseek.hint && <div className="v">{soulseek.hint}</div>}
@@ -228,6 +243,19 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="actions">{lossless?.enabled &&
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
+      </div>
+      <div className="group">
+        <div className="srow"><div className="srow-body"><div className="k">Library folder</div>
+          {editing ? <><input className="input" value={path} onChange={e => setPath(e.target.value)} />{err && <div className="err">{err}</div>}</> : <div className="v mono">{s.library_root}</div>}</div>
+          <div className="actions">{editing
+            ? <>{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}<button className="btn-secondary" onClick={() => { setEditing(false); setErr(null) }} disabled={busy}>Cancel</button><button className="btn-primary" onClick={save} disabled={busy}>Save</button></>
+            : <button className="btn-secondary" onClick={() => { setPath(s.library_root); setEditing(true); setErr(null) }}>Change</button>}</div></div>
+      </div>
+      {/* Titled because the status row that used to open this box -- and say what the box was about --
+          now sits up in Connections. What is left is everything about Soulseek that is not the question
+          "is it connected": what its downloads are filed as, its two logins, and the diagnostics. */}
+      <h2>Soulseek</h2>
+      <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}.</div>
           <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} />
