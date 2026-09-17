@@ -30,12 +30,20 @@ function renderReleaseBody(body) {
         if (linkUrl)
           return `<a href="${linkUrl}" target="_blank" rel="noopener">${linkText}</a>`;
         if (prUrl)
-          return `<a href="${prUrl}" target="_blank" rel="noopener">#${prNum}</a>`;
+          return `<a class="release-note-pr" href="${prUrl}" target="_blank" rel="noopener">#${prNum}</a>`;
         if (diffUrl)
-          return `<a href="${diffUrl}" target="_blank" rel="noopener">${diffRange}</a>`;
+          return `<a class="release-note-compare" href="${diffUrl}" target="_blank" rel="noopener">${diffRange}</a>`;
         return `<a href="${anyUrl}" target="_blank" rel="noopener">${anyUrl}</a>`;
       },
     );
+  const categoryHeading = (text) => {
+    const glyphs = Array.from(text);
+    const first = glyphs[0] || "";
+    const hasIcon = first && !/[A-Za-z0-9#]/.test(first);
+    return hasIcon
+      ? `<h5><span class="release-note-icon" aria-hidden="true">${first}</span><span>${inline(glyphs.slice(1).join("").trim())}</span></h5>`
+      : `<h5>${inline(text)}</h5>`;
+  };
   let html = "";
   let inList = false;
   const closeList = () => {
@@ -57,8 +65,9 @@ function renderReleaseBody(body) {
     const heading = line.match(/^(#{2,6})\s+(.+)$/);
     if (heading) {
       closeList();
-      const tag = heading[1].length === 2 ? "h4" : "h5";
-      html += `<${tag}>${inline(heading[2])}</${tag}>`;
+      html += heading[1].length === 2
+        ? `<h4>${inline(heading[2])}</h4>`
+        : categoryHeading(heading[2]);
     } else if (/^[-*]\s+/.test(line)) {
       if (!inList) {
         html += "<ul>";
