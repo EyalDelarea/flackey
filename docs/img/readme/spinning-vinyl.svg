@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1536 1024" width="1536" height="1024" role="img" aria-label="A silver vinyl record spinning as it emerges from a translucent Flackey sleeve">
+  <style>
+    .vinyl-disc-spin {
+      transform-origin: 0 0;
+      animation: vinyl-spin 40s linear infinite;
+    }
+    @keyframes vinyl-spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+
+  <image href="silver-vinyl-branded.png" xlink:href="silver-vinyl-branded.png" x="0" y="0" width="1536" height="1024" />
+
+  <defs>
+    <clipPath id="record-exposed">
+      <path d="M0 0H638L647 82L730 850H0Z" />
+    </clipPath>
+    <clipPath id="record-edge">
+      <circle r="378" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#record-exposed)">
+    <g transform="translate(542 478) matrix(.923 0 .177 .96 0 0)">
+      <g clip-path="url(#record-edge)">
+        <g class="vinyl-disc-spin">
+          <image href="silver-record-spin.png" xlink:href="silver-record-spin.png" x="-398.4" y="-398.4" width="796.8" height="796.8" />
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

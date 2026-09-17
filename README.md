@@ -1,26 +1,72 @@
-# Flackey
+# 🎧 Flackey
 
-Personal DJ library builder with a dark, pro-audio-style desktop GUI. Paste a
-YouTube or YouTube Music link into the app; a worker running on the Mac finds
-the track through a Telegram source bot (using your own Telegram account),
-matches it on Beatport, verifies it is genuine 320 kbps or better, tags it
-and files it under `~/Music/DJ Library/<Artist>/`, and writes M3U8 playlists
-for Rekordbox import. BPM and key are left to Rekordbox's analysis; genre and
-label are in the tags.
+**Paste a link. Get the FLAC.** Flackey is a dark, pro-audio-style desktop app
+for Mac that turns a YouTube or YouTube Music link into a tagged, Rekordbox-ready
+track in your DJ library — automatically.
 
-## Download
+Paste the link into the app; a worker running on the Mac finds the track
+through a Telegram source bot (using your own Telegram account), matches it
+on Beatport, verifies it is genuine 320 kbps or better (lossless where
+Soulseek has it), tags it and files it under `~/Music/DJ Library/<Artist>/`,
+and writes M3U8 playlists for Rekordbox import. BPM and key are left to
+Rekordbox's analysis; genre and label are in the tags.
+
+<p align="center">
+  <a href="https://github.com/EyalDelarea/flackey/actions/workflows/checks.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/EyalDelarea/flackey/checks.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/EyalDelarea/flackey/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/EyalDelarea/flackey/codeql.yml?branch=main&label=CodeQL"></a>
+  <a href="https://github.com/EyalDelarea/flackey/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/EyalDelarea/flackey"></a>
+  <a href="https://github.com/EyalDelarea/flackey/releases"><img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/EyalDelarea/flackey/total"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey">
+</p>
+
+<p align="center">
+  <img src="docs/img/readme/spinning-vinyl.svg" alt="A silver vinyl record spinning as it emerges from a translucent Flackey sleeve" width="520">
+</p>
+
+## ⬇️ Download
 
 Built for Apple Silicon Macs: **[eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)** — one zip,
 one Terminal command to clear the download flag, and the setup screen does the rest. Everything below is
 for running from a checkout.
 
-## Requirements
+## ✨ See it in action
+
+<p align="center">
+  <img src="docs/img/readme/demo.gif" alt="Paste a link and watch Flackey search, download, and verify it">
+  <br><sub>Paste a link — Flackey searches, downloads, and verifies it against the source.</sub>
+</p>
+
+<table>
+<tr>
+<td width="50%">
+<img src="docs/img/readme/downloads.png" alt="Download queue with a Beatport match to choose">
+<br>Paste a link, pick the right match when there's more than one.
+</td>
+<td width="50%">
+<img src="docs/img/readme/library-dark.png" alt="Library view in dark mode">
+<br>Every track, tagged and filed — dark mode included.
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="docs/img/readme/settings.png" alt="Settings screen">
+<br>Telegram, Soulseek, and library folder, all in one place.
+</td>
+<td width="50%">
+<img src="docs/img/readme/rekordbox-guide.png" alt="In-app Rekordbox import guide">
+<br>The app tells you exactly how to get tracks into Rekordbox.
+</td>
+</tr>
+</table>
+
+## 🧰 Requirements
 
 - macOS
 - Homebrew `ffmpeg` and `yt-dlp`
 - [uv](https://docs.astral.sh/uv/), Python 3.12
 
-## Setup
+## ⚙️ Setup
 
 ```bash
 cp .env.example .env   # optional: TELEGRAM_API_ID, TELEGRAM_API_HASH (the Telegram step asks for them otherwise)
@@ -29,16 +75,12 @@ npm --prefix web install
 npm --prefix web run build   # builds web/dist, which flackey start serves
 ```
 
-## Usage
+## 🎚️ Usage
 
 ```bash
 uv run flackey start          # worker + web UI, until Ctrl-C; opens the UI in a browser
 uv run flackey start --no-browser
 ```
-
-This project has been renamed twice (cratedigger → krater → flackey), and `crate`
-is kept as an alias for `flackey` because it is the one still in muscle memory —
-every command below works under either name.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
@@ -61,7 +103,7 @@ uv run flackey export                                     # rewrite every M3U8 p
 Flackey connects to Telegram directly through its saved Telethon session. Telegram Desktop does not need
 to be open while Flackey searches or downloads; the Deezer bot source can be switched on or off in Settings.
 
-## Rekordbox import
+## 💿 Rekordbox import
 
 No `rekordbox.xml` is written, on purpose: Rekordbox's XML bridge is a
 one-way import, and a generated XML carries none of the owner's hot cues,
@@ -79,7 +121,8 @@ careless drag destructive. Instead:
 The important part is that Flackey writes files and playlists, not Rekordbox's
 database. Rekordbox stays the source of truth for performance metadata.
 
-## Notes on Telegram behaviour
+<details>
+<summary><strong>📡 Notes on Telegram behaviour</strong></summary>
 
 - **Session expiry**: if the owner's Telethon session goes missing or
   expires, `flackey start` does not exit — the web UI keeps running so links
@@ -90,7 +133,10 @@ database. Rekordbox stays the source of truth for performance metadata.
   restarting `flackey start`; the worker resumes automatically once you're
   signed back in.
 
-## Lossless via Soulseek
+</details>
+
+<details>
+<summary><strong>🎼 Lossless via Soulseek</strong></summary>
 
 Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every request first asks the
 Soulseek network for a FLAC of the matched track. The file is verified (spectral cutoff), proven to be the
@@ -137,7 +183,10 @@ responses under `<data dir>/lossless/attempts/<id>/` (pruned after `LOSSLESS_KEE
 A transfer cancelled by a cap can still complete on slskd's side; such files stay in slskd's downloads folder
 and can be deleted at any time.
 
-## Where data lives
+</details>
+
+<details>
+<summary><strong>🗂️ Where data lives</strong></summary>
 
 - `~/Library/Application Support/Flackey/` on macOS; `~/.config/flackey/` elsewhere. The project has
   been named cratedigger and krater before this, and before the Mac-native move its data lived under
@@ -151,7 +200,10 @@ and can be deleted at any time.
   `settings.json` is created from env vars and can be updated via the app; env vars always override it.
 - `~/Music/DJ Library/` — one folder per artist, plus `Playlists/*.m3u8`.
 
-## Docker
+</details>
+
+<details>
+<summary><strong>🐳 Docker</strong></summary>
 
 ```bash
 docker build -t flackey .
@@ -167,7 +219,10 @@ as a terminal-only alternative, run once beforehand:
 docker run --env-file .env -it -v flackey-data:/data flackey uv run flackey login
 ```
 
-## Development
+</details>
+
+<details>
+<summary><strong>🛠️ Development</strong></summary>
 
 ```bash
 npm --prefix web install
@@ -179,9 +234,32 @@ uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.to
 
 `flackey start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
 
-## More
+</details>
+
+## 🤝 Contributing
+
+Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for
+setup, checks, and how PRs get labeled and titled for the changelog. Found a
+security issue? See [`SECURITY.md`](SECURITY.md) instead of opening a public
+issue.
+
+## 🙏 Acknowledgments
+
+Flackey's lossless sourcing wouldn't exist without the [Soulseek](https://www.slsknet.org/)
+network and everyone who keeps sharing their libraries on it, and without
+[slskd](https://github.com/slskd/slskd), the open-source Soulseek client/daemon
+that Flackey's lossless feature talks to. If Flackey finds you a peer's FLAC,
+share your own library back — that reciprocity is what keeps Soulseek alive.
+
+Also built on [yt-dlp](https://github.com/yt-dlp/yt-dlp), [ffmpeg](https://ffmpeg.org/),
+and [Chromaprint](https://github.com/acoustid/chromaprint) for source fetching,
+transcoding, and audio fingerprinting.
+
+## 📚 More
 
 - Release process (PR labels, version bump, tagging): `docs/RELEASING.md`
 - Source bot protocol notes: `docs/source-bot-protocol.md`
-- Soulseek source research: `docs/research/2026-09-06-soulseek-as-audio-source.md`
-- Soulseek spike findings: `docs/research/2026-09-07-soulseek-spike-findings.md`
+
+## 📄 License
+
+[MIT](LICENSE)
