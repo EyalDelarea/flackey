@@ -85,16 +85,51 @@ describe('reconnect and a live Soulseek connection', () => {
 })
 
 describe('the update banner', () => {
-  it('offers a download once an installer is available', async () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+  const availableUpdate = async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
     vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true, available: true,
       latest: '0.1.3', url: 'https://example.test/Flackey.pkg', release_url: 'https://example.test/releases/v0.1.3',
       size: 12345678, size_label: '12.3 MB', published_at: '2026-09-17T10:38:25Z', published_date: '2026-09-17',
       prerelease: false })
+  }
+
+  it('points at the row that can actually do something about it', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    await availableUpdate()
     render(<App />)
-    fireEvent.click(await screen.findByText('Download update'))
-    expect(open).toHaveBeenCalledWith('https://example.test/Flackey.pkg', '_blank', 'noopener,noreferrer')
+    fireEvent.click(await screen.findByText('Update'))
+    // Settings, where the progress is shown -- not a window the webview would silently drop.
+    await screen.findByText('Automatic update checks')
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('can be waved away, and leaves the sidebar dot behind when it is', async () => {
+    await availableUpdate()
+    render(<App />)
+    await screen.findByText('Flackey 0.1.3 is available.')
+    expect(document.querySelector('.nav-badge')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Flackey 0.1.3 is available.')).not.toBeInTheDocument())
+    expect(document.querySelector('.nav-badge')).toBeInTheDocument()
+  })
+
+  it('follows the download once one is running', async () => {
+    await availableUpdate()
+    render(<App />)
+    await screen.findByText('Flackey 0.1.3 is available.')
+    FakeEventSource.last?.emit('status', { update_download: { state: 'downloading', percent: 37,
+      received: 4_500_000, total: 12_345_678, version: '0.1.3', path: null, error: null } })
+    await screen.findByText('Downloading Flackey 0.1.3… 37%')
+  })
+
+  it('stays silent when automatic checks are off', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
+    vi.spyOn(api, 'settings').mockResolvedValue({ ...settings, auto_update_check: false })
+    const check = vi.spyOn(api, 'update')
+    render(<App />)
+    await screen.findByText('Paste a link above to start digging.')
+    expect(check).not.toHaveBeenCalled()
+    expect(document.querySelector('.nav-badge')).not.toBeInTheDocument()
   })
 
   it('stays quiet when a newer version exists but has no installer yet', async () => {

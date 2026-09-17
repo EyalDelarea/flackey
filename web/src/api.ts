@@ -66,6 +66,10 @@ export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
   url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
   published_date:string|null; prerelease:boolean; error?:string }
+/** Where the installer download has got to. Lives on the server and arrives on every `status` event, so
+    leaving Settings mid-download and coming back finds it where it actually is rather than idle. */
+export interface UpdateDownload { state:'idle'|'downloading'|'ready'|'error'; percent:number; received:number
+  total:number|null; version:string|null; path:string|null; error:string|null }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -104,6 +108,11 @@ export const api = {
   stats: () => call<Stats>('/api/stats'),
   settings: () => call<AppSettings>('/api/settings'),
   update: () => call<UpdateStatus>('/api/update'),
+  // No URL is passed: the server looks the release up again for itself, so a page left open on a stale
+  // check cannot name what gets downloaded and opened.
+  installUpdate: () => post<UpdateDownload>('/api/update/install'),
+  updateProgress: () => call<UpdateDownload>('/api/update/progress'),
+  openRelease: () => post<{ ok: boolean; url: string }>('/api/update/release'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

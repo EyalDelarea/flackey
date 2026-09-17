@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
 import { api, ApiError } from '../api'
-import type { AppSettings, Health, LosslessHealth, SharingState } from '../api'
+import type { AppSettings, Health, LosslessHealth, SharingState, UpdateDownload } from '../api'
 
 const makeLive = (over: { settings: AppSettings; health: Health }) =>
   ({ ...over, setSettings: mockSetSettings, refresh: mockRefresh } as never)
@@ -49,16 +49,68 @@ it('shows the settings cards and saves a new folder', async () => {
   expect(screen.getByText('Change')).toBeInTheDocument()
 })
 
+const updateAvailable = { ok: true, current: '0.1.0', newer: true, available: true,
+  latest: '0.1.1', url: 'https://example.test/Flackey.pkg', release_url: 'https://example.test/releases/v0.1.1',
+  size: 12345678, size_label: '12.3 MB', published_at: '2026-09-15T10:00:00Z', published_date: '2026-09-15',
+  prerelease: false } as const
+
+const liveWith = (download: UpdateDownload | null) => ({ ...(live as object), updateDownload: download } as never)
+
 it('shows an available app update', async () => {
-  const open = vi.spyOn(window, 'open').mockImplementation(() => null)
-  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', newer: true, available: true,
-    latest: '0.1.1', url: 'https://example.test/Flackey.pkg', release_url: 'https://example.test/releases/v0.1.1',
-    size: 12345678, size_label: '12.3 MB', published_at: '2026-09-15T10:00:00Z', published_date: '2026-09-15',
-    prerelease: false })
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText(/Version 0.1.1 is available/)).toBeInTheDocument())
-  fireEvent.click(screen.getByText('Download update'))
-  expect(open).toHaveBeenCalledWith('https://example.test/Flackey.pkg', '_blank', 'noopener,noreferrer')
+  expect(screen.getByText('Download update')).toBeInTheDocument()
+})
+
+/* The bug this row was rebuilt for: the press went to `window.open`, which does nothing inside the
+   webview, so nothing happened and nothing said so. The download is the server's job now. */
+it('hands the download to the server rather than opening a window', async () => {
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+  const install = vi.spyOn(api, 'installUpdate').mockResolvedValue(
+    { state: 'downloading', percent: 0, received: 0, total: 12345678, version: '0.1.1', path: null, error: null })
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Download update'))
+  await waitFor(() => expect(install).toHaveBeenCalled())
+  expect(open).not.toHaveBeenCalled()
+  // Something to look at between the press and the first status event, so the click is never dead.
+  expect(screen.getByText('Starting the download…')).toBeInTheDocument()
+})
+
+it('shows how far the download has got', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={liveWith({ state: 'downloading', percent: 42, received: 5_200_000,
+    total: 12_345_678, version: '0.1.1', path: null, error: null })} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Downloading… 42% · 5.2 MB of 12.3 MB')).toBeInTheDocument())
+  expect(screen.getByText('Downloading… 42%')).toBeDisabled()
+})
+
+it('offers the installer again once the download has finished', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={liveWith({ state: 'ready', percent: 100, received: 12_345_678,
+    total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey.pkg', error: null })} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/The macOS installer is open/)).toBeInTheDocument())
+  expect(screen.getByText('Open installer')).toBeEnabled()
+})
+
+it('says why a download failed and lets it be retried', async () => {
+  const install = vi.spyOn(api, 'installUpdate').mockResolvedValue(
+    { state: 'downloading', percent: 0, received: 0, total: null, version: '0.1.1', path: null, error: null })
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={liveWith({ state: 'error', percent: 0, received: 0, total: null,
+    version: '0.1.1', path: null, error: 'The download stopped before it finished.' })} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('The download stopped before it finished.')).toBeInTheDocument())
+  fireEvent.click(screen.getByText('Try again'))
+  await waitFor(() => expect(install).toHaveBeenCalled())
+})
+
+it('surfaces a download that would not even start', async () => {
+  vi.spyOn(api, 'installUpdate').mockRejectedValue(new ApiError(409, 'Flackey is already up to date.'))
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Download update'))
+  await waitFor(() => expect(screen.getByText('Flackey is already up to date.')).toBeInTheDocument())
 })
 
 it('says a newer version exists without offering a dead-end download when the installer is missing', async () => {

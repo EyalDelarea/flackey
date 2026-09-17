@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -153,6 +155,165 @@ def test_update_ignores_prerelease_releases(client):
     }]))
     body = c.get("/api/update").json()
     assert body["ok"] is True and body["newer"] is False and body["available"] is False and body["latest"] is None
+
+
+INSTALLER_URL = "https://example.test/Flackey.pkg"
+
+
+def _release_feed(size: int | None = 8, assets: bool = True):
+    return [{"draft": False, "prerelease": False, "tag_name": "v9.9.9",
+             "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+             "assets": [{"name": "Flackey.pkg", "size": size, "browser_download_url": INSTALLER_URL}]
+             if assets else []}]
+
+
+def _settle(c, want: str) -> dict:
+    """The download runs as a task, so the answer arrives after the POST that started it. Every request
+    gives the server's loop a turn, which is what actually moves it along."""
+    body = {}
+    for _ in range(300):
+        body = c.get("/api/update/progress").json()
+        if body["state"] == want:
+            return body
+        time.sleep(0.01)
+    raise AssertionError(f"download never reached {want!r}, stuck at {body.get('state')!r}: {body}")
+
+
+@respx.mock
+def test_update_install_downloads_the_installer_then_opens_it(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    assert c.post("/api/update/install").json()["state"] == "downloading"
+    body = _settle(c, "ready")
+    assert body["percent"] == 100 and body["version"] == "9.9.9" and body["error"] is None
+    target = settings.data_dir / "updates" / "Flackey.pkg"
+    assert target.read_bytes() == b"PKG-DATA"
+    assert opened == [target]
+
+
+@respx.mock
+def test_update_install_refuses_a_release_whose_installer_is_missing(client):
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(assets=False)))
+    r = c.post("/api/update/install")
+    assert r.status_code == 409 and "isn't published yet" in r.json()["detail"]
+    assert c.get("/api/update/progress").json()["state"] == "idle"
+
+
+@respx.mock
+def test_update_install_refuses_when_there_is_nothing_newer(client):
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": False, "tag_name": f"v{__version__}", "assets": [],
+    }]))
+    r = c.post("/api/update/install")
+    assert r.status_code == 409 and r.json()["detail"] == "Flackey is already up to date."
+
+
+@respx.mock
+def test_update_install_reports_a_download_that_dies_partway(client, monkeypatch):
+    # The failure the owner is most likely to hit, and the one that must not leave a half-written pkg
+    # behind: Installer.app calls a truncated file corrupt and never mentions the download.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("opened a broken pkg"))
+
+    async def dies_partway():
+        yield b"PKG-"
+        raise httpx.ReadError("connection went away")
+
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=dies_partway()))
+    c.post("/api/update/install")
+    body = _settle(c, "error")
+    assert body["error"] == "The download stopped before it finished. Check your connection and try again."
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+    assert not (settings.data_dir / "updates" / "Flackey.pkg.part").exists()
+
+
+@respx.mock
+def test_update_install_reports_a_folder_it_cannot_write_to(client):
+    c, _, settings = client
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (settings.data_dir / "updates").write_text("not a folder")
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install")
+    assert _settle(c, "error")["error"] == "Could not save the installer. The disk may be full."
+
+
+@respx.mock
+def test_update_install_reopens_a_finished_download_instead_of_fetching_it_again(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install")
+    _settle(c, "ready")
+    assert c.post("/api/update/install").json()["state"] == "ready"
+    assert route.call_count == 1 and len(opened) == 2
+
+
+@respx.mock
+def test_update_install_will_not_start_a_second_download(tmp_path, monkeypatch):
+    # Context-managed on purpose: a bare TestClient gives every request its own event loop and drains the
+    # download before the next one lands, so the press-it-twice case can only be reached with one loop
+    # spanning both requests -- which is what the real server has.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: None)
+
+    async def slowly():
+        yield b"PKG-"
+        await asyncio.sleep(0.3)
+        yield b"DATA"
+
+    feed = respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=slowly()))
+    app, _, _ = make(tmp_path)
+    with TestClient(app) as c:
+        c.post("/api/update/install")
+        assert c.post("/api/update/install").json()["state"] == "downloading"
+        assert feed.call_count == 1 and route.call_count == 1
+        _settle(c, "ready")
+
+
+@respx.mock
+def test_update_progress_reaches_the_page_over_the_status_stream(tmp_path, monkeypatch):
+    # The page can be left and come back to mid-download, so progress rides the status event rather than
+    # living in the component that started it.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: None)
+    bus = EventBus()
+    status = Status(bus, telegram_authorized=True, worker_running=False, setup_done=True)
+    app, _, _ = make(tmp_path, status=status, bus=bus)
+    c = TestClient(app)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install")
+    _settle(c, "ready")
+    assert status["update_download"]["state"] == "ready"
+    assert status["update_download"]["version"] == "9.9.9"
+
+
+@respx.mock
+def test_update_release_opens_the_page_in_the_real_browser(client, monkeypatch):
+    # `window.open` does nothing inside pywebview, so the release link is opened from here instead.
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_url", opened.append)
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed()))
+    assert c.post("/api/update/release").json() == {"ok": True, "url": "https://example.test/releases/v9.9.9"}
+    assert opened == ["https://example.test/releases/v9.9.9"]
+
+
+@respx.mock
+def test_update_release_says_so_when_github_cannot_be_reached(client, monkeypatch):
+    monkeypatch.setattr("flackey.web.update.open_url", lambda u: pytest.fail("opened a page it never found"))
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(side_effect=httpx.ConnectError("offline"))
+    r = c.post("/api/update/release")
+    assert r.status_code == 502 and r.json()["detail"] == "Could not check for updates."
 
 
 def test_cors_allows_vite_dev_server(client):
