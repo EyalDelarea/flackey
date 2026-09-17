@@ -29,7 +29,7 @@ FILE_PREFIX = "flackey"
 SKIP_ON_MIGRATE = tuple(f"{name}.app" for name in LEGACY_APP_DIR_NAMES)
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
-             "source_enabled")
+             "source_enabled", "auto_update_check")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # fetch -- so a request goes straight to Soulseek on the Beatport match instead of burning three
     # 30-second timeouts per track first. See `Worker._process`.
     source_enabled: bool = True
+    # On by default so an owner ends up on the latest release without hunting for it; /api/update still
+    # only ever surfaces a stable release with a built installer, never a prerelease or a broken one.
+    auto_update_check: bool = True
     library_root: Path = Path("~/Music/DJ Library")
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a

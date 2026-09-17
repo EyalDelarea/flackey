@@ -92,16 +92,16 @@ def test_health_reflects_shared_status(tmp_path):
 def test_update_reports_new_installer(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
-        "draft": False, "prerelease": True, "tag_name": "v9.9.9",
-        "published_at": "2026-09-15T10:00:00Z",
+        "draft": False, "prerelease": False, "tag_name": "v9.9.9",
+        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
         "assets": [{"name": "Flackey.pkg", "size": 12345678,
                     "browser_download_url": "https://example.test/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
-        "ok": True, "current": __version__, "available": True, "latest": "9.9.9",
-        "url": "https://example.test/Flackey.pkg", "size": 12345678,
-        "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
-        "published_date": "2026-09-15", "prerelease": True,
+        "ok": True, "current": __version__, "newer": True, "available": True, "latest": "9.9.9",
+        "url": "https://example.test/Flackey.pkg", "release_url": "https://example.test/releases/v9.9.9",
+        "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
+        "published_date": "2026-09-15", "prerelease": False,
     }
 
 
@@ -109,13 +109,45 @@ def test_update_reports_new_installer(client):
 def test_update_says_current_release_is_up_to_date(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
-        "draft": False, "prerelease": True, "tag_name": "v0.1.0",
+        "draft": False, "prerelease": False, "tag_name": "v0.1.0",
         "published_at": "2026-09-15T10:00:00Z",
         "assets": [{"name": "Flackey.pkg", "size": 123,
                     "browser_download_url": "https://example.test/Flackey.pkg"}],
     }]))
     body = c.get("/api/update").json()
-    assert body["ok"] is True and body["available"] is False and body["latest"] == "0.1.0"
+    assert body["ok"] is True and body["newer"] is False and body["available"] is False and body["latest"] == "0.1.0"
+
+
+@respx.mock
+def test_update_flags_newer_release_missing_its_installer(client):
+    # Reproduces the v0.1.3 incident: a release was tagged and published (so its tag sorts newer than
+    # the running version) but the installer job failed before an asset was attached. "Up to date" would
+    # be a lie here -- the fix is to say a newer version exists without offering a dead-end download.
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": False, "tag_name": "v0.1.3",
+        "published_at": "2026-09-17T10:38:25Z", "html_url": "https://example.test/releases/v0.1.3",
+        "assets": [],
+    }]))
+    body = c.get("/api/update").json()
+    assert body["ok"] is True and body["newer"] is True and body["available"] is False
+    assert body["latest"] == "0.1.3" and body["url"] is None
+    assert body["release_url"] == "https://example.test/releases/v0.1.3"
+
+
+@respx.mock
+def test_update_ignores_prerelease_releases(client):
+    # v0.1.0-v0.1.2 all shipped as GitHub prereleases; none of them should ever read as an available
+    # update, no matter how their version number compares to the running one.
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": True, "tag_name": "v9.9.9",
+        "published_at": "2026-09-15T10:00:00Z",
+        "assets": [{"name": "Flackey.pkg", "size": 123,
+                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+    }]))
+    body = c.get("/api/update").json()
+    assert body["ok"] is True and body["newer"] is False and body["available"] is False and body["latest"] is None
 
 
 def test_cors_allows_vite_dev_server(client):
@@ -392,6 +424,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                  "soulseek_enabled": False, "slskd_url": settings.slskd_url,
                  "slskd_downloads_dir": str(settings.slskd_downloads),
                  "lossless_filing_format": settings.lossless_filing_format,
+                 "auto_update_check": True,
                  "ports": {"app": {"port": 8765, "host": "127.0.0.1", "public": False},
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
                            "soulseek_listen": {"port": 50300, "host": "0.0.0.0", "public": True}},
@@ -408,6 +441,10 @@ def test_settings_get_and_put(client, tmp_path: Path):
     assert settings.library_root == new and new.is_dir() and settings.settings_path.exists()
     assert c.put("/api/settings", json={"library_root": "relative/dir"}).status_code == 400
     assert c.put("/api/settings", json={"library_root": ""}).status_code == 400
+    r = c.put("/api/settings", json={"library_root": str(new), "auto_update_check": False})
+    assert r.status_code == 200 and r.json()["auto_update_check"] is False
+    assert settings.auto_update_check is False
+    assert c.get("/api/settings").json()["auto_update_check"] is False
 
 
 def test_reveal_is_confined_to_app_folders(tmp_path: Path):
