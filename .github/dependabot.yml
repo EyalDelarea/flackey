@@ -13,13 +13,25 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # Majors come as their own PRs. Grouping them with the safe bumps meant one
+      # broken major (typescript 7 dropping implicit CSS side-effect typing) took
+      # nine unrelated updates down with it.
       web-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # The python base image is pinned by pyproject.toml's requires-python
+      # (">=3.12,<3.13"), not upgradable on its own -- `uv sync --frozen` refuses.
+      # Bump requires-python first, then this follows.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
 
   - package-ecosystem: "github-actions"
     directory: "/"
