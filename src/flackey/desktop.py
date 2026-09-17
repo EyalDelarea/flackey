@@ -1,4 +1,4 @@
-"""The desktop window. `crate start` runs the server on a background thread and shows the UI in a
+"""The desktop window. `flackey start` runs the server on a background thread and shows the UI in a
 pywebview (WKWebView) window on the main thread, which is where macOS insists the GUI loop lives.
 Closing the window stops the server; Ctrl-C in the terminal still stops everything (pywebview installs
 a Mach interrupt handler so the GUI loop returns)."""
@@ -226,7 +226,7 @@ def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
-    import webview  # lazy: `crate start --no-browser` must work without pywebview installed
+    import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()
 
     thread, handle = start_server_thread(settings)

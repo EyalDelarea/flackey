@@ -115,17 +115,19 @@ async def test_serve_reports_a_startup_failure_through_the_handle():
     assert handle.started.is_set() and isinstance(handle.error, OSError) and handle.url is None
 
 
-async def test_run_wakes_a_waiting_thread_even_when_startup_fails_before_the_server_exists():
+async def test_run_wakes_a_waiting_thread_even_when_startup_fails_before_the_server_exists(tmp_path):
     from unittest.mock import patch
 
     from flackey.app import ServerHandle, run
+    from flackey.config import Settings
 
     handle = ServerHandle()
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib")
 
-    # Simulate startup failure before server exists by raising from migrate_legacy_data_dir
-    with patch("flackey.app.migrate_legacy_data_dir", side_effect=RuntimeError("boom")):
+    # Simulate startup failure before the server exists by raising from log_startup_banner
+    with patch("flackey.app.log_startup_banner", side_effect=RuntimeError("boom")):
         try:
-            await run(object(), handle=handle)  # type: ignore
+            await run(settings, handle=handle)
         except RuntimeError as e:
             assert str(e) == "boom"
         else:

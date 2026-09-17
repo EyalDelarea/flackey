@@ -45,7 +45,7 @@ beforeEach(() => {
 it('surfaces a plain-words error when the API is unreachable, and clears it on retry', async () => {
   const healthSpy = vi.spyOn(api, 'health').mockRejectedValueOnce(new Error('network down'))
   render(<Harness />)
-  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `crate start` running?")).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `flackey start` running?")).toBeInTheDocument())
   expect(screen.getByText('no-health')).toBeInTheDocument()
   expect(screen.getByText('loaded')).toBeInTheDocument()
 
@@ -67,7 +67,7 @@ it('refresh() rethrows on failure so a caller (e.g. the setup screen) can react'
     try { await liveRef.current!.refresh() } catch (e) { caught = e }
   })
   expect((caught as Error)?.message).toBe('network down')
-  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `crate start` running?")).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText("Can't reach Flackey. Is `flackey start` running?")).toBeInTheDocument())
 })
 
 

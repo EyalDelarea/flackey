@@ -321,7 +321,7 @@ def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
 
     _fake_venv(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(sys, "argv", ["crate", "--env", "x.env", "start"])
+    monkeypatch.setattr(sys, "argv", ["flackey", "--env", "x.env", "start"])
     monkeypatch.delenv(desktop.BUNDLED_ENV, raising=False)
     calls = []
     monkeypatch.setattr(desktop.os, "execve", lambda path, argv, env: calls.append((path, argv, env)))

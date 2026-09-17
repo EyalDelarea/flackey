@@ -14,11 +14,8 @@ log = logging.getLogger(__name__)
 
 FLACKEY_WEB_USERNAME = "flackey"
 # The name of our entry inside slskd's own config file -- not a Python identifier, a key in a third-party
-# document that already exists on disk. Renaming it without carrying the old ones across would leave
-# `read_api_key` finding nothing, which turns the lossless provider off with no error anywhere; hence both
-# the fallback below and the rewrite in `repoint_slskd_config`. Newest generation first.
+# document that already exists on disk.
 API_KEY_NAME = "flackey"
-LEGACY_API_KEY_NAMES = ("krater", "cratedigger")
 WEB_PORT = 5030
 WEB_IP_ADDRESS = "127.0.0.1"
 API_KEY_CIDR = "127.0.0.1/32"
@@ -64,14 +61,11 @@ def read_api_key(data_dir: Path) -> str | None:
     data = _load_or_none(config_path(data_dir))
     if data is None:
         return None
-    for name in (API_KEY_NAME, *LEGACY_API_KEY_NAMES):
-        try:
-            key = data["web"]["authentication"]["api_keys"][name]["key"]
-        except (KeyError, TypeError):
-            continue
-        if key:
-            return key
-    return None
+    try:
+        key = data["web"]["authentication"]["api_keys"][API_KEY_NAME]["key"]
+    except (KeyError, TypeError):
+        return None
+    return key or None
 
 
 def read_username(data_dir: Path) -> str | None:
@@ -181,8 +175,6 @@ def write_credentials(data_dir: Path, username: str, password: str,
     if not auth.get("password"):
         auth["password"] = secrets.token_urlsafe(24)
     api_keys = _submapping(auth, "api_keys", path)
-    if API_KEY_NAME not in api_keys and (older := _legacy_key_name(api_keys)):
-        api_keys[API_KEY_NAME] = api_keys.pop(older)   # the rename, if the migration missed it
     key_entry = _submapping(api_keys, API_KEY_NAME, path)
     if not key_entry.get("key"):
         key_entry["key"] = secrets.token_hex(32)  # slskd requires at least 16 characters
@@ -248,56 +240,3 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
     _atomic_write(path, config)
     log.info("slskd share now %s", library_root)
     return True
-
-
-def repoint_slskd_config(old_data_dir: Path, new_data_dir: Path) -> None:
-    """Fix up the copied slskd.yml after the data folder has been renamed: it still holds absolute paths
-    into the folder that is about to be removed, and files our API key under the old project name.
-
-    Only paths that actually sit under the old folder are moved -- a downloads folder the owner pointed
-    somewhere else of their own accord is left exactly where they put it, and `shares.directories` names
-    the music library, which this rename does not touch. Never raises: a sidecar whose config needs a
-    hand edit is a bad day, a migration that aborts half way through is a worse one."""
-    path = config_path(new_data_dir)
-    config = _load_or_none(path)
-    if not config:
-        return
-    changed = False
-    directories = config.get("directories")
-    if isinstance(directories, dict):
-        for key in ("downloads", "incomplete"):
-            moved = _moved_under(directories.get(key), old_data_dir, new_data_dir)
-            if moved is not None:
-                directories[key], changed = moved, True
-                log.info("slskd %s folder follows the renamed data folder", key)
-    try:
-        api_keys = config["web"]["authentication"]["api_keys"]
-    except (KeyError, TypeError):
-        api_keys = None
-    if isinstance(api_keys, dict) and API_KEY_NAME not in api_keys and (older := _legacy_key_name(api_keys)):
-        api_keys[API_KEY_NAME] = api_keys.pop(older)
-        changed = True
-        log.info("slskd api key entry renamed from %s to %s", older, API_KEY_NAME)   # names, never the key
-    if not changed:
-        return
-    try:
-        _atomic_write(path, config)
-    except SlskdConfigError as e:
-        log.error("could not update %s after the rename: %s", path, e)
-
-
-def _legacy_key_name(api_keys: dict) -> str | None:
-    """The newest older-generation api_keys entry present, or None. Newest first so a config that somehow
-    carries two of them is adopted forward from the most recent, not the most ancient."""
-    return next((name for name in LEGACY_API_KEY_NAMES if name in api_keys), None)
-
-
-def _moved_under(value: object, old: Path, new: Path) -> str | None:
-    """`value` rebased from `old` to `new`, or None when it is not a path inside `old`."""
-    if not isinstance(value, str):
-        return None
-    try:
-        rel = Path(value).relative_to(old)
-    except ValueError:
-        return None
-    return str(new / rel)

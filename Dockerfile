@@ -1,6 +1,6 @@
 # Secrets are not baked in (.dockerignore drops .env). Run with:
 #   docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 8765:8765 flackey
-# and log in once beforehand with `docker run --env-file .env -it -v flackey-data:/data flackey uv run crate login`.
+# and log in once beforehand with `docker run --env-file .env -it -v flackey-data:/data flackey uv run flackey login`.
 FROM node:26-slim AS ui
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
@@ -24,4 +24,4 @@ USER flackey
 ENV DATA_DIR=/data LIBRARY_ROOT=/library WEB_PORT=8765 WEB_HOST=0.0.0.0
 VOLUME ["/data", "/library"]
 EXPOSE 8765
-CMD ["uv", "run", "crate", "start", "--no-browser"]
+CMD ["uv", "run", "flackey", "start", "--no-browser"]

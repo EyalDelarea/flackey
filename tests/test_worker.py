@@ -417,7 +417,7 @@ async def test_unauthorized_session_pauses_worker_and_keeps_request(env):
     rid = store.add_request("q", RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 0 and "login" in r.flag_reason.lower()
-    assert status["telegram_authorized"] is False and "crate login" in notifier.sent[-1][0]
+    assert status["telegram_authorized"] is False and "flackey login" in notifier.sent[-1][0]
     await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=1)   # returns at once: the worker is paused
 
 

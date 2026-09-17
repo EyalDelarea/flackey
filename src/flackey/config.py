@@ -3,30 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .slskd_config import read_api_key, repoint_slskd_config
+from .slskd_config import read_api_key
 
 log = logging.getLogger(__name__)
 XDG_DATA_DIR = Path("~/.config/flackey")
-# Every name this project has shipped under, newest first. Two renames are behind us -- cratedigger, then
-# krater -- and before the Mac-native move the data lived under ~/.config, so a machine can still be
-# carrying any of these folders. `migrate_legacy_data_dir` walks them in order and takes the first that
-# exists. Never derive them from the current name: that is exactly the bug where the migration looks for
-# its own destination, finds nothing, and orphans the library. A third rename costs one entry per tuple.
-LEGACY_APP_DIR_NAMES = ("Krater", "Cratedigger")
-LEGACY_XDG_DIRS = (Path("~/.config/krater"), Path("~/.config/cratedigger"))
-LEGACY_FILE_PREFIXES = ("krater", "cratedigger")   # <name>.sqlite, its -wal/-shm sidecars, <name>.log
 FILE_PREFIX = "flackey"
-# Rebuilt from the running venv on every launch (see desktop.build_bundle) and carries an absolute-path
-# pyvenv.cfg, so copying one would only carry a stale bundle under the wrong name across. Every
-# generation's bundle is skipped, not only the newest.
-SKIP_ON_MIGRATE = tuple(f"{name}.app" for name in LEGACY_APP_DIR_NAMES)
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
              "source_enabled", "auto_update_check")
@@ -38,15 +25,6 @@ def default_data_dir() -> Path:
     if sys.platform == "darwin":
         return Path("~/Library/Application Support/Flackey").expanduser()
     return XDG_DATA_DIR.expanduser()
-
-
-def legacy_data_dirs() -> tuple[Path, ...]:
-    """Every folder an earlier version kept its data in, newest first."""
-    xdg = tuple(p.expanduser() for p in LEGACY_XDG_DIRS)
-    if sys.platform != "darwin":
-        return xdg
-    support = Path("~/Library/Application Support").expanduser()
-    return tuple(support / name for name in LEGACY_APP_DIR_NAMES) + xdg
 
 
 class Settings(BaseSettings):
@@ -153,9 +131,6 @@ class Settings(BaseSettings):
 
     @property
     def db_path(self) -> Path:
-        # Derived, never spelled out: this is the live database name, and a rename that updates the
-        # legacy prefixes but misses a literal here starts the app on an empty database with the real
-        # library orphaned beside it under the old name.
         return self.data_dir / f"{FILE_PREFIX}.sqlite"
 
     @property
@@ -217,7 +192,7 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     generated for itself in the managed slskd.yml (see slskd_config.write_credentials) -- that file is
     the key's only copy."""
     if env_file is None:
-        # `./.env` when run from the repo root; otherwise the repo's own .env, so `crate` works from any cwd
+        # `./.env` when run from the repo root; otherwise the repo's own .env, so `flackey` works from any cwd
         env_file = Path(".env") if Path(".env").exists() else REPO_ENV
     base = Settings(_env_file=env_file)
     from_file = _read_settings_file(base.settings_path)
@@ -257,85 +232,3 @@ def save_settings(settings: Settings, **updates) -> Settings:
         f.write(json.dumps(data, indent=2))
     os.replace(tmp, settings.settings_path)
     return settings
-
-
-def migrate_legacy_data_dir(settings: Settings) -> bool:
-    """Bring the data folder of an earlier name across, once. Only when the data folder is the default
-    (a DATA_DIR override, e.g. Docker, is respected) and the new folder does not exist yet.
-
-    Copy, verify, then remove -- deliberately not `shutil.move`. The two folders can sit on different
-    volumes, and a move that fails halfway leaves the owner with a library split across two names and no
-    way to tell which half is current. Every step before the removal is recoverable: the worst outcome
-    here is two identical folders and a line in the log, never a missing one."""
-    if settings.data_dir != default_data_dir() or settings.data_dir.exists():
-        return False
-    for legacy in legacy_data_dirs():
-        if legacy != settings.data_dir and legacy.is_dir() and _adopt_data_dir(legacy, settings.data_dir):
-            return True
-    return False
-
-
-def _adopt_data_dir(legacy: Path, dest: Path) -> bool:
-    """Copy verbatim, verify, only then rewrite the names and paths that carry the old one, and only then
-    remove the source. The order is the whole safety argument -- rewriting before the verify would make
-    the verify fail on the files it just changed."""
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(legacy, dest, ignore=shutil.ignore_patterns(*SKIP_ON_MIGRATE), symlinks=True)
-    except (OSError, shutil.Error) as e:
-        log.error("could not copy app data from %s to %s: %s; keeping the old folder", legacy, dest, e)
-        shutil.rmtree(dest, ignore_errors=True)   # a half-written copy must not look like a finished one
-        return False
-    differ = _files_differing(legacy, dest)
-    if differ:
-        log.error("app data copied from %s is incomplete (%d files differ, first: %s); keeping both folders",
-                  legacy, len(differ), differ[0])
-        return False
-    _rename_legacy_files(dest)
-    repoint_slskd_config(legacy, dest)
-    shutil.rmtree(legacy, ignore_errors=True)
-    log.info("moved app data from %s to %s", legacy, dest)
-    return True
-
-
-def _files_differing(legacy: Path, dest: Path) -> list[str]:
-    """Relative paths whose presence or size does not match, sorted. Size rather than a checksum: this
-    runs on every launch until it succeeds and the folder holds hundreds of megabytes of audio, and a
-    truncated or missing file -- the only failure a local copy actually produces -- changes the size."""
-    before, after = _sizes(legacy), _sizes(dest)
-    return sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
-
-
-def _sizes(root: Path) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        if rel.parts[0] in SKIP_ON_MIGRATE or p.is_symlink() or not p.is_file():
-            continue
-        try:
-            out[str(rel)] = p.stat().st_size
-        except OSError:
-            out[str(rel)] = -1     # unreadable counts as different, which is what we want it to do
-    return out
-
-
-def _rename_legacy_files(root: Path) -> None:
-    """`krater.sqlite` / `cratedigger.sqlite`, their `-wal` and `-shm` sidecars and the matching `.log` all
-    carry an older name. Renamed by prefix so the sqlite trio stays consistent: SQLite finds its
-    write-ahead log by the `<database name>-wal` convention, so renaming the database on its own would
-    strand the pages in it.
-
-    Newest generation first, and a rename whose destination already exists is skipped rather than taken.
-    A folder holding both `krater.sqlite` and `cratedigger.sqlite` has two databases wanting the same new
-    name: `Path.rename` overwrites silently on POSIX, and pairing one database's `-wal` with another's
-    main file is how you get something SQLite refuses to open. Skipping loses nothing -- the older file
-    stays under its own name, where it can still be recovered by hand."""
-    for prefix in LEGACY_FILE_PREFIXES:
-        for p in sorted(root.iterdir()):
-            if not p.is_file() or not p.name.startswith(prefix):
-                continue
-            dest = root / (FILE_PREFIX + p.name[len(prefix):])
-            if dest.exists():
-                log.warning("not renaming %s: %s already exists", p.name, dest.name)
-                continue
-            p.rename(dest)

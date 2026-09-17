@@ -1,9 +1,8 @@
 """Entry point for the packaged Mac app.
 
-Deliberately not a second way of starting Flackey: it does what `crate start` does, in the same order,
-and then calls the same `run_in_window`. The order is the part that matters -- every entry point
-migrates the data dir before anything touches it, and logging is configured first because a windowed
-bundle has no console, so the log file in the data dir is the only place a traceback can go.
+Deliberately not a second way of starting Flackey: it does what `flackey start` does, in the same order,
+and then calls the same `run_in_window`. Logging is configured first because a windowed bundle has no
+console, so the log file in the data dir is the only place a traceback can go.
 """
 
 from __future__ import annotations
@@ -12,14 +11,13 @@ import logging
 import multiprocessing
 import sys
 
-from flackey.config import load_settings, migrate_legacy_data_dir
+from flackey.config import load_settings
 from flackey.logsetup import configure_logging
 
 
 def main() -> None:
     settings = load_settings()
     configure_logging(settings.data_dir)
-    migrate_legacy_data_dir(settings)
     log = logging.getLogger("flackey.launch")
     try:
         from flackey.desktop import run_in_window

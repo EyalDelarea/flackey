@@ -394,7 +394,7 @@ class Worker:
             if self.status.get("telegram_authorized", True):
                 self.status["telegram_authorized"] = False
                 log.error("%s: %s", LOGIN_REQUIRED, e)
-                await self.notifier.send(f"{LOGIN_REQUIRED}: {e}\nRun `crate login` and restart. "
+                await self.notifier.send(f"{LOGIN_REQUIRED}: {e}\nRun `flackey login` and restart. "
                                          f"Requests stay queued.")
         except Exception as e:
             log.exception("req#%d failed", request_id)

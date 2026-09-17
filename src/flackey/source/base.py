@@ -19,7 +19,7 @@ class SourceTimeout(SourceError):
 
 
 class SourceUnauthorized(SourceError):
-    """The owner's Telegram session was revoked or expired; nothing will work until `crate login`."""
+    """The owner's Telegram session was revoked or expired; nothing will work until `flackey login`."""
 
 
 class Source(Protocol):

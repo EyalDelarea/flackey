@@ -13,7 +13,7 @@ from telethon import TelegramClient
 
 from . import __version__
 from .catalog import BeatportCatalog
-from .config import Settings, migrate_legacy_data_dir, save_settings
+from .config import Settings, save_settings
 from .deezer import DeezerApi
 from .events import EventBus, Status
 from .inbox import Inbox
@@ -162,7 +162,6 @@ def make_on_authorized(settings: Settings, status: dict) -> Callable[[], None]:
 
 
 async def _run(settings: Settings, handle: ServerHandle) -> None:
-    migrate_legacy_data_dir(settings)
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.library_root,
               settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)
@@ -238,7 +237,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # stray dev server, say), the window silently loads that instead of failing to connect. The
     # exception is a wildcard bind (Docker's web_host="0.0.0.0"): nothing there is directly connectable,
     # so the desktop-window/browser-opening and log-message cases both want "localhost" instead --
-    # and open_browser is never true in that mode anyway (`crate start --no-browser`).
+    # and open_browser is never true in that mode anyway (`flackey start --no-browser`).
     display_host = "localhost" if settings.web_host in ("0.0.0.0", "::") else settings.web_host
     url = f"http://{display_host}:{settings.web_port}"
 

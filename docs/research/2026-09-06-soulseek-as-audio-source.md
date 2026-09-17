@@ -863,7 +863,7 @@ some torrent trackers use don't exist here.
   (VPN, CGNAT, etc.).
 - **Always-on:** slskd is designed to run as a long-lived daemon (Docker or native
   binary) with a web UI and REST API, matching flackey's own "must stay running
-  on the Mac" model (README.md:37-42 — `crate start` runs until Ctrl-C). Confirmed
+  on the Mac" model (README.md:37-42 — `flackey start` runs until Ctrl-C). Confirmed
   via GitHub Releases API that slskd v0.26.0 ships native macOS binaries for both
   architectures — `slskd-0.26.0-osx-arm64.zip` and `slskd-0.26.0-osx-x64.zip`
   (https://github.com/slskd/slskd/releases, fetched via
@@ -1179,7 +1179,7 @@ through it for the existing Deezer-bot source per `EXT_BY_MIME`,
 #### B5. Docker
 
 The existing `Dockerfile` (repo root) builds a single Python 3.12-slim image with
-`ffmpeg`, running `crate start` as the sole process, exposing only `8765`
+`ffmpeg`, running `flackey start` as the sole process, exposing only `8765`
 (`Dockerfile:1-16`). There is **no `docker-compose.yml`/compose file in the repo
 today** — only the single Dockerfile plus manual `docker run` instructions in
 `README.md:93-105`.

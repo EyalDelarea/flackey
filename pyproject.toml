@@ -22,10 +22,6 @@ dependencies = [
 
 [project.scripts]
 flackey = "flackey.cli:app"
-# `crate` is from cratedigger, two names ago, and it is the one the owner's fingers and shell history
-# still reach for -- so it stays. `krater` deliberately does not: it existed for a day and nobody typed
-# it. Aliases are cheap, but only worth keeping for names that were actually used.
-crate = "flackey.cli:app"
 
 [dependency-groups]
 dev = [

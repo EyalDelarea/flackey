@@ -65,7 +65,7 @@ export default function App() {
   if (!h) {
     return (<div className="app-loading">
       {live.loading ? 'Starting…'
-        : <Banner tone="red" text={live.loadError ?? "Can't reach Flackey. Is `crate start` running?"}
+        : <Banner tone="red" text={live.loadError ?? "Can't reach Flackey. Is `flackey start` running?"}
                   action={{ label: 'Try again', onClick: () => { live.retry().catch(() => undefined) } }} />}
     </div>)
   }
