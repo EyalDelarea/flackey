@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -39,8 +38,6 @@ LIBRARY_LIMIT = 10_000
 
 
 def reveal_in_finder(path: Path) -> None:
-    """`path` must already be the resolved, allow-listed value the `/reveal` handler validated --
-    callers never hand this the raw request body."""
     if sys.platform == "darwin":
         # `-R` reveals the path in a Finder window, selected; a bare `open` on a directory instead
         # *launches* it, which is wrong for a `.app`/`.rbxml`/other bundle directory.
@@ -48,6 +45,14 @@ def reveal_in_finder(path: Path) -> None:
     else:
         cmd = ["xdg-open", str(path if path.is_dir() else path.parent)]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _inside(path: Path, roots: list[Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return any(resolved == r.resolve() or r.resolve() in resolved.parents for r in roots)
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -210,21 +215,11 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.post("/reveal")
     async def reveal(body: dict) -> dict:
         path = Path(body.get("path") or "")
-        if not path.is_absolute():
+        if not path.is_absolute() or not _inside(path, [settings.library_root, settings.data_dir]):
             raise HTTPException(400, "only files inside the library or app data folder can be shown")
-        # Canonicalize and check containment with the same realpath+commonpath idiom right here,
-        # next to the sinks it guards (`.exists()`, `opener()`) -- not behind a helper a step away.
-        try:
-            real = os.path.realpath(path)
-        except OSError:
-            raise HTTPException(400, "only files inside the library or app data folder can be shown")
-        allowed_roots = (os.path.realpath(settings.library_root), os.path.realpath(settings.data_dir))
-        if not any(real == root or os.path.commonpath((root, real)) == root for root in allowed_roots):
-            raise HTTPException(400, "only files inside the library or app data folder can be shown")
-        resolved = Path(real)
-        if not resolved.exists():
+        if not path.exists():
             raise HTTPException(404, "that file is no longer there")
-        opener(resolved)
+        opener(path)
         return {"ok": True}
 
     @r.get("/tools")
