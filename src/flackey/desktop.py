@@ -177,7 +177,11 @@ def wait_for_server(handle: ServerHandle, timeout_s: float = WEB_SERVER_START_TI
 def inset_titlebar(window) -> bool:
     """Traffic lights over the sidebar: transparent title bar, hidden title, content under the title bar,
     and the see-through background the vibrancy layer shows through. The AppKit calls are queued on the
-    main thread. False when there is no native handle (not macOS)."""
+    main thread. False when there is no native handle (not macOS).
+
+    Call this on `loaded`, not `shown`. pywebview installs the WKWebView as the window's content view
+    from its own didFinishNavigation handler, roughly 70ms after `shown` fires; until then the content
+    view is a plain NSView that does not answer 'drawsBackground' at all."""
     native = getattr(window, "native", None)
     if native is None or sys.platform != "darwin":
         return False
@@ -191,17 +195,27 @@ def inset_titlebar(window) -> bool:
         native.setStyleMask_(native.styleMask() | _NS_FULL_SIZE_CONTENT_VIEW)
         native.setTitlebarAppearsTransparent_(True)
         native.setTitleVisibility_(_NS_WINDOW_TITLE_HIDDEN)
-        # The three lines pywebview's own `transparent=True` would run, minus its deprecated selector:
-        # it sets the KVC key 'drawsTransparentBackground', which resolves to WKWebView's deprecated
+        # What pywebview's own `transparent=True` would do, minus its deprecated selector: it sets the
+        # KVC key 'drawsTransparentBackground', which resolves to WKWebView's deprecated
         # -_setDrawsTransparentBackground: and makes AppKit log on every launch. 'drawsBackground' = NO
         # is the same effect through a selector AppKit does not complain about. Doing it here instead of
         # at window creation also means the window opens on the opaque `background_color` and only then
         # goes clear, so there is no white flash before the page paints.
+        #
+        # The web view first, the window second, and the window only if the web view agreed. Clearing
+        # the window's background is what makes it see-through; the web view drawing the page is what
+        # fills it back in. Done the other way round -- as this did until the content view turned out
+        # not to be the WKWebView yet -- a refused key leaves a transparent window with nothing
+        # painting it, which is a window you can see the desktop through.
+        content = native.contentView()
+        try:
+            content.setValue_forKey_(False, "drawsBackground")
+        except Exception:
+            log.warning("the window's content view would not take 'drawsBackground'; leaving the "
+                        "window opaque with its standard title bar", exc_info=True)
+            return
         native.setOpaque_(False)
         native.setBackgroundColor_(AppKit.NSColor.clearColor())
-        content = native.contentView()   # pywebview makes the WKWebView the window's content view
-        if content is not None:
-            content.setValue_forKey_(False, "drawsBackground")
         native.setHasShadow_(True)  # a non-opaque window loses its shadow, and a shadowless window is not native
 
     AppHelper.callAfter(apply)
@@ -230,7 +244,9 @@ def run_in_window(settings: Settings) -> None:
         vibrancy=inset)
     api.attach(window)
     if inset:
-        window.events.shown += lambda: inset_titlebar(window)
+        # `loaded`, not `shown`: see inset_titlebar. `shown` fires while the content view is still
+        # pywebview's placeholder NSView, and the call that makes the web view transparent is refused.
+        window.events.loaded += lambda: inset_titlebar(window)
     window.events.closed += handle.stop
     try:
         webview.start(icon=app_icon())
