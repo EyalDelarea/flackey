@@ -1011,7 +1011,21 @@ h2 {
   padding-top: 0;
   border-top: 0;
 }
-.release-note h3 {
+.release-note summary,
+.release-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.release-note summary {
+  list-style: none;
+  cursor: pointer;
+}
+.release-note summary::-webkit-details-marker {
+  display: none;
+}
+.release-note-title {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -1019,14 +1033,42 @@ h2 {
   font-size: 21px;
   font-weight: 550;
   letter-spacing: -0.02em;
-}
-.release-note h3 a {
   color: var(--ink);
 }
-.release-note h3 time {
+.release-note-title time {
   font-size: 14px;
   font-weight: 400;
   color: var(--muted);
+}
+.release-note-toggle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+.release-note-toggle::before,
+.release-note-toggle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--muted);
+  transform: translate(-50%, -50%);
+  transition: transform 0.2s;
+}
+.release-note-toggle::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.release-note[open] .release-note-toggle::after {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+.release-note-body {
+  margin-top: 18px;
 }
 .release-note h4 {
   margin: 18px 0 8px;
@@ -1052,6 +1094,15 @@ h2 {
 }
 .release-note a {
   color: var(--blue);
+}
+.release-note-link {
+  margin-top: 8px;
+  font-weight: 600;
+}
+.release-note-archive a {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 600;
 }
 .download-section {
   padding: 70px 0 60px;
