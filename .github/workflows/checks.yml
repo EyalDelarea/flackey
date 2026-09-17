@@ -21,7 +21,7 @@ jobs:
     name: ruff, lint-imports, pytest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
@@ -38,7 +38,7 @@ jobs:
     name: vitest and build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -63,7 +63,7 @@ jobs:
       FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
       FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
@@ -104,7 +104,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: Flackey.installer
