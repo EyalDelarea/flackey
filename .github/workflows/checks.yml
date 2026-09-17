@@ -88,7 +88,7 @@ jobs:
         run: |
           packaging/build_installer.sh
           cd packaging/build && shasum -a 256 Flackey.pkg > Flackey.pkg.sha256 && cat Flackey.pkg.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Flackey.installer
           path: |
