@@ -83,6 +83,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 const post = <T,>(path: string, body?: unknown) => call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
 const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
+/* For the handful of presses that act on the machine rather than on the library. Another site's page can
+   make the browser POST to loopback, and CORS hides only the reply -- but it cannot invent a header
+   without turning the request into a preflighted one, and that preflight is refused. The header's value
+   carries nothing; that it is there at all is the whole signal. */
+const appPost = <T,>(path: string) =>
+  call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-flackey-app': '1' } })
 
 export const api = {
   health: () => call<Health>('/api/health'),
@@ -109,10 +115,11 @@ export const api = {
   settings: () => call<AppSettings>('/api/settings'),
   update: () => call<UpdateStatus>('/api/update'),
   // No URL is passed: the server looks the release up again for itself, so a page left open on a stale
-  // check cannot name what gets downloaded and opened.
-  installUpdate: () => post<UpdateDownload>('/api/update/install'),
+  // check cannot name what gets downloaded and opened. These two go through `appPost` because they are
+  // wanted for their side effect, which CORS does not hide -- see `from_the_app` on the server.
+  installUpdate: () => appPost<UpdateDownload>('/api/update/install'),
   updateProgress: () => call<UpdateDownload>('/api/update/progress'),
-  openRelease: () => post<{ ok: boolean; url: string }>('/api/update/release'),
+  openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

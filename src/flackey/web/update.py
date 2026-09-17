@@ -9,7 +9,7 @@ import webbrowser
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
 from ..config import Settings
@@ -26,6 +26,27 @@ DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # the page cannot poll its way through a download it may navigate away from and come back to.
 PROGRESS_KEY = "update_download"
 INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
+
+
+APP_HEADER = "x-flackey-app"
+
+
+def from_the_app(request: Request) -> None:
+    """Refuse a press that some other page made the browser send.
+
+    Flackey listens on loopback, which is reachable from any site the owner happens to open, and a plain
+    form POST from one needs no permission: CORS hides the reply, but these two endpoints are wanted for
+    what they *do*, not what they answer -- a downloaded installer opening by itself is an admin-password
+    prompt at a stranger's choosing. A header nobody else can set is what separates the app's own page
+    from that: inventing a header turns the request into a preflighted one, and the preflight is answered
+    by the CORS rules in `create_app`, which no outside origin satisfies.
+
+    Deliberately not an `Origin` check. The window is a WKWebView loading an http:// URL and the dev
+    server proxies /api with `changeOrigin`, so what actually arrives in that header could not be
+    established here without running the real app -- and a wrong guess locks the owner out of updating.
+    """
+    if not request.headers.get(APP_HEADER):
+        raise HTTPException(403, "That request did not come from Flackey.")
 
 
 class ShortDownload(Exception):
@@ -84,7 +105,12 @@ async def latest_release() -> dict:
     # through), so "a newer version exists" and "there is something to download" are tracked
     # separately -- conflating them is what made a broken release read back as "up to date".
     newer = bool(latest and _version_tuple(latest_version) > _version_tuple(__version__))
-    available = bool(installer) and newer
+    # The declared size is the only thing bounding the download and the only thing that can say it
+    # arrived whole, so an asset without one is not something to offer. Reads to the page as a release
+    # whose installer isn't published yet, which is the same shape of "wait for the next one".
+    raw_size = installer.get("size") if installer else None
+    size = raw_size if isinstance(raw_size, int) and not isinstance(raw_size, bool) and raw_size > 0 else None
+    available = size is not None and newer
     published = latest.get("published_at") if latest else None
     date = None
     if isinstance(published, str):
@@ -96,8 +122,7 @@ async def latest_release() -> dict:
             "latest": latest_version or None,
             "url": installer.get("browser_download_url") if installer else None,
             "release_url": latest.get("html_url") if latest else None,
-            "size": installer.get("size") if installer else None,
-            "size_label": _size_mb(installer.get("size") if installer else None),
+            "size": size, "size_label": _size_mb(size),
             "published_at": published, "published_date": date,
             "prerelease": bool(latest.get("prerelease")) if latest else False}
 
@@ -226,8 +251,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         return dict(state)
 
     @r.post("/update/install")
-    async def install() -> dict:
+    async def install(request: Request) -> dict:
         nonlocal task
+        from_the_app(request)
         # The state, not the task handle, is what says a download is in flight -- the page may press this
         # from two windows, and the second press should read back the first one's progress, not start a
         # second 100MB fetch over the top of it.
@@ -261,7 +287,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         return dict(state)
 
     @r.post("/update/release")
-    async def release() -> dict:
+    async def release(request: Request) -> dict:
+        from_the_app(request)
         info = await latest_release()
         url = info.get("release_url")
         if not url:

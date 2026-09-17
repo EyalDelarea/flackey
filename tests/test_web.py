@@ -161,6 +161,9 @@ def test_update_ignores_prerelease_releases(client):
 
 INSTALLER_URL = "https://example.test/Flackey.pkg"
 INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
+# What the app's own page sends. A stranger's page cannot: inventing a header makes the request
+# preflighted, and the preflight is refused.
+FROM_APP = {"x-flackey-app": "1"}
 
 
 def _release_feed(size: int | None = 8, assets: bool = True):
@@ -189,7 +192,7 @@ def test_update_install_downloads_the_installer_then_opens_it(client, monkeypatc
     c, _, settings = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    assert c.post("/api/update/install").json()["state"] == "downloading"
+    assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "downloading"
     body = _settle(c, "ready")
     assert body["percent"] == 100 and body["version"] == "9.9.9" and body["error"] is None
     target = settings.data_dir / "updates" / "Flackey.pkg"
@@ -201,7 +204,7 @@ def test_update_install_downloads_the_installer_then_opens_it(client, monkeypatc
 def test_update_install_refuses_a_release_whose_installer_is_missing(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(assets=False)))
-    r = c.post("/api/update/install")
+    r = c.post("/api/update/install", headers=FROM_APP)
     assert r.status_code == 409 and "isn't published yet" in r.json()["detail"]
     assert c.get("/api/update/progress").json()["state"] == "idle"
 
@@ -212,7 +215,7 @@ def test_update_install_refuses_when_there_is_nothing_newer(client):
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
         "draft": False, "prerelease": False, "tag_name": f"v{__version__}", "assets": [],
     }]))
-    r = c.post("/api/update/install")
+    r = c.post("/api/update/install", headers=FROM_APP)
     assert r.status_code == 409 and r.json()["detail"] == "Flackey is already up to date."
 
 
@@ -229,7 +232,7 @@ def test_update_install_reports_a_download_that_dies_partway(client, monkeypatch
     c, _, settings = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=dies_partway()))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     body = _settle(c, "error")
     assert body["error"] == "The download stopped before it finished. Check your connection and try again."
     assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
@@ -243,7 +246,7 @@ def test_update_install_reports_a_folder_it_cannot_write_to(client):
     (settings.data_dir / "updates").write_text("not a folder")
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     assert _settle(c, "error")["error"] == "Could not save the installer. The disk may be full."
 
 
@@ -254,9 +257,9 @@ def test_update_install_reopens_a_finished_download_instead_of_fetching_it_again
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     _settle(c, "ready")
-    assert c.post("/api/update/install").json()["state"] == "ready"
+    assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "ready"
     assert route.call_count == 1 and len(opened) == 2
 
 
@@ -276,8 +279,8 @@ def test_update_install_will_not_start_a_second_download(tmp_path, monkeypatch):
     route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=slowly()))
     app, _, _ = make(tmp_path)
     with TestClient(app) as c:
-        c.post("/api/update/install")
-        assert c.post("/api/update/install").json()["state"] == "downloading"
+        c.post("/api/update/install", headers=FROM_APP)
+        assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "downloading"
         assert feed.call_count == 1 and route.call_count == 1
         _settle(c, "ready")
 
@@ -292,7 +295,7 @@ def test_update_install_says_so_when_the_installer_will_not_open(client, monkeyp
     c, _, settings = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     body = _settle(c, "ready")
     assert "would not open" in body["error"]
     assert (settings.data_dir / "updates" / "Flackey.pkg").read_bytes() == b"PKG-DATA"
@@ -311,12 +314,68 @@ def test_update_install_recovers_from_a_download_cancelled_under_it(client, monk
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=cancelled()))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     assert _settle(c, "error")["error"] == "The download stopped unexpectedly. Try again."
     # And the retry it refused before is allowed through again.
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     assert _settle(c, "ready")["percent"] == 100
+
+
+@pytest.mark.parametrize("path", ["/api/update/install", "/api/update/release"])
+@pytest.mark.parametrize("headers", [
+    {},                                                          # a plain form POST from another page
+    {"origin": "https://evil.test"},                             # ...and one that admits where it is from
+    {"content-type": "application/x-www-form-urlencoded"},       # the simple-request content type
+    {"host": "flackey.local"},                                   # a rebound host
+], ids=["no-header", "hostile-origin", "form-encoded", "rebound-host"])
+@respx.mock
+def test_update_side_effects_refuse_a_press_from_another_page(client, monkeypatch, path, headers):
+    # Loopback is reachable from any site the owner happens to open, and CORS hides the reply but not the
+    # download-and-open -- a real Apple installer asking for an admin password at a stranger's timing.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    monkeypatch.setattr("flackey.web.update.open_url", lambda u: pytest.fail("browser opened"))
+    feed = respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    c, _, _ = client
+    r = c.post(path, headers=headers)
+    assert r.status_code == 403 and r.json()["detail"] == "That request did not come from Flackey."
+    # Refused before it looks anything up, let alone fetches it.
+    assert feed.call_count == 0
+    assert c.get("/api/update/progress").json()["state"] == "idle"
+
+
+@respx.mock
+def test_update_release_still_works_for_the_app_itself(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_url", opened.append)
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed()))
+    assert c.post("/api/update/release", headers=FROM_APP).status_code == 200
+    assert opened == ["https://example.test/releases/v9.9.9"]
+
+
+@respx.mock
+def test_update_will_not_offer_an_installer_with_no_declared_size(client):
+    # The declared size bounds the download and decides whether it arrived whole. Without one there is
+    # no ceiling and no completeness check, so there is nothing safe to offer.
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        "draft": False, "prerelease": False, "tag_name": "v9.9.9",
+        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+        "assets": [{"name": "Flackey.pkg", "browser_download_url": INSTALLER_URL}],
+    }]))
+    body = c.get("/api/update").json()
+    assert body["newer"] is True and body["available"] is False and body["size"] is None
+    r = c.post("/api/update/install", headers=FROM_APP)
+    assert r.status_code == 409 and "isn't published yet" in r.json()["detail"]
+
+
+@respx.mock
+def test_update_will_not_offer_an_installer_whose_size_is_zero(client):
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=0)))
+    body = c.get("/api/update").json()
+    assert body["newer"] is True and body["available"] is False
 
 
 @respx.mock
@@ -336,7 +395,7 @@ def test_update_install_survives_two_presses_landing_together(tmp_path, monkeypa
     route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
     app, _, _ = make(tmp_path)
     with TestClient(app) as c, ThreadPoolExecutor(max_workers=2) as pool:
-        both = [pool.submit(c.post, "/api/update/install") for _ in range(2)]
+        both = [pool.submit(c.post, "/api/update/install", headers=FROM_APP) for _ in range(2)]
         assert [f.result().status_code for f in both] == [200, 200]
         _settle(c, "ready")
     assert route.call_count == 1
@@ -350,7 +409,7 @@ def test_update_install_refuses_a_body_shorter_than_the_release_says(client, mon
     c, _, settings = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     assert _settle(c, "error")["error"] == INCOMPLETE
     assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
     assert not (settings.data_dir / "updates" / "Flackey.pkg.part").exists()
@@ -362,7 +421,7 @@ def test_update_install_stops_a_body_longer_than_the_release_says(client, monkey
     c, _, settings = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=4)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA-AND-MORE"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     assert _settle(c, "error")["error"] == INCOMPLETE
     assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
 
@@ -378,7 +437,7 @@ def test_update_progress_reaches_the_page_over_the_status_stream(tmp_path, monke
     c = TestClient(app)
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
-    c.post("/api/update/install")
+    c.post("/api/update/install", headers=FROM_APP)
     _settle(c, "ready")
     assert status["update_download"]["state"] == "ready"
     assert status["update_download"]["version"] == "9.9.9"
@@ -391,7 +450,7 @@ def test_update_release_opens_the_page_in_the_real_browser(client, monkeypatch):
     monkeypatch.setattr("flackey.web.update.open_url", opened.append)
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed()))
-    assert c.post("/api/update/release").json() == {"ok": True, "url": "https://example.test/releases/v9.9.9"}
+    assert c.post("/api/update/release", headers=FROM_APP).json() == {"ok": True, "url": "https://example.test/releases/v9.9.9"}
     assert opened == ["https://example.test/releases/v9.9.9"]
 
 
@@ -400,7 +459,7 @@ def test_update_release_says_so_when_github_cannot_be_reached(client, monkeypatc
     monkeypatch.setattr("flackey.web.update.open_url", lambda u: pytest.fail("opened a page it never found"))
     c, _, _ = client
     respx.get(RELEASES_URL).mock(side_effect=httpx.ConnectError("offline"))
-    r = c.post("/api/update/release")
+    r = c.post("/api/update/release", headers=FROM_APP)
     assert r.status_code == 502 and r.json()["detail"] == "Could not check for updates."
 
 
