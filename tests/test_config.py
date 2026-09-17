@@ -178,6 +178,18 @@ def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_p
     assert load_settings(_env(tmp_path)).source_enabled is False
 
 
+def test_the_window_size_survives_a_round_trip_through_the_settings_file(tmp_path: Path):
+    # The only settings-file key that is not a scalar. JSON has no tuple, so it lands as a list and has to
+    # come back as the pair `desktop.startup_size` unpacks -- and it has to stay unset until the owner has
+    # actually resized the window, or a first launch would be pinned to whatever default wrote it.
+    s = load_settings(_env(tmp_path))
+    assert s.window_size is None
+    save_settings(s, window_size=[880, 615])
+
+    assert json.loads(s.settings_path.read_text())["window_size"] == [880, 615]
+    assert load_settings(_env(tmp_path)).window_size == (880, 615)
+
+
 def test_build_defaults_fill_telegram_keys_when_nothing_else_does(tmp_path: Path):
     env = tmp_path / ".env"
     env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")

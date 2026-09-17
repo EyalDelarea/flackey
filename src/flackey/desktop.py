@@ -14,11 +14,11 @@ import threading
 from pathlib import Path
 
 from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
-from .config import Settings
+from .config import Settings, save_settings
 
 log = logging.getLogger(__name__)
-MAIN_SIZE = (1100, 720)
-MIN_SIZE = (720, 540)  # the Welcome and setup screens ask for 720x600 through WindowApi.resize
+MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
+MIN_SIZE = (560, 420)    # the floor the narrow layout at the end of web/src/app.css is written for
 LIGHT_WINDOW = "#ECECEC"  # keep in sync with --window in web/src/theme.css
 DARK_WINDOW = "#1E1E1E"
 INSET_FLAG = "?titlebar=inset"
@@ -136,18 +136,38 @@ def system_is_dark() -> bool:
     return out.returncode == 0 and out.stdout.strip() == "Dark"
 
 
-class WindowApi:
-    """Exposed to the page as `window.pywebview.api`. Only public methods are exported, hence `_window`."""
+# There is deliberately no `js_api`. The one method the page ever had through the bridge was `resize`,
+# and the Welcome and setup screens calling it is what made the window snap to a size of its own choosing
+# mid-session, throwing away whatever the owner had dragged out. How big the window is, is the owner's
+# answer -- `startup_size` remembers it and AppKit's own resize handles the rest -- so the bridge is gone
+# rather than left in place unused, since the page cannot misuse what it is not given.
 
-    def __init__(self) -> None:
-        self._window = None
 
-    def attach(self, window) -> None:
-        self._window = window
+def startup_size(settings: Settings) -> tuple[int, int]:
+    """How big to open the window: the size the owner last closed it at, or `MAIN_SIZE` if they never
+    resized it. Clamped up to `MIN_SIZE`, because the minimum has come down before and a size saved under
+    an older, larger one would otherwise open a window smaller than the layout has rules for. Anything
+    unreadable in the file -- a hand-edited string, a single number -- is treated as never having been
+    set, since a window that will not open is a worse answer than a window of the wrong size."""
+    saved = getattr(settings, "window_size", None) or ()
+    try:
+        width, height = (int(saved[0]), int(saved[1])) if len(saved) == 2 else MAIN_SIZE
+    except (TypeError, ValueError):
+        log.warning("ignoring an unreadable saved window size %r", saved)
+        return MAIN_SIZE
+    return max(width, MIN_SIZE[0]), max(height, MIN_SIZE[1])
 
-    def resize(self, width: float, height: float) -> None:
-        if self._window is not None:
-            self._window.resize(int(width), int(height))
+
+def remember_window_size(settings: Settings, size: tuple[int, int]) -> bool:
+    """Write the size back so the next launch opens there. Best effort and never raised: this runs from
+    the window's `closed` handler, where the only thing left to do is stop the server, and a data dir that
+    has gone read-only must not turn quitting the app into a traceback."""
+    try:
+        save_settings(settings, window_size=[int(size[0]), int(size[1])])
+    except Exception:
+        log.warning("could not save the window size", exc_info=True)
+        return False
+    return True
 
 
 def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHandle]:
@@ -234,6 +254,50 @@ def add_titlebar_drag_view(native, AppKit) -> bool:
     return True
 
 
+_VIBRANCY_VIEW_NAME = "NSVisualEffectView"
+
+
+def stretch_web_view(native, AppKit) -> bool:
+    """Make the web view, and the blur behind it, follow the window frame.
+
+    Two things have to be true for the window to redraw cleanly when it is resized, and pywebview leaves
+    neither of them true here. It builds the WKWebView with `initWithFrame:` and never gives it an
+    autoresizing mask, and it hangs its `NSVisualEffectView` off the web view as a child rather than
+    beside it, so the blur inherits whatever frame the web view happens to be holding.
+
+    In an opaque window that is survivable: AppKit erases the background to the window colour, so a view
+    that arrives at its new frame a moment late costs a flicker. This window is not opaque -- the call
+    above clears its background so the vibrancy can show through -- and a non-opaque window never erases.
+    Every point no view currently covers keeps the pixels that were last drawn there, for as long as
+    nothing else draws over them. A web view whose frame lags the window therefore does not merely draw
+    in the wrong place; it leaves the previous drawing stranded beside it, which is the dead strip with a
+    stale "Connected" pill still painted in it that the bug report shows.
+
+    So pin the web view to all four edges and set its frame from the frame view now -- the style-mask
+    change just above moves the content rect up by the height of the title bar, and the web view is not
+    told -- then lift the vibrancy view out from under it to sit as its sibling, below it, stretched the
+    same way. Sibling rather than child because a blur that is a child of the view it exists to back
+    cannot cover for that view turning up late, which is the whole failure being fixed.
+
+    Returns False when there is no frame view to measure against (the content view is not installed yet)."""
+    content = native.contentView()
+    frame_view = content.superview() if content is not None else None
+    if frame_view is None:
+        return False
+    bounds = frame_view.bounds()
+    both = AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
+    content.setAutoresizingMask_(both)
+    content.setFrame_(bounds)
+    for view in list(content.subviews()):
+        if view.className() != _VIBRANCY_VIEW_NAME:
+            continue
+        view.removeFromSuperview()
+        view.setFrame_(bounds)
+        view.setAutoresizingMask_(both)
+        frame_view.addSubview_positioned_relativeTo_(view, AppKit.NSWindowBelow, content)
+    return True
+
+
 def inset_titlebar(window) -> bool:
     """Traffic lights over the sidebar: transparent title bar, hidden title, content under the title bar,
     and the see-through background the vibrancy layer shows through. The AppKit calls are queued on the
@@ -279,6 +343,9 @@ def inset_titlebar(window) -> bool:
         native.setOpaque_(False)
         native.setBackgroundColor_(AppKit.NSColor.clearColor())
         native.setHasShadow_(True)  # a non-opaque window loses its shadow, and a shadowless window is not native
+        # After the style mask, not before: the content rect it stretches the web view to is the one
+        # `NSWindowStyleMaskFullSizeContentView` has just redefined.
+        stretch_web_view(native, AppKit)
         add_titlebar_drag_view(native, AppKit)
 
     AppHelper.callAfter(apply)
@@ -295,21 +362,30 @@ def run_in_window(settings: Settings) -> None:
     thread, handle = start_server_thread(settings)
     url = wait_for_server(handle)
     inset = sys.platform == "darwin"
-    api = WindowApi()
+    size = startup_size(settings)
     window = webview.create_window(
-        "Flackey", url + (INSET_FLAG if inset else ""), js_api=api,
-        width=MAIN_SIZE[0], height=MAIN_SIZE[1], min_size=MIN_SIZE,
+        "Flackey", url + (INSET_FLAG if inset else ""),
+        width=size[0], height=size[1], min_size=MIN_SIZE,
         # Opaque on purpose: this is what the window shows until `inset_titlebar` turns the background
         # clear on `shown`, and it is what stops a white/black flash before the page paints. Passing
         # pywebview's own transparent=True instead would zero this colour's alpha at creation *and*
         # trip the deprecated WKWebView selector -- see inset_titlebar.
         background_color=DARK_WINDOW if system_is_dark() else LIGHT_WINDOW,
         vibrancy=inset)
-    api.attach(window)
+    # Tracked as it changes rather than read back on `closed`, because by then pywebview has already let
+    # go of the native window and there is no frame left to measure. pywebview reports the frame size,
+    # which is the same number `create_window` was given, so what is saved is what reopens.
+    last = list(size)
+
+    def remember(width, height) -> None:
+        last[:] = [int(width), int(height)]
+
+    window.events.resized += remember
     if inset:
         # `loaded`, not `shown`: see inset_titlebar. `shown` fires while the content view is still
         # pywebview's placeholder NSView, and the call that makes the web view transparent is refused.
         window.events.loaded += lambda: inset_titlebar(window)
+    window.events.closed += lambda: remember_window_size(settings, (last[0], last[1]))
     window.events.closed += handle.stop
     try:
         webview.start(icon=app_icon())

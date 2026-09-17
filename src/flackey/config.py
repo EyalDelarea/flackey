@@ -16,7 +16,7 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
-             "source_enabled", "auto_update_check")
+             "source_enabled", "auto_update_check", "window_size")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # On by default so an owner ends up on the latest release without hunting for it; /api/update still
     # only ever surfaces a stable release with a built installer, never a prerelease or a broken one.
     auto_update_check: bool = True
+    # The size the desktop window was last closed at, written by `desktop.remember_window_size`. None
+    # until the owner has moved a corner, which is what lets a first launch open at `desktop.MAIN_SIZE`
+    # without that default then overwriting every later choice. Stored rather than derived because the
+    # window is gone by the time the next launch needs to know how big it was.
+    window_size: tuple[int, int] | None = None
     library_root: Path = Path("~/Music/DJ Library")
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
