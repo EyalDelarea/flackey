@@ -113,7 +113,7 @@ class Hook(list):
 class FakeWindow:
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
-        self.events = types.SimpleNamespace(shown=Hook(), closed=Hook())
+        self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook())
 
 
 def _install_fake_webview(monkeypatch, tmp_path):
@@ -166,10 +166,10 @@ def test_run_in_window_opens_the_native_layout(monkeypatch, tmp_path):
     assert window.args[1].endswith("?titlebar=inset")
     assert window.kwargs["min_size"] == (720, 540)
     # transparent= is deliberately never passed: pywebview's implementation of it calls a deprecated
-    # WKWebView selector. inset_titlebar does the same job on `shown`. See its comment.
+    # WKWebView selector. inset_titlebar does the same job on `loaded`. See its comment.
     assert "transparent" not in window.kwargs
     assert window.kwargs["vibrancy"] is True
-    assert len(window.events.shown) == 1
+    assert len(window.events.loaded) == 1
 
 
 def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
@@ -182,7 +182,7 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
     assert "?titlebar=inset" not in window.args[1]
     assert "transparent" not in window.kwargs
     assert window.kwargs["vibrancy"] is False
-    assert len(window.events.shown) == 0
+    assert len(window.events.loaded) == 0
 
 
 def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):
@@ -259,9 +259,9 @@ def test_inset_titlebar_applies_the_native_style(monkeypatch):
         ("setStyleMask_", 1 << 15),
         ("setTitlebarAppearsTransparent_", True),
         ("setTitleVisibility_", 1),
+        ("setValue_forKey_", False, "drawsBackground"),
         ("setOpaque_", False),
         ("setBackgroundColor_", "clear"),
-        ("setValue_forKey_", False, "drawsBackground"),
         ("setHasShadow_", True),
     ]
     # The whole point of doing this ourselves: pywebview reaches transparency through
@@ -362,3 +362,95 @@ def test_a_packaged_app_does_not_relaunch_itself_through_the_venv_shim(monkeypat
         AssertionError("a frozen app must not try to build a venv shim")))
 
     assert desktop.relaunch_bundled(Settings(data_dir=tmp_path)) is False
+
+
+def _fake_appkit(monkeypatch):
+    """The AppKit/PyObjC surface inset_titlebar touches, with callAfter running inline."""
+    fake_app_helper = types.SimpleNamespace(callAfter=lambda fn: fn())
+    monkeypatch.setitem(sys.modules, "PyObjCTools.AppHelper", fake_app_helper)
+    monkeypatch.setitem(sys.modules, "PyObjCTools", types.SimpleNamespace(AppHelper=fake_app_helper))
+    monkeypatch.setitem(sys.modules, "AppKit",
+                        types.SimpleNamespace(NSColor=types.SimpleNamespace(clearColor=lambda: "clear")))
+
+
+def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it(monkeypatch):
+    """Order matters, not just the set of calls. Clearing the window's background is what makes it
+    see-through; the web view drawing its own is what fills it back in. Do them the other way round
+    and there is a window of time -- and, when the key is refused, forever -- where the window is
+    transparent with nothing painting it."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+
+    class FakeWebView:
+        def setValue_forKey_(self, value, key):
+            calls.append(("setValue_forKey_", value, key))
+
+    class FakeNative:
+        def styleMask(self):
+            return 0
+
+        def __getattr__(self, name):
+            return lambda *a: calls.append((name, *a))
+
+        def contentView(self):
+            return FakeWebView()
+
+    class Window:
+        native = FakeNative()
+
+    _fake_appkit(monkeypatch)
+    assert desktop.inset_titlebar(Window()) is True
+    names = [c[0] for c in calls]
+    assert names.index("setValue_forKey_") < names.index("setOpaque_")
+    assert ("setValue_forKey_", False, "drawsBackground") in calls
+    assert ("setOpaque_", False) in calls
+    assert ("setHasShadow_", True) in calls
+
+
+def test_inset_titlebar_leaves_the_window_opaque_when_the_content_view_is_not_the_web_view(monkeypatch):
+    """pywebview only makes the WKWebView the content view once the page has finished loading. Run
+    against the plain NSView that stands there until then, 'drawsBackground' raises -- and a window
+    that has already been told it is not opaque then has nothing at all to paint it. Better to stay
+    opaque and keep the standard title bar than to go see-through."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+
+    class PlainNSView:
+        def setValue_forKey_(self, value, key):
+            raise KeyError("NSUnknownKeyException - not key value coding-compliant for "
+                           f"the key {key}")
+
+    class FakeNative:
+        def styleMask(self):
+            return 0
+
+        def __getattr__(self, name):
+            return lambda *a: calls.append((name, *a))
+
+        def contentView(self):
+            return PlainNSView()
+
+    class Window:
+        native = FakeNative()
+
+    _fake_appkit(monkeypatch)
+    desktop.inset_titlebar(Window())
+    assert ("setOpaque_", False) not in calls
+    assert ("setBackgroundColor_", "clear") not in calls
+
+
+def test_run_in_window_insets_the_titlebar_once_the_page_is_loaded(monkeypatch, tmp_path):
+    """`shown` fires while the content view is still a placeholder NSView; `loaded` fires from
+    pywebview's didFinishNavigation handler, which is where the WKWebView is installed."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    desktop.run_in_window(settings=object())
+    window = windows["window"]
+    assert len(window.events.loaded) == 1
+    assert len(window.events.shown) == 0
