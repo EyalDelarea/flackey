@@ -233,10 +233,6 @@ class FakeSubview:
     def setAutoresizingMask_(self, mask):
         self.mask = mask
 
-    def removeFromSuperview(self):
-        self.owner.views.remove(self)
-        self.owner = None
-
 
 def _fake_window(calls, width=1100.0, height=720.0):
     """A window shaped like the real one: a WKWebView content view inside a frame view, with the traffic
@@ -259,6 +255,13 @@ def _fake_window(calls, width=1100.0, height=720.0):
             return list(self.views)
 
         def addSubview_positioned_relativeTo_(self, view, place, other):
+            # AppKit takes a view out of its old superview when it is added to a new one, and the code
+            # under test relies on that rather than unparenting by hand. Emulated, or the fake would
+            # leave the vibrancy layer in two places at once and hide a double-add.
+            owner = getattr(view, "owner", None)
+            if owner is not None:
+                owner.views.remove(view)
+                view.owner = None
             self.views.append(view)
             calls.append(("addSubview", view.frame, view.mask, place, other))
 
@@ -445,6 +448,13 @@ def test_stretch_web_view_pins_the_web_view_and_its_blur_to_the_window(monkeypat
     assert vibrancy.mask == 2 | 16
     place = next(c for c in calls if c[0] == "addSubview")[3]
     assert place == -1  # NSWindowBelow: behind the page, or the blur paints over it
+
+    # `loaded` fires again on every navigation, so this runs again on every tab change. The second run
+    # finds nothing left under the web view to move and must leave the one blur where it put it -- a
+    # stack of them, or one taken out and not put back, would be a window that stops blurring mid-session.
+    assert desktop.stretch_web_view(native, _appkit_module()) is True
+    assert frame_view.subviews() == [vibrancy]
+    assert content.subviews() == []
 
 
 def test_stretch_web_view_declines_before_the_web_view_is_installed():

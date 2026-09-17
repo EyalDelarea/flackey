@@ -291,9 +291,11 @@ def stretch_web_view(native, AppKit) -> bool:
     for view in list(content.subviews()):
         if view.className() != _VIBRANCY_VIEW_NAME:
             continue
-        view.removeFromSuperview()
         view.setFrame_(bounds)
         view.setAutoresizingMask_(both)
+        # No `removeFromSuperview` first: adding a view to a new superview takes it out of its old one,
+        # and doing it by hand would leave the view with no owner but this loop variable across the two
+        # calls in between -- which is a released view in PyObjC, and a window that has stopped blurring.
         frame_view.addSubview_positioned_relativeTo_(view, AppKit.NSWindowBelow, content)
     return True
 
