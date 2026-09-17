@@ -468,3 +468,31 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    "this is what it claims to be", and a 320 that lost its lossless race has not earned it. Amber, not red --
    the file plays fine, it is just not the copy that was wanted. */
 .kbps.lossy { color: var(--orange-text); }
+
+/* ---- Narrow window ----
+   The 900px breakpoint above is where the library table folds; this is the second, lower floor, and it
+   exists so that `MIN_SIZE` in src/flackey/desktop.py can be small enough to park the window beside
+   something else. Under the inset title bar the frame width is the viewport width, so MIN_SIZE's 560
+   is directly comparable with the 700 here and sits well inside it -- windowSize.test.ts holds that
+   pair together, because a minimum the layout has no rules for is a minimum that overflows.
+
+   What actually breaks between 900 and 560 is not the table (already folded) but the fixed widths: the
+   220px sidebar leaves ~330px of content, which is narrower than the Telegram step's 220px QR column
+   beside its text, and than three format cards in a row. Those two stack; everything else just gives
+   back the horizontal padding it does not have room for. Last in the file on purpose -- `.tg` and
+   `.format-options` set these same properties further up, and a media query adds no specificity. */
+@media (max-width: 700px) {
+  .sidebar { width: 168px; }
+  .toolbar { padding: 10px 12px; }
+  .filterbar { padding: 0 12px; }
+  .scroll { padding: 14px 12px 18px; }
+  .settings { padding: 18px 12px; }
+  .welcome-body { padding: 0 20px 24px; }
+  /* Four nowrap steps and three 22px gaps do not fit, and a stepper that overflows pushes the step
+     titles out of the window rather than ellipsizing -- they are the only guide through setup. */
+  .stepper { flex-wrap: wrap; gap: 6px 14px; }
+  .tg { grid-template-columns: minmax(0, 1fr); gap: 14px; justify-items: center; text-align: center; }
+  /* One card per row, so each keeps its note instead of shrinking to a name over three clipped lines. */
+  .format-options { grid-template-columns: minmax(0, 1fr); }
+  .format-choice { min-height: 0; }
+}

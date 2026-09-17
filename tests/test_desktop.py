@@ -1,8 +1,8 @@
 import asyncio
+import inspect
 import sys
 import threading
 import types
-from typing import ClassVar
 
 import pytest
 
@@ -49,20 +49,15 @@ def test_server_thread_fills_the_handle_and_reports_a_crash(monkeypatch):
     assert not thread.is_alive() and isinstance(handle.error, RuntimeError)
 
 
-def test_window_api_resize_forwards_to_the_window():
-    from flackey.desktop import WindowApi
+def test_the_page_is_given_no_bridge_to_resize_the_window_through():
+    """`WindowApi.resize` was the whole of `js_api`, and the Welcome and setup screens calling it is what
+    made the window snap about mid-session and discard the size the owner had dragged out. The capability
+    is gone rather than merely uncalled -- web/src/platform.test.ts bans the call from the other side, and
+    this is the half that makes it impossible."""
+    from flackey import desktop
 
-    class W:
-        calls: ClassVar[list] = []
-
-        def resize(self, w, h):
-            self.calls.append((w, h))
-
-    api = WindowApi()
-    api.resize(720, 540)          # before the window exists: no crash, nothing recorded
-    api.attach(W())
-    api.resize(720.0, 540.0)      # JS numbers arrive as floats
-    assert W.calls == [(720, 540)]
+    assert not hasattr(desktop, "WindowApi")
+    assert "js_api" not in inspect.getsource(desktop.run_in_window)
 
 
 def test_inset_titlebar_needs_a_native_handle():
@@ -97,11 +92,25 @@ def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
     assert desktop.app_icon() is None
 
 
+def test_screen_size_is_none_off_macos(monkeypatch):
+    """`startup_size` then applies no ceiling at all, which is right: there is no NSScreen to ask, and a
+    size the owner chose is a better guess than one this could not measure."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert desktop.screen_size() is None
+
+
 def test_set_app_name_is_false_off_macos(monkeypatch):
     from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.set_app_name() is False
+
+
+# A display no saved size will reach, so the tests that pass it exercise the saved value rather than
+# whatever monitor the suite happens to be running on.
+HUGE = (6000, 4000)
 
 
 class Hook(list):
@@ -113,7 +122,7 @@ class Hook(list):
 class FakeWindow:
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
-        self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook())
+        self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook(), resized=Hook())
 
 
 def _install_fake_webview(monkeypatch, tmp_path):
@@ -145,6 +154,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "app_icon", lambda: "/icons/app-icon.png")
     monkeypatch.setattr(desktop, "set_app_name", lambda: True)
     monkeypatch.setattr(desktop, "relaunch_bundled", lambda settings: False)
+    monkeypatch.setattr(desktop, "screen_size", lambda: HUGE)  # never the machine the suite runs on
     return windows, started, handle
 
 
@@ -164,7 +174,9 @@ def test_run_in_window_opens_the_native_layout(monkeypatch, tmp_path):
     desktop.run_in_window(settings=object())
     window = windows["window"]
     assert window.args[1].endswith("?titlebar=inset")
-    assert window.kwargs["min_size"] == (720, 540)
+    # Small enough to park beside something else. web/src/windowSize.test.ts holds this to the narrow
+    # layout's breakpoint from the other side, so neither number can move without the other.
+    assert window.kwargs["min_size"] == (560, 420)
     # transparent= is deliberately never passed: pywebview's implementation of it calls a deprecated
     # WKWebView selector. inset_titlebar does the same job on `loaded`. See its comment.
     assert "transparent" not in window.kwargs
@@ -187,9 +199,10 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
 
 def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):
     from flackey import desktop
+    from flackey.config import Settings
 
     windows, _, handle = _install_fake_webview(monkeypatch, tmp_path)
-    desktop.run_in_window(settings=object())
+    desktop.run_in_window(Settings(data_dir=tmp_path / "data"))
     # assigned only after run_in_window has returned, so its own `finally: handle.stop()`
     # cannot be what flips should_exit below -- only the closed handlers we call can.
     stub_server = types.SimpleNamespace(should_exit=False)
@@ -219,9 +232,33 @@ def _rect(x, y, w, h):
 ZOOM_BUTTON = (53.0, 692.0, 14.0, 14.0)  # the third traffic light, as AppKit lays them out from the left
 
 
+class FakeSubview:
+    """A view the window already holds: pywebview's vibrancy layer, or a drag strip from a previous
+    `loaded`. Answers `className` because that is how both are recognised again."""
+
+    def __init__(self, name, owner=None, frame=None):
+        self.name, self.owner, self.frame, self.mask = name, owner, frame, None
+        self.kinds = (name,)  # widen to stand in for a subclass of something else
+
+    def className(self):
+        return self.name
+
+    def isKindOfClass_(self, cls):
+        return cls in self.kinds
+
+    def setFrame_(self, frame):
+        self.frame = frame
+
+    def setAutoresizingMask_(self, mask):
+        self.mask = mask
+
+
 def _fake_window(calls, width=1100.0, height=720.0):
-    """A window shaped like the real one: a WKWebView content view inside a frame view, with the
-    traffic lights in the top left."""
+    """A window shaped like the real one: a WKWebView content view inside a frame view, with the traffic
+    lights in the top left and pywebview's vibrancy layer hanging off the web view as a child -- which is
+    where pywebview puts it, and what `stretch_web_view` moves. `contentView()` answers with the same
+    object every time, as the real one does: a fresh instance per call would let a test pass while the
+    code under it configured a view nobody kept."""
 
     class FakeFrameView:
         def __init__(self):
@@ -230,23 +267,51 @@ def _fake_window(calls, width=1100.0, height=720.0):
         def frame(self):
             return _rect(0.0, 0.0, width, height)
 
+        def bounds(self):
+            return _rect(0.0, 0.0, width, height)
+
         def subviews(self):
             return list(self.views)
 
         def addSubview_positioned_relativeTo_(self, view, place, other):
+            # AppKit takes a view out of its old superview when it is added to a new one, and the code
+            # under test relies on that rather than unparenting by hand. Emulated, or the fake would
+            # leave the vibrancy layer in two places at once and hide a double-add.
+            owner = getattr(view, "owner", None)
+            if owner is not None:
+                owner.views.remove(view)
+                view.owner = None
             self.views.append(view)
             calls.append(("addSubview", view.frame, view.mask, place, other))
 
     frame_view = FakeFrameView()
 
     class FakeWebView:
+        def __init__(self):
+            self.frame, self.mask = _rect(0.0, 0.0, width, height - 28.0), None
+            self.views = [FakeSubview("NSVisualEffectView", owner=self)]
+
         def setValue_forKey_(self, value, key):
             calls.append(("setValue_forKey_", value, key))
 
         def superview(self):
             return frame_view
 
+        def subviews(self):
+            return list(self.views)
+
+        def setFrame_(self, frame):
+            self.frame = frame
+            calls.append(("setFrame_", frame))
+
+        def setAutoresizingMask_(self, mask):
+            self.mask = mask
+            calls.append(("setAutoresizingMask_", mask))
+
     class FakeNative:
+        def __init__(self):
+            self.content = FakeWebView()
+
         def styleMask(self):
             return 0
 
@@ -269,7 +334,7 @@ def _fake_window(calls, width=1100.0, height=720.0):
             calls.append(("setBackgroundColor_", v))
 
         def contentView(self):
-            return FakeWebView()
+            return self.content
 
         def standardWindowButton_(self, which):
             return types.SimpleNamespace(frame=lambda: _rect(*ZOOM_BUTTON))
@@ -281,7 +346,10 @@ def _appkit_module():
     """The AppKit surface inset_titlebar and add_titlebar_drag_view touch."""
     return types.SimpleNamespace(
         NSColor=types.SimpleNamespace(clearColor=lambda: "clear"),
-        NSWindowZoomButton=2, NSWindowAbove=1, NSViewWidthSizable=2, NSViewMinYMargin=32,
+        # A sentinel standing in for the class object `isKindOfClass:` is asked about.
+        NSVisualEffectView="NSVisualEffectView",
+        NSWindowZoomButton=2, NSWindowAbove=1, NSWindowBelow=-1,
+        NSViewWidthSizable=2, NSViewHeightSizable=16, NSViewMinYMargin=32,
         NSMakeRect=lambda x, y, w, h: (x, y, w, h))
 
 
@@ -361,6 +429,9 @@ def test_inset_titlebar_applies_the_native_style(monkeypatch):
         "setOpaque_",
         "setBackgroundColor_",
         "setHasShadow_",
+        "setAutoresizingMask_",  # the web view, which pywebview leaves pinned to nothing
+        "setFrame_",
+        "addSubview",  # the vibrancy layer, moved out from under the web view
         "addSubview",  # the drag strip, or the window cannot be moved at all
     ]
     assert calls[:3] == [("setStyleMask_", 1 << 15), ("setTitlebarAppearsTransparent_", True),
@@ -371,6 +442,170 @@ def test_inset_titlebar_applies_the_native_style(monkeypatch):
     # 'drawsTransparentBackground', which is WKWebView's deprecated -_setDrawsTransparentBackground:
     # and logs on every launch. If this key ever comes back, the warning comes back with it.
     assert not [c for c in calls if "drawsTransparentBackground" in repr(c)]
+
+
+def test_stretch_web_view_pins_the_web_view_and_its_blur_to_the_window(monkeypatch):
+    """pywebview builds the WKWebView with a fixed frame and no autoresizing mask, and hangs its vibrancy
+    layer off the web view as a child. Both matter only because `inset_titlebar` makes the window
+    non-opaque, and a non-opaque window never erases: whatever the web view stops covering keeps the
+    pixels last drawn there. So the web view has to be stretched to the frame view and pinned to all four
+    edges, and the blur has to become its sibling underneath -- a child of the late view cannot cover for
+    it being late."""
+    from flackey import desktop
+
+    calls = []
+    native, frame_view = _fake_window(calls)
+    content = native.contentView()
+    vibrancy, = content.subviews()
+
+    assert desktop.stretch_web_view(native, _appkit_module()) is True
+    assert content.mask == 2 | 16          # width and height both follow the window
+    assert (content.frame.size.width, content.frame.size.height) == (1100.0, 720.0)
+    # It was 28 points short before: the full-size content view style mask had just moved the content
+    # rect up over the title bar without telling the view that fills it.
+    assert content.subviews() == []
+    assert frame_view.subviews() == [vibrancy]
+    assert (vibrancy.frame.size.width, vibrancy.frame.size.height) == (1100.0, 720.0)
+    assert vibrancy.mask == 2 | 16
+    place = next(c for c in calls if c[0] == "addSubview")[3]
+    assert place == -1  # NSWindowBelow: behind the page, or the blur paints over it
+
+    # `loaded` fires again on every navigation, so this runs again on every tab change. The second run
+    # finds nothing left under the web view to move and must leave the one blur where it put it -- a
+    # stack of them, or one taken out and not put back, would be a window that stops blurring mid-session.
+    assert desktop.stretch_web_view(native, _appkit_module()) is True
+    assert frame_view.subviews() == [vibrancy]
+    assert content.subviews() == []
+
+
+def test_stretch_web_view_says_so_when_it_cannot_find_the_blur(caplog):
+    """`pyproject.toml` floors pywebview at 6.2.1 with no upper bound, and pywebview already subclasses
+    one of the views it makes (`WebKitHost(WKWebView)`). If a later 6.x moves or wraps the blur so that
+    nothing here matches it, the web view still gets pinned -- but the blur stays where pywebview put it
+    and the stale paint comes back. Silently, on a green suite, unless this branch reports itself."""
+    from flackey import desktop
+
+    calls = []
+    native, frame_view = _fake_window(calls)
+    content = native.contentView()
+    content.views = [FakeSubview("PywebviewBlurHost", owner=content)]  # renamed out from under us
+
+    with caplog.at_level("WARNING"):
+        assert desktop.stretch_web_view(native, _appkit_module()) is False
+    assert "vibrancy" in caplog.text
+    assert content.mask == 2 | 16  # the web view is still pinned; only the blur was lost
+    assert frame_view.subviews() == []
+
+
+def test_stretch_web_view_finds_a_blur_pywebview_has_subclassed():
+    """`isKindOfClass:` before the class name, so a subclassed blur is still recognised as one."""
+    from flackey import desktop
+
+    calls = []
+    native, frame_view = _fake_window(calls)
+    content = native.contentView()
+    subclassed = FakeSubview("FlackeyBlurHost", owner=content)
+    subclassed.kinds = ("NSVisualEffectView",)
+    content.views = [subclassed]
+
+    assert desktop.stretch_web_view(native, _appkit_module()) is True
+    assert frame_view.subviews() == [subclassed]
+
+
+def test_stretch_web_view_declines_before_the_web_view_is_installed():
+    """`loaded` fires again on every navigation, and on a page that never reached the window there is no
+    frame view to measure -- better to leave the window alone than to size the web view to nothing."""
+    from flackey import desktop
+
+    class Orphan:
+        def superview(self):
+            return None
+
+    native = types.SimpleNamespace(contentView=lambda: Orphan())
+    assert desktop.stretch_web_view(native, _appkit_module()) is False
+
+
+def test_startup_size_opens_where_the_owner_left_it(tmp_path):
+    from flackey import desktop
+    from flackey.config import Settings
+
+    fresh = Settings(data_dir=tmp_path)
+    assert desktop.startup_size(fresh, limit=HUGE) == desktop.MAIN_SIZE
+    assert desktop.startup_size(Settings(data_dir=tmp_path, window_size=(840, 610)), limit=HUGE) == (840, 610)
+
+
+def test_startup_size_never_opens_below_the_minimum(tmp_path):
+    """The minimum has come down once and may again. A size saved under a larger one must not open a
+    window narrower than the layout has rules for."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    settings = Settings(data_dir=tmp_path, window_size=(200, 100))
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MIN_SIZE
+
+
+def test_startup_size_never_opens_wider_than_the_display(tmp_path):
+    """A size saved on an external monitor, reopened on the laptop. AppKit pulls an oversized window back
+    far enough to keep the traffic lights reachable, but not far enough to make the right edge grabbable."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    settings = Settings(data_dir=tmp_path, window_size=(3400, 1400))
+    assert desktop.startup_size(settings, limit=(1440, 810)) == (1440, 810)
+    # The floor is applied after the ceiling: a display smaller than the minimum is pathological, and a
+    # window too small to use is a worse answer than one that overhangs it.
+    assert desktop.startup_size(settings, limit=(300, 200)) == desktop.MIN_SIZE
+
+
+def test_startup_size_falls_back_on_a_size_assigned_in_process(tmp_path):
+    """Not the settings-file path: `load_settings` drops an unparseable `window_size` before `Settings`
+    exists, which test_config covers. This is the in-process one -- `remember_window_size` assigns a list
+    mid-session, so the field is reachable without passing pydantic on the way in."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    settings = Settings(data_dir=tmp_path)
+    settings.window_size = ("wide", "tall")
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MAIN_SIZE
+    settings.window_size = (900,)
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MAIN_SIZE
+
+
+def test_remember_window_size_survives_a_data_dir_it_cannot_write(tmp_path):
+    """This runs from the `closed` handler, where the only thing left is to stop the server. Quitting must
+    not become a traceback because the data dir cannot be written -- here because a file is sitting where
+    the folder needs to be, which is the same OSError a read-only volume raises."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    assert desktop.remember_window_size(Settings(data_dir=tmp_path / "data"), (900, 700)) is True
+
+    blocked = tmp_path / "in-the-way"
+    blocked.write_text("a file, so no directory can be created under it")
+    assert desktop.remember_window_size(Settings(data_dir=blocked / "data"), (900, 700)) is False
+
+
+def test_the_window_reopens_at_the_size_it_was_closed_at(monkeypatch, tmp_path):
+    """The round trip the owner actually feels: drag the window to a size, quit, launch again."""
+    from flackey import desktop
+    from flackey.config import Settings, _read_settings_file
+
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    data = tmp_path / "data"
+    desktop.run_in_window(Settings(data_dir=data))
+    window = windows["window"]
+    assert (window.kwargs["width"], window.kwargs["height"]) == desktop.MAIN_SIZE
+
+    for fn in window.events.resized:
+        fn(880.0, 615.0)  # pywebview reports the frame size, and as floats
+    for fn in window.events.closed:
+        fn()
+
+    # Through the file, not through the object the run kept: the point is that the *next* launch,
+    # which has only settings.json to go on, opens at the size this one was left at.
+    saved = _read_settings_file(data / "settings.json")
+    assert saved["window_size"] == [880, 615]
+    assert desktop.startup_size(Settings(data_dir=data, **saved), limit=HUGE) == (880, 615)
 
 
 def _fake_venv(monkeypatch, tmp_path):
@@ -490,12 +725,21 @@ def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it
         def setValue_forKey_(self, value, key):
             calls.append(("setValue_forKey_", value, key))
 
+        def subviews(self):
+            return []
+
         def superview(self):
             return types.SimpleNamespace(
-                frame=lambda: _rect(0.0, 0.0, 1100.0, 720.0), subviews=list,
+                frame=lambda: _rect(0.0, 0.0, 1100.0, 720.0),
+                bounds=lambda: _rect(0.0, 0.0, 1100.0, 720.0), subviews=list,
                 addSubview_positioned_relativeTo_=lambda *a: calls.append(("addSubview",)))
 
+        def __getattr__(self, name):
+            return lambda *a: calls.append((name, *a))
+
     class FakeNative:
+        content = FakeWebView()
+
         def styleMask(self):
             return 0
 
@@ -503,7 +747,7 @@ def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it
             return lambda *a: calls.append((name, *a))
 
         def contentView(self):
-            return FakeWebView()
+            return self.content
 
     class Window:
         native = FakeNative()

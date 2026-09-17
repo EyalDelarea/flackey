@@ -178,6 +178,86 @@ def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_p
     assert load_settings(_env(tmp_path)).source_enabled is False
 
 
+def test_the_window_size_survives_a_round_trip_through_the_settings_file(tmp_path: Path):
+    # The only settings-file key that is not a scalar. JSON has no tuple, so it lands as a list and has to
+    # come back as the pair `desktop.startup_size` unpacks -- and it has to stay unset until the owner has
+    # actually resized the window, or a first launch would be pinned to whatever default wrote it.
+    s = load_settings(_env(tmp_path))
+    assert s.window_size is None
+    save_settings(s, window_size=[880, 615])
+
+    assert json.loads(s.settings_path.read_text())["window_size"] == [880, 615]
+    assert load_settings(_env(tmp_path)).window_size == (880, 615)
+
+
+def test_one_unreadable_key_does_not_take_the_rest_of_the_file_with_it(tmp_path: Path):
+    # `Settings(**overrides)` reports every problem in one ValidationError, and answering that by falling
+    # back to a Settings with no file values at all meant a single bad key silently reset the library
+    # folder, the Telegram keys and the slskd key for that run -- with only a log line nobody sees in a
+    # windowed app. `window_size` is the key that makes this routine: it is rewritten on every quit, so a
+    # half-finished write or a hand edit is not the rare event a settings-screen submit is.
+    s = load_settings(_env(tmp_path))
+    s.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    s.settings_path.write_text(json.dumps({
+        "window_size": ["wide", "tall"],
+        "library_root": str(tmp_path / "survives"),
+        "auto_update_check": False,
+        "slskd_api_key": "kept",
+    }))
+
+    reloaded = load_settings(_env(tmp_path))
+    assert reloaded.window_size is None            # the only value dropped
+    assert reloaded.library_root == tmp_path / "survives"
+    assert reloaded.auto_update_check is False
+    assert reloaded.slskd_api_key == "kept"
+
+
+def test_a_file_with_nothing_usable_in_it_falls_back_to_the_defaults(tmp_path: Path):
+    # The other end of the same loop: when dropping the bad keys leaves nothing, the answer is the same
+    # Settings the chain would have produced without the file, not an exception on the way to the window.
+    s = load_settings(_env(tmp_path))
+    s.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    s.settings_path.write_text(json.dumps({"window_size": ["wide", "tall"],
+                                           "lossless_filing_format": "mp3"}))
+
+    reloaded = load_settings(_env(tmp_path))
+    assert reloaded.window_size is None
+    assert reloaded.lossless_filing_format == "aiff"
+
+
+def test_a_rejection_that_names_no_field_never_logs_the_values_it_rejected(tmp_path: Path, caplog):
+    # pydantic renders a ValidationError with the offending input embedded in it. A field error quotes
+    # just that field's value and is dropped by name above; an error raised by a @model_validator reports
+    # `loc = ()` and quotes the *whole* input dict -- which here is the settings file, secrets included.
+    # `Settings` has only field validators today, so this branch cannot be reached; it stops being
+    # unreachable the first time somebody checks telegram_api_id and telegram_api_hash together, and the
+    # failure then is the slskd key in plaintext in flackey.log, which is what a bug report bundles up.
+    import logging
+
+    from pydantic import model_validator
+
+    from flackey import config
+
+    # Deliberately not added to production `Settings`: the point is to construct the shape, not to ship it.
+    class Paired(config.Settings):
+        @model_validator(mode="after")
+        def _both_telegram_keys(self):
+            raise ValueError("telegram_api_id and telegram_api_hash must be set together")
+
+    base = config.Settings(data_dir=tmp_path / "data")
+    original, config.Settings = config.Settings, Paired
+    try:
+        with caplog.at_level(logging.WARNING, logger="flackey.config"):
+            result = config._settings_dropping_invalid(None, {"slskd_api_key": "TOP-SECRET"}, base)
+    finally:
+        config.Settings = original
+
+    assert result is base                        # nothing in the file was usable, so the defaults stand
+    assert "TOP-SECRET" not in caplog.text       # the whole of why this test exists
+    assert "<whole file>" in caplog.text         # it still says where the problem was
+    assert "value_error" in caplog.text          # and what kind it was
+
+
 def test_build_defaults_fill_telegram_keys_when_nothing_else_does(tmp_path: Path):
     env = tmp_path / ".env"
     env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")

@@ -18,7 +18,7 @@ import SoulseekStep from './components/setup/SoulseekStep'
 import TelegramStep from './components/setup/TelegramStep'
 import WelcomeStep from './components/setup/WelcomeStep'
 import { useLive } from './live'
-import { insetTitlebar, requestWindowSize } from './platform'
+import { insetTitlebar } from './platform'
 
 const inset = insetTitlebar()
 
@@ -57,11 +57,11 @@ export default function App() {
     if (!reconnecting) return
     setSoulseekState(h?.lossless?.provider?.status === 'ok' ? 'connected' : h?.lossless?.enabled ? 'pending' : 'skipped')
   }, [reconnecting])
-  const mainScreen = !!h && h.setup_done && !reconnecting
-  // 600, not 540: the Soulseek step carries a heading, a lead, two fields, a warning about a password
-  // nothing can reset, two buttons and a footnote, and at 540 that column did not fit -- which is how
-  // its heading came to be drawn over the stepper. The window is the thing that was wrong, not the step.
-  useEffect(() => { if (h) requestWindowSize(mainScreen ? 1100 : 720, mainScreen ? 720 : 600) }, [h, mainScreen])
+  // The setup steps used to answer being too tall for the window by resizing the window: the Soulseek
+  // step in particular asked for 720x600 on mount and the main shell asked for 1100x720 back. That threw
+  // away whatever size the owner had dragged out, twice per run of setup, and snapped the window about
+  // mid-session on any re-render that flipped `setup_done`. `.setup-content` scrolls, so a step that does
+  // not fit scrolls instead -- the window stays the size it was left at, which desktop.py remembers.
 
   if (!h) {
     return (<div className="app-loading">

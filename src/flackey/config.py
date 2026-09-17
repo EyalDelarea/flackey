@@ -16,7 +16,7 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
-             "source_enabled", "auto_update_check")
+             "source_enabled", "auto_update_check", "window_size")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # On by default so an owner ends up on the latest release without hunting for it; /api/update still
     # only ever surfaces a stable release with a built installer, never a prerelease or a broken one.
     auto_update_check: bool = True
+    # The size the desktop window was last closed at, written by `desktop.remember_window_size`. None
+    # until the owner has moved a corner, which is what lets a first launch open at `desktop.MAIN_SIZE`
+    # without that default then overwriting every later choice. Stored rather than derived because the
+    # window is gone by the time the next launch needs to know how big it was.
+    window_size: tuple[int, int] | None = None
     library_root: Path = Path("~/Music/DJ Library")
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
@@ -186,6 +191,50 @@ def _read_settings_file(path: Path) -> dict:
     return {k: v for k, v in data.items() if k in FILE_KEYS and v not in (None, "")}
 
 
+def _error_summary(e: ValidationError) -> str:
+    """Where each problem is and what kind it is -- never what the value was.
+
+    pydantic renders a `ValidationError` with the offending input embedded in it, and for an error that
+    belongs to the model rather than to one field the input it quotes is the whole dict it was handed.
+    That dict is the settings file, so logging the exception itself would put `slskd_api_key` and
+    `telegram_api_hash` in plaintext into flackey.log -- which is the file a bug report bundles up."""
+    return ", ".join(
+        f"{'.'.join(str(part) for part in err.get('loc') or ()) or '<whole file>'} ({err.get('type')})"
+        for err in e.errors()) or "no detail"
+
+
+def _settings_dropping_invalid(env_file: Path | None, overrides: dict, base: Settings) -> Settings:
+    """Build `Settings` from the file-derived values, dropping only the keys that will not validate.
+
+    One unreadable value used to cost the whole file. `Settings(**overrides)` reports every problem in a
+    single `ValidationError`, and the caller answered it by falling back to a `Settings` with no file
+    values in it at all -- so one malformed key silently took `library_root`, the Telegram keys and the
+    slskd key down with it for that run, leaving only a log line that nobody reads in a windowed app.
+
+    That was survivable while every file key was written by an owner submitting the settings screen. It is
+    not now that `window_size` is rewritten on every quit: a half-finished write or a hand-edited file
+    would reset everything else the owner had configured. pydantic names the offending key in each error's
+    `loc`, so drop those and try again. Every pass removes at least one key, so this terminates; running
+    out of keys means nothing in the file was usable, which is exactly `base`."""
+    remaining = dict(overrides)
+    while remaining:
+        try:
+            return Settings(_env_file=env_file, **remaining)
+        except ValidationError as e:
+            bad = {str(err["loc"][0]) for err in e.errors() if err.get("loc")} & remaining.keys()
+            if not bad:
+                # Not `e`: see `_error_summary`. Nothing reaches here while every validator on `Settings`
+                # belongs to a field, because a field error names its field and is dropped above -- it is
+                # the first model-level validator that makes this live, and by then the value being
+                # rejected is the whole file.
+                log.warning("ignoring %s entirely: %s", base.settings_path, _error_summary(e))
+                return base
+            log.warning("ignoring invalid %s in %s", ", ".join(sorted(bad)), base.settings_path)
+            for key in bad:
+                del remaining[key]
+    return base
+
+
 def load_settings(env_file: Path | None = None, build_defaults: Path | None = None) -> Settings:
     """Precedence: environment > .env > settings.json in the data folder > build.json inside a packaged
     build > defaults. When nothing in that chain set an API key, fall back to the one flackey already
@@ -199,14 +248,7 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     from_build = _read_build_defaults(build_defaults or BUILD_DEFAULTS_PATH)
     overrides = {k: v for k, v in from_build.items() if k not in base.model_fields_set}
     overrides.update({k: v for k, v in from_file.items() if k not in base.model_fields_set})
-    if not overrides:
-        result = base
-    else:
-        try:
-            result = Settings(_env_file=env_file, **overrides)
-        except ValidationError as e:
-            log.warning("ignoring invalid values in %s: %s", base.settings_path, e)
-            result = base
+    result = base if not overrides else _settings_dropping_invalid(env_file, overrides, base)
     if not result.slskd_api_key:
         result.slskd_api_key = read_api_key(result.data_dir)
     return result

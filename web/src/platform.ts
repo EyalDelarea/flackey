@@ -1,12 +1,4 @@
 // What the page knows about the window it lives in. Set by src/flackey/desktop.py: the launcher adds
-// `?titlebar=inset` on macOS and exposes `window.pywebview.api.resize`. In a plain browser both are absent.
-type Bridge = { api?: { resize: (width: number, height: number) => unknown } }
-const bridge = () => (window as Window & { pywebview?: Bridge }).pywebview
-
+// `?titlebar=inset` on macOS. Nothing more: the window's size is the owner's, chosen by dragging it and
+// remembered across launches by the launcher, so the page has no business asking for one.
 export const insetTitlebar = (): boolean => new URLSearchParams(window.location.search).get('titlebar') === 'inset'
-
-export function requestWindowSize(width: number, height: number): void {
-  const api = bridge()?.api
-  if (api) { api.resize(width, height); return }
-  window.addEventListener('pywebviewready', () => bridge()?.api?.resize(width, height), { once: true })
-}
