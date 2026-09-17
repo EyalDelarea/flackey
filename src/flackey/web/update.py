@@ -25,6 +25,13 @@ DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # Where the download's state lives on the shared status dict, which fans every change out over SSE --
 # the page cannot poll its way through a download it may navigate away from and come back to.
 PROGRESS_KEY = "update_download"
+INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
+
+
+class ShortDownload(Exception):
+    """The body did not match the size the release declared -- too few bytes or too many. Its own type
+    because it is neither an HTTP error nor a disk error, and saying "check your connection" about a
+    stream that ended early is the honest reading of both."""
 
 
 def _version_tuple(v: str) -> tuple[int, int, int]:
@@ -153,8 +160,13 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                         res.raise_for_status()
                         shown = -1
                         async for chunk in res.aiter_bytes():
-                            fh.write(chunk)
                             received += len(chunk)
+                            # The release says how big the installer is, so anything past that is not the
+                            # installer. Stop at the ceiling rather than writing a stranger's stream to
+                            # disk until it runs out of room.
+                            if total and received > total:
+                                raise ShortDownload(f"body ran past the {total} bytes the release declared")
+                            fh.write(chunk)
                             percent = int(received * 100 / total) if total else 0
                             # Only when the whole number moves: a chunk-by-chunk publish is a few thousand
                             # SSE frames for one download, and the page cannot draw them anyway.
@@ -162,7 +174,17 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                                 shown = percent
                                 publish(state="downloading", percent=percent, received=received,
                                         total=total, version=version)
+            # A connection closed cleanly partway is not an HTTP error and nothing upstream objects to it,
+            # so counting the bytes is the only thing standing between a half-installer and Installer.app
+            # calling Flackey corrupt.
+            if total and received != total:
+                raise ShortDownload(f"got {received} of {total} bytes")
             partial.replace(target)
+        except ShortDownload:
+            log.warning("update download from %s was incomplete", url, exc_info=True)
+            discard(partial)
+            publish(state="error", version=version, error=INCOMPLETE)
+            return
         except httpx.HTTPError:
             log.warning("update download from %s failed", url, exc_info=True)
             discard(partial)
@@ -216,10 +238,21 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         if state["state"] == "ready" and state["path"] and Path(state["path"]).exists():
             open_installer(Path(state["path"]))
             return dict(state)
-        info = await latest_release()
+        # Claimed here, before the lookup below -- which awaits. Two presses that both got past the check
+        # while it was running would each start a download onto the same part-file, interleave their
+        # writes, and hand whatever survived to Installer.app. The claim is dropped again on every path
+        # that does not go on to start one.
+        publish(state="downloading", version=state["version"])
+        try:
+            info = await latest_release()
+        except Exception:
+            publish(state="idle")
+            raise
         if not info.get("ok"):
+            publish(state="idle")
             raise HTTPException(502, info.get("error") or "Could not check for updates.")
         if not info["available"]:
+            publish(state="idle")
             raise HTTPException(409, f"Version {info['latest']} is out, but its installer isn't published yet."
                                 if info["newer"] else "Flackey is already up to date.")
         publish(state="downloading", total=info["size"], version=info["latest"])

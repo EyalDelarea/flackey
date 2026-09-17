@@ -94,6 +94,24 @@ it('offers the installer again once the download has finished', async () => {
   expect(screen.getByText('Open installer')).toBeEnabled()
 })
 
+/* Every status event anywhere in the app re-parses the whole dict, so `updateDownload` arrives as a new
+   object each time. Keying the busy flag on that identity handed the button back while the press that set
+   it was still in flight -- and a second press is a second download. */
+it('keeps the button held while an unrelated status event lands mid-press', async () => {
+  let settle: (v: UpdateDownload) => void = () => {}
+  vi.spyOn(api, 'installUpdate').mockReturnValue(new Promise<UpdateDownload>(r => { settle = r }))
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  const failed: UpdateDownload = { state: 'error', percent: 0, received: 0, total: null,
+    version: '0.1.1', path: null, error: 'It broke.' }
+  const { rerender } = render(<SettingsPage live={liveWith(failed)} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Try again'))
+  // An unrelated event: same state, brand new object, exactly what the SSE handler produces.
+  rerender(<SettingsPage live={liveWith({ ...failed })} onReconnect={() => {}} />)
+  expect(screen.getByText('Downloading…')).toBeDisabled()
+  expect(screen.queryByText('Try again')).not.toBeInTheDocument()
+  settle({ state: 'downloading', percent: 0, received: 0, total: null, version: '0.1.1', path: null, error: null })
+})
+
 it('does not claim the installer is open when it would not open', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
   render(<SettingsPage live={liveWith({ state: 'ready', percent: 100, received: 12_345_678,

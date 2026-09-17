@@ -68,6 +68,16 @@ export function useLive(): Live {
     if (settings.auto_update_check === false) return
     api.update().then(setUpdate).catch(() => undefined)
   }, [settings])
+  // The event bus drops events rather than blocking when a subscriber falls behind, and the frame it
+  // drops could be the last one -- a `ready` or `error` lost that way would leave the button disabled on
+  // a download that had already finished. Polling while one is running is the backstop for exactly that,
+  // and it stops the moment the download does.
+  const downloadState = updateDownload?.state
+  useEffect(() => {
+    if (downloadState !== 'downloading') return
+    const id = setInterval(() => { api.updateProgress().then(setUpdateDownload).catch(() => undefined) }, 3000)
+    return () => clearInterval(id)
+  }, [downloadState])
   const dropBundle = useCallback((id: number) => {
     setBundles(prev => { const next = new Map(prev); next.delete(id); return next })
   }, [])

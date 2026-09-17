@@ -81,10 +81,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   useEffect(() => {
     api.pickFolderAvailable().then(r => setPickerAvailable(r.available)).catch(() => {})
   }, [])
-  // The server has answered for itself, so the local "starting…" stand-in steps aside. Keyed on the
-  // object rather than its state, because a retry after a failure moves neither the old state nor the
-  // percentage until the first chunk lands.
-  useEffect(() => { setInstallStarting(false) }, [live.updateDownload])
+  // Keyed on the state rather than the object: every status event anywhere in the app -- a queue change,
+  // a Telegram flag -- re-parses the whole dict into a fresh `updateDownload`, and keying on identity
+  // meant any one of them could clear the flag while the press it belonged to was still in flight, which
+  // handed the button back mid-download. The server claims `downloading` before it awaits anything, so a
+  // press always drives the state through it and back out, and that round trip is what clears this.
+  const downloadState = live.updateDownload?.state
+  useEffect(() => { if (downloadState && downloadState !== 'downloading') setInstallStarting(false) }, [downloadState])
   useEffect(() => {
     setUpdateChecking(true)
     api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
@@ -183,6 +186,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
     // first status event is exactly the silence this row is here to end. The effect below clears it when
     // the server actually reports back.
     api.installUpdate()
+      .then(next => { if (next.state !== 'downloading') setInstallStarting(false) })
       .catch(e => { setInstallError(getErrorMessage(e, 'Could not start the download. Try again.')); setInstallStarting(false) })
   }
   const openRelease = () => {

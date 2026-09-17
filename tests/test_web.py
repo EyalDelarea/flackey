@@ -4,6 +4,7 @@ import logging
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -11,6 +12,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+import flackey.web.update
 from flackey import __version__
 from flackey.config import Settings
 from flackey.events import EventBus, Status
@@ -158,6 +160,7 @@ def test_update_ignores_prerelease_releases(client):
 
 
 INSTALLER_URL = "https://example.test/Flackey.pkg"
+INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
 
 
 def _release_feed(size: int | None = 8, assets: bool = True):
@@ -314,6 +317,54 @@ def test_update_install_recovers_from_a_download_cancelled_under_it(client, monk
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
     c.post("/api/update/install")
     assert _settle(c, "ready")["percent"] == 100
+
+
+@respx.mock
+def test_update_install_survives_two_presses_landing_together(tmp_path, monkeypatch):
+    # The guard used to sit on the far side of the release lookup, and that lookup awaits. Two presses
+    # inside that window both read "idle", both passed it, and both opened the same .part file to write
+    # over each other -- so the check has to be settled before anything yields.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: None)
+    unhurried = flackey.web.update.latest_release
+
+    async def slow_lookup():
+        await asyncio.sleep(0.2)
+        return await unhurried()
+
+    monkeypatch.setattr("flackey.web.update.latest_release", slow_lookup)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    app, _, _ = make(tmp_path)
+    with TestClient(app) as c, ThreadPoolExecutor(max_workers=2) as pool:
+        both = [pool.submit(c.post, "/api/update/install") for _ in range(2)]
+        assert [f.result().status_code for f in both] == [200, 200]
+        _settle(c, "ready")
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_update_install_refuses_a_body_shorter_than_the_release_says(client, monkeypatch):
+    # A connection closed cleanly partway is not an HTTP error, so nothing upstream objects. Promoting
+    # that to Flackey.pkg is exactly what the .part-then-rename dance exists to stop.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("opened a short pkg"))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-"))
+    c.post("/api/update/install")
+    assert _settle(c, "error")["error"] == INCOMPLETE
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+    assert not (settings.data_dir / "updates" / "Flackey.pkg.part").exists()
+
+
+@respx.mock
+def test_update_install_stops_a_body_longer_than_the_release_says(client, monkeypatch):
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("opened an overrun pkg"))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=4)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA-AND-MORE"))
+    c.post("/api/update/install")
+    assert _settle(c, "error")["error"] == INCOMPLETE
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
 
 
 @respx.mock
