@@ -68,13 +68,11 @@ it('refreshes missing files and re-reads the library without relaunching', async
   expect(screen.getByText('Removed 1 missing file from the library.')).toBeInTheDocument()
 })
 
-it('renders the toolbar drag layer only when inset, and search still works either way', async () => {
+it('leaves the toolbar free of drag layers, and search still works', async () => {
   vi.mocked(api.library).mockResolvedValue([])
-  const { container, rerender } = render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  const { container } = render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  expect(container.querySelector('.toolbar-drag')).toBeNull()
   expect(container.querySelector('.pywebview-drag-region')).toBeNull()
-
-  rerender(<LibraryPage live={makeLive()} selectedPlaylist={null} inset />)
-  expect(container.querySelector('.toolbar-drag.pywebview-drag-region')).not.toBeNull()
 
   fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'abc' } })
   await waitFor(() => expect(api.library).toHaveBeenCalledWith('abc', null))

@@ -6,7 +6,7 @@ export default function Shell({ tab, onTab, telegramAuthorized, lossless, banner
     <div className="app">
       <Sidebar tab={tab} onTab={onTab} telegramAuthorized={telegramAuthorized} lossless={lossless} inset={inset} extra={sidebarExtra} sourceEnabled={sourceEnabled} />
       <main className="content">
-        {inset && <div className="titlebar-spacer pywebview-drag-region" aria-hidden />}
+        {inset && <div className="titlebar-spacer" aria-hidden />}
         {banner}
         {children}
       </main>

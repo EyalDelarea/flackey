@@ -19,7 +19,7 @@ it('lists who is pulling from the shared library, with the totals', async () => 
                 bytes: 25611959, pct: 50, state: 'InProgress', speed_bps: 3400000, started_at: '2026-09-08T01:39:19Z', ended_at: null }],
     summary: { total: 1, active: 1, completed: 0, peers: 1, bytes: 25611959 },
   }))
-  render(<UploadsPage inset={false} />)
+  render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText('loginty')).toBeInTheDocument())
   expect(screen.getByText('Orphic Thrench.aiff')).toBeInTheDocument()
   expect(screen.getByText('Hallucinogen')).toBeInTheDocument()
@@ -30,13 +30,13 @@ it('lists who is pulling from the shared library, with the totals', async () => 
 
 it('says nothing has been uploaded yet rather than showing an empty table', async () => {
   serve(feed())
-  render(<UploadsPage inset={false} />)
+  render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(/Nobody has downloaded from you yet/)).toBeInTheDocument())
 })
 
 it('explains when Soulseek is switched off instead of looking broken', async () => {
   serve(feed({ enabled: false, provider: null }))
-  render(<UploadsPage inset={false} />)
+  render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(/Soulseek is off/)).toBeInTheDocument())
 })
 
@@ -44,7 +44,7 @@ it('warns when the port is closed', async () => {
   serve(feed())
   vi.spyOn(api, 'sharing').mockResolvedValue({ port: 50300, enabled: true, checking: false, mapping: null, reachable: false,
     public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null })
-  render(<UploadsPage inset={false} />)
+  render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument())
 })
 
@@ -52,7 +52,7 @@ it('says nothing about the port when it is open', async () => {
   serve(feed())
   vi.spyOn(api, 'sharing').mockResolvedValue({ port: 50300, enabled: true, checking: false, mapping: 'natpmp', reachable: true,
     public_ip: null, lan_ip: null, gateway: null, checked_at: null, error: null })
-  render(<UploadsPage inset={false} />)
+  render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(/Nobody has downloaded from you yet/)).toBeInTheDocument())
   expect(screen.queryByText(/Your Soulseek port is closed/)).not.toBeInTheDocument()
 })
@@ -64,7 +64,7 @@ it('renders a peer name as text, never as markup', async () => {
                 state: 'Completed, Succeeded', speed_bps: 0, started_at: null, ended_at: null }],
     summary: { total: 1, active: 0, completed: 1, peers: 1, bytes: 10 },
   }))
-  const { container } = render(<UploadsPage inset={false} />)
+  const { container } = render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(nasty)).toBeInTheDocument())
   expect(container.querySelector('img')).toBeNull()
 })

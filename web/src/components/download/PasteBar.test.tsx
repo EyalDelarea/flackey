@@ -30,13 +30,11 @@ it('does not submit and shows a plain error when the field is empty', async () =
   expect(onSubmit).not.toHaveBeenCalled()
 })
 
-it('renders the toolbar drag layer only when inset, and still submits normally either way', async () => {
+it('leaves the toolbar free of drag layers, and still submits normally', async () => {
   const onSubmit = vi.fn(async () => 'Queued 1 of 1')
-  const { container, rerender } = render(<PasteBar onSubmit={onSubmit} />)
+  const { container } = render(<PasteBar onSubmit={onSubmit} />)
+  expect(container.querySelector('.toolbar-drag')).toBeNull()
   expect(container.querySelector('.pywebview-drag-region')).toBeNull()
-
-  rerender(<PasteBar onSubmit={onSubmit} inset />)
-  expect(container.querySelector('.toolbar-drag.pywebview-drag-region')).not.toBeNull()
 
   fireEvent.change(screen.getByLabelText(LABEL), { target: { value: 'https://youtu.be/x' } })
   fireEvent.click(screen.getByText('Add'))

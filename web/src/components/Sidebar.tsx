@@ -20,7 +20,7 @@ export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inse
   const status = footer(telegramAuthorized, lossless, sourceEnabled)
   return (
     <nav className={`sidebar${inset ? ' inset' : ''}`}>
-      {inset && <div className="drag-strip pywebview-drag-region" />}
+      {inset && <div className="titlebar-strip" aria-hidden />}
       <div className="nav">{ITEMS.map(i => <button key={i.tab} className={`nav-item${tab === i.tab ? ' active' : ''}`} aria-current={tab === i.tab ? 'page' : undefined} onClick={() => onTab(i.tab)}><Icon name={i.icon} />{i.label}</button>)}</div>
       {extra}
       <SidebarMark />

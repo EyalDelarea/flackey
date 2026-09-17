@@ -115,9 +115,9 @@ export default function App() {
   return (
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
-      {tab === 'download' && <DownloadPage live={live} inset={inset} />}
-      {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} inset={inset} />}
-      {tab === 'uploads' && <UploadsPage inset={inset} />}
+      {tab === 'download' && <DownloadPage live={live} />}
+      {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}
+      {tab === 'uploads' && <UploadsPage />}
       {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} />}
     </Shell>
   )

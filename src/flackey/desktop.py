@@ -22,6 +22,8 @@ MIN_SIZE = (720, 540)  # the Welcome and setup screens ask for 720x600 through W
 LIGHT_WINDOW = "#ECECEC"  # keep in sync with --window in web/src/theme.css
 DARK_WINDOW = "#1E1E1E"
 INSET_FLAG = "?titlebar=inset"
+TITLEBAR_H = 28.0  # keep in sync with .titlebar-spacer in web/src/app.css
+_TRAFFIC_LIGHT_GAP = 12.0  # air between the zoom button and where the drag strip starts
 _NS_FULL_SIZE_CONTENT_VIEW = 1 << 15  # NSWindowStyleMaskFullSizeContentView
 _NS_WINDOW_TITLE_HIDDEN = 1           # NSWindowTitleHidden
 
@@ -174,10 +176,70 @@ def wait_for_server(handle: ServerHandle, timeout_s: float = WEB_SERVER_START_TI
     return handle.url
 
 
+_drag_view_class = None
+_DRAG_VIEW_NAME = "FlackeyTitlebarDragView"
+
+
+def titlebar_drag_view_class(AppKit):  # the module, passed in so this file still imports off macOS
+    """The view that moves the window. Registered with the Objective-C runtime the first time it is
+    asked for and reused after that, because a second class of the same name is an error, and defined in
+    here rather than at module scope because AppKit does not import off macOS."""
+    global _drag_view_class
+    if _drag_view_class is None:
+        class FlackeyTitlebarDragView(AppKit.NSView):
+            def mouseDown_(self, event):  # an Objective-C selector, hence the name
+                self.window().performWindowDragWithEvent_(event)
+
+            def acceptsFirstMouse_(self, event):
+                # Otherwise the first click on a background window only raises it, and the owner has to
+                # click twice to start moving a window they can see but have not focused.
+                return True
+
+        _drag_view_class = FlackeyTitlebarDragView
+    return _drag_view_class
+
+
+def add_titlebar_drag_view(native, AppKit) -> bool:
+    """Give the window back its title bar as a drag handle.
+
+    With `NSWindowStyleMaskFullSizeContentView` the WKWebView is the content view and covers the title
+    bar, and it answers `mouseDownCanMoveWindow` with NO, so neither the title bar nor
+    `movableByWindowBackground` moves the window any more: a press anywhere lands in the web view. The
+    page used to paper over that by marking strips as pywebview drag regions, and that is what threw the
+    window across the screen -- pywebview answers such a drag by posting an absolute screen position back
+    to Python, where the Cocoa backend re-adds the origin of an `NSScreen.mainScreen()` frame snapshotted
+    at window creation. On one display at (0, 0) the addition is a no-op; with a second display attached
+    the window teleports by that screen's origin on the first pixel of movement.
+
+    So the drag goes back to AppKit: a transparent view across the title bar whose `mouseDown:` hands the
+    event to `performWindowDragWithEvent:`, which is the real thing -- snapping, spaces, double-click to
+    zoom, and coordinates AppKit works out for itself. It starts to the right of the zoom button so the
+    traffic lights keep their own hit area, and it is the height of the title bar and no more, so every
+    control the page draws below it still receives its clicks.
+
+    Returns False when the window has no frame view to hang it off, or when it already has one."""
+    frame_view = native.contentView().superview() if native.contentView() is not None else None
+    if frame_view is None:
+        return False
+    if any(v.className() == _DRAG_VIEW_NAME for v in frame_view.subviews()):
+        return False  # `loaded` fires again on every navigation; one strip is enough
+    zoom = native.standardWindowButton_(AppKit.NSWindowZoomButton)
+    left = (zoom.frame().origin.x + zoom.frame().size.width + _TRAFFIC_LIGHT_GAP) if zoom is not None else 78.0
+    size = frame_view.frame().size
+    strip = titlebar_drag_view_class(AppKit).alloc().initWithFrame_(
+        AppKit.NSMakeRect(left, size.height - TITLEBAR_H, max(size.width - left, 0.0), TITLEBAR_H))
+    # Unflipped coordinates: pinned to the top of the window and stretched with it as it is resized.
+    strip.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewMinYMargin)
+    frame_view.addSubview_positioned_relativeTo_(strip, AppKit.NSWindowAbove, None)
+    return True
+
+
 def inset_titlebar(window) -> bool:
     """Traffic lights over the sidebar: transparent title bar, hidden title, content under the title bar,
     and the see-through background the vibrancy layer shows through. The AppKit calls are queued on the
     main thread. False when there is no native handle (not macOS).
+
+    This is also what makes the window draggable -- see `add_titlebar_drag_view`.
 
     Call this on `loaded`, not `shown`. pywebview installs the WKWebView as the window's content view
     from its own didFinishNavigation handler, roughly 70ms after `shown` fires; until then the content
@@ -217,6 +279,7 @@ def inset_titlebar(window) -> bool:
         native.setOpaque_(False)
         native.setBackgroundColor_(AppKit.NSColor.clearColor())
         native.setHasShadow_(True)  # a non-opaque window loses its shadow, and a shadowless window is not native
+        add_titlebar_drag_view(native, AppKit)
 
     AppHelper.callAfter(apply)
     return True

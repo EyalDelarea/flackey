@@ -39,7 +39,12 @@
 .app { height: 100%; display: flex; min-height: 0; }
 .app-loading { height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--window); color: var(--secondary); }
 .sidebar { position: relative; overflow: hidden; width: 220px; flex: none; display: flex; flex-direction: column; background: var(--sidebar); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); border-right: .5px solid var(--sep); }
-.drag-strip { height: 52px; flex: none; }
+/* The sidebar's own run-up to the nav: 28px of native title bar plus 24px of air, so the first nav
+   item does not sit against the traffic lights. Named for the title bar, not for dragging: the top
+   28px of it are dragged by an AppKit view laid over the whole window, not by anything the page does
+   -- it was one of pywebview's drag regions until that turned out to be what threw the window across
+   the screen (see `.titlebar-spacer`). */
+.titlebar-strip { height: 52px; flex: none; }
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 10px 0; }
 .sidebar.inset .nav { padding-top: 4px; }
 .nav-item { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text); font-size: 13px; text-align: left; transition: background 120ms; }
@@ -57,14 +62,16 @@ button.sidebar-footer { width: 100%; border-radius: 0; transition: background 12
 button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50%, transparent); color: var(--text); }
 .status-line { display: flex; align-items: center; gap: 8px; }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--window); }
-/* With the inset title bar the top 28px of the window still belong to the native title bar. It's a real
-   drag-region element (rendered by Shell only when inset), not a spacer, so that strip drags the window too. */
+/* With the inset title bar the top 28px of the window still belong to the native title bar, so this
+   keeps the toolbar out from under it. A spacer and nothing more -- moving the window is AppKit's job,
+   done by a transparent view over this same strip (`add_titlebar_drag_view` in src/flackey/desktop.py),
+   which is why nothing here may become one of pywebview's drag regions again: pywebview answers such a
+   drag by posting an absolute screen position back to Python, which re-adds the origin of an
+   `NSScreen.mainScreen()` frame snapshotted at window creation -- so with a second display attached the
+   window teleports by that screen's origin instead of following the pointer. Keep the 28px in step with
+   TITLEBAR_H in desktop.py: the spacer is what stops the toolbar drawing under the drag strip. */
 .titlebar-spacer { height: 28px; flex: none; }
-.toolbar { position: relative; height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: .5px solid var(--sep); }
-/* Drag layer sits behind the toolbar's controls (see Toolbar.tsx) so empty toolbar space drags the window
-   while the controls, lifted above it, still receive clicks. */
-.toolbar-drag { position: absolute; inset: 0; z-index: 0; }
-.toolbar > *:not(.toolbar-drag) { position: relative; z-index: 1; }
+.toolbar { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: .5px solid var(--sep); }
 .scroll { flex: 1; min-height: 0; overflow-y: auto;   /* min-height: a flex child defaults to
   min-height:auto and will not shrink below its content, so without this the pane grows past the
   window and .content's overflow:hidden clips it instead of this rule scrolling it */ padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 22px; }
@@ -320,8 +327,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .setup { height: 100%; display: flex; flex-direction: column; background: var(--window); }
 /* With the inset title bar the top 28px of the window belong to the native title bar and the web view
    draws under it, so a 52px bar centring its text put that text behind the traffic lights and clipped
-   it against the window edge. The main Shell solves this with .titlebar-spacer; here the title bar
-   *is* the drag region, so it grows instead of gaining a spacer above it. */
+   it against the window edge. The main Shell solves this with .titlebar-spacer; here the bar grows and
+   pads instead, so its text clears the traffic lights and the top 28px stay the native -- and only --
+   drag handle of the wizard window. */
 .setup.inset .setup-title { height: 80px; padding-top: 28px; }
 .setup-title { height: 52px; flex: none; display: flex; align-items: center; justify-content: center; border-bottom: .5px solid var(--sep); font-size: 13px; font-weight: 600; color: var(--secondary); }
 .setup-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 22px; padding: 22px 36px 20px; }

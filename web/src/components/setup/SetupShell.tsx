@@ -11,7 +11,7 @@ export default function SetupShell({ step, children, onBack, hint, inset = false
   skipped?: Partial<Record<3 | 4, boolean>>
 }) {
   return (<div className={`setup${inset ? ' inset' : ''}`}>
-    <div className="setup-title pywebview-drag-region">Welcome to Flackey</div>
+    <div className="setup-title">Welcome to Flackey</div>
     <div className="setup-body">
       <div className="stepper">{NAMES.map((n, i) => {
         const k = i + 1 as 1 | 2 | 3 | 4 | 5

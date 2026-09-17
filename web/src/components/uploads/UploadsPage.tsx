@@ -13,7 +13,7 @@ const POLL_MS = 4000
 
 /** Who is pulling from the shared library. Every string on this page - peer names, file and folder names -
  *  was chosen by a peer or by whoever named the file on disk. It is rendered as text and never acted on. */
-export default function UploadsPage({ inset }: { inset: boolean }) {
+export default function UploadsPage() {
   const [feed, setFeed] = useState<UploadFeed | null>(null)
   const [sharing, setSharing] = useState<SharingState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -33,7 +33,7 @@ export default function UploadsPage({ inset }: { inset: boolean }) {
 
   const s = feed?.summary
   return (<>
-    <Toolbar inset={inset}><h1>Uploads</h1></Toolbar>
+    <Toolbar><h1>Uploads</h1></Toolbar>
     {error && <Banner tone="red" text={error} />}
     {feed && !feed.enabled && <Banner tone="amber" text="Soulseek is off. Turn it on in Settings to share back." />}
     {feed?.error && <Banner tone="amber" text={`Can't read transfers from ${feed.provider ?? 'the sidecar'}: ${feed.error}`} />}
