@@ -214,6 +214,30 @@ describe('Retry all on the Failed tab', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Retry all 1' })).not.toBeDisabled())
   })
 
+  it('explains the gap between the Failed badge and its own count, rather than leaving two numbers', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'rejected'), mk(3, 'cancelled')])} />)
+    expect(screen.getByRole('button', { name: /^Failed/ })).toHaveTextContent('Failed 3')
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
+    expect(screen.getByText(/2 of these 3 cannot be tried again — 1 failed the quality check, 1 you stopped/))
+      .toBeInTheDocument()
+  })
+
+  it('leaves the sentence out when the two counts already agree', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found')])} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 2' })).toBeInTheDocument()
+    expect(screen.queryByText(/cannot be tried again/)).not.toBeInTheDocument()
+  })
+
+  it('tells every failed row why it is here and whether it can come back', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
+    openFailed()
+    // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
+    expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
+    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(2)
+  })
+
   it('says so when the call succeeds but nothing was re-queued', async () => {
     vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [], skipped: [1] })
     render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
