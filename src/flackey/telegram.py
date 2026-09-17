@@ -19,6 +19,13 @@ from telethon.errors import (
 
 log = logging.getLogger(__name__)
 
+# Telethon's connect() and qr_login() retry underneath us and have no deadline of their own, so on a
+# network that cannot reach Telegram at all they simply never return -- and the setup screen, which
+# has nothing to show until the POST answers, sits on an empty card indefinitely. Long enough to
+# cover a slow first connection, short enough that a wedged one becomes a sentence the owner can act
+# on. Overridden in tests.
+QR_START_TIMEOUT_S = 20.0
+
 
 class LoginError(Exception):
     """Plain-language message for the setup screen."""
@@ -113,11 +120,21 @@ class TelegramLogin:
             log.warning("Telegram sign-in requested without API keys")
             raise LoginError("This copy of Flackey isn't set up to connect to Telegram yet.")
         self._cancel_qr()  # one live QR at a time
-        if not self.client.is_connected():
-            # Telethon disconnects on its own when Telegram drops the session (AuthKeyUnregistered); a QR
-            # on a disconnected client fails with "Cannot send requests while disconnected".
-            await self.client.connect()
-        qr = await self.client.qr_login()
+        try:
+            async with asyncio.timeout(QR_START_TIMEOUT_S):
+                if not self.client.is_connected():
+                    # Telethon disconnects on its own when Telegram drops the session
+                    # (AuthKeyUnregistered); a QR on a disconnected client fails with "Cannot send
+                    # requests while disconnected".
+                    await self.client.connect()
+                qr = await self.client.qr_login()
+        except TimeoutError:
+            # Nothing was recorded in `_qr` yet, so there is no half-started login to clean up --
+            # whatever the timeout interrupted is dropped with the cancelled task.
+            log.warning("Telegram did not answer a QR sign-in within %ss", QR_START_TIMEOUT_S)
+            raise LoginError(
+                "Telegram did not answer in time. Check this Mac's internet connection and try "
+                "again, or sign in with your phone number instead.") from None
         qr_id = uuid.uuid4().hex
         entry = {"qr": qr, "state": "waiting", "task": None}
         entry["task"] = asyncio.create_task(self._wait_qr(entry))

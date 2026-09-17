@@ -90,3 +90,47 @@ it('shows why a skip failed on the keys screen, where there is no other error li
   await waitFor(() => expect(screen.getByText('Could not switch Telegram off.')).toBeInTheDocument())
   expect(onSkip).not.toHaveBeenCalled()
 })
+
+it('says it is preparing the code instead of showing an empty card', async () => {
+  // A blank white 220px square with "refreshes every 30 seconds" under it is what someone whose
+  // sign-in never comes back actually sees, and it looks identical to a code about to appear.
+  vi.spyOn(api, 'qrStart').mockReturnValue(new Promise(() => {}))
+  render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={10} />)
+  await waitFor(() => expect(screen.getByText(/preparing the code/i)).toBeInTheDocument())
+  expect(screen.queryByRole('img', { name: /qr/i })).toBeNull()
+})
+
+it('shows why the code could not be fetched, with a way to try again', async () => {
+  const qrStart = vi.spyOn(api, 'qrStart')
+    .mockRejectedValueOnce(new ApiError(503, "Telegram isn't reachable right now. Try again in a moment."))
+    .mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
+  vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
+  render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={10} />)
+  await waitFor(() => expect(screen.getByText(/isn't reachable right now/)).toBeInTheDocument())
+  expect(screen.queryByText(/preparing the code/i)).toBeNull()
+  fireEvent.click(screen.getByText('Try again'))
+  await waitFor(() => expect(screen.getByRole('img', { name: /qr/i })).toBeInTheDocument())
+  expect(qrStart).toHaveBeenCalledTimes(2)
+})
+
+it('keeps polling rather than restarting the sign-in when a poll cannot reach the server', async () => {
+  // Every failed poll used to land in the `unknown` branch and start a whole new QR login, which
+  // cancels the live one server-side and asks Telegram for another -- one request per poll interval.
+  const qrStart = vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
+  const qrState = vi.spyOn(api, 'qrState').mockRejectedValue(new ApiError(503, 'nope'))
+  render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={5} />)
+  await waitFor(() => expect(screen.getByRole('img', { name: /qr/i })).toBeInTheDocument())
+  await waitFor(() => expect(qrState.mock.calls.length).toBeGreaterThan(4))
+  expect(qrStart).toHaveBeenCalledTimes(1)
+})
+
+it('gives up instead of restarting forever when the server keeps losing the code', async () => {
+  const qrStart = vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
+  vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'unknown' })
+  render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={1} />)
+  await waitFor(() => expect(screen.getByText(/could not keep a sign-in code/i)).toBeInTheDocument())
+  const settled = qrStart.mock.calls.length
+  await new Promise(r => setTimeout(r, 50))
+  expect(qrStart.mock.calls.length).toBe(settled)
+  expect(settled).toBeLessThanOrEqual(7)
+})

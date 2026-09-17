@@ -340,3 +340,51 @@ async def test_reconfigure_leaves_an_unconnected_client_alone():
     login = TelegramLogin(old, False, make_client=Client)
     await login.reconfigure()
     assert old.disconnects == 0 and login.client is not old
+
+
+async def test_start_qr_gives_up_rather_than_hanging_when_telegram_never_answers(monkeypatch):
+    """A `connect()` or `qr_login()` that never returns leaves the POST /api/telegram/qr request
+    open for as long as the window is, and the setup screen has no code and no error to show for
+    it. Bound it and say so in plain words instead."""
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "QR_START_TIMEOUT_S", 0.05)
+
+    class NeverAnswers(FakeClient):
+        async def qr_login(self):
+            await asyncio.sleep(3600)
+
+    login = TelegramLogin(NeverAnswers(), True)
+    with pytest.raises(LoginError) as e:
+        await login.start_qr()
+    assert "Telegram" in str(e.value)
+
+
+async def test_start_qr_gives_up_when_the_connection_never_completes(monkeypatch):
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "QR_START_TIMEOUT_S", 0.05)
+
+    class NeverConnects(FakeClient):
+        async def connect(self):
+            await asyncio.sleep(3600)
+
+    with pytest.raises(LoginError):
+        await TelegramLogin(NeverConnects(), True).start_qr()
+
+
+async def test_start_qr_leaves_no_half_started_login_behind_after_a_timeout(monkeypatch):
+    """Whatever the timeout interrupts must not stay in `_qr`, or the next poll reports a state for
+    a code that was never shown."""
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "QR_START_TIMEOUT_S", 0.05)
+
+    class NeverAnswers(FakeClient):
+        async def qr_login(self):
+            await asyncio.sleep(3600)
+
+    login = TelegramLogin(NeverAnswers(), True)
+    with pytest.raises(LoginError):
+        await login.start_qr()
+    assert login._qr == {}

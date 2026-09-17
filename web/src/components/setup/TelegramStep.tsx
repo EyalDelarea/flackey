@@ -4,6 +4,12 @@ import { api, ApiError } from '../../api'
 import Icon from '../Icon'
 
 type Mode = 'qr' | 'phone'
+// A code expires about every 30 seconds, so restarting is normal. Restarting this many times inside
+// this window is not: it means the server keeps losing the code, and every restart cancels the live
+// QR login and asks Telegram for another one -- which is how a stuck screen turns into a flood wait.
+const MAX_RESTARTS = 5
+const RESTART_WINDOW_MS = 10_000
+
 export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone: () => void; onSkip: () => void; pollMs?: number }) {
   const [mode, setMode] = useState<Mode>('qr')
   // A build handed to someone else arrives without Telegram API keys: they belong to whoever compiled it,
@@ -12,6 +18,7 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
   const [apiId, setApiId] = useState(''); const [apiHash, setApiHash] = useState('')
   const [keysErr, setKeysErr] = useState<string | null>(null)
   const [img, setImg] = useState<string | null>(null); const [qrErr, setQrErr] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)   // bumped by "Try again"; re-runs the QR effect
   const [needPw, setNeedPw] = useState(false); const [pw, setPw] = useState(''); const [err, setErr] = useState<string | null>(null)
   const [phone, setPhone] = useState(''); const [code, setCode] = useState(''); const [codeSent, setCodeSent] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -33,10 +40,20 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
   }, [])
 
   useEffect(() => {
-    if (connected !== null || needKeys) return
+    if (connected !== null || needKeys || mode !== 'qr') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    const restarts: number[] = []
+    const restartingTooFast = () => {
+      const now = Date.now()
+      restarts.push(now)
+      while (restarts.length && now - restarts[0] > RESTART_WINDOW_MS) restarts.shift()
+      return restarts.length > MAX_RESTARTS
+    }
+    const giveUp = (message: string) => { setImg(null); setQrErr(message) }
+
     async function start() {
+      setQrErr(null)
       try {
         const q = await api.qrStart()
         if (cancelled) return
@@ -44,19 +61,29 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
         if (cancelled) return
         setImg(url)
         const poll = async () => {
-          const { state } = await api.qrState(q.id).catch(() => ({ state: 'unknown' as const }))
+          // null means the poll itself never got through. That says nothing about the code, so keep
+          // asking -- throwing away a live sign-in over one unreachable request is what turned a
+          // flaky connection into a new QR login every poll interval.
+          const state = await api.qrState(q.id).then(r => r.state).catch(() => null)
           if (cancelled) return
           if (state === 'done') return doneRef.current()
           if (state === 'password_needed') { setNeedPw(true); return }
-          if (state === 'expired' || state === 'unknown') return start()
+          if (state === 'expired' || state === 'unknown') {
+            if (restartingTooFast()) {
+              return giveUp('Telegram could not keep a sign-in code open. Check your connection and try again, or use your phone number instead.')
+            }
+            return start()
+          }
           timer = setTimeout(poll, pollMs)
         }
         timer = setTimeout(poll, pollMs)
-      } catch (e) { if (!cancelled) setQrErr(e instanceof ApiError ? e.message : 'Could not start the Telegram sign-in.') }
+      } catch (e) {
+        if (!cancelled) giveUp(e instanceof ApiError ? e.message : 'Could not start the Telegram sign-in.')
+      }
     }
-    if (mode === 'qr') start()
+    start()
     return () => { cancelled = true; if (timer) clearTimeout(timer) }
-  }, [mode, pollMs, connected, needKeys])
+  }, [mode, pollMs, connected, needKeys, attempt])
 
   const fail = (e: unknown) => setErr(e instanceof ApiError ? e.message : 'Something went wrong. Try again.')
   const submitPw = () => {
@@ -136,8 +163,14 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
     </div>)
   }
   return (<div className="tg">
-    <div>{mode === 'qr' ? (<><div className="qr-card">{img && <img src={img} alt="QR code" />}</div>
-      <div className="qr-hint">refreshes every 30 seconds</div></>) : <div className="qr-card phone"><Icon name="phone" size={48} stroke={1.2} /></div>}</div>
+    {/* An empty card is the one thing this must never render: a blank white square under "refreshes
+        every 30 seconds" looks exactly like a code that is about to appear, so someone whose sign-in
+        never comes back sits and waits at it. Say which of the three it is. */}
+    <div>{mode === 'qr' ? (<><div className="qr-card">
+      {img ? <img src={img} alt="QR code" />
+        : <div className="qr-card-note">{qrErr ? 'No code to show' : 'Preparing the code…'}</div>}</div>
+      {img && <div className="qr-hint">refreshes every 30 seconds</div>}</>)
+      : <div className="qr-card phone"><Icon name="phone" size={48} stroke={1.2} /></div>}</div>
     <div>
       {mode === 'qr' ? (<>
         <h1>Scan with the Telegram app on your phone</h1>
@@ -152,7 +185,10 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
           <div className="row-gap"><button className="btn-primary" onClick={signIn} disabled={busy}>Sign in</button></div></>) : pwBox}
         <div className="row-gap"><button className="btn-link" onClick={() => { setMode('qr'); setNeedPw(false); setCodeSent(false) }}>Scan a QR code instead</button></div>
       </>)}
-      {mode === 'qr' && qrErr && <div className="err">{qrErr}</div>}
+      {mode === 'qr' && qrErr && (<>
+        <div className="err">{qrErr}</div>
+        <div className="row-gap"><button className="btn-link" onClick={() => setAttempt(a => a + 1)}>Try again</button></div>
+      </>)}
       {err && <div className="err">{err}</div>}
       {/* Outside the mode ternary, like the footnote under it: the offer to leave Telegram off belongs to
           the step, not to whichever of the two sign-in screens happens to be showing. */}
