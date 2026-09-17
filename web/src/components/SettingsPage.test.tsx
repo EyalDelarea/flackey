@@ -94,6 +94,15 @@ it('offers the installer again once the download has finished', async () => {
   expect(screen.getByText('Open installer')).toBeEnabled()
 })
 
+it('does not claim the installer is open when it would not open', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={liveWith({ state: 'ready', percent: 100, received: 12_345_678,
+    total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey.pkg',
+    error: 'The installer downloaded but would not open.' })} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('The installer downloaded but would not open.')).toBeInTheDocument())
+  expect(screen.queryByText(/The macOS installer is open/)).not.toBeInTheDocument()
+})
+
 it('says why a download failed and lets it be retried', async () => {
   const install = vi.spyOn(api, 'installUpdate').mockResolvedValue(
     { state: 'downloading', percent: 0, received: 0, total: null, version: '0.1.1', path: null, error: null })

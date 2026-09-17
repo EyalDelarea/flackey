@@ -356,7 +356,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
               ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
-          {download?.state === 'ready' && <div className="v">
+          {/* Not when `ready` carries an error: that is the installer that downloaded but would not open,
+              and saying it is open directly above the line explaining that it isn't helps nobody. */}
+          {download?.state === 'ready' && !download.error && <div className="v">
             Downloaded. The macOS installer is open — follow it through, then reopen Flackey.
           </div>}
           {download?.error && <div className="err">{download.error}</div>}

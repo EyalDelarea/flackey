@@ -280,6 +280,43 @@ def test_update_install_will_not_start_a_second_download(tmp_path, monkeypatch):
 
 
 @respx.mock
+def test_update_install_says_so_when_the_installer_will_not_open(client, monkeypatch):
+    # The file is there and correct, so this stays "ready" -- but it may not claim the installer is open.
+    def refuses(path):
+        raise RuntimeError("LaunchServices said no")
+
+    monkeypatch.setattr("flackey.web.update.open_installer", refuses)
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install")
+    body = _settle(c, "ready")
+    assert "would not open" in body["error"]
+    assert (settings.data_dir / "updates" / "Flackey.pkg").read_bytes() == b"PKG-DATA"
+
+
+@respx.mock
+def test_update_install_recovers_from_a_download_cancelled_under_it(client, monkeypatch):
+    # A cancel at shutdown raises straight past `except Exception`. "Downloading" is the state that
+    # refuses the next attempt, so a task that dies holding it would wedge the button for good.
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: None)
+
+    async def cancelled():
+        yield b"PKG-"
+        raise asyncio.CancelledError()
+
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=cancelled()))
+    c.post("/api/update/install")
+    assert _settle(c, "error")["error"] == "The download stopped unexpectedly. Try again."
+    # And the retry it refused before is allowed through again.
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install")
+    assert _settle(c, "ready")["percent"] == 100
+
+
+@respx.mock
 def test_update_progress_reaches_the_page_over_the_status_stream(tmp_path, monkeypatch):
     # The page can be left and come back to mid-download, so progress rides the status event rather than
     # living in the component that started it.

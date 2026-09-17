@@ -125,7 +125,11 @@ describe('the update banner', () => {
   it('stays silent when automatic checks are off', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
     vi.spyOn(api, 'settings').mockResolvedValue({ ...settings, auto_update_check: false })
-    const check = vi.spyOn(api, 'update')
+    // Resolved rather than left to call through: an unmocked spy would reach the real fetch, and a
+    // `not.toHaveBeenCalled()` would never notice it had.
+    const check = vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true,
+      available: true, latest: '0.1.3', url: 'https://example.test/Flackey.pkg', release_url: null,
+      size: null, size_label: null, published_at: null, published_date: null, prerelease: false })
     render(<App />)
     await screen.findByText('Paste a link above to start digging.')
     expect(check).not.toHaveBeenCalled()

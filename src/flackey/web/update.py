@@ -117,20 +117,35 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         root = settings.data_dir if settings is not None else Path.home()
         return root / "updates" / INSTALLER_NAME
 
-    def discard(path: Path) -> None:
+    def discard(path: Path | None) -> None:
+        if path is None:
+            return
         try:
             path.unlink(missing_ok=True)
         except OSError:
             log.warning("could not remove the partial download at %s", path)
 
+    def finished(t: asyncio.Task) -> None:
+        """Last line of defence for the one state that must never stand: a task cancelled at shutdown
+        raises straight past `except Exception`, and a "downloading" left behind by it would refuse every
+        retry for the rest of the session."""
+        if not t.cancelled() and t.exception() is not None:
+            log.error("update download ended badly", exc_info=t.exception())
+        if state["state"] == "downloading":
+            publish(state="error", version=state["version"],
+                    error="The download stopped unexpectedly. Try again.")
+
     async def download(url: str, total: int | None, version: str) -> None:
-        target = target_path()
-        # Written under a .part name and renamed only once the last byte lands. A truncated file left at
-        # the real name is the one failure worth avoiding outright: macOS opens it, Installer.app calls it
-        # corrupt, and nothing says the download was the thing that went wrong.
-        partial = target.with_name(target.name + ".part")
         received = 0
+        # Bound before the try so the handlers below can clean up after a failure that happened before
+        # there was anything to clean up.
+        partial: Path | None = None
         try:
+            target = target_path()
+            # Written under a .part name and renamed only once the last byte lands. A truncated file left
+            # at the real name is the one failure worth avoiding outright: macOS opens it, Installer.app
+            # calls it corrupt, and nothing says the download was the thing that went wrong.
+            partial = target.with_name(target.name + ".part")
             target.parent.mkdir(parents=True, exist_ok=True)
             with partial.open("wb") as fh:
                 async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
@@ -173,7 +188,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                 path=str(target))
         try:
             open_installer(target)
-        except OSError:
+        except Exception:
             log.warning("could not open the downloaded installer at %s", target, exc_info=True)
             # Still ready, because the file is there and correct -- only the last step needs a hand.
             publish(state="ready", percent=100, received=received, total=total, version=version,
@@ -209,6 +224,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                                 if info["newer"] else "Flackey is already up to date.")
         publish(state="downloading", total=info["size"], version=info["latest"])
         task = asyncio.create_task(download(info["url"], info["size"], info["latest"]))
+        task.add_done_callback(finished)
         return dict(state)
 
     @r.post("/update/release")
