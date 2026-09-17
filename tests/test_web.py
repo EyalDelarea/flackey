@@ -123,16 +123,21 @@ def test_update_flags_newer_release_missing_its_installer(client):
     # Reproduces the v0.1.3 incident: a release was tagged and published (so its tag sorts newer than
     # the running version) but the installer job failed before an asset was attached. "Up to date" would
     # be a lie here -- the fix is to say a newer version exists without offering a dead-end download.
+    # The mocked tag bumps the running version's own patch number, so this stays true regardless of
+    # what __version__ happens to be (a plain release-day version bump shouldn't break this test).
+    major, minor, patch = (int(p) for p in __version__.split("."))
+    newer_version = f"{major}.{minor}.{patch + 1}"
+    newer_tag = f"v{newer_version}"
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
-        "draft": False, "prerelease": False, "tag_name": "v0.1.3",
-        "published_at": "2026-09-17T10:38:25Z", "html_url": "https://example.test/releases/v0.1.3",
+        "draft": False, "prerelease": False, "tag_name": newer_tag,
+        "published_at": "2026-09-17T10:38:25Z", "html_url": f"https://example.test/releases/{newer_tag}",
         "assets": [],
     }]))
     body = c.get("/api/update").json()
     assert body["ok"] is True and body["newer"] is True and body["available"] is False
-    assert body["latest"] == "0.1.3" and body["url"] is None
-    assert body["release_url"] == "https://example.test/releases/v0.1.3"
+    assert body["latest"] == newer_version and body["url"] is None
+    assert body["release_url"] == f"https://example.test/releases/{newer_tag}"
 
 
 @respx.mock
