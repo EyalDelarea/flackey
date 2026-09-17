@@ -3,20 +3,24 @@ import Shell from './Shell'
 
 const props = { tab: 'download' as const, telegramAuthorized: true, onTab: vi.fn() }
 
-it('reserves the title-bar drag strip only inside the inset native window', () => {
+it('reserves the title-bar strips only inside the inset native window', () => {
+  const { container, rerender } = render(<Shell {...props} inset={false}>x</Shell>)
+  expect(container.querySelector('.titlebar-spacer')).toBeNull()
+  expect(container.querySelector('.titlebar-strip')).toBeNull()
+  rerender(<Shell {...props} inset>x</Shell>)
+  expect(container.querySelector('.titlebar-spacer')).not.toBeNull()
+  expect(container.querySelector('.titlebar-strip')).not.toBeNull()
+})
+
+// The window is dragged by AppKit's own title bar. pywebview's JavaScript drag handler answers a drag
+// on a `.pywebview-drag-region` by posting an absolute screen position back to Python, which re-adds an
+// `NSScreen.mainScreen()` frame snapshotted at window creation -- so with a second display attached the
+// window jumped by that screen's origin instead of following the pointer. No element may wear the class.
+it('emits no pywebview drag region, inset or not', () => {
   const { container, rerender } = render(<Shell {...props} inset={false}>x</Shell>)
   expect(container.querySelector('.pywebview-drag-region')).toBeNull()
   rerender(<Shell {...props} inset>x</Shell>)
-  expect(container.querySelector('.pywebview-drag-region')).not.toBeNull()
-})
-
-it('renders the 28px title-bar spacer as a real drag region, only when inset', () => {
-  const { container, rerender } = render(<Shell {...props} inset={false}>x</Shell>)
-  expect(container.querySelector('.titlebar-spacer')).toBeNull()
-  rerender(<Shell {...props} inset>x</Shell>)
-  const spacer = container.querySelector('.titlebar-spacer')
-  expect(spacer).not.toBeNull()
-  expect(spacer).toHaveClass('pywebview-drag-region')
+  expect(container.querySelector('.pywebview-drag-region')).toBeNull()
 })
 
 it('switches tabs and shows the overall connection state in the footer', () => {

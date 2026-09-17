@@ -1,28 +1,19 @@
 import { render } from '@testing-library/react'
 import Toolbar from './Toolbar'
 
-it('renders the drag layer only when inset', () => {
-  const { container, rerender } = render(<Toolbar>child</Toolbar>)
-  expect(container.querySelector('.toolbar-drag')).toBeNull()
-  expect(container.querySelector('.pywebview-drag-region')).toBeNull()
-
-  rerender(<Toolbar inset={false}>child</Toolbar>)
-  expect(container.querySelector('.toolbar-drag')).toBeNull()
-
-  rerender(<Toolbar inset>child</Toolbar>)
-  const drag = container.querySelector('.toolbar-drag')
-  expect(drag).not.toBeNull()
-  expect(drag).toHaveClass('pywebview-drag-region')
+// The toolbar carried a `.toolbar-drag` layer so empty toolbar space moved the window. It went with
+// pywebview's JavaScript drag handling, which computed the new window position from screen coordinates
+// and threw the window across the display; AppKit's title bar is the drag handle now.
+it('renders its children and nothing else', () => {
+  const { container } = render(<Toolbar><button>Click me</button></Toolbar>)
+  const toolbar = container.querySelector('.toolbar')
+  expect(toolbar).not.toBeNull()
+  expect(toolbar?.children).toHaveLength(1)
+  expect(toolbar?.firstElementChild?.tagName).toBe('BUTTON')
 })
 
-it('renders the drag layer as a sibling of the controls, not an ancestor', () => {
-  const { container } = render(<Toolbar inset><button>Click me</button></Toolbar>)
-  const toolbar = container.querySelector('.toolbar')
-  expect(toolbar?.firstElementChild).toHaveClass('toolbar-drag')
-  const button = toolbar?.querySelector('button')
-  expect(button).not.toBeNull()
-  // pywebview starts a window drag by walking up from the click target looking for a
-  // `.pywebview-drag-region` ancestor. If the button were nested inside the drag layer
-  // instead of next to it, every click on it would start a drag and the click would be lost.
-  expect(button?.closest('.pywebview-drag-region')).toBeNull()
+it('emits no drag layer and no pywebview drag region', () => {
+  const { container } = render(<Toolbar><button>Click me</button></Toolbar>)
+  expect(container.querySelector('.toolbar-drag')).toBeNull()
+  expect(container.querySelector('.pywebview-drag-region')).toBeNull()
 })

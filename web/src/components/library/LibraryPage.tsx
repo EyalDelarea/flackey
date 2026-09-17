@@ -52,7 +52,7 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
   </section>
 }
 
-export default function LibraryPage({ live, selectedPlaylist, inset }: { live: Live; selectedPlaylist: number | null; inset?: boolean }) {
+export default function LibraryPage({ live, selectedPlaylist }: { live: Live; selectedPlaylist: number | null }) {
   const [q, setQ] = useState(''); const [tracks, setTracks] = useState<Track[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -141,7 +141,7 @@ export default function LibraryPage({ live, selectedPlaylist, inset }: { live: L
   }
 
   return (<>
-    <Toolbar inset={inset}>
+    <Toolbar>
       <div className="search"><Icon name="search" size={14} /><input className="input" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} aria-label="search library" /></div>
       <button className="btn-secondary" onClick={refresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
       {s && <span className="counts">{s.tracks} tracks · {s.playlists} playlists · {gb(s.bytes)} on disk</span>}

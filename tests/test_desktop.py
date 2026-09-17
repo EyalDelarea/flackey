@@ -210,11 +210,41 @@ def test_run_in_window_refuses_without_a_ui_build(monkeypatch, tmp_path):
     assert started == {}
 
 
-def test_inset_titlebar_applies_the_native_style(monkeypatch):
-    from flackey import desktop
+def _rect(x, y, w, h):
+    """Stands in for an NSRect, which answers with `.origin` and `.size`."""
+    return types.SimpleNamespace(origin=types.SimpleNamespace(x=x, y=y),
+                                 size=types.SimpleNamespace(width=w, height=h))
 
-    monkeypatch.setattr(sys, "platform", "darwin")
-    calls = []
+
+ZOOM_BUTTON = (53.0, 692.0, 14.0, 14.0)  # the third traffic light, as AppKit lays them out from the left
+
+
+def _fake_window(calls, width=1100.0, height=720.0):
+    """A window shaped like the real one: a WKWebView content view inside a frame view, with the
+    traffic lights in the top left."""
+
+    class FakeFrameView:
+        def __init__(self):
+            self.views = []
+
+        def frame(self):
+            return _rect(0.0, 0.0, width, height)
+
+        def subviews(self):
+            return list(self.views)
+
+        def addSubview_positioned_relativeTo_(self, view, place, other):
+            self.views.append(view)
+            calls.append(("addSubview", view.frame, view.mask, place, other))
+
+    frame_view = FakeFrameView()
+
+    class FakeWebView:
+        def setValue_forKey_(self, value, key):
+            calls.append(("setValue_forKey_", value, key))
+
+        def superview(self):
+            return frame_view
 
     class FakeNative:
         def styleMask(self):
@@ -241,29 +271,102 @@ def test_inset_titlebar_applies_the_native_style(monkeypatch):
         def contentView(self):
             return FakeWebView()
 
-    class FakeWebView:
-        def setValue_forKey_(self, value, key):
-            calls.append(("setValue_forKey_", value, key))
+        def standardWindowButton_(self, which):
+            return types.SimpleNamespace(frame=lambda: _rect(*ZOOM_BUTTON))
+
+    return FakeNative(), frame_view
+
+
+def _appkit_module():
+    """The AppKit surface inset_titlebar and add_titlebar_drag_view touch."""
+    return types.SimpleNamespace(
+        NSColor=types.SimpleNamespace(clearColor=lambda: "clear"),
+        NSWindowZoomButton=2, NSWindowAbove=1, NSViewWidthSizable=2, NSViewMinYMargin=32,
+        NSMakeRect=lambda x, y, w, h: (x, y, w, h))
+
+
+def _fake_drag_view(monkeypatch):
+    """Stands in for the Objective-C view class, so the test never registers one with the runtime."""
+    from flackey import desktop
+
+    class FakeView:
+        def __init__(self, frame):
+            self.frame, self.mask = frame, None
+
+        def setAutoresizingMask_(self, mask):
+            self.mask = mask
+
+    class FakeViewClass:
+        @staticmethod
+        def alloc():
+            return types.SimpleNamespace(initWithFrame_=FakeView)
+
+    monkeypatch.setattr(desktop, "titlebar_drag_view_class", lambda _appkit: FakeViewClass)
+
+
+def test_titlebar_drag_view_spans_the_title_bar_clear_of_the_traffic_lights(monkeypatch):
+    """The strip is what moves the window, so it has to cover the title bar and nothing below it: a
+    taller one would swallow clicks meant for the toolbar, and one starting further left would take the
+    traffic lights' own hit area with it."""
+    from flackey import desktop
+
+    _fake_drag_view(monkeypatch)
+    calls = []
+    native, frame_view = _fake_window(calls)
+
+    assert desktop.add_titlebar_drag_view(native, _appkit_module()) is True
+    added = [c for c in calls if c[0] == "addSubview"]
+    assert len(added) == 1
+    _, frame, mask, place, _relative = added[0]
+    # Unflipped: y is measured from the bottom, so the strip's 28 points sit at the very top.
+    assert frame == (53.0 + 14.0 + 12.0, 720.0 - 28.0, 1100.0 - 79.0, 28.0)
+    assert mask == 2 | 32  # width follows the window, bottom margin absorbs a height change
+    assert place == 1  # above the web view, or the web view keeps every press for itself
+    assert len(frame_view.subviews()) == 1
+
+
+def test_titlebar_drag_view_is_added_only_once(monkeypatch):
+    """`loaded` fires again on every navigation, and a stack of strips would each drag the window."""
+    from flackey import desktop
+
+    _fake_drag_view(monkeypatch)
+    calls = []
+    native, frame_view = _fake_window(calls)
+    frame_view.views.append(types.SimpleNamespace(className=lambda: "FlackeyTitlebarDragView"))
+
+    assert desktop.add_titlebar_drag_view(native, _appkit_module()) is False
+    assert len(frame_view.subviews()) == 1
+
+
+def test_inset_titlebar_applies_the_native_style(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+    native, _ = _fake_window(calls)
 
     class Window:
-        native = FakeNative()
+        pass
 
-    fake_app_helper = types.SimpleNamespace(callAfter=lambda fn: fn())
-    monkeypatch.setitem(sys.modules, "PyObjCTools.AppHelper", fake_app_helper)
-    monkeypatch.setitem(sys.modules, "PyObjCTools", types.SimpleNamespace(AppHelper=fake_app_helper))
-    monkeypatch.setitem(sys.modules, "AppKit",
-                        types.SimpleNamespace(NSColor=types.SimpleNamespace(clearColor=lambda: "clear")))
+    Window.native = native
+
+    _install_fake_appkit(monkeypatch)
 
     assert desktop.inset_titlebar(Window()) is True
-    assert calls == [
-        ("setStyleMask_", 1 << 15),
-        ("setTitlebarAppearsTransparent_", True),
-        ("setTitleVisibility_", 1),
-        ("setValue_forKey_", False, "drawsBackground"),
-        ("setOpaque_", False),
-        ("setBackgroundColor_", "clear"),
-        ("setHasShadow_", True),
+    assert [c[0] for c in calls] == [
+        "setStyleMask_",
+        "setTitlebarAppearsTransparent_",
+        "setTitleVisibility_",
+        "setValue_forKey_",
+        "setOpaque_",
+        "setBackgroundColor_",
+        "setHasShadow_",
+        "addSubview",  # the drag strip, or the window cannot be moved at all
     ]
+    assert calls[:3] == [("setStyleMask_", 1 << 15), ("setTitlebarAppearsTransparent_", True),
+                         ("setTitleVisibility_", 1)]
+    assert calls[3:7] == [("setValue_forKey_", False, "drawsBackground"), ("setOpaque_", False),
+                          ("setBackgroundColor_", "clear"), ("setHasShadow_", True)]
     # The whole point of doing this ourselves: pywebview reaches transparency through
     # 'drawsTransparentBackground', which is WKWebView's deprecated -_setDrawsTransparentBackground:
     # and logs on every launch. If this key ever comes back, the warning comes back with it.
@@ -364,13 +467,13 @@ def test_a_packaged_app_does_not_relaunch_itself_through_the_venv_shim(monkeypat
     assert desktop.relaunch_bundled(Settings(data_dir=tmp_path)) is False
 
 
-def _fake_appkit(monkeypatch):
+def _install_fake_appkit(monkeypatch):
     """The AppKit/PyObjC surface inset_titlebar touches, with callAfter running inline."""
     fake_app_helper = types.SimpleNamespace(callAfter=lambda fn: fn())
     monkeypatch.setitem(sys.modules, "PyObjCTools.AppHelper", fake_app_helper)
     monkeypatch.setitem(sys.modules, "PyObjCTools", types.SimpleNamespace(AppHelper=fake_app_helper))
-    monkeypatch.setitem(sys.modules, "AppKit",
-                        types.SimpleNamespace(NSColor=types.SimpleNamespace(clearColor=lambda: "clear")))
+    monkeypatch.setitem(sys.modules, "AppKit", _appkit_module())
+    _fake_drag_view(monkeypatch)
 
 
 def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it(monkeypatch):
@@ -387,6 +490,11 @@ def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it
         def setValue_forKey_(self, value, key):
             calls.append(("setValue_forKey_", value, key))
 
+        def superview(self):
+            return types.SimpleNamespace(
+                frame=lambda: _rect(0.0, 0.0, 1100.0, 720.0), subviews=list,
+                addSubview_positioned_relativeTo_=lambda *a: calls.append(("addSubview",)))
+
     class FakeNative:
         def styleMask(self):
             return 0
@@ -400,7 +508,7 @@ def test_inset_titlebar_clears_the_background_only_after_the_web_view_accepts_it
     class Window:
         native = FakeNative()
 
-    _fake_appkit(monkeypatch)
+    _install_fake_appkit(monkeypatch)
     assert desktop.inset_titlebar(Window()) is True
     names = [c[0] for c in calls]
     assert names.index("setValue_forKey_") < names.index("setOpaque_")
@@ -437,7 +545,7 @@ def test_inset_titlebar_leaves_the_window_opaque_when_the_content_view_is_not_th
     class Window:
         native = FakeNative()
 
-    _fake_appkit(monkeypatch)
+    _install_fake_appkit(monkeypatch)
     desktop.inset_titlebar(Window())
     assert ("setOpaque_", False) not in calls
     assert ("setBackgroundColor_", "clear") not in calls

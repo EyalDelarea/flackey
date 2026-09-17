@@ -1,6 +1,6 @@
 export default function WelcomeStep({ onStart }: { onStart: () => void }) {
   return (<div className="setup welcome">
-    <div className="setup-title pywebview-drag-region" />
+    <div className="setup-title" />
     <div className="welcome-body">
       <div className="welcome-vinyl">
         <img className="welcome-vinyl-photo" src="/silver-vinyl.png"

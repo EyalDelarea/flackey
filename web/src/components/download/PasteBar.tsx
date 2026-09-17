@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ApiError } from '../../api'
 import Toolbar from '../Toolbar'
 
-export default function PasteBar({ onSubmit, inset }: { onSubmit: (url: string) => Promise<string>; inset?: boolean }) {
+export default function PasteBar({ onSubmit }: { onSubmit: (url: string) => Promise<string> }) {
   const [url, setUrl] = useState(''); const [pending, setPending] = useState(false)
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
   async function submit(e: React.FormEvent) {
@@ -21,7 +21,7 @@ export default function PasteBar({ onSubmit, inset }: { onSubmit: (url: string) 
     } finally { setPending(false) }
   }
   return (
-    <Toolbar inset={inset}>
+    <Toolbar>
       <form className="pastebar" onSubmit={submit} aria-label="add link" role="form">
         <label className="paste-label" htmlFor="download-link">Track or playlist link</label>
         <div className="paste-controls">

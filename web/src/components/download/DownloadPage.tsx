@@ -17,7 +17,7 @@ function useNow(ms: number) {
   return now
 }
 
-export default function DownloadPage({ live, inset }: { live: Live; inset?: boolean }) {
+export default function DownloadPage({ live }: { live: Live }) {
   const now = useNow(1000)
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
@@ -60,7 +60,7 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
         const submission = await api.submit(url)
         await live.refresh()
         return submission.summary
-      }} inset={inset} />
+      }} />
       {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
       <div className="download-views" role="group" aria-label="Download view">
         <button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button>
