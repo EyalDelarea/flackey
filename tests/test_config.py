@@ -225,6 +225,39 @@ def test_a_file_with_nothing_usable_in_it_falls_back_to_the_defaults(tmp_path: P
     assert reloaded.lossless_filing_format == "aiff"
 
 
+def test_a_rejection_that_names_no_field_never_logs_the_values_it_rejected(tmp_path: Path, caplog):
+    # pydantic renders a ValidationError with the offending input embedded in it. A field error quotes
+    # just that field's value and is dropped by name above; an error raised by a @model_validator reports
+    # `loc = ()` and quotes the *whole* input dict -- which here is the settings file, secrets included.
+    # `Settings` has only field validators today, so this branch cannot be reached; it stops being
+    # unreachable the first time somebody checks telegram_api_id and telegram_api_hash together, and the
+    # failure then is the slskd key in plaintext in flackey.log, which is what a bug report bundles up.
+    import logging
+
+    from pydantic import model_validator
+
+    from flackey import config
+
+    # Deliberately not added to production `Settings`: the point is to construct the shape, not to ship it.
+    class Paired(config.Settings):
+        @model_validator(mode="after")
+        def _both_telegram_keys(self):
+            raise ValueError("telegram_api_id and telegram_api_hash must be set together")
+
+    base = config.Settings(data_dir=tmp_path / "data")
+    original, config.Settings = config.Settings, Paired
+    try:
+        with caplog.at_level(logging.WARNING, logger="flackey.config"):
+            result = config._settings_dropping_invalid(None, {"slskd_api_key": "TOP-SECRET"}, base)
+    finally:
+        config.Settings = original
+
+    assert result is base                        # nothing in the file was usable, so the defaults stand
+    assert "TOP-SECRET" not in caplog.text       # the whole of why this test exists
+    assert "<whole file>" in caplog.text         # it still says where the problem was
+    assert "value_error" in caplog.text          # and what kind it was
+
+
 def test_build_defaults_fill_telegram_keys_when_nothing_else_does(tmp_path: Path):
     env = tmp_path / ".env"
     env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")

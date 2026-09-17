@@ -191,6 +191,18 @@ def _read_settings_file(path: Path) -> dict:
     return {k: v for k, v in data.items() if k in FILE_KEYS and v not in (None, "")}
 
 
+def _error_summary(e: ValidationError) -> str:
+    """Where each problem is and what kind it is -- never what the value was.
+
+    pydantic renders a `ValidationError` with the offending input embedded in it, and for an error that
+    belongs to the model rather than to one field the input it quotes is the whole dict it was handed.
+    That dict is the settings file, so logging the exception itself would put `slskd_api_key` and
+    `telegram_api_hash` in plaintext into flackey.log -- which is the file a bug report bundles up."""
+    return ", ".join(
+        f"{'.'.join(str(part) for part in err.get('loc') or ()) or '<whole file>'} ({err.get('type')})"
+        for err in e.errors()) or "no detail"
+
+
 def _settings_dropping_invalid(env_file: Path | None, overrides: dict, base: Settings) -> Settings:
     """Build `Settings` from the file-derived values, dropping only the keys that will not validate.
 
@@ -211,7 +223,11 @@ def _settings_dropping_invalid(env_file: Path | None, overrides: dict, base: Set
         except ValidationError as e:
             bad = {str(err["loc"][0]) for err in e.errors() if err.get("loc")} & remaining.keys()
             if not bad:
-                log.warning("ignoring %s entirely: %s", base.settings_path, e)
+                # Not `e`: see `_error_summary`. Nothing reaches here while every validator on `Settings`
+                # belongs to a field, because a field error names its field and is dropped above -- it is
+                # the first model-level validator that makes this live, and by then the value being
+                # rejected is the whole file.
+                log.warning("ignoring %s entirely: %s", base.settings_path, _error_summary(e))
                 return base
             log.warning("ignoring invalid %s in %s", ", ".join(sorted(bad)), base.settings_path)
             for key in bad:
