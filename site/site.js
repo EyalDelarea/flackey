@@ -9,20 +9,26 @@ const formatReleaseDate = (iso) =>
     year: "numeric",
   }).format(new Date(iso));
 
-// Turns the "## Heading" / "* item" / "**bold**" / bare-PR-URL markdown that
-// gh release create --generate-notes produces (grouped by .github/release.yml,
-// e.g. "* Title by @user in https://github.com/.../pull/7") into markup.
+// Turns the small Markdown subset GitHub's generated release notes use into
+// markup: headings, bullets, bold/code, markdown links, and bare PR/compare URLs.
 // Escapes first, so nothing in a PR title can inject HTML -- markdown syntax
 // is only ever matched against already-escaped text, and the whole line is
 // scanned in one replace() pass so an inserted <a>/<strong> is never rescanned.
 function renderReleaseBody(body) {
   const esc = (s) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   const inline = (s) =>
     esc(s).replace(
-      /\*\*(.+?)\*\*|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+))\b|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:compare|commits)\/(\S+))|(https?:\/\/\S+)/g,
-      (match, bold, prUrl, prNum, diffUrl, diffRange, anyUrl) => {
+      /`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+))\b|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:compare|commits)\/(\S+))|(https?:\/\/\S+)/g,
+      (match, code, bold, linkText, linkUrl, prUrl, prNum, diffUrl, diffRange, anyUrl) => {
+        if (code !== undefined) return `<code>${code}</code>`;
         if (bold !== undefined) return `<strong>${bold}</strong>`;
+        if (linkUrl)
+          return `<a href="${linkUrl}" target="_blank" rel="noopener">${linkText}</a>`;
         if (prUrl)
           return `<a href="${prUrl}" target="_blank" rel="noopener">#${prNum}</a>`;
         if (diffUrl)
@@ -36,18 +42,29 @@ function renderReleaseBody(body) {
     if (inList) html += "</ul>";
     inList = false;
   };
+  let inComment = false;
   for (const raw of (body || "").split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    if (line.startsWith("## ")) {
+    if (inComment) {
+      inComment = !line.includes("-->");
+      continue;
+    }
+    if (line.startsWith("<!--")) {
+      inComment = !line.includes("-->");
+      continue;
+    }
+    const heading = line.match(/^(#{2,6})\s+(.+)$/);
+    if (heading) {
       closeList();
-      html += `<h4>${inline(line.slice(3))}</h4>`;
-    } else if (line.startsWith("* ")) {
+      const tag = heading[1].length === 2 ? "h4" : "h5";
+      html += `<${tag}>${inline(heading[2])}</${tag}>`;
+    } else if (/^[-*]\s+/.test(line)) {
       if (!inList) {
         html += "<ul>";
         inList = true;
       }
-      html += `<li>${inline(line.slice(2))}</li>`;
+      html += `<li>${inline(line.replace(/^[-*]\s+/, ""))}</li>`;
     } else {
       closeList();
       html += `<p>${inline(line)}</p>`;
@@ -90,36 +107,26 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
         notesList.innerHTML =
           '<p class="release-notes-status">No releases published yet.</p>';
       } else {
-        notesList.innerHTML = published
-          .slice(0, 5)
-          .map((item, index) => {
-            const version = String(item.tag_name || "").replace(/^v/, "");
-            const title = `<span class="release-note-title">
+        const version = String(data.tag_name || "").replace(/^v/, "");
+        const title = `<span class="release-note-title">
               <span>v${version}</span>
-              <time datetime="${item.published_at}">${formatReleaseDate(item.published_at)}</time>
+              <time datetime="${data.published_at}">${formatReleaseDate(data.published_at)}</time>
             </span>`;
-            if (index > 0) {
-              return `<article class="release-note release-note-archive">
-                <div class="release-note-header">
-                  ${title}
-                  <a href="${item.html_url}" target="_blank" rel="noopener">View on GitHub</a>
-                </div>
-              </article>`;
-            }
-            return `<details class="release-note">
+        notesList.innerHTML = `<details class="release-note">
               <summary>
                 ${title}
                 <span class="release-note-toggle" aria-hidden="true"></span>
               </summary>
               <div class="release-note-body">
-                ${renderReleaseBody(item.body)}
+                ${renderReleaseBody(data.body)}
                 <p class="release-note-link">
-                  <a href="${item.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
+                  <a href="${data.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
                 </p>
               </div>
-            </details>`;
-          })
-          .join("");
+            </details>
+            <p class="release-notes-more">
+              <a href="https://github.com/EyalDelarea/flackey/releases" target="_blank" rel="noopener">View other releases on GitHub</a>
+            </p>`;
       }
     }
   })
