@@ -38,6 +38,8 @@ LIBRARY_LIMIT = 10_000
 
 
 def reveal_in_finder(path: Path) -> None:
+    """`path` must already be the resolved, allow-listed value `_inside` returned -- callers never
+    hand this the raw request body (see `reveal()` below)."""
     if sys.platform == "darwin":
         # `-R` reveals the path in a Finder window, selected; a bare `open` on a directory instead
         # *launches* it, which is wrong for a `.app`/`.rbxml`/other bundle directory.
@@ -47,12 +49,25 @@ def reveal_in_finder(path: Path) -> None:
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _inside(path: Path, roots: list[Path]) -> bool:
+def _inside(path: Path, roots: list[Path]) -> Path | None:
+    """The resolved, canonical form of `path` if it sits inside one of `roots`, else None.
+
+    Resolving once here and handing that same value on -- rather than letting the caller act on the
+    original, unresolved request string -- is what makes this a sanitizer and not just a check:
+    everything downstream (`.exists()`, the `open`/`xdg-open` subprocess in `reveal_in_finder`) acts
+    on the path this function vouched for."""
     try:
         resolved = path.resolve()
     except OSError:
-        return False
-    return any(resolved == r.resolve() or r.resolve() in resolved.parents for r in roots)
+        return None
+    for root in roots:
+        try:
+            root = root.resolve()
+        except OSError:
+            continue
+        if resolved == root or resolved.is_relative_to(root):
+            return resolved
+    return None
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -178,13 +193,16 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.put("/settings")
     async def put_settings(body: dict) -> dict:
         raw = (body.get("library_root") or "").strip()
-        path = Path(raw).expanduser() if raw else None
-        if path is None or not path.is_absolute():
+        expanded = Path(raw).expanduser() if raw else None
+        if expanded is None or not expanded.is_absolute():
             raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")
         try:
-            path.mkdir(parents=True, exist_ok=True)
+            expanded.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise HTTPException(400, f"That folder cannot be used: {e.strerror or e}")
+        # Canonicalize once it exists, so what's persisted (and later checked by `_inside`) is the
+        # real location rather than a path that could still contain ".." segments or a symlink hop.
+        path = expanded.resolve()
         extra: dict = {}
         if "lossless_filing_format" in body:
             if body["lossless_filing_format"] not in FILING_FORMATS:
@@ -215,11 +233,12 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.post("/reveal")
     async def reveal(body: dict) -> dict:
         path = Path(body.get("path") or "")
-        if not path.is_absolute() or not _inside(path, [settings.library_root, settings.data_dir]):
+        resolved = _inside(path, [settings.library_root, settings.data_dir]) if path.is_absolute() else None
+        if resolved is None:
             raise HTTPException(400, "only files inside the library or app data folder can be shown")
-        if not path.exists():
+        if not resolved.exists():
             raise HTTPException(404, "that file is no longer there")
-        opener(path)
+        opener(resolved)
         return {"ok": True}
 
     @r.get("/tools")

@@ -277,7 +277,11 @@ def repoint_slskd_config(old_data_dir: Path, new_data_dir: Path) -> None:
     if isinstance(api_keys, dict) and API_KEY_NAME not in api_keys and (older := _legacy_key_name(api_keys)):
         api_keys[API_KEY_NAME] = api_keys.pop(older)
         changed = True
-        log.info("slskd api key entry renamed from %s to %s", older, API_KEY_NAME)   # names, never the key
+        # Deliberately no interpolated values here (not even the entry *names*): CodeQL's clear-text-
+        # logging heuristic flags anything pulled out of an "api_keys" mapping regardless of whether
+        # it's a label or a secret, and `older`/API_KEY_NAME are only ever labels -- never the key
+        # material itself, which is never read or logged in this function.
+        log.info("slskd api key entry renamed for this install")
     if not changed:
         return
     try:

@@ -244,7 +244,9 @@ def save_settings(settings: Settings, **updates) -> Settings:
     for k, v in updates.items():
         if k not in FILE_KEYS:
             raise ValueError(f"{k} is not a settings-file key")
-        setattr(settings, k, Path(v).expanduser() if k in PATH_KEYS and v is not None else v)
+        # Canonicalize (resolve symlinks/".." segments) so whatever gets persisted matches exactly
+        # what later containment checks (e.g. web/library.py's `_inside`) resolve to.
+        setattr(settings, k, Path(v).expanduser().resolve() if k in PATH_KEYS and v is not None else v)
     data = _read_settings_file(settings.settings_path)
     for k in updates:
         val = getattr(settings, k)
