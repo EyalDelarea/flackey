@@ -190,6 +190,41 @@ def test_the_window_size_survives_a_round_trip_through_the_settings_file(tmp_pat
     assert load_settings(_env(tmp_path)).window_size == (880, 615)
 
 
+def test_one_unreadable_key_does_not_take_the_rest_of_the_file_with_it(tmp_path: Path):
+    # `Settings(**overrides)` reports every problem in one ValidationError, and answering that by falling
+    # back to a Settings with no file values at all meant a single bad key silently reset the library
+    # folder, the Telegram keys and the slskd key for that run -- with only a log line nobody sees in a
+    # windowed app. `window_size` is the key that makes this routine: it is rewritten on every quit, so a
+    # half-finished write or a hand edit is not the rare event a settings-screen submit is.
+    s = load_settings(_env(tmp_path))
+    s.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    s.settings_path.write_text(json.dumps({
+        "window_size": ["wide", "tall"],
+        "library_root": str(tmp_path / "survives"),
+        "auto_update_check": False,
+        "slskd_api_key": "kept",
+    }))
+
+    reloaded = load_settings(_env(tmp_path))
+    assert reloaded.window_size is None            # the only value dropped
+    assert reloaded.library_root == tmp_path / "survives"
+    assert reloaded.auto_update_check is False
+    assert reloaded.slskd_api_key == "kept"
+
+
+def test_a_file_with_nothing_usable_in_it_falls_back_to_the_defaults(tmp_path: Path):
+    # The other end of the same loop: when dropping the bad keys leaves nothing, the answer is the same
+    # Settings the chain would have produced without the file, not an exception on the way to the window.
+    s = load_settings(_env(tmp_path))
+    s.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    s.settings_path.write_text(json.dumps({"window_size": ["wide", "tall"],
+                                           "lossless_filing_format": "mp3"}))
+
+    reloaded = load_settings(_env(tmp_path))
+    assert reloaded.window_size is None
+    assert reloaded.lossless_filing_format == "aiff"
+
+
 def test_build_defaults_fill_telegram_keys_when_nothing_else_does(tmp_path: Path):
     env = tmp_path / ".env"
     env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")

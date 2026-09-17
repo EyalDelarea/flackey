@@ -191,6 +191,34 @@ def _read_settings_file(path: Path) -> dict:
     return {k: v for k, v in data.items() if k in FILE_KEYS and v not in (None, "")}
 
 
+def _settings_dropping_invalid(env_file: Path | None, overrides: dict, base: Settings) -> Settings:
+    """Build `Settings` from the file-derived values, dropping only the keys that will not validate.
+
+    One unreadable value used to cost the whole file. `Settings(**overrides)` reports every problem in a
+    single `ValidationError`, and the caller answered it by falling back to a `Settings` with no file
+    values in it at all -- so one malformed key silently took `library_root`, the Telegram keys and the
+    slskd key down with it for that run, leaving only a log line that nobody reads in a windowed app.
+
+    That was survivable while every file key was written by an owner submitting the settings screen. It is
+    not now that `window_size` is rewritten on every quit: a half-finished write or a hand-edited file
+    would reset everything else the owner had configured. pydantic names the offending key in each error's
+    `loc`, so drop those and try again. Every pass removes at least one key, so this terminates; running
+    out of keys means nothing in the file was usable, which is exactly `base`."""
+    remaining = dict(overrides)
+    while remaining:
+        try:
+            return Settings(_env_file=env_file, **remaining)
+        except ValidationError as e:
+            bad = {str(err["loc"][0]) for err in e.errors() if err.get("loc")} & remaining.keys()
+            if not bad:
+                log.warning("ignoring %s entirely: %s", base.settings_path, e)
+                return base
+            log.warning("ignoring invalid %s in %s", ", ".join(sorted(bad)), base.settings_path)
+            for key in bad:
+                del remaining[key]
+    return base
+
+
 def load_settings(env_file: Path | None = None, build_defaults: Path | None = None) -> Settings:
     """Precedence: environment > .env > settings.json in the data folder > build.json inside a packaged
     build > defaults. When nothing in that chain set an API key, fall back to the one flackey already
@@ -204,14 +232,7 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     from_build = _read_build_defaults(build_defaults or BUILD_DEFAULTS_PATH)
     overrides = {k: v for k, v in from_build.items() if k not in base.model_fields_set}
     overrides.update({k: v for k, v in from_file.items() if k not in base.model_fields_set})
-    if not overrides:
-        result = base
-    else:
-        try:
-            result = Settings(_env_file=env_file, **overrides)
-        except ValidationError as e:
-            log.warning("ignoring invalid values in %s: %s", base.settings_path, e)
-            result = base
+    result = base if not overrides else _settings_dropping_invalid(env_file, overrides, base)
     if not result.slskd_api_key:
         result.slskd_api_key = read_api_key(result.data_dir)
     return result

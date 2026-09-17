@@ -143,18 +143,46 @@ def system_is_dark() -> bool:
 # rather than left in place unused, since the page cannot misuse what it is not given.
 
 
-def startup_size(settings: Settings) -> tuple[int, int]:
+def screen_size() -> tuple[int, int] | None:
+    """The usable size of the display the window will open on, or None off macOS and without AppKit.
+    `visibleFrame` rather than `frame`, so the menu bar and the Dock are already taken off it."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        from AppKit import NSScreen
+    except ImportError:
+        return None
+    try:
+        frame = NSScreen.mainScreen().visibleFrame()
+    except Exception:
+        log.debug("could not read the screen size", exc_info=True)
+        return None
+    return int(frame.size.width), int(frame.size.height)
+
+
+def startup_size(settings: Settings, limit: tuple[int, int] | None = None) -> tuple[int, int]:
     """How big to open the window: the size the owner last closed it at, or `MAIN_SIZE` if they never
-    resized it. Clamped up to `MIN_SIZE`, because the minimum has come down before and a size saved under
-    an older, larger one would otherwise open a window smaller than the layout has rules for. Anything
-    unreadable in the file -- a hand-edited string, a single number -- is treated as never having been
-    set, since a window that will not open is a worse answer than a window of the wrong size."""
+    resized it.
+
+    Bounded at both ends. Up to `MIN_SIZE`, because the minimum has come down once and may again, and a
+    size saved under an older, larger one would open a window smaller than the layout has rules for. Down
+    to the display, because a size saved on an external monitor otherwise reopens on the laptop as a
+    window wider than the screen -- AppKit will pull it back far enough to keep the traffic lights
+    reachable, but not far enough to make the right-hand edge grabbable. The floor is applied last: a
+    window too small to use is worse than one that overhangs a very small display.
+
+    A value that is not a pair of numbers is treated as never having been set. `load_settings` already
+    drops an unparseable `window_size` when it reads the file, so this guards the in-process path --
+    `remember_window_size` assigns a list mid-session -- rather than the file."""
     saved = getattr(settings, "window_size", None) or ()
     try:
         width, height = (int(saved[0]), int(saved[1])) if len(saved) == 2 else MAIN_SIZE
     except (TypeError, ValueError):
         log.warning("ignoring an unreadable saved window size %r", saved)
-        return MAIN_SIZE
+        width, height = MAIN_SIZE
+    limit = limit if limit is not None else screen_size()
+    if limit:
+        width, height = min(width, limit[0]), min(height, limit[1])
     return max(width, MIN_SIZE[0]), max(height, MIN_SIZE[1])
 
 
@@ -257,6 +285,20 @@ def add_titlebar_drag_view(native, AppKit) -> bool:
 _VIBRANCY_VIEW_NAME = "NSVisualEffectView"
 
 
+def _is_vibrancy(view, AppKit) -> bool:
+    """Whether this is pywebview's blur. `isKindOfClass:` before the class name, because pywebview already
+    subclasses one of the views it creates (`WebKitHost(WKWebView)`) and a subclassed blur would answer
+    `className` with a name of its own while still being the view we are looking for. The name is the
+    fallback for when AppKit is a stand-in that has no such class to ask about."""
+    effect_class = getattr(AppKit, "NSVisualEffectView", None)
+    if effect_class is not None:
+        try:
+            return bool(view.isKindOfClass_(effect_class))
+        except (AttributeError, TypeError):
+            pass
+    return view.className() == _VIBRANCY_VIEW_NAME
+
+
 def stretch_web_view(native, AppKit) -> bool:
     """Make the web view, and the blur behind it, follow the window frame.
 
@@ -279,7 +321,9 @@ def stretch_web_view(native, AppKit) -> bool:
     same way. Sibling rather than child because a blur that is a child of the view it exists to back
     cannot cover for that view turning up late, which is the whole failure being fixed.
 
-    Returns False when there is no frame view to measure against (the content view is not installed yet)."""
+    Returns False when there is no frame view to measure against (the content view is not installed yet),
+    or when the blur is nowhere to be found -- which is how a future pywebview quietly moving it would
+    show up, rather than as the stale paint coming back with a green test suite behind it."""
     content = native.contentView()
     frame_view = content.superview() if content is not None else None
     if frame_view is None:
@@ -288,16 +332,19 @@ def stretch_web_view(native, AppKit) -> bool:
     both = AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
     content.setAutoresizingMask_(both)
     content.setFrame_(bounds)
-    for view in list(content.subviews()):
-        if view.className() != _VIBRANCY_VIEW_NAME:
-            continue
+    moved = [v for v in content.subviews() if _is_vibrancy(v, AppKit)]
+    for view in moved:
         view.setFrame_(bounds)
         view.setAutoresizingMask_(both)
         # No `removeFromSuperview` first: adding a view to a new superview takes it out of its old one,
         # and doing it by hand would leave the view with no owner but this loop variable across the two
         # calls in between -- which is a released view in PyObjC, and a window that has stopped blurring.
         frame_view.addSubview_positioned_relativeTo_(view, AppKit.NSWindowBelow, content)
-    return True
+    if moved or any(_is_vibrancy(v, AppKit) for v in frame_view.subviews()):
+        return True  # moved now, or moved by an earlier `loaded` and still where it was put
+    log.warning("found no vibrancy view under the web view or beside it; the window will still follow its "
+                "frame, but nothing is backing the web view if pywebview has moved the blur again")
+    return False
 
 
 def inset_titlebar(window) -> bool:
@@ -346,8 +393,13 @@ def inset_titlebar(window) -> bool:
         native.setBackgroundColor_(AppKit.NSColor.clearColor())
         native.setHasShadow_(True)  # a non-opaque window loses its shadow, and a shadowless window is not native
         # After the style mask, not before: the content rect it stretches the web view to is the one
-        # `NSWindowStyleMaskFullSizeContentView` has just redefined.
-        stretch_web_view(native, AppKit)
+        # `NSWindowStyleMaskFullSizeContentView` has just redefined. Its answer is worth a line in the log
+        # because the failure it reports is invisible until somebody drags the window and sees the old
+        # paint stay behind. `add_titlebar_drag_view` is not logged the same way: it answers False on
+        # every `loaded` after the first, by design, and that is a normal navigation rather than a fault.
+        if not stretch_web_view(native, AppKit):
+            log.warning("could not pin the web view to the window frame; resizing the window may leave "
+                        "stale paint behind it")
         add_titlebar_drag_view(native, AppKit)
 
     AppHelper.callAfter(apply)

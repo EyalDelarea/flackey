@@ -92,11 +92,25 @@ def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
     assert desktop.app_icon() is None
 
 
+def test_screen_size_is_none_off_macos(monkeypatch):
+    """`startup_size` then applies no ceiling at all, which is right: there is no NSScreen to ask, and a
+    size the owner chose is a better guess than one this could not measure."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert desktop.screen_size() is None
+
+
 def test_set_app_name_is_false_off_macos(monkeypatch):
     from flackey import desktop
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.set_app_name() is False
+
+
+# A display no saved size will reach, so the tests that pass it exercise the saved value rather than
+# whatever monitor the suite happens to be running on.
+HUGE = (6000, 4000)
 
 
 class Hook(list):
@@ -140,6 +154,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "app_icon", lambda: "/icons/app-icon.png")
     monkeypatch.setattr(desktop, "set_app_name", lambda: True)
     monkeypatch.setattr(desktop, "relaunch_bundled", lambda settings: False)
+    monkeypatch.setattr(desktop, "screen_size", lambda: HUGE)  # never the machine the suite runs on
     return windows, started, handle
 
 
@@ -223,9 +238,13 @@ class FakeSubview:
 
     def __init__(self, name, owner=None, frame=None):
         self.name, self.owner, self.frame, self.mask = name, owner, frame, None
+        self.kinds = (name,)  # widen to stand in for a subclass of something else
 
     def className(self):
         return self.name
+
+    def isKindOfClass_(self, cls):
+        return cls in self.kinds
 
     def setFrame_(self, frame):
         self.frame = frame
@@ -327,6 +346,8 @@ def _appkit_module():
     """The AppKit surface inset_titlebar and add_titlebar_drag_view touch."""
     return types.SimpleNamespace(
         NSColor=types.SimpleNamespace(clearColor=lambda: "clear"),
+        # A sentinel standing in for the class object `isKindOfClass:` is asked about.
+        NSVisualEffectView="NSVisualEffectView",
         NSWindowZoomButton=2, NSWindowAbove=1, NSWindowBelow=-1,
         NSViewWidthSizable=2, NSViewHeightSizable=16, NSViewMinYMargin=32,
         NSMakeRect=lambda x, y, w, h: (x, y, w, h))
@@ -457,6 +478,40 @@ def test_stretch_web_view_pins_the_web_view_and_its_blur_to_the_window(monkeypat
     assert content.subviews() == []
 
 
+def test_stretch_web_view_says_so_when_it_cannot_find_the_blur(caplog):
+    """`pyproject.toml` floors pywebview at 6.2.1 with no upper bound, and pywebview already subclasses
+    one of the views it makes (`WebKitHost(WKWebView)`). If a later 6.x moves or wraps the blur so that
+    nothing here matches it, the web view still gets pinned -- but the blur stays where pywebview put it
+    and the stale paint comes back. Silently, on a green suite, unless this branch reports itself."""
+    from flackey import desktop
+
+    calls = []
+    native, frame_view = _fake_window(calls)
+    content = native.contentView()
+    content.views = [FakeSubview("PywebviewBlurHost", owner=content)]  # renamed out from under us
+
+    with caplog.at_level("WARNING"):
+        assert desktop.stretch_web_view(native, _appkit_module()) is False
+    assert "vibrancy" in caplog.text
+    assert content.mask == 2 | 16  # the web view is still pinned; only the blur was lost
+    assert frame_view.subviews() == []
+
+
+def test_stretch_web_view_finds_a_blur_pywebview_has_subclassed():
+    """`isKindOfClass:` before the class name, so a subclassed blur is still recognised as one."""
+    from flackey import desktop
+
+    calls = []
+    native, frame_view = _fake_window(calls)
+    content = native.contentView()
+    subclassed = FakeSubview("FlackeyBlurHost", owner=content)
+    subclassed.kinds = ("NSVisualEffectView",)
+    content.views = [subclassed]
+
+    assert desktop.stretch_web_view(native, _appkit_module()) is True
+    assert frame_view.subviews() == [subclassed]
+
+
 def test_stretch_web_view_declines_before_the_web_view_is_installed():
     """`loaded` fires again on every navigation, and on a page that never reached the window there is no
     frame view to measure -- better to leave the window alone than to size the web view to nothing."""
@@ -475,39 +530,59 @@ def test_startup_size_opens_where_the_owner_left_it(tmp_path):
     from flackey.config import Settings
 
     fresh = Settings(data_dir=tmp_path)
-    assert desktop.startup_size(fresh) == desktop.MAIN_SIZE
-    assert desktop.startup_size(Settings(data_dir=tmp_path, window_size=(840, 610))) == (840, 610)
+    assert desktop.startup_size(fresh, limit=HUGE) == desktop.MAIN_SIZE
+    assert desktop.startup_size(Settings(data_dir=tmp_path, window_size=(840, 610)), limit=HUGE) == (840, 610)
 
 
 def test_startup_size_never_opens_below_the_minimum(tmp_path):
-    """The minimum has come down once and may again. A size saved under a larger one -- or typed into
-    settings.json by hand -- must not open a window narrower than the layout has rules for."""
+    """The minimum has come down once and may again. A size saved under a larger one must not open a
+    window narrower than the layout has rules for."""
     from flackey import desktop
     from flackey.config import Settings
 
-    assert desktop.startup_size(Settings(data_dir=tmp_path, window_size=(200, 100))) == desktop.MIN_SIZE
+    settings = Settings(data_dir=tmp_path, window_size=(200, 100))
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MIN_SIZE
 
 
-def test_startup_size_falls_back_on_a_size_it_cannot_read(tmp_path):
+def test_startup_size_never_opens_wider_than_the_display(tmp_path):
+    """A size saved on an external monitor, reopened on the laptop. AppKit pulls an oversized window back
+    far enough to keep the traffic lights reachable, but not far enough to make the right edge grabbable."""
+    from flackey import desktop
+    from flackey.config import Settings
+
+    settings = Settings(data_dir=tmp_path, window_size=(3400, 1400))
+    assert desktop.startup_size(settings, limit=(1440, 810)) == (1440, 810)
+    # The floor is applied after the ceiling: a display smaller than the minimum is pathological, and a
+    # window too small to use is a worse answer than one that overhangs it.
+    assert desktop.startup_size(settings, limit=(300, 200)) == desktop.MIN_SIZE
+
+
+def test_startup_size_falls_back_on_a_size_assigned_in_process(tmp_path):
+    """Not the settings-file path: `load_settings` drops an unparseable `window_size` before `Settings`
+    exists, which test_config covers. This is the in-process one -- `remember_window_size` assigns a list
+    mid-session, so the field is reachable without passing pydantic on the way in."""
     from flackey import desktop
     from flackey.config import Settings
 
     settings = Settings(data_dir=tmp_path)
-    settings.window_size = ("wide", "tall")  # hand-edited settings.json; a window must still open
-    assert desktop.startup_size(settings) == desktop.MAIN_SIZE
+    settings.window_size = ("wide", "tall")
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MAIN_SIZE
     settings.window_size = (900,)
-    assert desktop.startup_size(settings) == desktop.MAIN_SIZE
+    assert desktop.startup_size(settings, limit=HUGE) == desktop.MAIN_SIZE
 
 
 def test_remember_window_size_survives_a_data_dir_it_cannot_write(tmp_path):
-    """This runs from the `closed` handler, where the only thing left is to stop the server. Quitting
-    must not become a traceback because the settings file went read-only."""
+    """This runs from the `closed` handler, where the only thing left is to stop the server. Quitting must
+    not become a traceback because the data dir cannot be written -- here because a file is sitting where
+    the folder needs to be, which is the same OSError a read-only volume raises."""
     from flackey import desktop
     from flackey.config import Settings
 
-    settings = Settings(data_dir=tmp_path / "data")
-    assert desktop.remember_window_size(settings, (900, 700)) is True
-    assert desktop.remember_window_size(object(), (900, 700)) is False
+    assert desktop.remember_window_size(Settings(data_dir=tmp_path / "data"), (900, 700)) is True
+
+    blocked = tmp_path / "in-the-way"
+    blocked.write_text("a file, so no directory can be created under it")
+    assert desktop.remember_window_size(Settings(data_dir=blocked / "data"), (900, 700)) is False
 
 
 def test_the_window_reopens_at_the_size_it_was_closed_at(monkeypatch, tmp_path):
@@ -530,7 +605,7 @@ def test_the_window_reopens_at_the_size_it_was_closed_at(monkeypatch, tmp_path):
     # which has only settings.json to go on, opens at the size this one was left at.
     saved = _read_settings_file(data / "settings.json")
     assert saved["window_size"] == [880, 615]
-    assert desktop.startup_size(Settings(data_dir=data, **saved)) == (880, 615)
+    assert desktop.startup_size(Settings(data_dir=data, **saved), limit=HUGE) == (880, 615)
 
 
 def _fake_venv(monkeypatch, tmp_path):
