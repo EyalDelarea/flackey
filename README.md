@@ -21,7 +21,7 @@ Rekordbox's analysis; genre and label are in the tags.
 </p>
 
 <p align="center">
-  <img src="docs/img/readme/spinning-vinyl.svg" alt="A silver vinyl record spinning as it emerges from a translucent Flackey sleeve" width="520">
+  <img src="docs/img/readme/hero-spin.gif" alt="A silver vinyl record spinning as it emerges from a translucent Flackey sleeve" width="520">
 </p>
 
 ## ⬇️ Download
