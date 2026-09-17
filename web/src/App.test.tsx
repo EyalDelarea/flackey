@@ -32,6 +32,9 @@ beforeEach(() => {
   vi.spyOn(api, 'stats').mockResolvedValue(stats)
   vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
   vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', newer: false, available: false,
+    latest: '0.1.0', url: null, release_url: null, size: null, size_label: null, published_at: null,
+    published_date: null, prerelease: false })
 })
 
 /** Signed out, so the sidebar offers Reconnect: the shortest way into setup step 2 from the main screen. */
@@ -78,6 +81,39 @@ describe('reconnect and a live Soulseek connection', () => {
     expect(screen.queryByText('Connect a source')).not.toBeInTheDocument()
     const soulseekStep = [...document.querySelectorAll('.step')].find(el => el.textContent?.includes('Soulseek'))
     expect(soulseekStep).not.toHaveClass('skipped')
+  })
+})
+
+describe('the update banner', () => {
+  it('offers a download once an installer is available', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
+    vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true, available: true,
+      latest: '0.1.3', url: 'https://example.test/Flackey.pkg', release_url: 'https://example.test/releases/v0.1.3',
+      size: 12345678, size_label: '12.3 MB', published_at: '2026-09-17T10:38:25Z', published_date: '2026-09-17',
+      prerelease: false })
+    render(<App />)
+    fireEvent.click(await screen.findByText('Download update'))
+    expect(open).toHaveBeenCalledWith('https://example.test/Flackey.pkg', '_blank', 'noopener,noreferrer')
+  })
+
+  it('stays quiet when a newer version exists but has no installer yet', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
+    vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true, available: false,
+      latest: '0.1.3', url: null, release_url: 'https://example.test/releases/v0.1.3', size: null,
+      size_label: null, published_at: '2026-09-17T10:38:25Z', published_date: '2026-09-17', prerelease: false })
+    render(<App />)
+    await screen.findByText('Download')   // the sidebar/tab label, proof the main screen rendered
+    expect(screen.queryByText(/is available/)).not.toBeInTheDocument()
+  })
+
+  it('never checks when the owner turned auto-update checks off', async () => {
+    const updateSpy = vi.spyOn(api, 'update')
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true }))
+    vi.spyOn(api, 'settings').mockResolvedValue({ ...settings, auto_update_check: false })
+    render(<App />)
+    await screen.findByText('Download')
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 })
 

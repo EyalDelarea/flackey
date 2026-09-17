@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
 import { api, ApiError } from '../api'
 import type { AppSettings, Health, LosslessHealth, SharingState } from '../api'
@@ -17,9 +17,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: true, configured: true, phone_masked: '+31 6 •••• ••42' })
   vi.spyOn(api, 'pickFolderAvailable').mockResolvedValue({ available: true })
-  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', available: false, latest: '0.1.0',
-    url: 'https://example.test/Flackey.pkg', size: 123, size_label: '123 B', published_at: null,
-    published_date: null, prerelease: true })
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', newer: false, available: false,
+    latest: '0.1.0', url: 'https://example.test/Flackey.pkg', release_url: null, size: 123, size_label: '123 B',
+    published_at: null, published_date: null, prerelease: true })
   mockRefresh.mockResolvedValue(undefined)
 })
 
@@ -41,18 +41,47 @@ it('shows the four cards and saves a new folder', async () => {
 
 it('shows an available app update', async () => {
   const open = vi.spyOn(window, 'open').mockImplementation(() => null)
-  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', available: true, latest: '0.1.1',
-    url: 'https://example.test/Flackey.pkg', size: 12345678, size_label: '12.3 MB',
-    published_at: '2026-09-15T10:00:00Z', published_date: '2026-09-15', prerelease: true })
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', newer: true, available: true,
+    latest: '0.1.1', url: 'https://example.test/Flackey.pkg', release_url: 'https://example.test/releases/v0.1.1',
+    size: 12345678, size_label: '12.3 MB', published_at: '2026-09-15T10:00:00Z', published_date: '2026-09-15',
+    prerelease: false })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText(/Version 0.1.1 is available/)).toBeInTheDocument())
   fireEvent.click(screen.getByText('Download update'))
   expect(open).toHaveBeenCalledWith('https://example.test/Flackey.pkg', '_blank', 'noopener,noreferrer')
 })
 
+it('says a newer version exists without offering a dead-end download when the installer is missing', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true, available: false,
+    latest: '0.1.3', url: null, release_url: 'https://example.test/releases/v0.1.3', size: null,
+    size_label: null, published_at: '2026-09-17T10:38:25Z', published_date: '2026-09-17', prerelease: false })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/isn't published yet/)).toBeInTheDocument())
+  expect(screen.queryByText('Download update')).not.toBeInTheDocument()
+  expect(screen.getByText('View release')).toBeInTheDocument()
+})
+
 it('says when the app is up to date', async () => {
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('Up to date.')).toBeInTheDocument())
+})
+
+it('defaults automatic update checks to on and lets the owner turn them off', async () => {
+  const liveSettings = (live as unknown as { settings: AppSettings }).settings
+  const result = { ...liveSettings, auto_update_check: false }
+  vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  const row = screen.getByText('On — Flackey checks for updates when it starts.').closest('.srow') as HTMLElement
+  fireEvent.click(within(row).getByText('Turn off'))
+  await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(liveSettings.library_root, { auto_update_check: false }))
+  expect(mockSetSettings).toHaveBeenCalledWith(result)
+})
+
+it('shows automatic update checks as off when the setting is saved that way', async () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const off = makeLive({ ...current, settings: { ...current.settings, auto_update_check: false } })
+  render(<SettingsPage live={off} onReconnect={() => {}} />)
+  expect(screen.getByText('Off — check for updates here instead.')).toBeInTheDocument()
 })
 
 it('shows error message when saveSettings fails with ApiError', async () => {

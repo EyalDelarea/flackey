@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import './app.css'
 import { api } from './api'
 import Banner from './components/Banner'
@@ -99,7 +100,18 @@ export default function App() {
       {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(3)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
-  const banner = sourceOn && !authorized ? <Banner tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} /> : undefined
+  const update = live.update
+  const banners: ReactNode[] = []
+  if (sourceOn && !authorized) {
+    banners.push(<Banner key="telegram" tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
+  }
+  // Only when there is something to click: a newer tag with no installer yet is detail for the
+  // Settings page, not a launch-time nag with nowhere for the click to go.
+  if (update?.available && update.url) {
+    const url = update.url
+    banners.push(<Banner key="update" tone="amber" text={`Flackey ${update.latest} is available.`} action={{ label: 'Download update', onClick: () => window.open(url, '_blank', 'noopener,noreferrer') }} />)
+  }
+  const banner = banners.length ? banners : undefined
   return (
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
