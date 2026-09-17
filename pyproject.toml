@@ -1,6 +1,6 @@
 [project]
 name = "flackey"
-version = "0.1.3"
+version = "0.1.2"
 description = "Personal DJ library builder with a desktop GUI: paste a link -> verified, tagged tracks -> Rekordbox"
 requires-python = ">=3.12,<3.13"
 dependencies = [

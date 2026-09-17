@@ -145,7 +145,7 @@ wheels = [
 
 [[package]]
 name = "flackey"
-version = "0.1.3"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "curl-cffi" },
