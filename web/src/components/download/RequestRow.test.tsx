@@ -7,7 +7,22 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null }
+  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null }
+
+it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
+  // The note is the only thing on a final row that says what is left to do -- there is no button beside
+  // it -- so it must render, and it must not read the same as the one that has a Try again next to it.
+  const { rerender } = render(<RequestRow view={{ ...base, bucket: 'failed', status: 'Stopped by you',
+    outcome: { retryable: false, note: 'You stopped this one; paste the link again to start over.' } }}
+    onAction={() => {}} onChoose={() => {}} />)
+  expect(screen.getByText(/paste the link again/)).toHaveClass('outcome', 'final')
+  rerender(<RequestRow view={{ ...base, bucket: 'failed', status: 'Failed — boom',
+    action: { label: 'Try again', kind: 'retry' },
+    outcome: { retryable: true, note: 'Try again starts the search over.' } }}
+    onAction={() => {}} onChoose={() => {}} />)
+  expect(screen.getByText('Try again starts the search over.')).not.toHaveClass('final')
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+})
 
 it('renders title, status and tag', () => {
   render(<RequestRow view={base} onAction={() => {}} onChoose={() => {}} />)

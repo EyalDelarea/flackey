@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { bucketCounts, groupRows } from '../../presentation'
+import { bucketCounts, bucketOf, failedSummary, groupRows } from '../../presentation'
 import type { Bucket, RowAction } from '../../presentation'
+import type { Bundle } from '../../api'
 import Banner from '../Banner'
 import FilterBar from './FilterBar'
 import Group from './Group'
 import PasteBar from './PasteBar'
 
-const FAILED_STATES = ['rejected', 'not_found', 'error', 'cancelled']
-const TERMINAL_STATES = ['done', 'duplicate', ...FAILED_STATES]
+// Asked of `bucketOf` rather than spelled out here. This file used to keep its own list of the failed
+// states, which is how the badge came to count four of them while the button beneath it retried two.
+const isFailed = (b: Bundle) => bucketOf(b.request.state) === 'failed'
+const isFinished = (b: Bundle) => isFailed(b) || bucketOf(b.request.state) === 'done'
 
 function useNow(ms: number) {
   const [now, setNow] = useState(() => new Date())
@@ -30,11 +33,10 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const soulseekConnected = live.health?.lossless?.enabled && live.health.lossless.provider?.status === 'ok'
   const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress }
   const bundles = [...live.bundles.values()]
-  const scoped = bundles.filter(b => view === 'active'
-    ? ['queued', 'identifying', 'awaiting_review', 'fetching', 'verifying', 'filing'].includes(b.request.state)
-    : view === 'failed' ? FAILED_STATES.includes(b.request.state)
-    : TERMINAL_STATES.includes(b.request.state))
-  const historyIds = bundles.filter(b => TERMINAL_STATES.includes(b.request.state)).map(b => b.request.id)
+  const scoped = bundles.filter(b => view === 'active' ? !isFinished(b)
+    : view === 'failed' ? isFailed(b)
+    : isFinished(b))
+  const historyIds = bundles.filter(isFinished).map(b => b.request.id)
   // The first snapshot this launch is history the owner already knows about, not a batch that "just"
   // finished -- otherwise a returning owner with a long history sees it all counted as new on open.
   const seededHistory = useRef(false)
@@ -51,6 +53,8 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   // down to is what "Retry all" retries, and only the rows carrying a retry button can be re-queued at all
   // -- a rejected or skipped track has nothing for the worker to try again, so it is not in the count.
   const retryableIds = groups.flatMap(g => g.rows).filter(r => r.action?.kind === 'retry').map(r => r.id)
+  // Same rows, same filter, so the sentence and the button count the same population.
+  const summary = failedSummary(scoped)
   const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
   const retryAll = () => {
@@ -83,15 +87,21 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
       <div className="download-views" role="group" aria-label="Download view">
         <button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button>
         <button className="chip" aria-pressed={view === 'history'} onClick={openHistory}>History{newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}</button>
-        {view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(b => FAILED_STATES.includes(b.request.state)).length}</span></button>}
+        {view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(isFailed).length}</span></button>}
       </div>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
           rows are all rejected needs a disabled "Retry all 0" to answer why, where an absent button
-          just looks like the feature is missing. */}
+          just looks like the feature is missing.
+          The sentence beside it is the rest of that answer. The badge counts every failure and the button
+          counts the ones the worker will take back, so the two numbers disagree by design -- and until this
+          line was here, nothing on screen said so. It is built from the rows in view, like the ids are, so
+          a filtered-down tab explains the tab the owner is actually looking at. `.filterbar` is 38px of
+          single-line chrome elsewhere; the wide modifier lets this one grow to hold a sentence. */}
       {view === 'failed' && scoped.length > 0 && (
-        <div className="filterbar">
+        <div className="filterbar wide">
+          {summary && <p className="failed-summary">{summary}</p>}
           <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
             {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
           </button>

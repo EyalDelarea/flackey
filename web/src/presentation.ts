@@ -25,13 +25,16 @@ export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
 export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove'; path?: string }
 export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean }
 export interface RejectionView { reason: string; cutoffKhz: number | null; caption: string; spectrogramUrl: string | null }
+/** Why a row is sitting in a list called "Failed" and whether it can come back. Present on failed rows
+ *  only -- the ones the owner is looking at when they ask that question. */
+export interface OutcomeView { retryable: boolean; note: string }
 export interface RowView {
   id: number; title: string; version: string | null; status: string; statusTone: Tone
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
   formatLabel: string | null; checks: CheckView[]
-  progress: ProgressView | null; fallback: FallbackView | null
+  progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
 export interface ProgressView { pct: number | null; label: string }
@@ -66,6 +69,53 @@ const BUCKET_OF: Record<RequestState, Bucket> = {
   rejected: 'failed', not_found: 'failed', error: 'failed', cancelled: 'failed',
 }
 export const bucketOf = (state: RequestState): Bucket => BUCKET_OF[state]
+
+/* Whether anything can still move a request out of the state it is in. A plain `Record`, not a Set of the
+   interesting ones: a thirteenth state then fails the build here instead of quietly classifying itself as
+   final and appearing in the Failed list with nothing to say about it.
+   - `open`: the pipeline still has it, so the question does not arise.
+   - `retryable`: stopped, but `Worker.retry` takes it back and re-queues it. Exactly `RETRYABLE_STATES` in
+     src/flackey/models.py -- `test_failed_states_match_the_ui` fails if these two lists disagree, because a
+     button offering a retry the worker refuses is the confusion this whole table exists to end.
+   - `final`: nothing in the app moves it again. `done` and `duplicate` are final because they succeeded;
+     `rejected` and `cancelled` because a verdict was reached, not because the app ran out of ideas. */
+export type Finality = 'open' | 'retryable' | 'final'
+const FINALITY_OF: Record<RequestState, Finality> = {
+  queued: 'open', identifying: 'open', awaiting_review: 'open', fetching: 'open', verifying: 'open', filing: 'open',
+  done: 'final', duplicate: 'final',
+  error: 'retryable', not_found: 'retryable',
+  rejected: 'final', cancelled: 'final',
+}
+/** The one answer to "can the owner press a button and have this tried again?". Every retry affordance in
+ *  the UI asks this rather than carrying its own list of states, which is how the Failed badge and the
+ *  "Retry all" button came to count different things. */
+export const canRetry = (state: RequestState): boolean => FINALITY_OF[state] === 'retryable'
+
+/* What the Failed list says about each way of failing. `tally` is the fragment the summary line above the
+   list counts with ("20 you stopped"); `note` is the sentence on the row itself, and every one of them ends
+   by saying whether the track can come back and what to do if it cannot. Retryability is deliberately not
+   repeated here -- it is read from FINALITY_OF above -- so the words and the buttons cannot disagree.
+   Keyed by every state BUCKET_OF sends to the `failed` bucket; the test walks BUCKET_OF and fails if a new
+   failure state lands in the list mute. */
+const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>> = {
+  error: {
+    tally: 'gave up after several tries',
+    note: 'Flackey tried this several times and stopped. Try again starts the search over from the beginning, Soulseek included.',
+  },
+  not_found: {
+    tally: 'found no copy anywhere',
+    note: 'Nothing to download turned up last time. Try again searches again from scratch — Beatport listings and the people sharing on Soulseek both change.',
+  },
+  rejected: {
+    tally: 'failed the quality check',
+    note: 'The copy on offer was checked, failed and deleted, so Flackey will not fetch it again. Paste the link again to start a fresh search.',
+  },
+  cancelled: {
+    tally: 'you stopped',
+    note: 'You stopped this one — nothing went wrong with it. Flackey will not pick it back up on its own; paste the link again to start over.',
+  },
+}
+
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
@@ -188,6 +238,36 @@ function titleOf(b: Bundle): { title: string; version: string | null } {
   return { title: r.raw_text, version: null }
 }
 
+function outcomeOf(state: RequestState): OutcomeView | null {
+  const copy = FAILED_COPY[state]
+  return copy ? { retryable: canRetry(state), note: copy.note } : null
+}
+
+/** The sentence beside "Retry all N" that reconciles it with the "Failed N" badge above it. The two numbers
+ *  differ whenever a failure is final, and a tab showing both without a word about it is exactly what sent
+ *  the owner asking whether failed is a final state. Null when there is nothing to reconcile: every failure
+ *  on screen is retryable, the numbers already match, and a line saying "0 of these" would be noise.
+ *  Counted from the same FINALITY_OF the buttons are drawn from, and worded from the same FAILED_COPY the
+ *  rows are, so this line cannot claim a breakdown the list below it does not show. */
+export function failedSummary(bundles: Bundle[]): string | null {
+  const failed = bundles.filter(b => bucketOf(b.request.state) === 'failed')
+  const finals = failed.filter(b => !canRetry(b.request.state))
+  if (finals.length === 0) return null
+  // Fixed key order, not first-seen order: the line must read the same on every refresh, and the map is
+  // rebuilt from scratch each time the list changes.
+  const parts = (Object.keys(FAILED_COPY) as RequestState[])
+    .map(s => ({ n: finals.filter(b => b.request.state === s).length, tally: FAILED_COPY[s]!.tally }))
+    .filter(p => p.n > 0)
+    .map(p => `${p.n} ${p.tally}`)
+  // No count in the head when the whole tab is final: "None of these 5" needs the reader to check the
+  // number against the badge, where "Nothing here" is the answer they came for, and it also keeps the
+  // sentence honest on a tab holding exactly one row.
+  const head = failed.length === finals.length
+    ? 'Nothing here can be tried again'
+    : `${finals.length} of these ${failed.length} cannot be tried again`
+  return `${head} — ${parts.join(', ')}. ${finals.length === 1 ? 'That row says' : 'Each row says'} what to do instead.`
+}
+
 export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const r = b.request
   const { title, version } = titleOf(b)
@@ -198,6 +278,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
     bucket, removable: bucket === 'done' || bucket === 'failed', formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
+    outcome: outcomeOf(r.state),
   }
   const step = stepIndex(r.state)
   const hasAnySource = opts.telegramAuthorized || opts.soulseekConnected
@@ -288,16 +369,21 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.action = { label: opts.whyOpen ? 'Hide why' : 'See why', kind: 'why' }
       break
     }
-    case 'cancelled': v.status = 'Skipped'; v.dimmed = true; break
+    // `cancel` leaves `flag_reason` as it found it, so a row that had backed off before it was stopped is
+    // still carrying "…, will retry". Nothing here reads it: printing a retry promise on a row this very
+    // list calls final is worse than printing nothing, and the outcome note below says what happened.
+    case 'cancelled': v.status = 'Stopped by you'; v.dimmed = true; break
     case 'not_found':
       v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`
-      v.action = { label: 'Try again', kind: 'retry' }
       break
     case 'error':
       v.status = `Failed — ${r.error_message || 'unknown error'}`; v.statusTone = 'red'
-      v.action = { label: 'Try again', kind: 'retry' }
       break
   }
+  // One place decides which rows get a retry button, and it is the same `canRetry` the Failed tab counts
+  // with and the worker is pinned to. It used to be spelled out in the two cases above, which is how a
+  // third list of "failed" states could be written elsewhere and disagree with it.
+  if (canRetry(r.state)) v.action = { label: 'Try again', kind: 'retry' }
   return v
 }
 

@@ -2,15 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
-import { gb } from '../../presentation'
+import { bucketOf, canRetry, gb } from '../../presentation'
 import Icon from '../Icon'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
 import PlaylistCard from './PlaylistCard'
 import TrackTable from './TrackTable'
 
-const ACTIVE_STATES = new Set(['queued', 'identifying', 'awaiting_review', 'fetching', 'verifying', 'filing'])
-const FAILED_STATES = new Set(['not_found', 'error', 'rejected', 'cancelled'])
+// Both asked of `bucketOf` rather than listed here. Two of the four lists of "the failed states" this app
+// used to keep were in this file, and the Retry button below was a third list of "the retryable ones".
+const isActive = (s: Bundle['request']['state']) => bucketOf(s) === 'progress' || bucketOf(s) === 'needs'
+const isFailed = (s: Bundle['request']['state']) => bucketOf(s) === 'failed'
 const LABEL: Record<string, string> = {
   queued: 'Queued', identifying: 'Searching', awaiting_review: 'Needs your choice', fetching: 'Getting file',
   verifying: 'Checking file', filing: 'Filing', not_found: 'No match found', error: 'Failed',
@@ -29,11 +31,11 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
     if (!old || r.id > old.request.id) latest.set(r.playlist_position, b)
   }
   const unresolved = [...latest.values()].filter(b => !filed.has(b.request.playlist_position!) &&
-      (ACTIVE_STATES.has(b.request.state) || FAILED_STATES.has(b.request.state)))
+      (isActive(b.request.state) || isFailed(b.request.state)))
     .sort((a, b) => a.request.playlist_position! - b.request.playlist_position!)
   const total = Math.max(0, ...filedPositions, ...latest.keys())
   if (!total) return null
-  const active = unresolved.filter(b => ACTIVE_STATES.has(b.request.state)).length
+  const active = unresolved.filter(b => isActive(b.request.state)).length
   const failed = unresolved.length - active
   return <section className="group playlist-import-status" aria-label="Playlist import status">
     <h2>Import status <span>{filed.size} of {total} in library{active ? ` · ${active} processing` : ''}{failed ? ` · ${failed} not in library` : ''}</span></h2>
@@ -45,8 +47,8 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
               {b.request.state === 'queued' ? 'Previous attempt: ' : ''}{b.request.error_message || b.request.flag_reason}
             </small>}
           </span>
-          <span className={FAILED_STATES.has(b.request.state) ? 'rej' : 'needs'}>{LABEL[b.request.state] ?? b.request.state}</span>
-          {['not_found', 'error'].includes(b.request.state) && <button className="btn-secondary" onClick={() => onRetry(b.request.id)}>Retry</button>}
+          <span className={isFailed(b.request.state) ? 'rej' : 'needs'}>{LABEL[b.request.state] ?? b.request.state}</span>
+          {canRetry(b.request.state) && <button className="btn-secondary" onClick={() => onRetry(b.request.id)}>Retry</button>}
         </li>)}</ul></>
       : <p>All playlist entries are in the library.</p>}
   </section>

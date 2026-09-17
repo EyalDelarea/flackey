@@ -34,6 +34,7 @@ from .lossless import (
 from .match import candidate_query, candidate_version, decide, same_version
 from .models import (
     MISS_REASON,
+    RETRYABLE_STATES,
     Candidate,
     CatalogTrack,
     Query,
@@ -361,11 +362,19 @@ class Worker:
         return self.store.get_request(request_id)
 
     async def retry(self, request_id: int) -> Request:
-        """"Try now" on a backoff, "Try again" on a failure."""
+        """"Try now" on a backoff, "Try again" on a failure.
+
+        Only the two states in `RETRYABLE_STATES` come back. Both are the pipeline running out of road, and
+        another pass really can end differently. The other two failures are decisions rather than dead ends:
+        REJECTED means a file was checked, failed and thrown away, CANCELLED means the owner stopped the
+        track. Reviving either would overturn a verdict rather than repeat an attempt, so retry refuses them
+        and the way back is to submit the link again -- which starts a fresh request and leaves the decided
+        one as the record of what happened.
+        """
         req = self.store.get_request(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:
             self.store.update_request(request_id, retry_after=None)
-        elif req.state in {RequestState.ERROR, RequestState.NOT_FOUND}:
+        elif req.state in RETRYABLE_STATES:
             # `lossless_retry`: "Try again" on a failure is the owner asking for another look at the
             # providers, which is exactly what `_lossless_miss_line` tells them the button does. A
             # not-found row can also become actionable after its source is enabled or a catalog changes.

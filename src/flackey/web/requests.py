@@ -6,13 +6,12 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import Settings
 from ..inbox import BadLink, Inbox
-from ..models import TERMINAL_STATES, RequestState
+from ..models import FAILED_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
 from ..worker import Worker
 from . import Bundles, to_dict
 
 RECENT = 500
-FAILED_STATES = {RequestState.REJECTED, RequestState.NOT_FOUND, RequestState.ERROR, RequestState.CANCELLED}
 
 
 def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, settings: Settings) -> APIRouter:

@@ -7,7 +7,14 @@ import pytest
 
 from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
-from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
+from flackey.models import (
+    RETRYABLE_STATES,
+    Candidate,
+    CatalogTrack,
+    Query,
+    RequestKind,
+    RequestState,
+)
 from flackey.notify import MemoryNotifier
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
@@ -458,6 +465,25 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     store.set_state(rid, RequestState.NOT_FOUND, error_message="Deezer was switched off")
     r = await w.retry(rid)
     assert r.state == RequestState.QUEUED and r.error_message is None and r.lossless_retry == 1
+
+
+async def test_retry_takes_back_exactly_the_retryable_states(env):
+    """Three surfaces draw a retry button from this one decision -- the row's Try again, the Failed tab's
+    Retry all, and the playlist import list -- and the Failed tab now puts it into words on every row. Walk
+    every state rather than trust the handful the tests above happen to exercise, so widening the scope is
+    something a person has to come here and choose."""
+    settings, store, notifier = env
+    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request("q", RequestKind.TEXT)
+    for state in RequestState:
+        # retry_after cleared each time: a queued row with a backoff is the *other* thing retry accepts
+        # ("Try now"), and it would mask the answer for QUEUED itself.
+        store.update_request(rid, state=state, retry_after=None)
+        if state in RETRYABLE_STATES:
+            assert (await w.retry(rid)).state == RequestState.QUEUED, state
+        else:
+            with pytest.raises(ValueError, match="nothing to retry"):
+                await w.retry(rid)
 
 
 def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
