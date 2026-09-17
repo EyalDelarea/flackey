@@ -21,6 +21,11 @@ changelog:
     - title: 🧹 Chores
       labels:
         - chore
+    # Dependabot's noise gets its own bucket at the bottom, so it stops sharing
+    # "Other Changes" with human PRs that simply missed a category label.
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
     - title: Other Changes
       labels:
         - "*"
