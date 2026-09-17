@@ -53,6 +53,15 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The document is exactly as tall as the window and never actually overflows -- a screen scrolls inside
+   its own pane, not the document -- but WebKit still lets a trackpad rubber-band the main frame, which
+   slides the whole app up or down and shows bare desktop through the gap (`html.native body` below is
+   transparent, so there is nothing painted behind it). `overscroll-behavior` stops only that elastic
+   overshoot; unlike `overflow: hidden` it leaves a document that genuinely is too tall scrolling
+   normally, so this cannot quietly swallow real overflow if a screen ever grows past the window. On
+   `html` alone, because the overshoot to stop is the root's own and the property does not inherit down
+   into the panes. */
+html { overscroll-behavior: none; }
 body { background: var(--window); color: var(--text); font: 13px/1.35 var(--sans); -webkit-font-smoothing: antialiased; }
 /* Inside the native window the WKWebView is transparent and a vibrancy view sits behind it: only the
    sidebar (rgba) lets it through; every screen paints --window itself. */
