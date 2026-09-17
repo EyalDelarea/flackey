@@ -87,6 +87,7 @@ export const api = {
   choose: (rid: number, cid: number) => post<Request>(`/api/requests/${rid}/choose/${cid}`),
   cancel: (rid: number) => post<Request>(`/api/requests/${rid}/cancel`),
   retry: (rid: number) => post<Request>(`/api/requests/${rid}/retry`),
+  retryFailed: (ids: number[]) => post<{ retried: number[]; skipped: number[] }>('/api/requests/retry-failed', { ids }),
   removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
   clearFailed: () => post<{ removed: number[] }>('/api/requests/clear-failed'),
   library: (q?: string, playlistId?: number | null) => {

@@ -22,6 +22,7 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
+  const [retryingAll, setRetryingAll] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
   // What History has already shown: a fresh id that lands in a terminal state while the owner is looking
   // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
@@ -46,7 +47,24 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)
   const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
-  const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(err instanceof ApiError ? err.message : "That didn't work. Try again."))
+  // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
+  // down to is what "Retry all" retries, and only the rows carrying a retry button can be re-queued at all
+  // -- a rejected or skipped track has nothing for the worker to try again, so it is not in the count.
+  const retryableIds = groups.flatMap(g => g.rows).filter(r => r.action?.kind === 'retry').map(r => r.id)
+  const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
+  const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
+  const retryAll = () => {
+    setRetryingAll(true)
+    api.retryFailed(retryableIds)
+      .then(async ({ retried }) => {
+        // A 200 that re-queued nothing is still a press that did nothing: say so rather than leave the
+        // owner watching an unchanged list.
+        setActionError(retried.length === 0 ? 'Nothing could be retried — this list may be out of date.' : null)
+        await live.refresh()
+      })
+      .catch(err => setActionError(failMessage(err)))
+      .finally(() => setRetryingAll(false))
+  }
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
     else if (kind === 'reveal' && path) run(api.reveal(path))
@@ -69,6 +87,16 @@ export default function DownloadPage({ live, inset }: { live: Live; inset?: bool
       </div>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
+      {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
+          rows are all rejected needs a disabled "Retry all 0" to answer why, where an absent button
+          just looks like the feature is missing. */}
+      {view === 'failed' && scoped.length > 0 && (
+        <div className="filterbar">
+          <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
+            {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
+          </button>
+        </div>
+      )}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
