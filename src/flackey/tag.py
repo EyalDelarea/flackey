@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import httpx
@@ -33,10 +34,11 @@ class TagError(Exception):
 
 
 # 2.3, not mutagen's default of 2.4, because 2.3 is the version every DJ tool reads and nothing we write
-# needs 2.4. This is compatibility insurance, not a bug fix: the empty-artist import that prompted it was
-# the WAV container, which rekordbox does not read ID3 from in either version (see `lossless_filing_format`).
+# needs 2.4. WAV also gets RIFF INFO below because that is the metadata source Rekordbox documents for
+# WAVE files; the ID3 block stays as a best-effort compatibility/artwork fallback for other readers.
 # The one frame that does not carry over is TDRC, and TYER stands in for it below.
 ID3_VERSION = 3
+INFO_TEXT_ENCODING = "utf-8"
 
 
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
@@ -66,8 +68,7 @@ def _values(catalog: CatalogTrack, verdict: Verdict, source: str = "deezer_bot")
 
 
 def _id3_target(path: Path):
-    """(container, tags). MP3 saves a bare ID3 block; WAV/AIFF keep ID3 inside their chunk list (mutagen
-    WAVE/AIFF), which Rekordbox reads the same way."""
+    """(container, tags). MP3 saves a bare ID3 block; WAV/AIFF keep ID3 inside their chunk list."""
     ext = path.suffix.lower()
     if ext == ".mp3":
         try:
@@ -113,6 +114,81 @@ def _write_id3(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) 
         container.save(v2_version=ID3_VERSION)
 
 
+def _riff_chunk(kind: bytes, payload: bytes) -> bytes:
+    return kind + struct.pack("<I", len(payload)) + payload + (b"\0" if len(payload) % 2 else b"")
+
+
+def _info_text(value: str) -> bytes:
+    return value.encode(INFO_TEXT_ENCODING) + b"\0"
+
+
+def _info_list(values: dict[str, str]) -> bytes:
+    # Rekordbox documents RIFF INFO, not WAV ID3, as its WAVE tag source. These are the standard INFO
+    # fields that line up with Flackey's catalog data; richer values remain in the best-effort ID3 block.
+    mapping = {"INAM": "title", "IART": "artist", "IPRD": "album", "IGNR": "genre", "ICRD": "date",
+               "ICMT": "comment", "ISRC": "isrc", "IPUB": "label", "ICAT": "catalognumber",
+               "IMIX": "mix"}
+    body = b"INFO" + b"".join(_riff_chunk(k.encode("ascii"), _info_text(values[src]))
+                              for k, src in mapping.items() if values[src])
+    return _riff_chunk(b"LIST", body)
+
+
+def _write_wav_info(path: Path, values: dict[str, str]) -> None:
+    raw = path.read_bytes()
+    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        raise TagError(f"{path} is not a RIFF/WAVE file")
+    chunks: list[tuple[bytes, bytes]] = []
+    pos = 12
+    inserted = False
+    info = _info_list(values)
+    while pos + 8 <= len(raw):
+        kind = raw[pos:pos + 4]
+        size = struct.unpack("<I", raw[pos + 4:pos + 8])[0]
+        end = pos + 8 + size
+        if end > len(raw):
+            raise TagError(f"{path} has a truncated RIFF chunk")
+        payload = raw[pos + 8:end]
+        pos = end + (size % 2)
+        if kind == b"LIST" and payload[:4] == b"INFO":
+            continue
+        if kind == b"data" and not inserted:
+            chunks.append((b"_RAW", info))
+            inserted = True
+        chunks.append((kind, payload))
+    if not inserted:
+        chunks.append((b"_RAW", info))
+    body = b"WAVE" + b"".join(payload if kind == b"_RAW" else _riff_chunk(kind, payload) for kind, payload in chunks)
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+
+def _read_wav_info(path: Path) -> dict[str, str]:
+    raw = path.read_bytes()
+    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return {}
+    out: dict[str, str] = {}
+    pos = 12
+    while pos + 8 <= len(raw):
+        kind = raw[pos:pos + 4]
+        size = struct.unpack("<I", raw[pos + 4:pos + 8])[0]
+        payload = raw[pos + 8:pos + 8 + size]
+        pos = pos + 8 + size + (size % 2)
+        if kind != b"LIST" or payload[:4] != b"INFO":
+            continue
+        sub = 4
+        while sub + 8 <= len(payload):
+            code = payload[sub:sub + 4].decode("ascii", errors="ignore")
+            n = struct.unpack("<I", payload[sub + 4:sub + 8])[0]
+            value = payload[sub + 8:sub + 8 + n].rstrip(b"\0").decode(INFO_TEXT_ENCODING, errors="replace")
+            out[code] = value
+            sub = sub + 8 + n + (n % 2)
+    return out
+
+
+def _write_wav(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) -> None:
+    _write_id3(path, v, artwork, mime)
+    _write_wav_info(path, v)
+
+
 def _write_flac(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) -> None:
     f = FLAC(path)
     f.delete()
@@ -133,7 +209,7 @@ def _write_flac(path: Path, v: dict[str, str], artwork: bytes | None, mime: str)
     f.save()
 
 
-ID3_EXTS = {".mp3", ".wav", ".aiff", ".aif"}  # every format verify() can pass except FLAC carries ID3
+ID3_EXTS = {".mp3", ".aiff", ".aif"}  # WAV has ID3 too, but also needs RIFF INFO for Rekordbox.
 
 
 def write_tags(path: Path, catalog: CatalogTrack, verdict: Verdict, artwork: bytes | None,
@@ -142,6 +218,8 @@ def write_tags(path: Path, catalog: CatalogTrack, verdict: Verdict, artwork: byt
     ext = path.suffix.lower()
     if ext in ID3_EXTS:
         _write_id3(path, v, artwork, artwork_mime)
+    elif ext == ".wav":
+        _write_wav(path, v, artwork, artwork_mime)
     elif ext == ".flac":
         _write_flac(path, v, artwork, artwork_mime)
     else:
@@ -164,7 +242,7 @@ def read_tags(path: Path) -> dict[str, str]:
     ext = path.suffix.lower()
     out = {k: "" for k in ("title", "artist", "album", "albumartist", "genre", "label", "catalognumber",
                            "date", "year", "isrc", "bpm", "key", "mix", "comment")}
-    if ext in ID3_EXTS:
+    if ext in ID3_EXTS or ext == ".wav":
         t = _id3_tags(path)
         def g(frame: str) -> str:
             fr = t.getall(frame)
@@ -179,6 +257,12 @@ def read_tags(path: Path) -> dict[str, str]:
         comm = t.getall("COMM")
         out["comment"] = str(comm[0].text[0]) if comm else ""
         out["has_artwork"] = "yes" if t.getall("APIC") else "no"
+        if ext == ".wav":
+            info = _read_wav_info(path)
+            info_map = {"INAM": "title", "IART": "artist", "IPRD": "album", "IGNR": "genre",
+                        "ICRD": "date", "ICMT": "comment", "ISRC": "isrc", "IPUB": "label",
+                        "ICAT": "catalognumber", "IMIX": "mix"}
+            out.update({dst: info[src] for src, dst in info_map.items() if info.get(src)})
     elif ext == ".flac":
         f = FLAC(path)
         def g(k: str) -> str:

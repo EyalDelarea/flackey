@@ -69,9 +69,8 @@ def test_save_settings_preserves_keys_written_by_an_earlier_save(tmp_path: Path)
 
 
 def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path):
-    """Rekordbox reads no ID3 tag out of a WAV -- proven against it with the tag after `data`, moved in front
-    of `data`, and stripped to a kilobyte with no cover; all three imported as the bare filename. It reads the
-    identical frames out of an AIFF, artwork included. The default is the whole fix, so it is worth a test."""
+    """AIFF stays the default because Rekordbox's WAVE metadata path is RIFF INFO, not ID3/APIC artwork.
+    WAV remains selectable for owners who want it, but AIFF is still the richest Rekordbox import path."""
     assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
 
 

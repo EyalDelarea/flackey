@@ -9,6 +9,7 @@ import DownloadPage from './components/download/DownloadPage'
 import LibraryPage from './components/library/LibraryPage'
 import UploadsPage from './components/uploads/UploadsPage'
 import PlaylistNav from './components/library/PlaylistNav'
+import FormatStep from './components/setup/FormatStep'
 import FolderStep from './components/setup/FolderStep'
 import ReadyStep from './components/setup/ReadyStep'
 import SetupShell from './components/setup/SetupShell'
@@ -25,9 +26,10 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('download')
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [welcomeSeen, setWelcomeSeen] = useState(false)
   const [libraryRoot, setLibraryRoot] = useState('')
+  const [filingFormat, setFilingFormat] = useState('aiff')
   const [setupError, setSetupError] = useState<string | null>(null)
   // What the Ready step is allowed to claim, and nothing else: each is set by the step it belongs to.
   const [telegramSkipped, setTelegramSkipped] = useState(false)
@@ -45,6 +47,7 @@ export default function App() {
   const refresh = live.refresh
   useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
+  useEffect(() => { if (live.settings?.lossless_filing_format) setFilingFormat(live.settings.lossless_filing_format) }, [live.settings?.lossless_filing_format])
   // Reconnect only re-runs the Telegram step (see `current` below) -- Soulseek's own step never opens, so
   // nothing in the wizard would otherwise set `soulseekState` away from its unvisited default of
   // 'skipped', and Ready would falsely tell a Soulseek-connected owner they skipped it.
@@ -67,7 +70,7 @@ export default function App() {
   }
   if (!h.setup_done || reconnecting) {
     if (!reconnecting && !welcomeSeen) return <WelcomeStep onStart={() => setWelcomeSeen(true)} />
-    const current = reconnecting && step === 1 ? 2 : step
+    const current = reconnecting && step === 1 ? 3 : step
     const startApp = async () => {
       try {
         await api.setupDone()
@@ -80,16 +83,20 @@ export default function App() {
       setReconnecting(false)
       setStep(1)
     }
-    const back = reconnecting && current === 2 ? () => { setReconnecting(false); setStep(1) }
-      : reconnecting && current === 4 ? () => setStep(2)
+    const back = reconnecting && current === 3 ? () => { setReconnecting(false); setStep(1) }
+      : reconnecting && current === 5 ? () => setStep(3)
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
+      : current === 5 ? () => setStep(4)
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
-    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 2 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
-      skipped={{ 2: telegramSkipped, 3: soulseekState === 'skipped' }}>
+    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 3 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
+      skipped={{ 3: telegramSkipped, 4: soulseekState === 'skipped' }}>
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
-      {current === 2 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 4 : 3) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 4 : 3) }} />}
-      {current === 3 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(4) }} onSkip={() => { setSoulseekState('skipped'); setStep(4) }} />}
-      {current === 4 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(2)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
+      {current === 2 && <FormatStep libraryRoot={libraryRoot} initial={filingFormat}
+        formats={live.settings?.filing_formats ?? ['aiff', 'wav', 'flac']}
+        onDone={f => { setFilingFormat(f); setStep(3) }} />}
+      {current === 3 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
+      {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { setSoulseekState('skipped'); setStep(5) }} />}
+      {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(3)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
   const banner = sourceOn && !authorized ? <Banner tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} /> : undefined

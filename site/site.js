@@ -92,15 +92,32 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       } else {
         notesList.innerHTML = published
           .slice(0, 5)
-          .map((item) => {
+          .map((item, index) => {
             const version = String(item.tag_name || "").replace(/^v/, "");
-            return `<article class="release-note">
-              <h3>
-                <a href="${item.html_url}" target="_blank" rel="noopener">v${version}</a>
-                <time datetime="${item.published_at}">${formatReleaseDate(item.published_at)}</time>
-              </h3>
-              ${renderReleaseBody(item.body)}
-            </article>`;
+            const title = `<span class="release-note-title">
+              <span>v${version}</span>
+              <time datetime="${item.published_at}">${formatReleaseDate(item.published_at)}</time>
+            </span>`;
+            if (index > 0) {
+              return `<article class="release-note release-note-archive">
+                <div class="release-note-header">
+                  ${title}
+                  <a href="${item.html_url}" target="_blank" rel="noopener">View on GitHub</a>
+                </div>
+              </article>`;
+            }
+            return `<details class="release-note">
+              <summary>
+                ${title}
+                <span class="release-note-toggle" aria-hidden="true"></span>
+              </summary>
+              <div class="release-note-body">
+                ${renderReleaseBody(item.body)}
+                <p class="release-note-link">
+                  <a href="${item.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
+                </p>
+              </div>
+            </details>`;
           })
           .join("");
       }
