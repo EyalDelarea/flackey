@@ -96,6 +96,14 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .chip .count { font-size: 12px; color: var(--secondary); }
 .chip .count.amber { color: var(--orange-text); } .chip .count.red { color: var(--red); }
 .filterbar .btn-secondary { margin-left: auto; }
+/* The Failed tab's bar carries a sentence, not chips, so it cannot keep the fixed 38px the others use --
+   the line wraps on a narrow window and a fixed height would clip it. min-height keeps it flush with the
+   chip bars when the sentence happens to fit on one line. */
+.filterbar.wide { height: auto; min-height: 38px; padding-top: 7px; padding-bottom: 7px; }
+/* Sits at 12px rather than the rows' 11px: it answers the count in the tab above it, so it is read once
+   before the list, not skimmed alongside every row. `max-width` stops it running out to meet the button on
+   a wide window, where a full-bleed line of small text reads as chrome rather than as an answer. */
+.failed-summary { flex: 1; max-width: 62ch; font-size: 12px; line-height: 1.35; color: var(--secondary); }
 .group-section { display: flex; flex-direction: column; gap: 8px; }
 .group-head { display: flex; align-items: baseline; gap: 10px; padding: 0 2px; }
 .group-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
@@ -114,6 +122,14 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.amber { color: var(--orange-text); } .status.red { color: var(--red); } .status.green { color: var(--green-text); }
 .row .retry-countdown { color: var(--orange-text); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Wraps, where `.status` above it is one ellipsized line. A status is a fact that survives being cut off
+   mid-sentence; this is an instruction ("paste the link again to start over") that does not, and it is the
+   only thing on a final row telling the owner what is left to do. Tertiary, not secondary: it must stay
+   quieter than the status line it explains, or every failed row reads as two headlines. */
+.row .outcome { font-size: 11px; line-height: 1.35; color: var(--tertiary); }
+/* Final rows lose the "Try again" button, so this line is the whole of their right-hand side. The extra
+   step to secondary is what stops that emptiness reading as a row that simply has not loaded yet. */
+.row .outcome.final { color: var(--secondary); }
 .row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green-text); white-space: nowrap; }
 .tag { font-size: 11px; color: var(--tertiary); }

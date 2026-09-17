@@ -6,7 +6,7 @@ import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn() } }
+  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn() } }
 })
 
 function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
@@ -153,5 +153,96 @@ describe('filter bar, remove and clear failed', () => {
     render(<DownloadPage live={makeLive([])} />)
     expect(screen.queryByRole('button', { name: /^All/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Clear failed' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Retry all on the Failed tab', () => {
+  const openFailed = () => fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+
+  it('counts only the failed rows that can actually be re-queued', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 2' })).toBeInTheDocument()
+  })
+
+  it('re-queues every retryable row in the view in one call, then refreshes', async () => {
+    vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [1, 2], skipped: [] })
+    const refresh = vi.fn(async () => undefined)
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected')], { refresh })} />)
+    openFailed()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry all 2' }))
+    await waitFor(() => expect(api.retryFailed).toHaveBeenCalledWith([1, 2]))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+  })
+
+  it('sits there disabled when the failures on screen are all unretryable', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'rejected'), mk(2, 'cancelled')])} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
+  })
+
+  it('is not offered when there is nothing failed at all', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'done')])} />)
+    openFailed()
+    expect(screen.queryByRole('button', { name: /^Retry all/ })).not.toBeInTheDocument()
+  })
+
+  it('is not offered on the other tabs', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
+    expect(screen.queryByRole('button', { name: /^Retry all/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(screen.queryByRole('button', { name: /^Retry all/ })).not.toBeInTheDocument()
+  })
+
+  it('disables itself while the batch is in flight', async () => {
+    let finish = (_: { retried: number[]; skipped: number[] }) => undefined as void
+    vi.mocked(api.retryFailed).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
+    openFailed()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
+    expect(await screen.findByRole('button', { name: 'Retrying…' })).toBeDisabled()
+    finish({ retried: [1], skipped: [] })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry all 1' })).not.toBeDisabled())
+  })
+
+  it('shows the error when the batch call fails', async () => {
+    vi.mocked(api.retryFailed).mockRejectedValueOnce(new ApiError(503, 'Soulseek is not connected.'))
+    render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
+    openFailed()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
+    expect(await screen.findByText('Soulseek is not connected.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry all 1' })).not.toBeDisabled())
+  })
+
+  it('explains the gap between the Failed badge and its own count, rather than leaving two numbers', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'rejected'), mk(3, 'cancelled')])} />)
+    expect(screen.getByRole('button', { name: /^Failed/ })).toHaveTextContent('Failed 3')
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
+    expect(screen.getByText(/2 of these 3 cannot be tried again — 1 failed the quality check, 1 you stopped/))
+      .toBeInTheDocument()
+  })
+
+  it('leaves the sentence out when the two counts already agree', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found')])} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Retry all 2' })).toBeInTheDocument()
+    expect(screen.queryByText(/cannot be tried again/)).not.toBeInTheDocument()
+  })
+
+  it('tells every failed row why it is here and whether it can come back', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
+    openFailed()
+    // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
+    expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
+    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(2)
+  })
+
+  it('says so when the call succeeds but nothing was re-queued', async () => {
+    vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [], skipped: [1] })
+    render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
+    openFailed()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
+    expect(await screen.findByText('Nothing could be retried — this list may be out of date.')).toBeInTheDocument()
   })
 })

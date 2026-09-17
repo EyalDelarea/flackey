@@ -43,6 +43,19 @@ TERMINAL_STATES = {
     RequestState.NOT_FOUND,
     RequestState.ERROR,
 }
+# "Terminal" here means the pipeline has stopped and the row may be deleted -- not that the state can never
+# change. Two of the six below are handed back to the queue by `Worker.retry`; see RETRYABLE_STATES.
+FAILED_STATES = {
+    RequestState.REJECTED,
+    RequestState.CANCELLED,
+    RequestState.NOT_FOUND,
+    RequestState.ERROR,
+}
+# The subset of FAILED_STATES `Worker.retry` takes back, and the reason the Failed badge and the "Retry all"
+# button count differently. Defined once so every surface that offers a retry -- the worker, the row button,
+# the batch route, the words the UI puts on a row -- reads the same set; `test_failed_states_match_the_ui`
+# pins `web/src/presentation.ts` to both sets so the browser copy cannot drift away from the worker.
+RETRYABLE_STATES = {RequestState.ERROR, RequestState.NOT_FOUND}
 
 
 def is_original(version: str | None) -> bool:

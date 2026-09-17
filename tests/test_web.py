@@ -234,6 +234,42 @@ def test_choose_cancel_retry(client):
     assert c.post("/api/requests/999/retry").status_code == 404
 
 
+def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
+    c, store, _ = client
+    errored = store.add_request("e", RequestKind.TEXT)
+    store.set_state(errored, RequestState.ERROR, error_message="x")
+    not_found = store.add_request("nf", RequestKind.TEXT)
+    store.set_state(not_found, RequestState.NOT_FOUND)
+    rejected = store.add_request("r", RequestKind.TEXT)
+    store.set_state(rejected, RequestState.REJECTED)
+
+    r = c.post("/api/requests/retry-failed", json={"ids": [errored, not_found, rejected, 999]})
+    assert r.status_code == 200
+    assert r.json() == {"retried": [errored, not_found], "skipped": [rejected, 999]}
+    assert store.get_request(errored).state == RequestState.QUEUED
+    assert store.get_request(not_found).state == RequestState.QUEUED
+    assert store.get_request(rejected).state == RequestState.REJECTED
+
+
+def test_retry_failed_retries_only_the_ids_it_is_given(client):
+    c, store, _ = client
+    asked = store.add_request("e", RequestKind.TEXT)
+    store.set_state(asked, RequestState.ERROR, error_message="x")
+    left_alone = store.add_request("e2", RequestKind.TEXT)
+    store.set_state(left_alone, RequestState.ERROR, error_message="x")
+
+    assert c.post("/api/requests/retry-failed", json={"ids": [asked]}).json()["retried"] == [asked]
+    assert store.get_request(left_alone).state == RequestState.ERROR
+
+
+def test_retry_failed_rejects_a_body_that_is_not_a_list_of_ids(client):
+    c, _, _ = client
+    assert c.post("/api/requests/retry-failed", json={}).status_code == 400
+    assert c.post("/api/requests/retry-failed", json={"ids": "1"}).status_code == 400
+    assert c.post("/api/requests/retry-failed", json={"ids": ["1"]}).status_code == 400
+    assert c.post("/api/requests/retry-failed", json={"ids": []}).json() == {"retried": [], "skipped": []}
+
+
 def test_delete_request_removes_it_from_the_queue_but_keeps_a_filed_track(client, tmp_path):
     c, store, _ = client
     rid = store.add_request("q", RequestKind.TEXT)

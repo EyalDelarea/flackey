@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './theme.css'
 import { api } from './api'
-import type { AppSettings, Health, Stats, Track, Bundle, Playlist } from './api'
+import type { AppSettings, Health, Stats, Track, Bundle, Playlist, Request, RequestState } from './api'
 
 class FakeEventSource {
   onopen: (() => void) | null = null
@@ -53,13 +53,37 @@ const track = (over: Partial<Track>): Track => ({
   ...over,
 })
 
+/* One failure of each kind, which is the only way to see the Failed tab answer its own question: two rows
+   the worker will take back, two it will not, and a summary line reconciling the badge with the button. */
+const failure = (id: number, state: RequestState, over: Partial<Request> = {}): Bundle => ({
+  request: {
+    id, created_at: '2026-09-16T20:00:00Z', updated_at: '2026-09-16T20:05:00Z', kind: 'yt_track', state,
+    raw_text: 'https://youtu.be/x', playlist_id: null, playlist_position: null, source_url: null,
+    query_artist: 'Astral Projection', query_title: 'Into the Void', query_version: null, query_duration_s: 442,
+    chosen_candidate_id: null, catalog_track_id: null, confidence: null, flag_reason: null, error_message: null,
+    attempts: 0, retry_after: null, track_id: null, fetch_source: null, ...over,
+  },
+  candidates: [], catalog: null, track: null, rejection: null,
+})
+
+const failures: Bundle[] = [
+  failure(41, 'error', { query_artist: 'Ace Ventura', query_title: 'Presence', attempts: 3,
+    error_message: 'the people who had it stopped sending part-way through' }),
+  failure(42, 'not_found', { query_artist: 'Vibrasphere', query_title: 'Lime Twig',
+    error_message: 'neither Deezer nor Beatport has a match for it' }),
+  failure(43, 'rejected', { query_artist: 'Symbolic', query_title: 'Gravity Waves' }),
+  failure(44, 'cancelled', { query_artist: 'Human Element', query_title: 'The Answer' }),
+  failure(45, 'cancelled', { query_artist: 'Atmos', query_title: 'Klein Aber Doctor',
+    flag_reason: 'Beatport unreachable, will retry' }),
+]
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : [])
   vi_spy(api, 'stats', async () => stats)
-  vi_spy(api, 'queue', async () => [] as Bundle[])
+  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -110,6 +134,13 @@ function scenarioSetup() {
       vi_spy(api, 'soulseekSetup', async () => ({ configured: false, username: null }))
       vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))
       vi_spy(api, 'tools', async () => ({ ffmpeg: true, ffprobe: true, yt_dlp: true }))
+      break
+    case 'failed':
+      // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the
+      // queue has arrived. Left to the operator (or the screenshot script) rather than faked here: a
+      // harness that forced the view would stop proving the chip reaches it.
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
       break
     default:
       vi_spy(api, 'health', async () => health())

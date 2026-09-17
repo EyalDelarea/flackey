@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, gb, groupRows, mmss, presentRow, stepIndex } from './presentation'
+import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, mmss, presentRow, stepIndex } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -144,7 +144,8 @@ describe('presentRow', () => {
   })
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')
-    expect(presentRow(bundle({ state: 'cancelled' }), opts).status).toBe('Skipped')
+    // "Skipped" said what happened without saying who did it, on a row sitting under a red "Failed" badge.
+    expect(presentRow(bundle({ state: 'cancelled' }), opts).status).toBe('Stopped by you')
     expect(presentRow(bundle({ state: 'not_found', error_message: 'no candidates from source' }), opts)).toMatchObject({
       status: 'No downloadable match found — no candidates from source', action: { label: 'Try again', kind: 'retry' },
     })
@@ -214,6 +215,77 @@ describe('bucketOf', () => {
     expect(bucketOf('awaiting_review')).toBe('needs')
     expect(bucketOf('done')).toBe('done'); expect(bucketOf('duplicate')).toBe('done')
     for (const s of ['rejected', 'not_found', 'error', 'cancelled'] as const) expect(bucketOf(s)).toBe('failed')
+  })
+})
+
+const FAILED_STATES = ['rejected', 'not_found', 'error', 'cancelled'] as const
+
+describe('failed states say why they are failed and whether they can come back', () => {
+  it('gives every state in the failed bucket a note, and only those states', () => {
+    // The list called "Failed" is where the owner goes to ask what happened. A state that lands there
+    // with nothing to say is the bug this is here to stop, whichever state it turns out to be.
+    for (const s of FAILED_STATES) {
+      expect(bucketOf(s), `${s} should be a failure`).toBe('failed')
+      expect(presentRow(bundle({ state: s }), opts).outcome, `${s} has no note`).not.toBeNull()
+    }
+    for (const s of ['queued', 'fetching', 'awaiting_review', 'done', 'duplicate'] as const) {
+      expect(presentRow(bundle({ state: s }), opts).outcome, `${s} is not a failure`).toBeNull()
+    }
+  })
+
+  it('agrees with the retry button on every one of them', () => {
+    // `canRetry` draws the button and counts the batch; the note tells the owner what the button means.
+    // If these two ever disagree a row says "paste the link again" beside a working Try again, or the
+    // other way round -- which is the badge-versus-button confusion again, one row further down.
+    for (const s of FAILED_STATES) {
+      const v = presentRow(bundle({ state: s }), opts)
+      expect(v.outcome!.retryable, s).toBe(canRetry(s))
+      expect(v.action?.kind === 'retry', s).toBe(canRetry(s))
+    }
+    expect(FAILED_STATES.filter(canRetry)).toEqual(['not_found', 'error'])
+  })
+
+  it('points a final row at the one thing that does work: submitting the link again', () => {
+    for (const s of ['rejected', 'cancelled'] as const) {
+      expect(presentRow(bundle({ state: s }), opts).outcome!.note).toMatch(/paste the link again/i)
+    }
+  })
+
+  it('does not repeat a stale retry promise on a row it has just called final', () => {
+    // `Worker.cancel` leaves `flag_reason` alone, so a request that had backed off and was then stopped
+    // still carries "will retry" in the column the queued row renders. The cancelled row must not.
+    const v = presentRow(bundle({ state: 'cancelled', flag_reason: 'Beatport unreachable, will retry' }), opts)
+    expect(v.status).toBe('Stopped by you')
+    expect(v.status + v.outcome!.note).not.toMatch(/will retry/)
+  })
+})
+
+describe('failedSummary', () => {
+  const failed = (id: number, state: Request['state']) => bundle({ id, state })
+
+  it('explains the gap between the Failed badge and the Retry all count', () => {
+    expect(failedSummary([failed(1, 'error'), failed(2, 'not_found'), failed(3, 'rejected'),
+                          failed(4, 'cancelled'), failed(5, 'cancelled')]))
+      // Ordered by FAILED_COPY, not by what the list happens to hold first, so the sentence does not
+      // reshuffle itself under the owner every time a row is retried or removed.
+      .toBe('3 of these 5 cannot be tried again — 1 failed the quality check, 2 you stopped. '
+            + 'Each row says what to do instead.')
+  })
+
+  it('says so plainly when the button is disabled because nothing here can move', () => {
+    expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected')]))
+      .toBe('Nothing here can be tried again — 2 failed the quality check. Each row says what to do instead.')
+  })
+
+  it('stays silent when there is no gap to explain', () => {
+    // Badge and button already agree; a line saying "0 of these" is noise above a list that is fine.
+    expect(failedSummary([failed(1, 'error'), failed(2, 'not_found')])).toBeNull()
+    expect(failedSummary([])).toBeNull()
+  })
+
+  it('counts only failures, so a History tab full of finished tracks does not inflate it', () => {
+    expect(failedSummary([failed(1, 'done'), failed(2, 'duplicate'), failed(3, 'cancelled')]))
+      .toBe('Nothing here can be tried again — 1 you stopped. That row says what to do instead.')
   })
 })
 
