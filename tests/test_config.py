@@ -1,5 +1,4 @@
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -8,7 +7,6 @@ from flackey.config import (
     Settings,
     default_data_dir,
     load_settings,
-    migrate_legacy_data_dir,
     save_settings,
 )
 
@@ -77,129 +75,6 @@ def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path)
 def test_web_host_defaults_to_loopback(tmp_path: Path):
     assert load_settings(_env(tmp_path)).web_host == "127.0.0.1"
     assert load_settings(_env(tmp_path, "WEB_HOST=0.0.0.0\n")).web_host == "0.0.0.0"
-
-
-def _legacy(tmp_path: Path, monkeypatch, name: str = "legacy") -> tuple[Path, Path]:
-    """A populated old-name data folder and the new folder it should end up in."""
-    legacy, new = tmp_path / name, tmp_path / "new"
-    (legacy / "spectrograms").mkdir(parents=True)
-    (legacy / "krater.sqlite").write_text("old-db")        # previous name: renamed on the way
-    (legacy / "krater.sqlite-wal").write_text("wal")
-    (legacy / "krater.log").write_text("log")
-    (legacy / "notes.txt").write_text("kept")              # no generation prefix: carried across as is
-    (legacy / "spectrograms" / "1.png").write_bytes(b"png")
-    monkeypatch.setattr("flackey.config.legacy_data_dirs", lambda: (legacy,))
-    monkeypatch.setattr("flackey.config.default_data_dir", lambda: new)
-    return legacy, new
-
-
-def test_migrate_legacy_data_dir_copies_everything_then_removes_the_old_folder(tmp_path: Path, monkeypatch):
-    legacy, new = _legacy(tmp_path, monkeypatch)
-    s = Settings(_env_file=None, data_dir=new)
-    assert migrate_legacy_data_dir(s) is True
-    assert (new / "flackey.sqlite").read_text() == "old-db"   # renamed, and it is the same database
-    assert (new / "flackey.sqlite-wal").read_text() == "wal"
-    assert (new / "flackey.log").read_text() == "log"
-    assert (new / "notes.txt").read_text() == "kept"          # untouched: it carries no generation prefix
-    assert (new / "spectrograms" / "1.png").read_bytes() == b"png"
-    assert not legacy.exists()
-    assert migrate_legacy_data_dir(s) is False               # nothing left to move
-
-
-def test_migrate_walks_every_legacy_folder_and_takes_the_first_that_exists(tmp_path: Path, monkeypatch):
-    # Two renames are behind this project, so a machine can hold either old folder. The newest that
-    # exists wins; an older one that also exists is not merged on top of it.
-    newer, new = _legacy(tmp_path, monkeypatch, name="newer")
-    older = tmp_path / "older"
-    older.mkdir()
-    (older / "cratedigger.sqlite").write_text("ancient")
-    monkeypatch.setattr("flackey.config.legacy_data_dirs", lambda: (tmp_path / "absent", newer, older))
-    assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
-    assert (new / "flackey.sqlite").read_text() == "old-db"
-    assert older.exists() and not newer.exists()
-
-
-def test_migrate_is_skipped_when_data_dir_was_overridden(tmp_path: Path, monkeypatch):
-    _legacy(tmp_path, monkeypatch)
-    other = Settings(_env_file=None, data_dir=tmp_path / "custom")
-    assert migrate_legacy_data_dir(other) is False           # DATA_DIR was set (Docker): leave it alone
-    assert not (tmp_path / "custom").exists()
-
-
-def test_a_failed_copy_keeps_the_old_folder_and_leaves_no_half_written_new_one(tmp_path: Path, monkeypatch):
-    legacy, new = _legacy(tmp_path, monkeypatch)
-
-    def boom(*_a, **_kw):
-        raise OSError("disk full")
-
-    monkeypatch.setattr("flackey.config.shutil.copytree", boom)
-    s = Settings(_env_file=None, data_dir=new)
-    assert migrate_legacy_data_dir(s) is False
-    assert legacy.exists() and not new.exists()              # not crashed, not half-moved
-
-
-def test_an_incomplete_copy_keeps_both_folders_rather_than_deleting_the_source(tmp_path: Path, monkeypatch):
-    # The whole reason this copies instead of moving. If the verify cannot account for every file, the
-    # owner is left with two folders and a log line -- never with the only copy deleted.
-    legacy, new = _legacy(tmp_path, monkeypatch)
-    real = shutil.copytree
-
-    def truncating(src, dst, *a, **kw):
-        # copytree recurses through the module global, so this wrapper sees the subdirectories too; only
-        # the outermost call has finished copying and is the one to damage.
-        out = real(src, dst, *a, **kw)
-        if Path(dst) == new:
-            (Path(out) / "krater.sqlite").write_text("")      # a short file the size check must catch
-        return out
-
-    monkeypatch.setattr("flackey.config.shutil.copytree", truncating)
-    assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is False
-    assert legacy.exists() and (legacy / "krater.sqlite").read_text() == "old-db"
-    assert (new / "krater.sqlite").exists()                  # left verbatim, un-renamed, for inspection
-
-
-def test_two_generations_of_the_same_database_are_never_collapsed_onto_one_name(tmp_path: Path, monkeypatch):
-    # `krater.sqlite` and `cratedigger.sqlite` both want to become `flackey.sqlite`. `Path.rename`
-    # overwrites silently on POSIX, so the older code lost one of them -- and worse, could pair one
-    # database's `-wal` with the other's main file, which SQLite either refuses to open or reads as
-    # corruption. The newest generation takes the name; the older keeps its own and is left for a human.
-    legacy, new = _legacy(tmp_path, monkeypatch)
-    (legacy / "cratedigger.sqlite").write_text("ancient-db")
-    (legacy / "cratedigger.sqlite-wal").write_text("ancient-wal")
-    assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
-    assert (new / "flackey.sqlite").read_text() == "old-db"        # krater won: it is the newer generation
-    assert (new / "flackey.sqlite-wal").read_text() == "wal"       # and its own wal came with it
-    assert (new / "cratedigger.sqlite").read_text() == "ancient-db"    # not renamed, and not destroyed
-    assert (new / "cratedigger.sqlite-wal").read_text() == "ancient-wal"
-
-
-def test_the_app_bundle_is_not_carried_across(tmp_path: Path, monkeypatch):
-    # It is rebuilt from the running venv on every launch and holds an absolute-path pyvenv.cfg, so a
-    # copy is only a stale bundle under the wrong name.
-    legacy, new = _legacy(tmp_path, monkeypatch)
-    for older in ("Krater.app", "Cratedigger.app"):          # every generation's bundle, not only the newest
-        (legacy / older / "Contents" / "MacOS").mkdir(parents=True)
-        (legacy / older / "Contents" / "MacOS" / older[:-4]).write_text("exe")
-    assert migrate_legacy_data_dir(Settings(_env_file=None, data_dir=new)) is True
-    assert not (new / "Krater.app").exists() and not (new / "Cratedigger.app").exists()
-    assert not (new / "Flackey.app").exists()
-
-
-def test_settings_migrates_legacy_data_dir_before_creating_it(tmp_path: Path, monkeypatch):
-    # Every `flackey` entry point (`status`, `export`, `add`, `login`, not just `start`) must migrate before
-    # anything creates the new data_dir, or the migration becomes a permanent no-op the moment any of
-    # them runs first.
-    from flackey.cli import _settings, _state
-
-    legacy, new = _legacy(tmp_path, monkeypatch)
-    env = tmp_path / ".env"
-    env.write_text(f"TELEGRAM_API_ID=1\nTELEGRAM_API_HASH=h\nLIBRARY_ROOT={tmp_path / 'lib'}\nDATA_DIR={new}\n")
-    monkeypatch.setitem(_state, "env", env)
-
-    assert not new.exists()  # the default-shaped data dir is absent before this call
-    s = _settings()
-    assert s.data_dir == new
-    assert (new / "flackey.sqlite").read_text() == "old-db" and not legacy.exists()
 
 
 def test_load_settings_ignores_a_settings_file_with_an_invalid_value(tmp_path: Path):

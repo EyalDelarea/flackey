@@ -283,7 +283,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .srow .k { font-size: 13px; }
 .srow .v { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 12px; color: var(--secondary); }
 /* Wrap rather than ellipsize: these are file paths the owner may need to read, and a path cut off
-   at "…/Application Support/Crate" tells them nothing. */
+   at "…/Application Support/Flackey" tells them nothing. */
 .srow .v.mono { display: block; overflow-wrap: anywhere; }
 .srow .input { margin-top: 4px; }
 /* The disclosure the ports and the pick rules live behind. Closed it is one 13px line that reads like

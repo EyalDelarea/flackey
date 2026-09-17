@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from .config import Settings, load_settings, migrate_legacy_data_dir
+from .config import Settings, load_settings
 from .logsetup import configure_logging
 
 app = typer.Typer(name="flackey", help="Flackey: paste Deezer links, get verified, tagged tracks for Rekordbox",
@@ -15,9 +15,7 @@ _state: dict = {}
 
 
 def _settings() -> Settings:
-    s = load_settings(_state.get("env"))
-    migrate_legacy_data_dir(s)  # every entry point migrates before anything else touches data_dir
-    return s
+    return load_settings(_state.get("env"))
 
 
 @app.callback()

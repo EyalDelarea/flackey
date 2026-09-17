@@ -23,7 +23,7 @@ const stats: Stats = { tracks: 2, bytes: 84_000_000, playlists: 1, rejections: 0
 const health = (over: Partial<Health> = {}): Health => ({ ok: true, version: '0.1.0',
   telegram_authorized: true, worker_running: true, setup_done: true, source_enabled: true,
   telegram_configured: true,
-  lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'cratedigger-dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 },
+  lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'flackey-dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 },
   ...over })
 
 const track = (over: Partial<Track>): Track => ({
