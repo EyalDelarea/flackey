@@ -1,0 +1,84 @@
+name: release tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, for example 0.1.3 or v0.1.3"
+        required: true
+      ref:
+        description: "Ref to tag after the version bump has landed"
+        required: true
+        default: main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Create validated release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate requested version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw="${{ inputs.version }}"
+          version="${raw#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid version::Use X.Y.Z or vX.Y.Z, got '$raw'."
+            exit 1
+          fi
+
+          tag="v$version"
+          packaging/check_version.sh "$tag"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing tag
+        id: existing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.version.outputs.tag }}"
+          git fetch --tags origin
+
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current="$(git rev-parse HEAD)"
+          existing="$(git rev-list -n 1 "$tag")"
+          if [[ "$existing" == "$current" ]]; then
+            echo "$tag already points at $current."
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error title=Tag already exists::$tag points at $existing, not $current. Delete the incorrect tag intentionally, then rerun this workflow."
+          exit 1
+
+      - name: Create and push the release tag
+        if: steps.existing.outputs.already != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"

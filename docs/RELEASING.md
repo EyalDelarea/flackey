@@ -46,15 +46,15 @@ a change is major, minor, or patch is decided by judgment, not automation.
 
 ## Cut the release
 
-1. Tag the bump commit and push the tag:
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-2. The `checks` workflow (`.github/workflows/checks.yml`) builds and
+1. Run the `release tag` workflow from the GitHub Actions tab.
+   - Set `version` to the version you just landed, like `0.1.3` or `v0.1.3`.
+   - Leave `ref` as `main` unless you intentionally need to tag another ref.
+2. The workflow checks out that ref, runs `packaging/check_version.sh` against
+   the requested tag, and only then creates and pushes `vX.Y.Z`.
+3. The `checks` workflow (`.github/workflows/checks.yml`) builds and
    smoke-tests the macOS installer, then its `release` job publishes a GitHub
    Release for the tag with `gh release create --generate-notes`.
-3. GitHub groups the generated notes using `.github/release.yml` —
+4. GitHub groups the generated notes using `.github/release.yml` —
    `enhancement`-labeled PRs under "🚀 Features", `bug` under "🐛 Bug Fixes",
    `documentation` under "📝 Documentation", `chore` under "🧹 Chores", and
    anything unlabeled under "Other Changes" — pulled straight from merged PR
@@ -63,3 +63,11 @@ a change is major, minor, or patch is decided by judgment, not automation.
 Because `.github/release.yml` only affects notes for tags created *after* it
 lands on `main`, land this file (and label your PRs) before cutting the next
 tag, or that release's notes will still come out flat.
+
+The workflow will not move a tag that already points at another commit. If a
+bad tag was pushed, delete it intentionally, then rerun `release tag`:
+
+```bash
+git push origin :refs/tags/vX.Y.Z
+git tag -d vX.Y.Z
+```
