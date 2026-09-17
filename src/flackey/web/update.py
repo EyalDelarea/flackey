@@ -33,17 +33,23 @@ def router() -> APIRouter:
                 res.raise_for_status()
             releases = res.json()
         except (httpx.HTTPError, ValueError):
-            return {"ok": False, "current": __version__, "available": False,
+            return {"ok": False, "current": __version__, "newer": False, "available": False,
                     "error": "Could not check for updates."}
         if not isinstance(releases, list):
-            return {"ok": False, "current": __version__, "available": False,
+            return {"ok": False, "current": __version__, "newer": False, "available": False,
                     "error": "Release feed did not look right."}
-        latest = next((item for item in releases if isinstance(item, dict) and not item.get("draft")), None)
+        # Stable only: a prerelease tag (every 0.1.x release so far) should never trigger an update prompt.
+        latest = next((item for item in releases
+                        if isinstance(item, dict) and not item.get("draft") and not item.get("prerelease")), None)
         assets = latest.get("assets", []) if latest else []
         installer = next((a for a in assets if isinstance(a, dict) and a.get("name") == "Flackey.pkg"), None)
         tag = str(latest.get("tag_name") or "") if latest else ""
         latest_version = tag.removeprefix("v")
-        available = bool(installer and _version_tuple(latest_version) > _version_tuple(__version__))
+        # A newer tag can exist before its installer is built (e.g. a release job that failed partway
+        # through), so "a newer version exists" and "there is something to download" are tracked
+        # separately -- conflating them is what made a broken release read back as "up to date".
+        newer = bool(latest and _version_tuple(latest_version) > _version_tuple(__version__))
+        available = bool(installer) and newer
         published = latest.get("published_at") if latest else None
         date = None
         if isinstance(published, str):
@@ -51,9 +57,10 @@ def router() -> APIRouter:
                 date = dt.datetime.fromisoformat(published).date().isoformat()
             except ValueError:
                 date = published
-        return {"ok": True, "current": __version__, "available": available,
+        return {"ok": True, "current": __version__, "newer": newer, "available": available,
                 "latest": latest_version or None,
                 "url": installer.get("browser_download_url") if installer else None,
+                "release_url": latest.get("html_url") if latest else None,
                 "size": installer.get("size") if installer else None,
                 "size_label": _size_mb(installer.get("size") if installer else None),
                 "published_at": published, "published_date": date,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats } from './api'
+import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats, UpdateStatus } from './api'
 
 export const UNREACHABLE = "Can't reach Flackey. Is `crate start` running?"
 
@@ -9,6 +9,9 @@ export interface Live {
   fetchProgress: FetchProgress[]
   libraryVersion: number; loadError: string | null; loading: boolean; connected: boolean; lastSeen: Date | null
   upgradeActivity: string | null; setUpgradeActivity: (message: string | null) => void
+  // Checked once per launch, not on every reconnect -- a background version check has no business
+  // repeating every time the SSE connection blips. Stays null when `auto_update_check` is off.
+  update: UpdateStatus | null
   refresh: () => Promise<void>; refreshLibrary: () => Promise<void>; retry: () => Promise<void>
   setHealth: (h: Health) => void; setSettings: (s: AppSettings) => void; dropBundle: (id: number) => void
 }
@@ -26,6 +29,8 @@ export function useLive(): Live {
   const [upgradeActivity, setUpgradeActivity] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastSeen, setLastSeen] = useState<Date | null>(null)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const updateChecked = useRef(false)
   const firstOpen = useRef(true)
   const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const markAlive = useCallback(() => {
@@ -52,6 +57,13 @@ export function useLive(): Live {
     }
   }, [refreshLibrary])
   const retry = useCallback(async () => { setLoadError(null); await refresh() }, [refresh])
+
+  useEffect(() => {
+    if (!settings || updateChecked.current) return
+    updateChecked.current = true
+    if (settings.auto_update_check === false) return
+    api.update().then(setUpdate).catch(() => undefined)
+  }, [settings])
   const dropBundle = useCallback((id: number) => {
     setBundles(prev => { const next = new Map(prev); next.delete(id); return next })
   }, [])
@@ -93,5 +105,5 @@ export function useLive(): Live {
     return () => { if (staleTimer.current) clearTimeout(staleTimer.current); es.close() }
   }, [refresh, refreshLibrary])
 
-  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
+  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, update, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
 }

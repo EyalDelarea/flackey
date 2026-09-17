@@ -30,12 +30,16 @@ function Harness({ liveRef }: { liveRef?: { current: Live | null } }) {
   </div>)
 }
 
+const upToDate = { ok: true, current: '0.1.0', newer: false, available: false, latest: '0.1.0', url: null,
+  release_url: null, size: null, size_label: null, published_at: null, published_date: null, prerelease: false }
+
 beforeEach(() => {
   vi.stubGlobal('EventSource', FakeEventSource)
   vi.spyOn(api, 'queue').mockResolvedValue([])
   vi.spyOn(api, 'settings').mockResolvedValue(settings)
   vi.spyOn(api, 'playlists').mockResolvedValue([])
   vi.spyOn(api, 'stats').mockResolvedValue(stats)
+  vi.spyOn(api, 'update').mockResolvedValue(upToDate)
 })
 
 it('surfaces a plain-words error when the API is unreachable, and clears it on retry', async () => {
@@ -104,5 +108,40 @@ describe('the status event', () => {
     const es = await start()
     act(() => es.emit('status', { lossless_provider: { name: 'soulseek', status: 'ok', username: 'digger' } }))
     expect('lossless_provider' in liveRef.current!.health!).toBe(false)
+  })
+})
+
+describe('the automatic update check', () => {
+  it('checks once at launch when auto_update_check is not disabled', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    const updateSpy = vi.spyOn(api, 'update').mockResolvedValue(upToDate)
+    const liveRef: { current: Live | null } = { current: null }
+    render(<Harness liveRef={liveRef} />)
+    await waitFor(() => expect(liveRef.current!.update).toEqual(upToDate))
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('never calls /api/update when the owner turned auto-check off', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    vi.spyOn(api, 'settings').mockResolvedValue({ ...settings, auto_update_check: false })
+    const updateSpy = vi.spyOn(api, 'update')
+    const liveRef: { current: Live | null } = { current: null }
+    render(<Harness liveRef={liveRef} />)
+    await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(liveRef.current!.update).toBeNull()
+  })
+
+  it('does not re-check on an SSE reconnect', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    const updateSpy = vi.spyOn(api, 'update').mockResolvedValue(upToDate)
+    const liveRef: { current: Live | null } = { current: null }
+    render(<Harness liveRef={liveRef} />)
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1))
+    const es = FakeEventSource.last!
+    act(() => { es.onopen?.() })   // the initial open: a no-op beyond clearing the "first open" flag
+    act(() => { es.onopen?.() })   // a real reconnect: this one re-runs refresh()
+    await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+    expect(updateSpy).toHaveBeenCalledTimes(1)
   })
 })

@@ -47,7 +47,7 @@ export interface Ranking { max_picks:number; duration_tolerance_s:number; title_
   require_artist:boolean; max_queue:number|null; fingerprint_min:number }
 export interface AppSettings { library_root:string; data_dir:string; version:string; telegram_configured:boolean;
   log_path:string; soulseek_enabled?:boolean; slskd_url?:string; slskd_downloads_dir?:string;
-  lossless_filing_format?:string; filing_formats?:string[];
+  lossless_filing_format?:string; filing_formats?:string[]; auto_update_check?:boolean;
   ports?:{ app:PortInfo; sidecar:PortInfo; soulseek_listen:PortInfo }; ranking?:Ranking }
 export interface Submission { summary:string; request_ids:number[]; playlist_id:number|null; name:string; total:number; already_in_library:number; already_queued:number }
 export interface Tools { ffmpeg:boolean; ffprobe:boolean; yt_dlp:boolean }
@@ -63,9 +63,9 @@ export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 
   username: string | null; error: string | null }
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
-export interface UpdateStatus { ok:boolean; current:string; available:boolean; latest:string|null; url:string|null;
-  size:number|null; size_label:string|null; published_at:string|null; published_date:string|null; prerelease:boolean;
-  error?:string }
+export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
+  url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
+  published_date:string|null; prerelease:boolean; error?:string }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -103,7 +103,7 @@ export const api = {
   stats: () => call<Stats>('/api/stats'),
   settings: () => call<AppSettings>('/api/settings'),
   update: () => call<UpdateStatus>('/api/update'),
-  saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string }> = {}) =>
+  saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),
   pickFolder: (initial: string | null) => post<{ path: string | null }>('/api/pick-folder', { initial }),

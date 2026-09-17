@@ -161,6 +161,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "soulseek_enabled": settings.soulseek_enabled, "slskd_url": settings.slskd_url,
                 "slskd_downloads_dir": str(settings.slskd_downloads),
                 "lossless_filing_format": settings.lossless_filing_format,
+                "auto_update_check": settings.auto_update_check,
                 "ports": _ports(settings),
                 "ranking": {"max_picks": settings.lossless_max_picks,
                             "duration_tolerance_s": settings.lossless_duration_tolerance_s,
@@ -189,6 +190,8 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             if body["lossless_filing_format"] not in FILING_FORMATS:
                 raise HTTPException(400, f"Filing format must be one of {', '.join(FILING_FORMATS)}.")
             extra["lossless_filing_format"] = body["lossless_filing_format"]
+        if "auto_update_check" in body:
+            extra["auto_update_check"] = bool(body["auto_update_check"])
         if body.get("slskd_url"):
             extra["slskd_url"] = str(body["slskd_url"]).rstrip("/")
         if body.get("slskd_api_key"):

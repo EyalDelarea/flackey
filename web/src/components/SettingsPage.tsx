@@ -4,7 +4,7 @@ import type { AppSettings, LosslessHealth, TelegramStatus, UpdateStatus } from '
 import type { Live } from '../live'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
-import FormatOptions, { FORMAT_LABELS, formatNote } from './FormatOptions'
+import FormatOptions, { FORMAT_LABELS } from './FormatOptions'
 import SharingPanel from './SharingPanel'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
@@ -59,6 +59,8 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [keysSaved, setKeysSaved] = useState(false)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [updateChecking, setUpdateChecking] = useState(true)
+  const [autoUpdateBusy, setAutoUpdateBusy] = useState(false)
+  const [autoUpdateError, setAutoUpdateError] = useState<string | null>(null)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
@@ -67,9 +69,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   }, [])
   useEffect(() => {
     setUpdateChecking(true)
-    api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', available: false,
-      latest: null, url: null, size: null, size_label: null, published_at: null, published_date: null,
-      prerelease: false, error: 'Could not check for updates.' }))
+    api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
+      available: false, latest: null, url: null, release_url: null, size: null, size_label: null,
+      published_at: null, published_date: null, prerelease: false, error: 'Could not check for updates.' }))
       .finally(() => setUpdateChecking(false))
   }, [s?.version])
   if (!s) return null
@@ -150,6 +152,17 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const openUpdate = () => {
     if (update?.url) window.open(update.url, '_blank', 'noopener,noreferrer')
   }
+  const openRelease = () => {
+    if (update?.release_url) window.open(update.release_url, '_blank', 'noopener,noreferrer')
+  }
+  const autoUpdateOn = s?.auto_update_check !== false
+  const toggleAutoUpdate = () => {
+    setAutoUpdateBusy(true); setAutoUpdateError(null)
+    api.saveSettings(s.library_root, { auto_update_check: !autoUpdateOn })
+      .then(next => live.setSettings(next))
+      .catch(e => setAutoUpdateError(getErrorMessage(e, 'Could not save that setting.')))
+      .finally(() => setAutoUpdateBusy(false))
+  }
   const showSoulseekPassword = () => {
     setPasswordBusy(true); setPasswordError(null)
     api.soulseekPassword()
@@ -216,7 +229,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
-          <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}. {formatNote(currentFormat)}</div>
+          <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}.</div>
           <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} />
           {formatError && <div className="err">{formatError}</div>}</div></div>
         {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
@@ -267,15 +280,26 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
         <div className="srow"><div className="srow-body"><div className="k">App version</div>
           <div className="v">Flackey {s.version}</div>
           {updateChecking && <div className="v">Checking for updates…</div>}
-          {!updateChecking && update?.ok && !update.available && <div className="v">Up to date.</div>}
+          {!updateChecking && update?.ok && !update.newer && <div className="v">Up to date.</div>}
           {!updateChecking && update?.ok && update.available && <div className="v">
             Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
+          </div>}
+          {!updateChecking && update?.ok && update.newer && !update.available && <div className="v">
+            Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
         </div>
           {update?.available && update.url && <div className="actions">
             <button className="btn-secondary" onClick={openUpdate}>Download update</button>
+          </div>}
+          {update?.newer && !update.available && update.release_url && <div className="actions">
+            <button className="btn-secondary" onClick={openRelease}>View release</button>
           </div>}</div>
+        <div className="srow"><div className="srow-body"><div className="k">Automatic update checks</div>
+          <div className="v">{autoUpdateOn ? 'On — Flackey checks for updates when it starts.' : 'Off — check for updates here instead.'}</div>
+          {autoUpdateError && <div className="err">{autoUpdateError}</div>}</div>
+          <div className="actions"><button className="btn-secondary" onClick={toggleAutoUpdate} disabled={autoUpdateBusy}>
+            {autoUpdateBusy ? 'Saving…' : autoUpdateOn ? 'Turn off' : 'Turn on'}</button></div></div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
           <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
       </div>
