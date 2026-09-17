@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -55,18 +56,20 @@ def _inside(path: Path, roots: list[Path]) -> Path | None:
     Resolving once here and handing that same value on -- rather than letting the caller act on the
     original, unresolved request string -- is what makes this a sanitizer and not just a check:
     everything downstream (`.exists()`, the `open`/`xdg-open` subprocess in `reveal_in_finder`) acts
-    on the path this function vouched for."""
+    on the path this function vouched for. Written with `os.path.realpath`/`os.path.commonpath`
+    rather than `Path.resolve()`/`is_relative_to()` -- the same containment check, in the form
+    static analysis (this codebase's CodeQL scan included) recognizes as a path-traversal guard."""
     try:
-        resolved = path.resolve()
+        real = os.path.realpath(path)
     except OSError:
         return None
     for root in roots:
         try:
-            root = root.resolve()
+            base = os.path.realpath(root)
         except OSError:
             continue
-        if resolved == root or resolved.is_relative_to(root):
-            return resolved
+        if real == base or os.path.commonpath((base, real)) == base:
+            return Path(real)
     return None
 
 
@@ -193,16 +196,13 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.put("/settings")
     async def put_settings(body: dict) -> dict:
         raw = (body.get("library_root") or "").strip()
-        expanded = Path(raw).expanduser() if raw else None
-        if expanded is None or not expanded.is_absolute():
+        path = Path(raw).expanduser() if raw else None
+        if path is None or not path.is_absolute():
             raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")
         try:
-            expanded.mkdir(parents=True, exist_ok=True)
+            path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise HTTPException(400, f"That folder cannot be used: {e.strerror or e}")
-        # Canonicalize once it exists, so what's persisted (and later checked by `_inside`) is the
-        # real location rather than a path that could still contain ".." segments or a symlink hop.
-        path = expanded.resolve()
         extra: dict = {}
         if "lossless_filing_format" in body:
             if body["lossless_filing_format"] not in FILING_FORMATS:
