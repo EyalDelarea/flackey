@@ -39,8 +39,8 @@ LIBRARY_LIMIT = 10_000
 
 
 def reveal_in_finder(path: Path) -> None:
-    """`path` must already be the resolved, allow-listed value `_inside` returned -- callers never
-    hand this the raw request body (see `reveal()` below)."""
+    """`path` must already be the resolved, allow-listed value the `/reveal` handler validated --
+    callers never hand this the raw request body."""
     if sys.platform == "darwin":
         # `-R` reveals the path in a Finder window, selected; a bare `open` on a directory instead
         # *launches* it, which is wrong for a `.app`/`.rbxml`/other bundle directory.
@@ -48,29 +48,6 @@ def reveal_in_finder(path: Path) -> None:
     else:
         cmd = ["xdg-open", str(path if path.is_dir() else path.parent)]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def _inside(path: Path, roots: list[Path]) -> Path | None:
-    """The resolved, canonical form of `path` if it sits inside one of `roots`, else None.
-
-    Resolving once here and handing that same value on -- rather than letting the caller act on the
-    original, unresolved request string -- is what makes this a sanitizer and not just a check:
-    everything downstream (`.exists()`, the `open`/`xdg-open` subprocess in `reveal_in_finder`) acts
-    on the path this function vouched for. Written with `os.path.realpath`/`os.path.commonpath`
-    rather than `Path.resolve()`/`is_relative_to()` -- the same containment check, in the form
-    static analysis (this codebase's CodeQL scan included) recognizes as a path-traversal guard."""
-    try:
-        real = os.path.realpath(path)
-    except OSError:
-        return None
-    for root in roots:
-        try:
-            base = os.path.realpath(root)
-        except OSError:
-            continue
-        if real == base or os.path.commonpath((base, real)) == base:
-            return Path(real)
-    return None
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -233,9 +210,18 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.post("/reveal")
     async def reveal(body: dict) -> dict:
         path = Path(body.get("path") or "")
-        resolved = _inside(path, [settings.library_root, settings.data_dir]) if path.is_absolute() else None
-        if resolved is None:
+        if not path.is_absolute():
             raise HTTPException(400, "only files inside the library or app data folder can be shown")
+        # Canonicalize and check containment with the same realpath+commonpath idiom right here,
+        # next to the sinks it guards (`.exists()`, `opener()`) -- not behind a helper a step away.
+        try:
+            real = os.path.realpath(path)
+        except OSError:
+            raise HTTPException(400, "only files inside the library or app data folder can be shown")
+        allowed_roots = (os.path.realpath(settings.library_root), os.path.realpath(settings.data_dir))
+        if not any(real == root or os.path.commonpath((root, real)) == root for root in allowed_roots):
+            raise HTTPException(400, "only files inside the library or app data folder can be shown")
+        resolved = Path(real)
         if not resolved.exists():
             raise HTTPException(404, "that file is no longer there")
         opener(resolved)
