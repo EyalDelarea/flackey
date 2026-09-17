@@ -145,3 +145,34 @@ describe('the automatic update check', () => {
     expect(updateSpy).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the update download', () => {
+  /* The bus drops events rather than blocking when a subscriber falls behind, and the frame it drops
+     could be the terminal one -- which would leave the page believing a finished download is still
+     running, with the button disabled for good. */
+  it('polls while one is running, so a dropped terminal frame still lands', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(api, 'health').mockResolvedValue(health)
+      const poll = vi.spyOn(api, 'updateProgress').mockResolvedValue({ state: 'ready', percent: 100,
+        received: 8, total: 8, version: '0.1.1', path: '/data/updates/Flackey.pkg', error: null })
+      const liveRef: { current: Live | null } = { current: null }
+      render(<Harness liveRef={liveRef} />)
+      await vi.waitFor(() => expect(FakeEventSource.last).not.toBeNull())
+      const es = FakeEventSource.last!
+      act(() => { es.emit('status', { update_download: { state: 'downloading', percent: 50, received: 4,
+        total: 8, version: '0.1.1', path: null, error: null } }) })
+      expect(liveRef.current?.updateDownload?.state).toBe('downloading')
+      expect(poll).not.toHaveBeenCalled()   // the poll is a backstop, not the channel
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      expect(poll).toHaveBeenCalled()
+      expect(liveRef.current?.updateDownload?.state).toBe('ready')
+      // And it stops once there is nothing left to watch.
+      const settled = poll.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+      expect(poll.mock.calls.length).toBe(settled)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

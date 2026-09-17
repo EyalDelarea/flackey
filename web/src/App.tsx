@@ -27,6 +27,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('download')
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
+  const [updateDismissed, setUpdateDismissed] = useState(false)
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [welcomeSeen, setWelcomeSeen] = useState(false)
   const [libraryRoot, setLibraryRoot] = useState('')
@@ -106,14 +107,26 @@ export default function App() {
     banners.push(<Banner key="telegram" tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
   }
   // Only when there is something to click: a newer tag with no installer yet is detail for the
-  // Settings page, not a launch-time nag with nowhere for the click to go.
-  if (update?.available && update.url) {
-    const url = update.url
-    banners.push(<Banner key="update" tone="amber" text={`Flackey ${update.latest} is available.`} action={{ label: 'Download update', onClick: () => window.open(url, '_blank', 'noopener,noreferrer') }} />)
+  // Settings page, not a launch-time nag with nowhere for the click to go. `live.update` is null when
+  // automatic checks are off, so that switch turns this off with it.
+  // Dismissal is deliberately session-only: the Settings dot outlives it, and remembering a brush-off
+  // across launches would need a new stored setting to say how long "not now" lasts.
+  if (update?.available && !updateDismissed) {
+    const dl = live.updateDownload
+    const text = dl?.state === 'downloading'
+      ? `Downloading Flackey ${update.latest}… ${dl.percent}%`
+      : dl?.state === 'ready' ? `Flackey ${update.latest} is downloaded — finish in the installer.`
+      : `Flackey ${update.latest} is available.`
+    // Sends them to the row that shows the download rather than starting one from under a banner that
+    // has nowhere to report a failure.
+    banners.push(<Banner key="update" tone="amber" text={text}
+      action={{ label: dl ? 'Show' : 'Update', onClick: () => setTab('settings') }}
+      onDismiss={() => setUpdateDismissed(true)} />)
   }
   const banner = banners.length ? banners : undefined
   return (
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
+      updateWaiting={!!update?.available}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
       {tab === 'download' && <DownloadPage live={live} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}

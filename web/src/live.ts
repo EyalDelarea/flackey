@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats, UpdateStatus } from './api'
+import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats, UpdateDownload, UpdateStatus } from './api'
 
 export const UNREACHABLE = "Can't reach Flackey. Is `flackey start` running?"
 
@@ -12,6 +12,9 @@ export interface Live {
   // Checked once per launch, not on every reconnect -- a background version check has no business
   // repeating every time the SSE connection blips. Stays null when `auto_update_check` is off.
   update: UpdateStatus | null
+  // The installer download, owned by the server. Null until something starts one; the stream seeds a
+  // freshly opened page with whatever it was already doing.
+  updateDownload: UpdateDownload | null
   refresh: () => Promise<void>; refreshLibrary: () => Promise<void>; retry: () => Promise<void>
   setHealth: (h: Health) => void; setSettings: (s: AppSettings) => void; dropBundle: (id: number) => void
 }
@@ -30,6 +33,7 @@ export function useLive(): Live {
   const [connected, setConnected] = useState(false)
   const [lastSeen, setLastSeen] = useState<Date | null>(null)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updateDownload, setUpdateDownload] = useState<UpdateDownload | null>(null)
   const updateChecked = useRef(false)
   const firstOpen = useRef(true)
   const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,6 +68,16 @@ export function useLive(): Live {
     if (settings.auto_update_check === false) return
     api.update().then(setUpdate).catch(() => undefined)
   }, [settings])
+  // The event bus drops events rather than blocking when a subscriber falls behind, and the frame it
+  // drops could be the last one -- a `ready` or `error` lost that way would leave the button disabled on
+  // a download that had already finished. Polling while one is running is the backstop for exactly that,
+  // and it stops the moment the download does.
+  const downloadState = updateDownload?.state
+  useEffect(() => {
+    if (downloadState !== 'downloading') return
+    const id = setInterval(() => { api.updateProgress().then(setUpdateDownload).catch(() => undefined) }, 3000)
+    return () => clearInterval(id)
+  }, [downloadState])
   const dropBundle = useCallback((id: number) => {
     setBundles(prev => { const next = new Map(prev); next.delete(id); return next })
   }, [])
@@ -83,10 +97,12 @@ export function useLive(): Live {
       // folded into `lossless.provider` by hand. Spreading it straight in put a stray top-level key on
       // the object and left health.lossless.provider frozen at whatever the last full refresh saw --
       // which is why the Soulseek line could sit on "Signing in…" long after the worker had signed in.
-      const { lossless_provider: provider, fetch_progress: fetching, ...flags } =
+      const { lossless_provider: provider, fetch_progress: fetching, update_download: downloading, ...flags } =
         JSON.parse((e as MessageEvent).data) as Partial<Health> &
-          { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress[] | null }
+          { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress[] | null
+            update_download?: UpdateDownload | null }
       if (fetching !== undefined) setFetchProgress(fetching ?? [])
+      if (downloading !== undefined) setUpdateDownload(downloading ?? null)
       markAlive()
       setHealth(prev => {
         if (!prev) return prev
@@ -105,5 +121,5 @@ export function useLive(): Live {
     return () => { if (staleTimer.current) clearTimeout(staleTimer.current); es.close() }
   }, [refresh, refreshLibrary])
 
-  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, update, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
+  return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, update, updateDownload, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
 }

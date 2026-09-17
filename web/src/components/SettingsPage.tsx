@@ -72,12 +72,22 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [updateChecking, setUpdateChecking] = useState(true)
   const [autoUpdateBusy, setAutoUpdateBusy] = useState(false)
   const [autoUpdateError, setAutoUpdateError] = useState<string | null>(null)
+  const [installStarting, setInstallStarting] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
+  const [releaseBusy, setReleaseBusy] = useState(false)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
   useEffect(() => {
     api.pickFolderAvailable().then(r => setPickerAvailable(r.available)).catch(() => {})
   }, [])
+  // Keyed on the state rather than the object: every status event anywhere in the app -- a queue change,
+  // a Telegram flag -- re-parses the whole dict into a fresh `updateDownload`, and keying on identity
+  // meant any one of them could clear the flag while the press it belonged to was still in flight, which
+  // handed the button back mid-download. The server claims `downloading` before it awaits anything, so a
+  // press always drives the state through it and back out, and that round trip is what clears this.
+  const downloadState = live.updateDownload?.state
+  useEffect(() => { if (downloadState && downloadState !== 'downloading') setInstallStarting(false) }, [downloadState])
   useEffect(() => {
     setUpdateChecking(true)
     api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
@@ -164,12 +174,29 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
     setCheckError(null)
     api.checkSharing().catch(e => setCheckError(getErrorMessage(e, 'Could not start the check. Try again.')))
   }
-  const openUpdate = () => {
-    if (update?.url) window.open(update.url, '_blank', 'noopener,noreferrer')
+  // Both of these used to be `window.open`, which does nothing at all inside the webview the app runs in:
+  // the press was real, the handler ran, and not one pixel changed. The work belongs to the server, which
+  // can reach a browser and the installer -- the same move `reveal()` above already makes.
+  const download = live.updateDownload
+  const startUpdate = () => {
+    setInstallStarting(true); setInstallError(null)
+    // The answer arrives on the status event, the way the sharing check's does, so the response here is
+    // only worth its failure: a press that could not even start needs saying, and nothing else will.
+    // Not cleared when the POST resolves: that only means the server took the job, and the gap until the
+    // first status event is exactly the silence this row is here to end. The effect below clears it when
+    // the server actually reports back.
+    api.installUpdate()
+      .then(next => { if (next.state !== 'downloading') setInstallStarting(false) })
+      .catch(e => { setInstallError(getErrorMessage(e, 'Could not start the download. Try again.')); setInstallStarting(false) })
   }
   const openRelease = () => {
-    if (update?.release_url) window.open(update.release_url, '_blank', 'noopener,noreferrer')
+    setReleaseBusy(true); setInstallError(null)
+    api.openRelease()
+      .catch(e => setInstallError(getErrorMessage(e, "Couldn't open the release page.")))
+      .finally(() => setReleaseBusy(false))
   }
+  const downloading = download?.state === 'downloading' || installStarting
+  const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`
   const autoUpdateOn = s?.auto_update_check !== false
   const toggleAutoUpdate = () => {
     setAutoUpdateBusy(true); setAutoUpdateError(null)
@@ -326,12 +353,30 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
-        </div>
-          {update?.available && update.url && <div className="actions">
-            <button className="btn-secondary" onClick={openUpdate}>Download update</button>
+          {/* What the press is doing, in the row that was silent before. The percentage only appears once
+              the server knows the size; until then the byte count is the honest thing to show. */}
+          {downloading && <div className="v">
+            {download?.total
+              ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
+              : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
-          {update?.newer && !update.available && update.release_url && <div className="actions">
-            <button className="btn-secondary" onClick={openRelease}>View release</button>
+          {/* Not when `ready` carries an error: that is the installer that downloaded but would not open,
+              and saying it is open directly above the line explaining that it isn't helps nobody. */}
+          {download?.state === 'ready' && !download.error && <div className="v">
+            Downloaded. The macOS installer is open — follow it through, then reopen Flackey.
+          </div>}
+          {download?.error && <div className="err">{download.error}</div>}
+          {installError && <div className="err">{installError}</div>}
+        </div>
+          {update?.available && <div className="actions">
+            <button className="btn-secondary" onClick={startUpdate} disabled={downloading}>
+              {downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
+                : download?.state === 'ready' ? 'Open installer'
+                : download?.state === 'error' ? 'Try again' : 'Download update'}</button>
+          </div>}
+          {update?.newer && !update.available && <div className="actions">
+            <button className="btn-secondary" onClick={openRelease} disabled={releaseBusy}>
+              {releaseBusy ? 'Opening…' : 'View release'}</button>
           </div>}</div>
         <div className="srow"><div className="srow-body"><div className="k">Automatic update checks</div>
           <div className="v">{autoUpdateOn ? 'On — Flackey checks for updates when it starts.' : 'Off — check for updates here instead.'}</div>
