@@ -76,7 +76,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: packaging/check_version.sh "$GITHUB_REF_NAME"
       - name: Cache helper downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packaging/build/helpers
           key: helpers-${{ hashFiles('packaging/fetch_helpers.sh') }}
