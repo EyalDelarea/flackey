@@ -26,7 +26,8 @@ beforeEach(() => {
 /* The whole point of the Connections section is where things sit, and a `getByText` passes just as
    happily when the three connections are scattered over three cards again. Everything below asks which
    box, and in what order, rather than only whether the words are on screen. */
-const connections = () => screen.getByRole('heading', { name: 'Connections' }).nextElementSibling as HTMLElement
+const section = (name: string) => screen.getByRole('heading', { name }).nextElementSibling as HTMLElement
+const connections = () => section('Connections')
 /* Scoped to that box on purpose: "Soulseek" is both a connection row and the heading of the box holding
    everything else about it, so an unscoped lookup would have two answers. */
 const connRow = (name: string) => within(connections()).getByText(name).closest('.srow') as HTMLElement
@@ -201,11 +202,21 @@ describe('the Connections section', () => {
     expect(onReconnect).toHaveBeenCalled()
   })
 
-  it('leaves the rest of Soulseek in its own titled box, below', () => {
+  it('files the format question with the folder, where it belongs', () => {
+    // The format applies to every lossless download, whatever fetched it. Under a Soulseek heading it
+    // would claim to be a Soulseek setting -- the same implication-by-position this section removes.
     render(<SettingsPage live={live} onReconnect={() => {}} />)
-    const soulseek = screen.getByRole('heading', { name: 'Soulseek' }).nextElementSibling as HTMLElement
-    expect(soulseek).toContainElement(screen.getByText('File format'))
-    expect(soulseek).not.toContainElement(connRow('Soulseek'))
+    const library = section('Library')
+    expect(library).toContainElement(screen.getByText('Library folder'))
+    expect(library).toContainElement(screen.getByText('File format'))
+  })
+
+  it('draws no Soulseek box when there is nothing Soulseek-specific to put in it', () => {
+    // Nothing in that box is unconditional now the format has moved out, so a copy with no account and
+    // no port table must not be given a titled empty card.
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    expect(screen.queryByRole('heading', { name: 'Soulseek' })).not.toBeInTheDocument()
+    expect(connRow('Soulseek')).toBeInTheDocument()
   })
 })
 
@@ -324,6 +335,18 @@ describe('the Soulseek panel', () => {
   it('has no reconnect button when there is no account to reconnect', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
     expect(screen.queryByRole('button', { name: /Reconnect|Try again/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps its own box to rows that really are Soulseek', () => {
+    // The two logins, the sharing state and the diagnostics -- but not the filing format, which governs
+    // every lossless download and lives with the library folder those downloads land in.
+    show(lossless({ provider: { name: 'soulseek', status: 'ok', username: 'digger' } }))
+    const box = section('Soulseek')
+    for (const name of ['Soulseek account password', 'Helper web login', 'Sharing', 'Technical details']) {
+      expect(box).toContainElement(screen.getByText(name))
+    }
+    expect(box).not.toContainElement(screen.getByText('File format'))
+    expect(section('Library')).toContainElement(screen.getByText('File format'))
   })
 
   it('lets the owner choose the future lossless filing format', async () => {

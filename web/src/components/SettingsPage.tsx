@@ -131,6 +131,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   }
   const lossless: LosslessHealth | undefined = live.health?.lossless
   const soulseek = soulseekLine(lossless)
+  // The same three conditions the rows in that box carry, asked once: an account's two logins and its
+  // sharing state, or the diagnostics. None of them is a given, so neither is the box.
+  const soulseekRows = !!s.soulseek_enabled || !!s.ports || !!(lossless?.enabled && s.ranking)
   const reconnectSoulseek = () => {
     setReconnecting(true); setSoulseekError(null)
     api.connectSoulseek()
@@ -244,22 +247,29 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
       </div>
+      {/* Where tracks land and what they land as: one question, so one box. The format switch used to
+          sit with the Soulseek rows, which said -- by position, the way the Deezer bot's dependency used
+          to be said -- that it governed Soulseek downloads only. It governs every lossless download,
+          whichever source fetched it, so it belongs beside the folder they all land in. */}
+      <h2>Library</h2>
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">Library folder</div>
           {editing ? <><input className="input" value={path} onChange={e => setPath(e.target.value)} />{err && <div className="err">{err}</div>}</> : <div className="v mono">{s.library_root}</div>}</div>
           <div className="actions">{editing
             ? <>{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}<button className="btn-secondary" onClick={() => { setEditing(false); setErr(null) }} disabled={busy}>Cancel</button><button className="btn-primary" onClick={save} disabled={busy}>Save</button></>
             : <button className="btn-secondary" onClick={() => { setPath(s.library_root); setEditing(true); setErr(null) }}>Change</button>}</div></div>
-      </div>
-      {/* Titled because the status row that used to open this box -- and say what the box was about --
-          now sits up in Connections. What is left is everything about Soulseek that is not the question
-          "is it connected": what its downloads are filed as, its two logins, and the diagnostics. */}
-      <h2>Soulseek</h2>
-      <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}.</div>
           <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} />
           {formatError && <div className="err">{formatError}</div>}</div></div>
+      </div>
+      {/* What is left is Soulseek and nothing else: its two logins, whether other people can reach this
+          Mac, and the diagnostics. Every row inside is conditional, and with the format switch moved out
+          none of them is guaranteed -- so the heading and its box are drawn only when something would
+          actually be inside, rather than leaving a titled empty card on a copy with no account. */}
+      {soulseekRows && <>
+      <h2>Soulseek</h2>
+      <div className="group">
         {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
             Flackey generated both. So the owner has to be able to get this string back -- without it they
             cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
@@ -303,7 +313,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
                 Survivors are ordered by quality, then by who can send now. Flackey tries up to {s.ranking.max_picks} of
                 them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
           </details></div></div>}
-      </div>
+      </div></>}
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">App version</div>
           <div className="v">Flackey {s.version}</div>
