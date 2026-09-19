@@ -84,6 +84,17 @@ jobs:
         run: packaging/build_app.sh
       - name: Smoke-launch
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
+      - name: Update helper is inside the signed bundle
+        # Cheap, and it fails the build rather than the update: a bundle published without the helper
+        # looks perfect until someone presses Update months later and nothing can swap it.
+        run: |
+          test -x packaging/build/dist/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
+          codesign --verify --deep --strict packaging/build/dist/Flackey.app
+      - name: Helper refuses what it should
+        # The only job in this workflow on a Mac, so the only one that can compile the helper and watch
+        # it decline to swap a symlink, a directory owned by someone else, or a quarantined bundle. The
+        # python job runs on ubuntu and skips these.
+        run: uv run pytest tests/test_update_helper.py -q
       - name: Installer
         run: |
           packaging/build_installer.sh
@@ -94,6 +105,7 @@ jobs:
           path: |
             packaging/build/Flackey.pkg
             packaging/build/Flackey.pkg.sha256
+            packaging/build/Flackey-*.zip
           if-no-files-found: error
 
   release:
@@ -105,15 +117,47 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
       - uses: actions/download-artifact@v8
         with:
           name: Flackey.installer
           path: dist
       - name: latest.json
         run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 | tee dist/latest.json
+      - name: Sign the update archive
+        # Here rather than in the mac job, on purpose: this is the only step in the whole workflow that
+        # needs the private key, and keeping it out of the job that runs a build script, npm install and
+        # PyInstaller is the difference between one step seeing the secret and several hundred packages
+        # being in a position to.
+        #
+        # An unset secret is not a failure -- the script says so and the release publishes the zip
+        # unsigned, which reads to every installed copy as "no seamless update here, use the installer".
+        env:
+          FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
+        run: uv run --with cryptography packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json \
+          set -euo pipefail
+
+          zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
+          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json)
+          # The zip and its signature are each optional and independently so: the zip is missing only if
+          # the build changed, and the .sig is missing whenever the signing secret is unset. Publishing
+          # the pkg is what must not depend on either.
+          if [[ -f "$zip" ]]; then
+            assets+=("$zip")
+            if [[ -f "$zip.sig" ]]; then
+              assets+=("$zip.sig")
+            else
+              echo "::notice title=Unsigned release::No $zip.sig; installed copies will update by installer."
+            fi
+          else
+            echo "::warning title=No update archive::$zip was not built."
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes
