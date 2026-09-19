@@ -65,11 +65,28 @@ export interface SlskdSetup { installed: boolean; running: boolean; version: str
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
   url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
-  published_date:string|null; prerelease:boolean; error?:string }
-/** Where the installer download has got to. Lives on the server and arrives on every `status` event, so
-    leaving Settings mid-download and coming back finds it where it actually is rather than idle. */
-export interface UpdateDownload { state:'idle'|'downloading'|'ready'|'error'; percent:number; received:number
-  total:number|null; version:string|null; path:string|null; error:string|null }
+  published_date:string|null; prerelease:boolean; error?:string
+  /** Whether pressing Update replaces the app in place instead of opening the macOS installer. Both
+      halves have to hold for this to be true -- the release has to carry a signed archive, and this
+      copy has to be a packaged build in /Applications with a verification key. False is the old flow,
+      not a failure. */
+  seamless?:boolean; archive_url?:string|null; archive_size?:number|null; signature_url?:string|null }
+/** Where the update has got to. Lives on the server and arrives on every `status` event, so leaving
+    Settings mid-download and coming back finds it where it actually is rather than idle.
+
+    The seamless path adds three states to the installer's four. `verifying` is the signature check;
+    `staged` means the new bundle is unpacked and proven and nothing further happens until the owner
+    answers; `installing` means the app is closing to let the helper swap it. */
+export interface UpdateDownload {
+  state:'idle'|'downloading'|'verifying'|'staged'|'installing'|'ready'|'error'
+  percent:number; received:number; total:number|null; version:string|null; path:string|null
+  error:string|null
+  /** True for the whole of a seamless attempt, so the row can say "Update" rather than "Download". */
+  seamless:boolean
+  /** How many transfers are in flight, for the restart prompt: restarting loses them. */
+  busy:number
+  /** The owner chose "install on quit" rather than restarting now. */
+  deferred:boolean }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -120,6 +137,11 @@ export const api = {
   installUpdate: () => appPost<UpdateDownload>('/api/update/install'),
   updateProgress: () => call<UpdateDownload>('/api/update/progress'),
   openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
+  // Both only mean anything once the state is `staged`, and both go through `appPost` for the same
+  // reason `installUpdate` does: an app that quits itself at a stranger's choosing is not an
+  // improvement on a downloaded installer.
+  restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
+  installUpdateOnQuit: () => appPost<UpdateDownload>('/api/update/later'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

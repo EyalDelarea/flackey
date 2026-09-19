@@ -56,6 +56,12 @@ const updateAvailable = { ok: true, current: '0.1.0', newer: true, available: tr
 
 const liveWith = (download: UpdateDownload | null) => ({ ...(live as object), updateDownload: download } as never)
 
+/* The server always sends every field, so the type requires them all; this is what spares each test
+   from restating the nine it does not care about. */
+const progress = (over: Partial<UpdateDownload> = {}): UpdateDownload => ({
+  state: 'idle', percent: 0, received: 0, total: null, version: null, path: null, error: null,
+  seamless: false, busy: 0, deferred: false, ...over })
+
 it('shows an available app update', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
@@ -68,7 +74,7 @@ it('shows an available app update', async () => {
 it('hands the download to the server rather than opening a window', async () => {
   const open = vi.spyOn(window, 'open').mockImplementation(() => null)
   const install = vi.spyOn(api, 'installUpdate').mockResolvedValue(
-    { state: 'downloading', percent: 0, received: 0, total: 12345678, version: '0.1.1', path: null, error: null })
+    progress({ state: 'downloading', total: 12345678, version: '0.1.1' }))
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   fireEvent.click(await screen.findByText('Download update'))
@@ -80,16 +86,16 @@ it('hands the download to the server rather than opening a window', async () => 
 
 it('shows how far the download has got', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
-  render(<SettingsPage live={liveWith({ state: 'downloading', percent: 42, received: 5_200_000,
-    total: 12_345_678, version: '0.1.1', path: null, error: null })} onReconnect={() => {}} />)
+  render(<SettingsPage live={liveWith(progress({ state: 'downloading', percent: 42, received: 5_200_000,
+    total: 12_345_678, version: '0.1.1' }))} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('Downloading… 42% · 5.2 MB of 12.3 MB')).toBeInTheDocument())
   expect(screen.getByText('Downloading… 42%')).toBeDisabled()
 })
 
 it('offers the installer again once the download has finished', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
-  render(<SettingsPage live={liveWith({ state: 'ready', percent: 100, received: 12_345_678,
-    total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey.pkg', error: null })} onReconnect={() => {}} />)
+  render(<SettingsPage live={liveWith(progress({ state: 'ready', percent: 100, received: 12_345_678,
+    total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey.pkg' }))} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText(/The macOS installer is open/)).toBeInTheDocument())
   expect(screen.getByText('Open installer')).toBeEnabled()
 })
@@ -101,32 +107,31 @@ it('keeps the button held while an unrelated status event lands mid-press', asyn
   let settle: (v: UpdateDownload) => void = () => {}
   vi.spyOn(api, 'installUpdate').mockReturnValue(new Promise<UpdateDownload>(r => { settle = r }))
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
-  const failed: UpdateDownload = { state: 'error', percent: 0, received: 0, total: null,
-    version: '0.1.1', path: null, error: 'It broke.' }
+  const failed = progress({ state: 'error', version: '0.1.1', error: 'It broke.' })
   const { rerender } = render(<SettingsPage live={liveWith(failed)} onReconnect={() => {}} />)
   fireEvent.click(await screen.findByText('Try again'))
   // An unrelated event: same state, brand new object, exactly what the SSE handler produces.
   rerender(<SettingsPage live={liveWith({ ...failed })} onReconnect={() => {}} />)
   expect(screen.getByText('Downloading…')).toBeDisabled()
   expect(screen.queryByText('Try again')).not.toBeInTheDocument()
-  settle({ state: 'downloading', percent: 0, received: 0, total: null, version: '0.1.1', path: null, error: null })
+  settle(progress({ state: 'downloading', version: '0.1.1' }))
 })
 
 it('does not claim the installer is open when it would not open', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
-  render(<SettingsPage live={liveWith({ state: 'ready', percent: 100, received: 12_345_678,
+  render(<SettingsPage live={liveWith(progress({ state: 'ready', percent: 100, received: 12_345_678,
     total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey.pkg',
-    error: 'The installer downloaded but would not open.' })} onReconnect={() => {}} />)
+    error: 'The installer downloaded but would not open.' }))} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('The installer downloaded but would not open.')).toBeInTheDocument())
   expect(screen.queryByText(/The macOS installer is open/)).not.toBeInTheDocument()
 })
 
 it('says why a download failed and lets it be retried', async () => {
   const install = vi.spyOn(api, 'installUpdate').mockResolvedValue(
-    { state: 'downloading', percent: 0, received: 0, total: null, version: '0.1.1', path: null, error: null })
+    progress({ state: 'downloading', version: '0.1.1' }))
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
-  render(<SettingsPage live={liveWith({ state: 'error', percent: 0, received: 0, total: null,
-    version: '0.1.1', path: null, error: 'The download stopped before it finished.' })} onReconnect={() => {}} />)
+  render(<SettingsPage live={liveWith(progress({ state: 'error', version: '0.1.1',
+    error: 'The download stopped before it finished.' }))} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('The download stopped before it finished.')).toBeInTheDocument())
   fireEvent.click(screen.getByText('Try again'))
   await waitFor(() => expect(install).toHaveBeenCalled())
@@ -153,6 +158,106 @@ it('says a newer version exists without offering a dead-end download when the in
 it('says when the app is up to date', async () => {
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('Up to date.')).toBeInTheDocument())
+})
+
+/* The seamless path (#58). The row has to be honest about which of the two things pressing the button
+   does: replace the app in place, or hand over to Installer.app. Promising a restart that is not going
+   to happen is the same class of bug as the dead click this row was rebuilt for. */
+it('offers to update in place when the release is signed and this build can verify it', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Update')).toBeInTheDocument())
+  expect(screen.queryByText('Download update')).not.toBeInTheDocument()
+})
+
+it('still says "Download update" when the update has to go through the installer', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: false })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Download update')).toBeInTheDocument())
+})
+
+it('says it is checking the update is genuine while the signature is verified', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'verifying', percent: 100, received: 8, total: 8,
+    version: '0.1.1', seamless: true }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Checking the update is genuine…')).toBeInTheDocument())
+  expect(screen.getByText('Verifying…')).toBeDisabled()
+})
+
+/* Staged means the new bundle is on disk and proven, and nothing else happens until this is answered.
+   An app that closed itself the moment a download finished would be worse than the installer. */
+it('asks before closing the app, once an update is staged', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true, path: '/Applications/.Flackey-staging-abc123.app' }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/ready and verified/)).toBeInTheDocument())
+  expect(screen.getByText('Restart now')).toBeEnabled()
+  expect(screen.getByText('Install on quit')).toBeEnabled()
+  // The press that started this is over; offering it again would start a second download.
+  expect(screen.queryByText('Update')).not.toBeInTheDocument()
+})
+
+/* A restart during a Soulseek transfer loses it. Saying so and letting the owner choose is the point --
+   neither blocking the update nor taking the loss quietly is theirs to decide. */
+it('says how much would be lost by restarting now', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true, busy: 3 }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/3 transfers are still running and would be lost/)).toBeInTheDocument())
+})
+
+it('counts a single transfer in the singular', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true, busy: 1 }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/1 transfer is still running/)).toBeInTheDocument())
+})
+
+it('says nothing about transfers when none are running', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true, busy: 0 }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/ready and verified/)).toBeInTheDocument())
+  expect(screen.queryByText(/would be lost/)).not.toBeInTheDocument()
+})
+
+it('restarts when asked to', async () => {
+  const restart = vi.spyOn(api, 'restartForUpdate').mockResolvedValue(
+    progress({ state: 'installing', percent: 100, version: '0.1.1', seamless: true }))
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true }))} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Restart now'))
+  await waitFor(() => expect(restart).toHaveBeenCalled())
+})
+
+it('schedules the update for the next quit instead, when asked to', async () => {
+  const later = vi.spyOn(api, 'installUpdateOnQuit').mockResolvedValue(
+    progress({ state: 'staged', percent: 100, version: '0.1.1', seamless: true, deferred: true }))
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true }))} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Install on quit'))
+  await waitFor(() => expect(later).toHaveBeenCalled())
+})
+
+it('stops asking once the owner has chosen to install on quit', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true, deferred: true }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/next time you quit Flackey/)).toBeInTheDocument())
+  expect(screen.queryByText('Restart now')).not.toBeInTheDocument()
+})
+
+/* The refusal, as the owner sees it. A payload that did not verify is the one failure that must never
+   read as a hiccup worth retrying blindly, and it never silently becomes an installer download. */
+it('says plainly when an update could not be verified', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'error', version: '0.1.1', seamless: true,
+    error: 'This update could not be verified, so Flackey did not install it.' }))} onReconnect={() => {}} />)
+  await waitFor(() => expect(
+    screen.getByText('This update could not be verified, so Flackey did not install it.')).toBeInTheDocument())
+  expect(screen.queryByText('Restart now')).not.toBeInTheDocument()
 })
 
 it('defaults automatic update checks to on and lets the owner turn them off', async () => {
