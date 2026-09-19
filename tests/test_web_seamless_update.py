@@ -42,6 +42,16 @@ SIGNATURE_URL = "https://example.test/Flackey-9.9.9.zip.sig"
 INSTALLER_URL = "https://example.test/Flackey.pkg"
 
 
+@pytest.fixture(autouse=True)
+def _disarm():
+    """`selfupdate.pending` is process-wide, because the thing it records is -- and a test that armed it
+    and then failed before disarming would hand the next test an app that thinks it is about to replace
+    itself. Cleared on the way in as well as out, so the order tests run in cannot matter."""
+    selfupdate.pending.clear()
+    yield
+    selfupdate.pending.clear()
+
+
 @pytest.fixture
 def private_key():
     return Ed25519PrivateKey.generate()

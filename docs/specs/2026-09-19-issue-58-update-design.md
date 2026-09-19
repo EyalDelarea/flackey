@@ -319,3 +319,15 @@ Measured on macOS 26.6.2, Apple Silicon, 2026-09-18/19:
   exist — which is why the helper is compiled.
 - `ditto` propagates `com.apple.quarantine` from a zip onto every extracted file, including the app
   bundle and its executable. This is why the staging step strips it and the helper asserts its absence.
+
+Measured 2026-09-19, while building this:
+
+- The normalisation steps do not break the thing they are applied to. An ad-hoc signed bundle taken
+  through the whole pipeline — `codesign --deep --sign -`, `ditto -c -k --keepParent`, `ditto -x -k`,
+  `xattr -rc`, `chmod -R go-w` — still passes `codesign --verify --deep --strict`. Worth measuring
+  rather than assuming: `xattr -rc` clears *every* extended attribute, and signatures for non-Mach-O
+  files can live in `com.apple.cs.*` xattrs. In a bundle they do not — the main executable carries its
+  signature inside the Mach-O and everything else is hashed into `Contents/_CodeSignature/CodeResources`.
+- `ditto -x -k` of a `--keepParent` archive writes `<dest>/Flackey.app`, and symlinks inside the bundle
+  survive the round trip. Both are why the archive is made with `ditto` and unpacked into a directory of
+  its own; `zip` flattens the symlinks and produces a bundle that will not launch.
