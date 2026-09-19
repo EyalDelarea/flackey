@@ -48,10 +48,41 @@ uv run --with pyinstaller pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \
   packaging/Flackey.spec
 
+echo "==> update helper"
+# The program that swaps the new bundle in for the old one after the app has quit. Built here rather
+# than fetched: it is 300 lines of C in this repository, and a self-updater that downloads its own
+# updater would defeat the point of signing the payload.
+#
+# Copied in after PyInstaller and *before* codesign, which is not optional. Adding a file to a signed
+# bundle breaks the seal, and macOS treats a bundle whose signature no longer matches far worse than an
+# unsigned one -- "Flackey is damaged and can't be opened", with no way past it.
+#
+# Not routed through Flackey.spec's `binaries` list either: PyInstaller rewrites the load commands of
+# everything in there, and this program links nothing but libSystem and wants to stay exactly as clang
+# emitted it.
+HELPER_DIR="$BUILD/dist/Flackey.app/Contents/Frameworks/bin"
+mkdir -p "$HELPER_DIR"
+clang -O2 -Wall -Wextra -Werror -o "$HELPER_DIR/flackey-update-helper" packaging/update_helper.c
+chmod 755 "$HELPER_DIR/flackey-update-helper"
+
 # A bundle assembled file by file carries no signature, and macOS treats an unsigned-but-modified bundle
 # worse than a plainly unsigned one: an ad-hoc signature is free and makes it merely unsigned.
 echo "==> ad-hoc signature"
 codesign --force --deep --sign - "$BUILD/dist/Flackey.app"
+
+echo "==> update archive"
+# The seamless update payload: the bundle exactly as it will be installed, and nothing else. `ditto`
+# rather than `zip` because the bundle contains symlinks (Python.framework) and the signature written
+# above -- `zip` flattens the first and drops the second, and what comes out the other end will not
+# launch. --keepParent so the archive contains `Flackey.app` rather than its contents loose.
+#
+# Made here, after the signature, so the bytes published are the bytes that were signed. The release
+# workflow signs this exact file with the Ed25519 key; anything that rewrites it afterwards invalidates
+# the signature, which is the point.
+VERSION="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' src/flackey/__init__.py)"
+rm -f "$BUILD/Flackey-$VERSION.zip"
+ditto -c -k --keepParent "$BUILD/dist/Flackey.app" "$BUILD/Flackey-$VERSION.zip"
+echo "    $BUILD/Flackey-$VERSION.zip"
 
 echo
 echo "Built $BUILD/dist/Flackey.app"

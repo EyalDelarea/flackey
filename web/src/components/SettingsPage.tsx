@@ -75,6 +75,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [installStarting, setInstallStarting] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
   const [releaseBusy, setReleaseBusy] = useState(false)
+  // Never cleared on the "restart now" path: the app is closing, and handing the button back for a
+  // second press in the second before the window goes would be an invitation to press it.
+  const [restartBusy, setRestartBusy] = useState(false)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
@@ -195,7 +198,22 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setInstallError(getErrorMessage(e, "Couldn't open the release page.")))
       .finally(() => setReleaseBusy(false))
   }
-  const downloading = download?.state === 'downloading' || installStarting
+  // The two answers to the restart prompt. Neither is undoable from here -- the first closes the app and
+  // the second arms it to install when it next closes -- so both are behind a button the owner presses
+  // rather than anything that happens on its own.
+  const restartNow = () => {
+    setRestartBusy(true); setInstallError(null)
+    api.restartForUpdate()
+      .catch(e => { setInstallError(getErrorMessage(e, "Couldn't restart to finish the update.")); setRestartBusy(false) })
+  }
+  const installOnQuit = () => {
+    setRestartBusy(true); setInstallError(null)
+    api.installUpdateOnQuit()
+      .catch(e => setInstallError(getErrorMessage(e, "Couldn't schedule the update.")))
+      .finally(() => setRestartBusy(false))
+  }
+  const downloading = download?.state === 'downloading' || download?.state === 'verifying' || installStarting
+  const staged = download?.state === 'staged'
   const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`
   const autoUpdateOn = s?.auto_update_check !== false
   const toggleAutoUpdate = () => {
@@ -355,11 +373,23 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
           {/* What the press is doing, in the row that was silent before. The percentage only appears once
               the server knows the size; until then the byte count is the honest thing to show. */}
-          {downloading && <div className="v">
+          {download?.state === 'verifying' && <div className="v">Checking the update is genuine…</div>}
+          {downloading && download?.state !== 'verifying' && <div className="v">
             {download?.total
               ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
+          {/* The restart prompt. It says what happens rather than asking to be trusted: the app closes
+              and reopens by itself, and if anything is mid-transfer it says how much would be lost --
+              that is the owner's call to make, not something to decide quietly on their behalf. */}
+          {staged && !download?.deferred && <div className="v">
+            Version {download?.version} is ready and verified. Flackey will close and reopen to finish.
+            {download?.busy ? ` ${download.busy} ${download.busy === 1 ? 'transfer is' : 'transfers are'} still running and would be lost.` : ''}
+          </div>}
+          {staged && download?.deferred && <div className="v">
+            Version {download?.version} will be installed the next time you quit Flackey.
+          </div>}
+          {download?.state === 'installing' && <div className="v">Closing to install version {download?.version}…</div>}
           {/* Not when `ready` carries an error: that is the installer that downloaded but would not open,
               and saying it is open directly above the line explaining that it isn't helps nobody. */}
           {download?.state === 'ready' && !download.error && <div className="v">
@@ -368,11 +398,20 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           {download?.error && <div className="err">{download.error}</div>}
           {installError && <div className="err">{installError}</div>}
         </div>
-          {update?.available && <div className="actions">
+          {staged && !download?.deferred && <div className="actions">
+            <button className="btn-secondary" onClick={installOnQuit} disabled={restartBusy}>Install on quit</button>
+            <button className="btn-secondary" onClick={restartNow} disabled={restartBusy}>
+              {restartBusy ? 'Restarting…' : 'Restart now'}</button>
+          </div>}
+          {update?.available && !staged && download?.state !== 'installing' && <div className="actions">
             <button className="btn-secondary" onClick={startUpdate} disabled={downloading}>
-              {downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
+              {download?.state === 'verifying' ? 'Verifying…'
+                : downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
                 : download?.state === 'ready' ? 'Open installer'
-                : download?.state === 'error' ? 'Try again' : 'Download update'}</button>
+                : download?.state === 'error' ? 'Try again'
+                // "Update" when it installs itself, "Download update" when it hands over to Installer.app:
+                // the button should not promise a restart it is not going to perform.
+                : update?.seamless ? 'Update' : 'Download update'}</button>
           </div>}
           {update?.newer && !update.available && <div className="actions">
             <button className="btn-secondary" onClick={openRelease} disabled={releaseBusy}>
