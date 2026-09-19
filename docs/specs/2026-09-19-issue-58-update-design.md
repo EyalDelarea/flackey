@@ -1,6 +1,9 @@
 # Seamless in-place update (issue #58)
 
-Status: approved 2026-09-19. Supersedes nothing; extends the download path added in #56.
+Status: approved 2026-09-19; built 2026-09-19. Supersedes nothing; extends the download path added in
+#56. [As built](#as-built) records where the code differs from what is written below, and
+[Turning it on](#turning-it-on) is the owner's remaining step — until it is done, every build takes the
+installer path exactly as it did before.
 
 ## The problem
 
@@ -240,6 +243,67 @@ Manual, on a real Mac — the part unit tests cannot prove:
 - The CSRF shape on `/api/reveal`, `/api/setup/reset`, `/api/telegram/logout` noted during the #56
   review. Its own issue.
 - Background or automatic updates (D3).
+
+## As built
+
+Seven places the code differs from the design above. Everything else was built as written.
+
+| # | design said | built as | why |
+|---|-------------|----------|-----|
+| 1 | `.github/workflows/release-tag.yml` builds and signs the zip | `.github/workflows/checks.yml` | `release-tag.yml` only bumps the version and pushes the tag; the assets are published by the `release` job in `checks.yml`. The zip is built in the `mac` job, which is the only one with a built `.app`, and signed in the `release` job — the one step that needs the private key is not the step that runs npm install and PyInstaller |
+| 2 | `flackey.update.verify`, `src/flackey/update_key.py` | `src/flackey/selfupdate/` — `signature.py`, `key.py`, `install.py` | `flackey/verify.py` already exists and means audio verification. One package is also one entry in the import-linter layer list, which is `exhaustive = true` |
+| 3 | unpack straight into `.Flackey-staging-XXXXXX.app` | unpack into a temporary directory, then rename the bundle out of it | `ditto -x -k` of a `--keepParent` archive writes `<dest>/Flackey.app`, so the staging name has to be applied by a rename afterwards |
+| 4 | helper takes the staging and target paths | helper takes the containing directory and the staging *name*; the target name is compiled in | One path this program is allowed to overwrite, and it is not negotiable from the command line. The directory stays an argument so the helper can be tested against a temp tree rather than against `/Applications` |
+| 5 | helper relaunches | helper takes a relaunch flag | Somebody who chose "install on quit" asked for the app to go away. Reopening it for them a second later is not what they asked for |
+| 6 | — | helper also refuses a bundle with no `Contents/MacOS/Flackey` | The invariant is that the installed path points at a *working* bundle. A directory with no executable satisfies every other rule and still leaves an app that cannot open |
+| 7 | — | `Info.plist` is searched, not parsed | Linking CoreFoundation into a helper that has to stay trivially auditable, to read two strings, is a bad trade. This is an identity check; the security work is done by the no-symlink, owned-by-us and generated-name rules around it |
+
+The signature asset is hex text rather than raw bytes, so it survives a copy-paste and reads back in a
+terminal. An asset that is missing, oversized, not hex, or the wrong length is refused identically — all
+four are "there is no signature here", which the design requires never to be read as "no signature
+required".
+
+### What the tests cover, and what they do not
+
+`tests/test_selfupdate_signature.py`, `tests/test_selfupdate_install.py`,
+`tests/test_update_helper.py` and `tests/test_web_seamless_update.py` cover every row of the failure
+table that can be reached without a published release, including a real `RENAME_SWAP` against a real
+directory tree.
+
+Two things they cannot reach, stated plainly rather than implied:
+
+- **Rule 4, the hostile half.** Handing the staging directory to another uid needs root. The test asserts
+  the positive case and says in its own name that it does not assert the refusal.
+- **Everything under [Testing](#testing) marked manual.** An app replacing its own bundle while running
+  needs a real Mac and a real signed release. Nothing in CI proves it.
+
+## Turning it on
+
+Until this is done, `PUBLIC_KEY_HEX` in `src/flackey/selfupdate/key.py` is empty, every build reports
+`seamless: false`, and the Update button opens Installer.app exactly as it did before. That is the
+intended resting state, not a broken one — an unset key is a build that cannot do seamless updates,
+which is deliberately not the same thing as a payload that failed to verify.
+
+1. Generate the keypair locally (D5 — the private half should not be born on a CI runner):
+
+   ```
+   uv run python -c 'from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as K; \
+   from cryptography.hazmat.primitives import serialization as s; k = K.generate(); \
+   print("private:", k.private_bytes(s.Encoding.Raw, s.PrivateFormat.Raw, s.NoEncryption()).hex()); \
+   print("public: ", k.public_key().public_bytes(s.Encoding.Raw, s.PublicFormat.Raw).hex())'
+   ```
+
+2. Private half → the `FLACKEY_UPDATE_SIGNING_KEY` repository secret, and a password manager. Losing it
+   does not break installed copies; it means published updates stop verifying until a new public key is
+   committed, and people install by pkg until then.
+3. Public half → `PUBLIC_KEY_HEX` in `src/flackey/selfupdate/key.py`, and delete
+   `test_no_key_is_baked_into_the_source_yet` in `tests/test_selfupdate_signature.py`. That test exists
+   so this cannot happen by accident: baking a key takes a deliberate edit and shows up in a diff.
+4. Cut a release. `packaging/sign_archive.py` prints the public key it derived from the secret, so a
+   mismatch between the secret and the committed key is visible in the release log rather than only as
+   "this update could not be verified" on somebody's Mac.
+5. Work through [Testing](#testing)'s manual list. Step 8 — a Mac that has never built or run Flackey —
+   is the only configuration that exercises Gatekeeper with no local history to fall back on.
 
 ## Evidence
 
