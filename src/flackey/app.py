@@ -51,11 +51,27 @@ class ServerHandle:
     url: str | None = None
     error: BaseException | None = None
     server: uvicorn.Server | None = None
+    # Set by the desktop window once it exists, which is after the server has already started -- hence a
+    # slot read at call time rather than a callback passed in at construction. Closing the window is what
+    # ends the program: it stops the server, which stops the sidecar, and only then does anything get to
+    # replace the app bundle.
+    on_quit: Callable[[], None] | None = None
 
     def stop(self) -> None:
         """Safe from any thread: uvicorn polls should_exit on its own loop."""
         if self.server is not None:
             self.server.should_exit = True
+
+    def quit_app(self) -> None:
+        """End the program from a request handler, the way the owner closing the window would.
+
+        Falls back to stopping the server when there is no window -- `flackey start --no-browser` has
+        nothing to close, and leaving the server up after it has been told to quit would be worse than
+        a slightly abrupt exit."""
+        if self.on_quit is not None:
+            self.on_quit()
+        else:
+            self.stop()
 
 
 async def serve(server: uvicorn.Server, url: str, handle: ServerHandle,
@@ -228,7 +244,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
                         on_connected=sharing.start_refresh)
     link.adopt(slskd_process)
     api = create_app(store, worker, inbox, settings, ui_dir=UI_DIR, status=status, bus=bus, login=login,
-                     link=link, sharing=sharing)
+                     link=link, sharing=sharing, quit_app=handle.quit_app)
     server = uvicorn.Server(uvicorn.Config(api, host=settings.web_host, port=settings.web_port,
                                            log_level="warning", log_config=None))
 

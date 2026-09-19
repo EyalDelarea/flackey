@@ -123,6 +123,14 @@ class FakeWindow:
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
         self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook(), resized=Hook())
+        self.destroyed = False
+
+    def destroy(self) -> None:
+        """What `handle.quit_app()` reaches for when the app closes itself to install an update. The
+        real one fires `closed`, so this does too -- a test that stubbed it silently would show the
+        server never stopping."""
+        self.destroyed = True
+        self.events.closed()
 
 
 def _install_fake_webview(monkeypatch, tmp_path):

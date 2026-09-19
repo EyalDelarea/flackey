@@ -18,6 +18,10 @@ dependencies = [
   "pydantic-settings>=2.4",
   "pywebview>=6.2.1",
   "pyyaml>=6",
+  # Ed25519 verification for the self-update payload (selfupdate/signature.py). Audited and
+  # mainstream: the code that decides whether to run a downloaded bundle is the last place to
+  # hand-roll crypto. The `rsa` in the lock file arrives via telethon and is the wrong algorithm.
+  "cryptography>=43",
 ]
 
 [project.scripts]
@@ -58,6 +62,7 @@ layers = [
   "desktop",
   "app",
   "web",
+  "selfupdate",
   "soulseek_link : sharing",
   "worker : events : inbox",
   "attempts",
