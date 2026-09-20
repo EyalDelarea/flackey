@@ -132,7 +132,9 @@ static int has_runnable_executable(int stagefd) {
     return 1;
 }
 
-/* A nap can overshoot on a busy machine, so counting naps is not counting time. */
+/* 1 once the pid is gone, 0 on timeout, measured by the clock because naps overshoot on a busy
+ * machine. Refuse on timeout rather than proceed: a relaunch beside a live copy is two Flackeys
+ * sharing one database, which is worse than no update. */
 static int wait_for_exit(pid_t pid) {
     struct timespec nap = {.tv_sec = 0, .tv_nsec = WAIT_POLL_MS * 1000000L};
     struct timespec start, now;
