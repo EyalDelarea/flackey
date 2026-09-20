@@ -86,7 +86,9 @@ def test_a_signature_asset_of_the_wrong_length_decodes_to_nothing(keypair):
     assert signature.decode_signature(private.sign(PAYLOAD).hex()[:-2].encode()) is None
 
 
-def test_no_key_is_baked_into_the_source_yet():
-    """Deleted in the same commit that bakes the real key, so that becomes a deliberate edit."""
-    assert signature.baked_public_key() is None
-    assert signature.seamless_updates_configured() is False
+def test_the_release_key_is_baked_in_and_well_formed():
+    """A cleared or corrupted constant reads as "this build does not do seamless updates", which is
+    silent -- every copy quietly falls back to the installer with nothing to say it went wrong."""
+    key = signature.baked_public_key()
+    assert key is not None and len(key) == signature.PUBLIC_KEY_BYTES
+    assert signature.seamless_updates_configured() is True
