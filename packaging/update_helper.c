@@ -1,28 +1,23 @@
 /*
  * flackey-update-helper -- swap a staged Flackey.app in for the installed one.
  *
- * A process cannot replace the bundle it is executing from, so the app stages the new bundle beside
- * the old one, copies this program out of itself into a private temp directory, spawns it detached and
- * quits. This program waits for that to happen and then performs the one destructive operation in the
- * whole design:
+ * The app stages the new bundle beside the old one, copies this program out of itself, spawns it
+ * detached and quits. This program waits for that and then performs the one destructive operation:
  *
  *     renameatx_np(dir, ".Flackey-staging-XXXXXX.app", dir, "Flackey.app", RENAME_SWAP)
  *
  * RENAME_SWAP is why this is compiled C and not a shell script. Two `mv`s leave a window in which
  * /Applications/Flackey.app does not exist, and a machine that loses power in that window has no app.
- * The kernel swaps the two directory entries in one step or does nothing at all.
  *
- * Everything above the swap is input validation, and the validation is the security boundary rather
- * than a formality: this program runs detached, with no parent watching, and does something
- * irreversible to a path in /Applications. String checks alone would be racy -- anything validated by
- * path can be swapped between the check and the call -- so every check and the swap itself are
- * relative to one directory descriptor opened once, and the kernel never re-resolves the path.
+ * Everything above the swap is input validation, and it is the security boundary rather than a
+ * formality: this runs detached, unwatched, against a path in /Applications. Anything validated by
+ * path could be swapped between the check and the call, so every check and the swap itself are
+ * relative to one directory descriptor opened once.
  *
- * Nothing here runs as root. There is no privileged component, no XPC service and no socket; the only
- * way to drive this program is to already be running as the owner, at which point replacing the bundle
- * directly is just as easy. See docs/specs/2026-09-19-issue-58-update-design.md.
+ * Nothing here runs as root: no privileged component, no XPC service, no socket. See
+ * docs/specs/2026-09-19-issue-58-update-design.md.
  *
- * Built by packaging/build_app.sh and copied into the bundle before it is ad-hoc signed:
+ * Built by packaging/build_app.sh:
  *     clang -O2 -Wall -Wextra -o flackey-update-helper packaging/update_helper.c
  */
 
@@ -63,8 +58,8 @@ static void logline(const char *fmt, ...) {
     if (logfile) fflush(logfile);
 }
 
-/* Exit codes are read back only by a human in the log; the app is gone by the time any of them
- * happen. They exist so that "refused" and "tried and failed" are distinguishable at a glance. */
+/* Read back only by a human in the log; the app is gone by the time any of them happen. They exist so
+ * that "refused" and "tried and failed" are distinguishable at a glance. */
 enum {
     EXIT_OK = 0,
     EXIT_USAGE = 2,
@@ -74,11 +69,9 @@ enum {
     EXIT_PARENT_ALIVE = 6,
 };
 
-/* Rule 3, staging half: exactly `.Flackey-staging-` + at least six alphanumerics + `.app`.
- *
- * The name is not decoration. It is the only thing tying the directory about to be swapped into
- * /Applications to one this app created minutes ago, and it is checked here rather than trusted from
- * the argument because an argument is exactly what an attacker would control. */
+/* The name is the only thing tying the directory about to be swapped into /Applications to one this
+ * app created minutes ago, and it is checked here rather than trusted because an argument is exactly
+ * what an attacker would control. */
 static int staging_name_ok(const char *name) {
     size_t len = strlen(name);
     size_t prefix = strlen(STAGING_PREFIX), suffix = strlen(STAGING_SUFFIX);
@@ -91,8 +84,8 @@ static int staging_name_ok(const char *name) {
     return 1;
 }
 
-/* Rule 2: never `stat`. A symlink at either name is a refusal, not something to follow -- following one
- * is how Sparkle's CVE-2023-XXXX class of bug works, and the fix is to refuse rather than to resolve. */
+/* Never `stat`: a symlink at either name is a refusal, not something to follow. Following one is the
+ * classic way an updater is talked into writing outside the directory it was given. */
 static int is_real_directory(int dirfd, const char *name, struct stat *out) {
     if (fstatat(dirfd, name, out, AT_SYMLINK_NOFOLLOW) != 0) {
         logline("refusing: cannot stat %s: %s", name, strerror(errno));
@@ -114,11 +107,10 @@ static int has_quarantine(int fd) {
     return n >= 0;
 }
 
-/* Rule 5, identity half. Deliberately a search rather than a parse: Info.plist may be XML or binary,
- * and linking CoreFoundation into a helper that must stay trivially auditable to read two strings is a
- * bad trade. This is a sanity check that the staged directory is a Flackey bundle and not some other
- * app -- the properties doing security work are the ones above it (no symlink, owned by us, named with
- * a suffix we generated), not this one. */
+/* A search rather than a parse: Info.plist may be XML or binary, and linking CoreFoundation into a
+ * helper that must stay trivially auditable to read two strings is a bad trade. This is a sanity check
+ * that the staged directory is a Flackey bundle; the properties doing security work are the ones above
+ * it -- no symlink, owned by us, named with a suffix we generated. */
 static int declares_flackey_bundle_id(int stagefd) {
     int fd = openat(stagefd, "Contents/Info.plist", O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
@@ -143,9 +135,8 @@ static int declares_flackey_bundle_id(int stagefd) {
     return 1;
 }
 
-/* The invariant the whole design exists to keep is that /Applications/Flackey.app always points at a
- * working bundle. Swapping in a directory with no executable would break it in the one way the user
- * cannot recover from without a terminal, so the executable is checked before the swap and not after. */
+/* Swapping in a directory with no executable would leave /Applications/Flackey.app pointing at
+ * something unlaunchable, which the owner cannot recover from without a terminal. */
 static int has_runnable_executable(int stagefd) {
     struct stat st;
     if (fstatat(stagefd, "Contents/MacOS/Flackey", &st, AT_SYMLINK_NOFOLLOW) != 0) {
@@ -161,9 +152,9 @@ static int has_runnable_executable(int stagefd) {
 
 /* Returns 1 once the pid is gone, 0 if it outlived the timeout.
  *
- * Refuse rather than proceed on a timeout: swapping under a still-running app would work (the running
- * process holds its inode and never notices), but the relaunch afterwards would put a second copy on
- * screen, and two Flackeys sharing one database is worse than an update that did not happen. */
+ * Refuse rather than proceed on a timeout: swapping under a still-running app would work, but the
+ * relaunch afterwards would put a second copy on screen, and two Flackeys sharing one database is
+ * worse than an update that did not happen. */
 static int wait_for_exit(pid_t pid) {
     struct timespec nap = {.tv_sec = 0, .tv_nsec = WAIT_POLL_MS * 1000000L};
     for (int waited = 0; waited < WAIT_TIMEOUT_MS; waited += WAIT_POLL_MS) {
@@ -206,9 +197,8 @@ int main(int argc, char **argv) {
         return EXIT_REFUSED;
     }
 
-    /* Rule 1. One descriptor, opened once, and every check and the swap below are relative to it. Once
-     * this succeeds the kernel never resolves the string `dir` again, so nothing swapped in underneath
-     * it afterwards can redirect what happens next. */
+    /* Opened once, and every check and the swap below are relative to it: after this the kernel never
+     * resolves the string `dir` again, so nothing swapped in underneath it can redirect what happens. */
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
         logline("refusing: cannot open %s as a directory: %s", dir, strerror(errno));
@@ -224,9 +214,9 @@ int main(int argc, char **argv) {
     if (!is_real_directory(dirfd, staging, &staged_st)) return EXIT_REFUSED;
     if (!is_real_directory(dirfd, TARGET_NAME, &target_st)) return EXIT_REFUSED;
 
-    /* Rule 4. A staging directory owned by anyone else was not created by this app, whatever it is
-     * called. Compared against the real uid: this program is never setuid and must not become useful
-     * to anyone who arranges for it to be. */
+    /* A staging directory owned by anyone else was not created by this app, whatever it is called.
+     * Compared against the real uid: this program is never setuid and must not become useful to
+     * anyone who arranges for it to be. */
     if (staged_st.st_uid != getuid()) {
         logline("refusing: %s is owned by uid %u, not %u", staging, staged_st.st_uid, getuid());
         return EXIT_REFUSED;
@@ -237,11 +227,9 @@ int main(int argc, char **argv) {
         logline("refusing: cannot open %s: %s", staging, strerror(errno));
         return EXIT_REFUSED;
     }
-    /* Rule 5, quarantine half. `ditto` propagates com.apple.quarantine from a zip onto everything it
-     * extracts, and a quarantined bundle with an ad-hoc signature is refused outright by Gatekeeper --
-     * "Flackey is damaged and can't be opened", with no way past it short of a terminal. The app strips
-     * the attribute after unpacking; if it is still here, an assumption broke upstream and swapping
-     * this in would brick the install rather than update it. */
+    /* The app strips com.apple.quarantine after unpacking. If it is still here an assumption broke
+     * upstream, and a quarantined ad-hoc bundle is refused outright by Gatekeeper -- "Flackey is
+     * damaged and can't be opened" -- so swapping it in would brick the install rather than update it. */
     if (has_quarantine(stagefd)) {
         logline("refusing: %s still carries com.apple.quarantine", staging);
         close(stagefd);
@@ -253,9 +241,8 @@ int main(int argc, char **argv) {
     }
     close(stagefd);
 
-    /* Rule 6. Both entries exist and both have been validated, so this either swaps them or changes
-     * nothing. The target name is the compiled-in constant rather than an argument: there is exactly
-     * one path this program is allowed to overwrite, and it is not negotiable from the command line. */
+    /* The target name is the compiled-in constant rather than an argument: there is exactly one path
+     * this program is allowed to overwrite, and it is not negotiable from the command line. */
     if (renameatx_np(dirfd, staging, dirfd, TARGET_NAME, RENAME_SWAP) != 0) {
         int err = errno;
         if (err == EPERM || err == EACCES) {
@@ -271,9 +258,8 @@ int main(int argc, char **argv) {
     close(dirfd);
     logline("swapped %s into %s/%s", staging, dir, TARGET_NAME);
 
-    /* The old bundle is now sitting at the staging path. Removing it is tidying, not part of the
-     * update: a failure here leaves a hidden directory in /Applications and nothing else, so it is
-     * logged and not treated as the update having failed. */
+    /* Tidying, not part of the update: a failure here leaves a hidden directory in /Applications and
+     * nothing else. */
     char old[PATH_MAX];
     snprintf(old, sizeof(old), "%s/%s", dir, staging);
     if (removefile(old, NULL, REMOVEFILE_RECURSIVE) != 0) {

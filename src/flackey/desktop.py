@@ -442,19 +442,16 @@ def run_in_window(settings: Settings) -> None:
         window.events.loaded += lambda: inset_titlebar(window)
     window.events.closed += lambda: remember_window_size(settings, (last[0], last[1]))
     window.events.closed += handle.stop
-    # How `POST /api/update/restart` ends the program. It cannot stop the server directly and leave the
-    # window up with nothing behind it, so it closes the window and the existing `closed` handlers above
-    # do the rest -- the same path as the owner clicking the red button.
+    # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers
+    # above, the same path as the owner clicking the red button.
     handle.on_quit = window.destroy
     try:
         webview.start(icon=app_icon())
     finally:
         handle.stop()
         thread.join(timeout=15)
-        # Last thing this process does, and only after the server and the slskd sidecar are down: the
-        # helper is about to replace the bundle these were reading from. Nothing happens unless an update
-        # was staged and the owner said yes to it, and `run` never raises -- this is the exit path, and a
-        # traceback here would be the last thing an owner saw of an app that closed on purpose.
+        # Only after the server and the slskd sidecar are down: the helper is about to replace the
+        # bundle they were reading from. `run` never raises -- this is the exit path.
         if update_install.pending.staged is not None:
             log.info("quitting to install a staged update")
             update_install.pending.run(log_path=settings.data_dir / "flackey-update-helper.log")

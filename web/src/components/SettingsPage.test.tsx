@@ -160,9 +160,6 @@ it('says when the app is up to date', async () => {
   await waitFor(() => expect(screen.getByText('Up to date.')).toBeInTheDocument())
 })
 
-/* The seamless path (#58). The row has to be honest about which of the two things pressing the button
-   does: replace the app in place, or hand over to Installer.app. Promising a restart that is not going
-   to happen is the same class of bug as the dead click this row was rebuilt for. */
 it('offers to update in place when the release is signed and this build can verify it', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
@@ -184,8 +181,6 @@ it('says it is checking the update is genuine while the signature is verified', 
   expect(screen.getByText('Verifying…')).toBeDisabled()
 })
 
-/* Staged means the new bundle is on disk and proven, and nothing else happens until this is answered.
-   An app that closed itself the moment a download finished would be worse than the installer. */
 it('asks before closing the app, once an update is staged', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
   render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
@@ -197,8 +192,6 @@ it('asks before closing the app, once an update is staged', async () => {
   expect(screen.queryByText('Update')).not.toBeInTheDocument()
 })
 
-/* A restart during a Soulseek transfer loses it. Saying so and letting the owner choose is the point --
-   neither blocking the update nor taking the loss quietly is theirs to decide. */
 it('says how much would be lost by restarting now', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
   render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
@@ -231,6 +224,31 @@ it('restarts when asked to', async () => {
   await waitFor(() => expect(restart).toHaveBeenCalled())
 })
 
+/* A window that will not close answers 200 with the state still `staged` and an error in it, which
+   as a success would leave both buttons disabled for the session. */
+it('hands the buttons back when the app could not close itself', async () => {
+  vi.spyOn(api, 'restartForUpdate').mockResolvedValue(progress({ state: 'staged', percent: 100,
+    version: '0.1.1', seamless: true, error: 'Flackey could not close itself. Quit Flackey and it will install on the way out.' }))
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
+  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
+    seamless: true }))} onReconnect={() => {}} />)
+  fireEvent.click(await screen.findByText('Restart now'))
+  await waitFor(() => expect(screen.getByText(/could not close itself/)).toBeInTheDocument())
+  expect(screen.getByText('Restart now')).toBeEnabled()
+  expect(screen.getByText('Install on quit')).toBeEnabled()
+})
+
+/* `available` is the .pkg and `seamless` is the signed archive, and the server installs from either.
+   Gating on the first alone rendered a signed-archive-only release as "no update". */
+it('offers the update when only the signed archive is published', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, available: false, url: null,
+    size: null, size_label: null, seamless: true })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText('Update')).toBeInTheDocument())
+  expect(screen.getByText(/Version 0.1.1 is available/)).toBeInTheDocument()
+  expect(screen.queryByText(/installer isn't published yet/)).not.toBeInTheDocument()
+})
+
 it('schedules the update for the next quit instead, when asked to', async () => {
   const later = vi.spyOn(api, 'installUpdateOnQuit').mockResolvedValue(
     progress({ state: 'staged', percent: 100, version: '0.1.1', seamless: true, deferred: true }))
@@ -249,8 +267,6 @@ it('stops asking once the owner has chosen to install on quit', async () => {
   expect(screen.queryByText('Restart now')).not.toBeInTheDocument()
 })
 
-/* The refusal, as the owner sees it. A payload that did not verify is the one failure that must never
-   read as a hiccup worth retrying blindly, and it never silently becomes an installer download. */
 it('says plainly when an update could not be verified', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
   render(<SettingsPage live={liveWith(progress({ state: 'error', version: '0.1.1', seamless: true,

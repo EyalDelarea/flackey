@@ -1,12 +1,8 @@
 """The seamless path through `POST /api/update/install`, end to end with the network faked.
 
-The design doc's failure table is the specification, and the single line it all turns on is the one in
-`download_archive` that refuses when `verify` says no. Most of what follows is that line, approached
-from every direction a release can be wrong: tampered payload, tampered signature, missing signature,
-signature that is not a signature.
-
-What "refused" has to mean in every one of them: nothing unpacked, nothing staged, no fallback to the
-installer, and an error the owner can read.
+Most of these approach the same line -- the refusal in `download_archive` when `verify` says no -- from
+every direction a release can be wrong. "Refused" means: nothing unpacked, nothing staged, no fallback
+to the installer, and an error the owner can read.
 """
 from __future__ import annotations
 
@@ -42,11 +38,26 @@ SIGNATURE_URL = "https://example.test/Flackey-9.9.9.zip.sig"
 INSTALLER_URL = "https://example.test/Flackey.pkg"
 
 
+class EndlessStream(httpx.AsyncByteStream):
+    """A response body that never ends, and counts how much of it was actually pulled. Stops itself
+    well past where a correct reader gives up, since a truly endless one would hang the test."""
+
+    LIMIT = 10_000
+
+    def __init__(self) -> None:
+        self.pulled = 0
+
+    async def __aiter__(self):
+        while self.pulled < self.LIMIT:
+            self.pulled += 1
+            yield b"a" * 1024
+        raise AssertionError("the signature read was never bounded")
+
+
 @pytest.fixture(autouse=True)
 def _disarm():
-    """`selfupdate.pending` is process-wide, because the thing it records is -- and a test that armed it
-    and then failed before disarming would hand the next test an app that thinks it is about to replace
-    itself. Cleared on the way in as well as out, so the order tests run in cannot matter."""
+    """`selfupdate.pending` is process-wide, so a test that armed it and then failed would hand the next
+    one an app that thinks it is about to replace itself. Cleared both ways, so order cannot matter."""
     selfupdate.pending.clear()
     yield
     selfupdate.pending.clear()
@@ -59,8 +70,8 @@ def private_key():
 
 @pytest.fixture
 def archive_bytes(tmp_path) -> bytes:
-    """A real ditto archive of a minimal bundle -- the staging step shells out to ditto and will not be
-    fooled by a handful of bytes calling itself a zip."""
+    """A real ditto archive: the staging step shells out to ditto and will not be fooled by a handful
+    of bytes calling itself a zip."""
     app = tmp_path / "src" / "Flackey.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.flackey.app"}))
@@ -70,6 +81,18 @@ def archive_bytes(tmp_path) -> bytes:
     out = tmp_path / "built.zip"
     subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(app), str(out)], check=True)
     return out.read_bytes()
+
+
+class Quit(list):
+    """The window's close as the router receives it: a list of the presses that reached it, plus a
+    switch that makes closing fail."""
+
+    fail = False
+
+    def __call__(self) -> None:
+        if self.fail:
+            raise RuntimeError("the window would not close")
+        self.append(1)
 
 
 @pytest.fixture
@@ -96,9 +119,9 @@ def app(tmp_path, applications, private_key, monkeypatch):
     store = Store(settings.db_path)
     worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
     status = Status(None, telegram_authorized=True, worker_running=False, setup_done=True)
-    quits: list[int] = []
+    quits = Quit()
     api = create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, status=status,
-                     quit_app=lambda: quits.append(1))
+                     quit_app=quits)
     return TestClient(api), settings, status, quits
 
 
@@ -149,7 +172,6 @@ def test_a_signed_release_is_downloaded_verified_and_staged(app, archive_bytes, 
 
 @respx.mock
 def test_a_tampered_payload_is_refused_and_nothing_is_staged(app, archive_bytes, private_key, applications):
-    """The case the whole design exists for: the bytes were changed after they were signed."""
     c, _, _, _ = app
     sig = private_key.sign(archive_bytes)
     serve(archive_bytes[:-1] + bytes([archive_bytes[-1] ^ 0xFF]), sig, archive_size=len(archive_bytes))
@@ -171,24 +193,23 @@ def test_a_signature_from_another_key_is_refused(app, archive_bytes, application
 
 
 @respx.mock
-def test_a_release_with_no_signature_asset_never_reaches_the_seamless_path(app, archive_bytes, applications):
-    """A missing signature is refused, never read as "no signature required". It is caught before the
-    download even starts: with no .sig in the release there is no signed pair, so the press falls to the
-    installer -- which is the pre-existing flow, not a silent seamless install."""
+def test_a_release_with_no_signature_asset_never_reaches_the_seamless_path(app, archive_bytes,
+                                                                        applications, monkeypatch):
     c, _, _, _ = app
+    opened: list = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(sig=False)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"12345678"))
 
     state = press(c, "ready")
 
     assert state["seamless"] is False
+    assert [p.name for p in opened] == ["Flackey.pkg"]
     assert list(applications.iterdir()) == []
 
 
 @respx.mock
 def test_a_signature_asset_that_cannot_be_fetched_is_refused(app, archive_bytes, private_key, applications):
-    """Listed in the release, gone by the time it is asked for. A 404 here must refuse rather than
-    proceed unsigned -- the design's rule is that missing is a failure."""
     c, _, _, _ = app
     serve(archive_bytes, private_key.sign(archive_bytes))
     respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(404))
@@ -208,22 +229,24 @@ def test_a_signature_asset_that_is_not_a_signature_is_refused(app, archive_bytes
 
 
 @respx.mock
-def test_an_oversized_signature_asset_is_refused(app, archive_bytes, private_key, applications):
-    """Nothing declares the .sig's size the way the archive does, so the read is bounded here. 128
-    characters of hex is a signature; a megabyte of anything is not."""
+def test_an_endless_signature_asset_is_abandoned_rather_than_read(app, archive_bytes, private_key,
+                                                                  applications):
+    """The stream is abandoned at the ceiling rather than fetched and then measured. The generator
+    counts what was actually pulled, so this fails if the bound moves back to the finished body."""
     c, _, _, _ = app
     serve(archive_bytes, private_key.sign(archive_bytes))
-    respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(200, content=b"a" * 100_000))
+    stream = EndlessStream()
+    respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(200, stream=stream))
 
     assert press(c, "error")["state"] == "error"
+    # 4096-byte ceiling, 1KB chunks: it should give up after a handful, not after ten thousand.
+    assert stream.pulled < 20
     assert list(applications.iterdir()) == []
 
 
 @respx.mock
 def test_a_truncated_download_is_reported_as_a_download_problem(app, archive_bytes, private_key,
                                                                 applications):
-    """A dropped connection must not read to the owner as a tampered release. It is caught by the byte
-    count before verification ever runs, so the sentence is about the connection."""
     c, _, _, _ = app
     serve(archive_bytes[:100], private_key.sign(archive_bytes), archive_size=len(archive_bytes))
 
@@ -237,8 +260,6 @@ def test_a_truncated_download_is_reported_as_a_download_problem(app, archive_byt
 @respx.mock
 def test_a_verification_failure_never_falls_back_to_the_installer(app, archive_bytes, applications,
                                                                   monkeypatch):
-    """Decision D2. Whatever went wrong, fetching a second payload from the same release and running it
-    through Installer.app is not the answer to it."""
     c, _, _, _ = app
     opened: list = []
     monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
@@ -264,9 +285,23 @@ def test_restart_arms_the_helper_and_closes_the_window(app, archive_bytes, priva
 
 
 @respx.mock
+def test_a_window_that_will_not_close_leaves_the_update_armed_and_says_so(app, archive_bytes,
+                                                                          private_key):
+    c, _, _, quits = app
+    quits.fail = True
+    serve(archive_bytes, private_key.sign(archive_bytes))
+    press(c)
+
+    body = c.post("/api/update/restart", headers=FROM_APP).json()
+
+    assert body["state"] == "staged"
+    assert "Quit Flackey" in body["error"]
+    assert selfupdate.pending.staged is not None
+    selfupdate.pending.clear()
+
+
+@respx.mock
 def test_install_on_quit_arms_the_helper_without_reopening_the_app(app, archive_bytes, private_key):
-    """Somebody who chose "install on quit" asked for the app to go away. Reopening it for them a second
-    later is not what they asked for, which is the one thing that differs between the two buttons."""
     c, _, _, quits = app
     serve(archive_bytes, private_key.sign(archive_bytes))
     press(c)
@@ -280,8 +315,22 @@ def test_install_on_quit_arms_the_helper_without_reopening_the_app(app, archive_
     selfupdate.pending.clear()
 
 
+@respx.mock
+def test_pressing_update_while_the_app_is_closing_does_not_start_a_fresh_download(app, archive_bytes,
+                                                                                  private_key,
+                                                                                  applications):
+    c, _, _, _ = app
+    serve(archive_bytes, private_key.sign(archive_bytes))
+    press(c)
+    c.post("/api/update/restart", headers=FROM_APP)
+
+    body = c.post("/api/update/install", headers=FROM_APP).json()
+
+    assert body["state"] == "installing"
+    assert len(list(applications.iterdir())) == 1
+
+
 def test_restart_refuses_when_nothing_is_staged(app):
-    """Out of order, so it does nothing at all rather than quitting the app for no reason."""
     c, _, _, quits = app
 
     assert c.post("/api/update/restart", headers=FROM_APP).status_code == 409
@@ -291,8 +340,6 @@ def test_restart_refuses_when_nothing_is_staged(app):
 
 
 def test_a_page_that_is_not_flackeys_cannot_trigger_a_restart(app):
-    """The same guard #56 put on the other two update routes. These are wanted for what they *do* -- an
-    app that quits itself at a stranger's choosing is not an improvement on a downloaded installer."""
     c, _, _, quits = app
 
     assert c.post("/api/update/restart").status_code == 403
@@ -302,9 +349,6 @@ def test_a_page_that_is_not_flackeys_cannot_trigger_a_restart(app):
 
 @respx.mock
 def test_the_restart_prompt_says_how_many_transfers_are_in_flight(app, archive_bytes, private_key):
-    """D4: the dialog carries the busy warning. A restart during a Soulseek transfer loses it, and the
-    honest thing is to say so and let the owner choose rather than to block the update or take the loss
-    quietly."""
     c, _, status, _ = app
     status["fetch_progress"] = [{"id": 1}, {"id": 2}, {"id": 3}]
     serve(archive_bytes, private_key.sign(archive_bytes))
@@ -325,8 +369,6 @@ def test_pressing_update_again_while_one_is_staged_does_not_download_it_twice(ap
 
 @respx.mock
 def test_a_build_with_no_key_takes_the_installer_path(app, archive_bytes, monkeypatch, applications):
-    """The state this repository ships in until the owner generates the keypair. Not an error: nothing
-    was claimed and nothing failed, so the press behaves exactly as it did before this feature existed."""
     c, _, _, _ = app
     monkeypatch.setattr(selfupdate, "seamless_available", lambda *a, **k: False)
     opened: list = []

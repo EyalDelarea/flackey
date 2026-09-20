@@ -1,9 +1,7 @@
 """Staging a verified update, and the handover to the helper.
 
-The rule every test here is checking one face of: nothing in `install` ever touches the installed
-bundle. It unpacks, normalises and renames inside a directory it was given, and on every failure path
-what it created is gone and what was already there is untouched. The only thing that may replace the
-installed app is the helper, and the helper does not run unless staging returned.
+Every test here checks one face of the same rule: nothing in `install` ever touches the installed
+bundle, and on every failure path what it created is gone and what was already there is untouched.
 """
 from __future__ import annotations
 
@@ -14,8 +12,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from flackey.selfupdate import install
+from flackey.selfupdate import install, signature
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="ditto and xattr are macOS-only")
 
@@ -63,9 +62,6 @@ def test_staging_unpacks_the_bundle_under_a_name_the_helper_will_accept(archive,
 
 
 def test_the_staged_bundle_carries_no_quarantine_and_is_not_group_writable(archive, applications):
-    """Both are defence in depth rather than fixes for something observed: httpx sets no quarantine
-    attribute, so in the expected path there is nothing to strip. The helper refuses a quarantined
-    bundle outright, and this is the step that makes sure it never has to."""
     subprocess.run(["/usr/bin/xattr", "-w", "com.apple.quarantine", "0081;0;Safari;", str(archive)],
                    check=True)
 
@@ -77,12 +73,49 @@ def test_the_staged_bundle_carries_no_quarantine_and_is_not_group_writable(archi
         assert not path.stat().st_mode & 0o022
 
 
-def test_two_updates_in_a_row_do_not_collide(archive, applications):
+def test_a_second_update_supersedes_the_first_rather_than_piling_up(archive, applications):
     first = install.stage(archive, "9.9.9", applications=applications)
     second = install.stage(archive, "9.9.9", applications=applications)
 
     assert first.path != second.path
-    assert first.path.is_dir() and second.path.is_dir()
+    assert not first.path.exists()
+    assert [p.name for p in applications.iterdir()] == [second.path.name]
+
+
+def test_a_failed_attempt_still_clears_what_the_last_one_left(tmp_path, applications, archive):
+    stale = install.stage(archive, "9.9.9", applications=applications)
+    junk = tmp_path / "Flackey-9.9.9.zip"
+    junk.write_bytes(b"not a zip")
+
+    with pytest.raises(install.StagingError):
+        install.stage(junk, "9.9.9", applications=applications)
+
+    assert not stale.path.exists()
+    assert list(applications.iterdir()) == []
+
+
+def test_the_sweep_leaves_alone_anything_it_did_not_create(archive, applications):
+    other = applications / "SomeoneElse.app"
+    other.mkdir()
+    installed = applications / "Flackey.app"
+    installed.mkdir()
+    hidden = applications / ".hidden-but-not-ours"
+    hidden.mkdir()
+
+    install.stage(archive, "9.9.9", applications=applications)
+
+    assert other.is_dir() and installed.is_dir() and hidden.is_dir()
+
+
+def test_the_sweep_does_not_follow_a_symlink_out_of_the_folder(tmp_path, archive, applications):
+    elsewhere = tmp_path / "precious"
+    elsewhere.mkdir()
+    (elsewhere / "file").write_text("keep me")
+    (applications / f"{install.STAGING_PREFIX}planted.app").symlink_to(elsewhere)
+
+    install.stage(archive, "9.9.9", applications=applications)
+
+    assert (elsewhere / "file").read_text() == "keep me"
 
 
 def test_an_archive_without_flackey_inside_it_is_refused(tmp_path, applications):
@@ -114,8 +147,6 @@ def test_a_garbage_archive_is_refused_and_leaves_nothing_behind(tmp_path, applic
 
 
 def test_staging_never_touches_what_is_already_installed(archive, applications):
-    """The invariant, stated directly. `stage` writes two new names and reads nothing else, so an
-    installed bundle sitting right beside it comes through byte for byte."""
     installed = applications / "Flackey.app"
     (installed / "Contents").mkdir(parents=True)
     (installed / "Contents" / "marker").write_text("installed")
@@ -126,8 +157,6 @@ def test_staging_never_touches_what_is_already_installed(archive, applications):
 
 
 def test_discard_only_ever_removes_a_staging_path(applications):
-    """A guard against a caller's bug becoming a deleted app. `discard` is handed a StagedUpdate, and the
-    one thing it refuses to act on is a path that is not named like one."""
     installed = applications / "Flackey.app"
     installed.mkdir()
     install.discard(install.StagedUpdate(path=installed, version="9.9.9"))
@@ -139,17 +168,36 @@ def test_discard_only_ever_removes_a_staging_path(applications):
     assert not staged.exists()
 
 
+def test_an_installed_build_with_a_key_and_a_helper_is_offered_the_seamless_path(tmp_path, monkeypatch):
+    """The only test here that asserts True. Every other one pins a reason to refuse, so a
+    `seamless_available` broken into always answering False would leave them all green."""
+    bundle = tmp_path / "Applications" / "Flackey.app"
+    frameworks = bundle / "Contents" / "Frameworks"
+    (frameworks / "bin").mkdir(parents=True)
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    exe = bundle / "Contents" / "MacOS" / "Flackey"
+    exe.touch()
+    helper = frameworks / "bin" / install.HELPER_NAME
+    helper.touch()
+    helper.chmod(0o755)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(sys, "_MEIPASS", str(frameworks), raising=False)
+    monkeypatch.setattr(install.signature, "PUBLIC_KEY_HEX",
+                        signature.encode_public_key(
+                            Ed25519PrivateKey.generate().public_key()).hex())
+
+    assert install.running_bundle() == bundle
+    assert install.helper_path() == helper
+    assert install.seamless_available(applications=tmp_path / "Applications") is True
+
+
 def test_a_checkout_is_never_offered_a_seamless_update():
-    """`sys.frozen` is false here, so there is no bundle to replace. This is also what keeps the feature
-    from appearing during development, where replacing /Applications/Flackey.app would be somebody
-    else's copy of the app."""
     assert install.running_bundle() is None
     assert install.seamless_available() is False
 
 
 def test_seamless_is_refused_when_the_app_is_not_the_one_in_applications(tmp_path, monkeypatch):
-    """A copy running from Downloads, or a second copy alongside the installed one. Updating in place
-    from there would replace an app the owner is not looking at."""
     elsewhere = tmp_path / "Downloads" / "Flackey.app"
     elsewhere.mkdir(parents=True)
     monkeypatch.setattr(install.signature, "seamless_updates_configured", lambda: True)
@@ -169,9 +217,6 @@ def test_seamless_is_refused_when_the_build_carries_no_helper(tmp_path, monkeypa
 
 
 def test_seamless_is_refused_when_no_key_is_baked_in(tmp_path, monkeypatch):
-    """The state this repository is actually in until the owner generates the keypair. Not an error, and
-    deliberately not routed through the same refusal as a bad signature: nothing was claimed here, so
-    nothing failed -- the Update button simply behaves the way it did before."""
     applications = tmp_path / "Applications"
     monkeypatch.setattr(install, "running_bundle", lambda: applications / "Flackey.app")
     monkeypatch.setattr(install, "helper_path", lambda: tmp_path / "helper")
@@ -181,11 +226,6 @@ def test_seamless_is_refused_when_no_key_is_baked_in(tmp_path, monkeypatch):
 
 
 def test_the_helper_is_copied_out_of_the_bundle_before_it_is_run(tmp_path, monkeypatch):
-    """Copied out at the moment of quitting rather than when the update was staged. "Install on quit" may
-    be hours later, and a helper sitting in a temp directory for a whole session is the stray-binary
-    shape Sparkle warns about in its own source.
-
-    It also cannot run from inside the bundle it is about to swap away."""
     source = tmp_path / "bin" / "flackey-update-helper"
     source.parent.mkdir()
     source.write_text("#!/bin/sh\nexit 0\n")
@@ -254,8 +294,6 @@ def test_an_armed_update_is_handed_over_once_and_only_once(tmp_path, monkeypatch
 
 
 def test_a_helper_that_will_not_start_does_not_take_the_quit_down_with_it(tmp_path, monkeypatch):
-    """This runs inside the `finally` that ends the program. An exception here would replace a clean
-    exit with a traceback, for an owner who has already been told the app is closing."""
     def boom(staged, **kw):
         raise install.StagingError("no")
 

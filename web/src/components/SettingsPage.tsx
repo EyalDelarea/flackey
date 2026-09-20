@@ -75,8 +75,6 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [installStarting, setInstallStarting] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
   const [releaseBusy, setReleaseBusy] = useState(false)
-  // Never cleared on the "restart now" path: the app is closing, and handing the button back for a
-  // second press in the second before the window goes would be an invitation to press it.
   const [restartBusy, setRestartBusy] = useState(false)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
@@ -198,12 +196,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setInstallError(getErrorMessage(e, "Couldn't open the release page.")))
       .finally(() => setReleaseBusy(false))
   }
-  // The two answers to the restart prompt. Neither is undoable from here -- the first closes the app and
-  // the second arms it to install when it next closes -- so both are behind a button the owner presses
-  // rather than anything that happens on its own.
   const restartNow = () => {
     setRestartBusy(true); setInstallError(null)
+    // Read out of the answer, not only out of `.catch`: a window that refuses to close comes back 200
+    // and still `staged`, which as a success would leave both buttons disabled for the session.
     api.restartForUpdate()
+      .then(next => { if (next.state !== 'installing') {
+        setInstallError(next.error ?? "Couldn't restart to finish the update."); setRestartBusy(false) } })
       .catch(e => { setInstallError(getErrorMessage(e, "Couldn't restart to finish the update.")); setRestartBusy(false) })
   }
   const installOnQuit = () => {
@@ -212,6 +211,11 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setInstallError(getErrorMessage(e, "Couldn't schedule the update.")))
       .finally(() => setRestartBusy(false))
   }
+  // One boolean for "there is something to install", because the server has two independent ways of
+  // saying so and the install endpoint accepts either. A release that carries the signed archive but no
+  // .pkg yet is `available: false, seamless: true`, and gating the button on `available` alone would
+  // render that as "no update" for a release the app can perfectly well install.
+  const installable = !!update?.ok && (update.available || !!update.seamless)
   const downloading = download?.state === 'downloading' || download?.state === 'verifying' || installStarting
   const staged = download?.state === 'staged'
   const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`
@@ -364,24 +368,22 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="v">Flackey {s.version}</div>
           {updateChecking && <div className="v">Checking for updates…</div>}
           {!updateChecking && update?.ok && !update.newer && <div className="v">Up to date.</div>}
-          {!updateChecking && update?.ok && update.available && <div className="v">
+          {!updateChecking && installable && <div className="v">
             Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
           </div>}
-          {!updateChecking && update?.ok && update.newer && !update.available && <div className="v">
+          {!updateChecking && update?.ok && update.newer && !installable && <div className="v">
             Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
-          {/* What the press is doing, in the row that was silent before. The percentage only appears once
-              the server knows the size; until then the byte count is the honest thing to show. */}
+          {/* The percentage only appears once the server knows the size; until then, the byte count. */}
           {download?.state === 'verifying' && <div className="v">Checking the update is genuine…</div>}
           {downloading && download?.state !== 'verifying' && <div className="v">
             {download?.total
               ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
-          {/* The restart prompt. It says what happens rather than asking to be trusted: the app closes
-              and reopens by itself, and if anything is mid-transfer it says how much would be lost --
-              that is the owner's call to make, not something to decide quietly on their behalf. */}
+          {/* Says what happens rather than asking to be trusted, and names what a restart would cost
+              while transfers are running -- that is the owner's call, not one to make quietly. */}
           {staged && !download?.deferred && <div className="v">
             Version {download?.version} is ready and verified. Flackey will close and reopen to finish.
             {download?.busy ? ` ${download.busy} ${download.busy === 1 ? 'transfer is' : 'transfers are'} still running and would be lost.` : ''}
@@ -403,17 +405,16 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             <button className="btn-secondary" onClick={restartNow} disabled={restartBusy}>
               {restartBusy ? 'Restarting…' : 'Restart now'}</button>
           </div>}
-          {update?.available && !staged && download?.state !== 'installing' && <div className="actions">
+          {installable && !staged && download?.state !== 'installing' && <div className="actions">
             <button className="btn-secondary" onClick={startUpdate} disabled={downloading}>
               {download?.state === 'verifying' ? 'Verifying…'
                 : downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
                 : download?.state === 'ready' ? 'Open installer'
                 : download?.state === 'error' ? 'Try again'
-                // "Update" when it installs itself, "Download update" when it hands over to Installer.app:
-                // the button should not promise a restart it is not going to perform.
+                // The button should not promise a restart it is not going to perform.
                 : update?.seamless ? 'Update' : 'Download update'}</button>
           </div>}
-          {update?.newer && !update.available && <div className="actions">
+          {update?.newer && !installable && <div className="actions">
             <button className="btn-secondary" onClick={openRelease} disabled={releaseBusy}>
               {releaseBusy ? 'Opening…' : 'View release'}</button>
           </div>}</div>

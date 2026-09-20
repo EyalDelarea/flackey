@@ -51,10 +51,8 @@ class ServerHandle:
     url: str | None = None
     error: BaseException | None = None
     server: uvicorn.Server | None = None
-    # Set by the desktop window once it exists, which is after the server has already started -- hence a
-    # slot read at call time rather than a callback passed in at construction. Closing the window is what
-    # ends the program: it stops the server, which stops the sidecar, and only then does anything get to
-    # replace the app bundle.
+    # Set by the desktop window once it exists, which is after the server has already started -- hence
+    # a slot read at call time rather than a callback passed in at construction.
     on_quit: Callable[[], None] | None = None
 
     def stop(self) -> None:
@@ -65,9 +63,8 @@ class ServerHandle:
     def quit_app(self) -> None:
         """End the program from a request handler, the way the owner closing the window would.
 
-        Falls back to stopping the server when there is no window -- `flackey start --no-browser` has
-        nothing to close, and leaving the server up after it has been told to quit would be worse than
-        a slightly abrupt exit."""
+        Falls back to stopping the server when there is no window: `flackey start --no-browser` has
+        nothing to close."""
         if self.on_quit is not None:
             self.on_quit()
         else:

@@ -1,14 +1,10 @@
 """The helper's refusals, against real directories.
 
-This is the one program in the repository that does something irreversible to a path in /Applications,
-and it does it detached, with nothing watching. Its input validation is the security boundary, so every
-rule in the design doc's "Helper hardening" section gets a test that watches it refuse and confirms the
-target was left exactly as it was.
+Its input validation is the security boundary, so each rule gets a test that watches it refuse and
+confirms the target was left exactly as it was.
 
-Compiled from source per session rather than taken from a built bundle: the thing under test is
-`packaging/update_helper.c`, and a test that quietly passed because it ran last month's binary would be
-testing nothing. macOS only -- `renameatx_np` and `RENAME_SWAP` are Darwin, and the CI job that runs
-this file is the mac one.
+Compiled from source per session rather than taken from a built bundle: a test that passed because it
+ran last month's binary would be testing nothing. macOS only -- `renameatx_np` is Darwin.
 """
 from __future__ import annotations
 
@@ -97,8 +93,6 @@ def test_the_swap_happens_and_the_old_bundle_ends_up_at_the_staging_path(helper,
 
 
 def test_a_symlink_where_the_staged_bundle_should_be_is_refused(helper, tree, tmp_path):
-    """Rule 2. Following a symlink here is how an attacker turns "replace this staged bundle" into
-    "replace whatever I point at", and it is the shape Sparkle was patched for in 2.9.5."""
     elsewhere = make_bundle(tmp_path / "elsewhere.app", marker="planted")
     staged = tree / STAGING
     subprocess.run(["rm", "-rf", str(staged)], check=True)
@@ -110,8 +104,6 @@ def test_a_symlink_where_the_staged_bundle_should_be_is_refused(helper, tree, tm
 
 
 def test_a_symlink_where_the_installed_app_should_be_is_refused(helper, tree, tmp_path):
-    """The same rule applied to the other entry. A symlink at the target would make the swap replace
-    something outside the directory the helper was pointed at."""
     real = make_bundle(tmp_path / "real.app", marker="real")
     target = tree / TARGET
     subprocess.run(["rm", "-rf", str(target)], check=True)
@@ -122,8 +114,6 @@ def test_a_symlink_where_the_installed_app_should_be_is_refused(helper, tree, tm
 
 
 def test_a_staging_name_the_app_would_never_produce_is_refused(helper, tree):
-    """Rule 3. The name is the only thing tying the directory about to be swapped in to one this app
-    created, and it comes from an argument -- which is exactly what an attacker controls."""
     for name in ("Flackey.app", ".Flackey-staging-.app", ".Flackey-staging-ab.app",
                  ".Flackey-staging-abc123", ".Flackey-staging-abc/123.app", "../evil.app",
                  ".Flackey-staging-abc-123.app"):
@@ -132,20 +122,16 @@ def test_a_staging_name_the_app_would_never_produce_is_refused(helper, tree):
 
 
 def test_rule_4_lets_through_a_staged_bundle_we_own(helper, tree):
-    """Rule 4, positive case only, and this test does not claim otherwise.
-
-    Handing the staged directory to another uid needs root, so the refusal itself cannot be exercised by
-    an unprivileged test suite and is not asserted here. What this does pin down is that the check does
-    not refuse the ordinary case -- a rule that rejected everything would pass a suite of refusal tests
-    perfectly and ship an app that can never update. The hostile half is one `if` in update_helper.c
-    with no else branch, which is why it is written as one line and read rather than mocked."""
+    """Positive case only: handing the staged directory to another uid needs root, so the refusal
+    cannot be exercised unprivileged. This pins down that the check does not reject the
+    ordinary case -- a rule that rejected everything would pass every refusal test and ship an
+    app that can never update."""
     assert (tree / STAGING).stat().st_uid == os.getuid()
     assert run(helper, tree).returncode == 0
     assert marker_of(tree / TARGET) == "new"
 
 
 def test_a_bundle_that_is_not_flackey_is_refused(helper, tree):
-    """Rule 5, identity half."""
     subprocess.run(["rm", "-rf", str(tree / STAGING)], check=True)
     make_bundle(tree / STAGING, bundle_id="com.example.something-else")
 
@@ -161,8 +147,6 @@ def test_a_staged_bundle_with_no_info_plist_is_refused(helper, tree):
 
 
 def test_a_staged_bundle_with_no_executable_is_refused(helper, tree):
-    """The invariant is that the installed path always points at a *working* bundle. A directory with
-    no executable in it would satisfy every other rule and still leave an app that cannot open."""
     (tree / STAGING / "Contents" / "MacOS" / "Flackey").unlink()
 
     assert run(helper, tree).returncode == REFUSED
@@ -170,9 +154,6 @@ def test_a_staged_bundle_with_no_executable_is_refused(helper, tree):
 
 
 def test_a_quarantined_staged_bundle_is_refused(helper, tree, tmp_path):
-    """Rule 5, quarantine half. `ditto` propagates com.apple.quarantine onto everything it extracts, and
-    a quarantined ad-hoc bundle is refused outright by Gatekeeper -- swapping it in would replace a
-    working app with one that cannot be opened at all without a terminal."""
     subprocess.run(["/usr/bin/xattr", "-w", "com.apple.quarantine",
                     "0081;00000000;Safari;", str(tree / STAGING)], check=True)
     log = tmp_path / "helper.log"
@@ -190,9 +171,6 @@ def test_a_missing_staged_bundle_is_refused(helper, tree):
 
 
 def test_a_missing_installed_app_is_refused(helper, tree):
-    """Nothing to swap with. Refusing rather than renaming the staged bundle into place keeps the one
-    operation this program performs to a single atomic step -- the helper never creates the target, it
-    only ever exchanges two things that both already exist."""
     subprocess.run(["rm", "-rf", str(tree / TARGET)], check=True)
 
     assert run(helper, tree).returncode == REFUSED
@@ -208,9 +186,6 @@ def test_a_file_where_a_bundle_should_be_is_refused(helper, tree):
 
 
 def test_it_refuses_while_the_app_it_is_replacing_is_still_running(helper, tree):
-    """Swapping under a live app would work -- the running process holds its inode and never notices --
-    but the relaunch afterwards would put a second copy on screen, and two Flackeys sharing one database
-    is worse than an update that did not happen."""
     alive = subprocess.Popen(["/bin/sh", "-c", "sleep 120"])
     try:
         # The helper's own wait is 60s; the test's timeout is what stops this hanging if that changes.

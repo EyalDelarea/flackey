@@ -1,18 +1,8 @@
 """Unpack a verified update beside the installed app, and hand the swap to the helper.
 
-The shape of this file is dictated by one fact: a running process cannot replace the bundle it is
-executing from. So the work is split in two. Everything here happens while the app is alive and can
-still show the owner an error -- unpack, normalise, validate, stage. The swap itself happens after this
-process is gone, in `packaging/update_helper.c`, which this module copies out and spawns on the way
-down.
-
-The invariant every path below is written to keep, taken from the design doc:
-
-    /Applications/Flackey.app always points at a working bundle -- the original or the new one, never
-    deleted with no replacement.
-
-Which is why nothing here ever removes or moves the installed app. The only operation that touches it
-is the helper's atomic swap, and that is the last thing to happen rather than the first.
+A process cannot replace the bundle it is executing from, so the work is split in two: everything here
+happens while the app is alive and can still show an error, and the swap itself happens afterwards in
+`packaging/update_helper.c`. Nothing here ever removes or moves the installed app.
 """
 
 from __future__ import annotations
@@ -34,8 +24,7 @@ log = logging.getLogger(__name__)
 APPLICATIONS = Path("/Applications")
 BUNDLE_NAME = "Flackey.app"
 HELPER_NAME = "flackey-update-helper"
-# Hidden, so a staging directory that outlives a failed attempt is not something the owner trips over in
-# Finder, and unique per attempt, so a path planted in advance can never be the one that gets used. Kept
+# Hidden, and unique per attempt so a path planted in advance can never be the one that gets used. Kept
 # in step with `staging_name_ok` in packaging/update_helper.c, which refuses anything else.
 STAGING_PREFIX = ".Flackey-staging-"
 STAGING_RANDOM_CHARS = 10
@@ -46,10 +35,8 @@ STEP_TIMEOUT_S = 300  # unpacking ~100MB; generous, but not "forever" if ditto w
 
 
 class StagingError(Exception):
-    """A step between "the signature verified" and "the bundle is ready to swap in" did not complete.
-
-    Carries a sentence written for the owner rather than for the log, because that is what the Settings
-    row shows. Every raise site below is a row in the design doc's failure table."""
+    """A step between verification and a bundle ready to swap in did not complete. Carries a sentence
+    written for the owner, because that is what the Settings row shows."""
 
 
 @dataclass(frozen=True)
@@ -66,10 +53,7 @@ class StagedUpdate:
 
 
 def running_bundle() -> Path | None:
-    """The `.app` this process is running from, or None from a checkout.
-
-    Only the packaged build can update itself: `python -m flackey` has no bundle to replace, and a
-    development checkout that tried would be replacing whatever `.app` happened to be around it."""
+    """The `.app` this process is running from, or None from a checkout."""
     if not getattr(sys, "frozen", False):
         return None
     # Inside the bundle the executable is Contents/MacOS/Flackey, so the bundle is three levels up.
@@ -83,10 +67,8 @@ def running_bundle() -> Path | None:
 def helper_path() -> Path | None:
     """The helper this build carries, or None when it is not there.
 
-    Lives beside ffmpeg in the bundle's `bin` folder -- `tools.bundled_bin_dir()` -- because that is
-    already the place PyInstaller unpacks binaries to and already where the app looks for its own
-    programs. Not resolved through `tools.tool_path`, deliberately: that falls back to the PATH and to
-    Homebrew, and a `flackey-update-helper` found on the PATH is exactly the thing not to run."""
+    Not resolved through `tools.tool_path`, deliberately: that falls back to the PATH and to Homebrew,
+    and a `flackey-update-helper` found on the PATH is exactly the thing not to run."""
     from ..tools import bundled_bin_dir
 
     root = bundled_bin_dir()
@@ -97,17 +79,8 @@ def helper_path() -> Path | None:
 
 
 def seamless_available(applications: Path = APPLICATIONS) -> bool:
-    """Whether this copy of Flackey can replace itself in place.
-
-    Three separate reasons it may not be able to, all of which mean "use the installer", none of which
-    mean "this update failed":
-
-    - No key is baked in, so nothing could be verified. See `selfupdate/key.py`.
-    - The app is not the one in /Applications -- running from a Downloads folder, a second copy, or a
-      checkout. Replacing `/Applications/Flackey.app` from there would update an app the owner is not
-      looking at.
-    - The build carries no helper, which means it was assembled by something other than build_app.sh.
-    """
+    """Whether this copy of Flackey can replace itself in place. False means "use the installer", never
+    "this update failed"."""
     bundle = running_bundle()
     return (signature.seamless_updates_configured()
             and bundle is not None
@@ -130,19 +103,17 @@ def stage(archive: Path, version: str, *, applications: Path = APPLICATIONS,
           relaunch: bool = True) -> StagedUpdate:
     """Unpack a *verified* archive into `applications` and return the staged bundle.
 
-    Never call this with bytes that have not been through `signature.verify`. Unpacking is the first
-    step that writes attacker-influenced content to disk, and the design puts verification strictly
-    before it so that a forged payload never reaches `ditto` at all.
+    Never call this with bytes that have not been through `signature.verify` -- unpacking is the first
+    step that writes attacker-influenced content to disk.
 
     Inside /Applications rather than a temp folder because `rename` cannot cross filesystems and the
-    swap at the end is a rename. On any failure the staged directory is removed and the installed app is
-    untouched -- it is not touched until the helper runs, and the helper does not run unless this
-    returns."""
+    swap at the end is a rename."""
+    sweep(applications)
     suffix = secrets.token_hex(STAGING_RANDOM_CHARS // 2)
     unpack = applications / f"{UNPACK_PREFIX}{suffix}"
-    staged = applications / f"{STAGING_PREFIX}{suffix}{'.app'}"
-    # A path that already exists was not made by this call. Reusing it would mean unpacking over
-    # somebody else's directory, which is the planted-path shape Sparkle was bitten by; refuse instead.
+    staged = applications / f"{STAGING_PREFIX}{suffix}.app"
+    # A path that already exists was not made by this call, so unpacking into it would be unpacking over
+    # somebody else's directory. Refuse instead.
     for path in (unpack, staged):
         if path.exists() or path.is_symlink():
             raise StagingError("Could not prepare the update: that folder is already in use.")
@@ -160,14 +131,10 @@ def stage(archive: Path, version: str, *, applications: Path = APPLICATIONS,
         inner = unpack / BUNDLE_NAME
         if not inner.is_dir() or inner.is_symlink():
             raise StagingError("The update file did not contain Flackey.app.")
-        # Strip quarantine *before* the rename, so what lands at the staging path is already clean --
-        # `httpx` sets no quarantine attribute today, but `ditto` propagates one onto every extracted
-        # file if the archive ever carries one, and a quarantined ad-hoc bundle is unopenable.
+        # `ditto` propagates a quarantine attribute onto everything it extracts, and a quarantined
+        # ad-hoc bundle is unopenable. Stripped before the rename, so the staging path is already clean.
         _run(["/usr/bin/xattr", "-rc", str(inner)], "xattr -rc",
              "The update could not be prepared for installation.")
-        # Only the owner can write inside the new bundle. This does not stop it being replaced wholesale
-        # -- /Applications is group-writable and this whole design is built on that -- but it narrows
-        # editing files inside it from the `admin` group to one account.
         _run(["/bin/chmod", "-R", "go-w", str(inner)], "chmod -R go-w",
              "The update could not be prepared for installation.")
         inner.rename(staged)
@@ -187,20 +154,37 @@ def discard(staged: StagedUpdate | None) -> None:
     shutil.rmtree(staged.path, ignore_errors=True)
 
 
+def sweep(applications: Path) -> None:
+    """Remove ~200MB staging directories left over from earlier attempts -- pressing Update and then
+    closing the window without answering the restart prompt leaves one behind every time.
+
+    Called at the top of `stage`. If an older bundle had been armed for install-on-quit its path is now
+    gone, which the helper already refuses rather than acts on."""
+    try:
+        entries = list(applications.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith((STAGING_PREFIX, UNPACK_PREFIX)):
+            continue
+        try:
+            # Never follow a link out of the directory, and never delete what is not ours.
+            if entry.is_symlink() or entry.lstat().st_uid != os.getuid():
+                continue
+        except OSError:
+            continue
+        log.info("removing a staged update left over from an earlier attempt: %s", entry)
+        shutil.rmtree(entry, ignore_errors=True)
+
+
 def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None:
     """Copy the helper out of the bundle and spawn it detached. The last thing the app does.
 
-    Copied out *now* rather than when the update was staged. "Install on quit" may be hours later, and a
-    helper left sitting in a temp directory for a whole session is the stray-binary shape Sparkle warns
-    about in its own source -- somebody else's writable copy of a program whose whole job is to replace
-    an app in /Applications. A fresh 0700 directory per run, created by `mkdtemp` so the name cannot be
-    guessed or pre-planted, and the helper removes it on its way out.
+    Copied out now rather than at staging time: "install on quit" may be hours later, and a writable
+    copy of a program whose job is to replace an app in /Applications should not sit in a temp directory
+    for a whole session. It cannot run from inside the bundle it is about to swap away either.
 
-    The helper cannot run from inside the bundle it is about to swap away: the swap would pull the
-    filesystem out from under a running executable.
-
-    Raises StagingError if the copy fails, so the caller can abort the *update* rather than the quit --
-    the staged bundle is still good and the next attempt can use it."""
+    Raises StagingError if the copy fails, so the caller can abort the *update* rather than the quit."""
     helper = helper_path()
     if helper is None:
         raise StagingError("This copy of Flackey cannot install updates by itself.")
@@ -219,8 +203,8 @@ def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None
     if log_path is not None:
         argv.append(str(log_path))
     try:
-        # `start_new_session` is the whole point: the helper has to outlive the process that spawned it,
-        # and a child in this session dies with it. Detached, it reparents to launchd and waits.
+        # `start_new_session` is the whole point: a child in this session would die with it, and the
+        # helper has to outlive the process that spawned it.
         subprocess.Popen(argv, start_new_session=True, close_fds=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
@@ -231,12 +215,10 @@ def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None
 
 
 class Pending:
-    """The one thing the web thread and the window thread have to agree on: whether this app, when it
-    next stops, should replace itself.
+    """Whether this app, when it next stops, should replace itself.
 
-    Process-wide because the fact is process-wide -- the press happens on a uvicorn worker thread and
-    the quit happens on the AppKit main thread, and there is no object that already spans both. Kept to
-    three methods so that what crosses that boundary is a single assignment of an immutable value."""
+    Process-wide because the fact is: the press happens on a uvicorn worker thread and the quit happens
+    on the AppKit main thread, and no object already spans both."""
 
     def __init__(self) -> None:
         self._staged: StagedUpdate | None = None
@@ -252,11 +234,10 @@ class Pending:
         self._staged = None
 
     def run(self, *, log_path: Path | None = None) -> bool:
-        """Spawn the helper if one is armed. Called from the quit path once the server has stopped and
-        the sidecar is down, so that the bundle being swapped is not one anything is still reading.
+        """Spawn the helper if one is armed. Called from the quit path once the server and sidecar are
+        down, so the bundle being swapped is not one anything is still reading.
 
-        Never raises: this runs inside the `finally` that ends the program, and an exception there would
-        replace a clean exit with a traceback for a user who has already been told the app is closing."""
+        Never raises: this runs inside the `finally` that ends the program."""
         staged = self._staged
         self._staged = None
         if staged is None:
