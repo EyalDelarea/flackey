@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
 from .config import Settings, save_settings
+from .selfupdate import install as update_install
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
@@ -441,8 +442,16 @@ def run_in_window(settings: Settings) -> None:
         window.events.loaded += lambda: inset_titlebar(window)
     window.events.closed += lambda: remember_window_size(settings, (last[0], last[1]))
     window.events.closed += handle.stop
+    # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers
+    # above, the same path as the owner clicking the red button.
+    handle.on_quit = window.destroy
     try:
         webview.start(icon=app_icon())
     finally:
         handle.stop()
         thread.join(timeout=15)
+        # Only after the server and the slskd sidecar are down: the helper is about to replace the
+        # bundle they were reading from. `run` never raises -- this is the exit path.
+        if update_install.pending.staged is not None:
+            log.info("quitting to install a staged update")
+            update_install.pending.run(log_path=settings.data_dir / "flackey-update-helper.log")

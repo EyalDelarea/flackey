@@ -84,6 +84,16 @@ jobs:
         run: packaging/build_app.sh
       - name: Smoke-launch
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
+      - name: Update helper is inside the signed bundle
+        # A bundle published without the helper looks perfect until someone presses Update months
+        # later and nothing can swap it.
+        run: |
+          test -x packaging/build/dist/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
+          codesign --verify --deep --strict packaging/build/dist/Flackey.app
+      - name: Helper refuses what it should
+        # The only job on a Mac, so the only one that can compile the helper; the python job runs on
+        # ubuntu and skips these.
+        run: uv run pytest tests/test_update_helper.py -q
       - name: Installer
         run: |
           packaging/build_installer.sh
@@ -94,6 +104,7 @@ jobs:
           path: |
             packaging/build/Flackey.pkg
             packaging/build/Flackey.pkg.sha256
+            packaging/build/Flackey-*.zip
           if-no-files-found: error
 
   release:
@@ -105,15 +116,46 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
       - uses: actions/download-artifact@v8
         with:
           name: Flackey.installer
           path: dist
       - name: latest.json
         run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 | tee dist/latest.json
+      - name: Sign the update archive
+        # Here rather than in the mac job: this is the only step that needs the private key, and it
+        # should not run alongside npm install and PyInstaller.
+        #
+        # An unset secret is not a failure -- the script says so and the release publishes the zip
+        # unsigned, which reads to every installed copy as "no seamless update here, use the installer".
+        env:
+          FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
+        # --no-project: the script reads the signed-message format straight out of src/, so none of
+        # the app's macOS-shaped dependencies need to resolve on this runner.
+        run: uv run --no-project --with cryptography packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json \
+          set -euo pipefail
+
+          zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
+          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json)
+          # Both optional and independently so -- the .sig is missing whenever the signing secret is
+          # unset -- and publishing the pkg must not depend on either.
+          if [[ -f "$zip" ]]; then
+            assets+=("$zip")
+            if [[ -f "$zip.sig" ]]; then
+              assets+=("$zip.sig")
+            else
+              echo "::notice title=Unsigned release::No $zip.sig; installed copies will update by installer."
+            fi
+          else
+            echo "::warning title=No update archive::$zip was not built."
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes

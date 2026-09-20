@@ -33,3 +33,12 @@ def has_fpcalc() -> bool:
 
 
 requires_fpcalc = pytest.mark.skipif(not has_fpcalc(), reason="fpcalc (chromaprint) not installed")
+
+
+@pytest.fixture(autouse=True)
+def _never_open_the_real_installer(monkeypatch):
+    """`open_installer` shells out to `open`, so a test that reaches it throws a modal Installer.app
+    dialog at whoever is running the suite. Tests that mean to reach this path stub it themselves."""
+    monkeypatch.setattr("flackey.web.update.open_installer",
+                        lambda path: pytest.fail(f"a test opened the real installer: {path} -- stub "
+                                                 "flackey.web.update.open_installer in the test"))

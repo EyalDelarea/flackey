@@ -65,11 +65,18 @@ export interface SlskdSetup { installed: boolean; running: boolean; version: str
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
   url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
-  published_date:string|null; prerelease:boolean; error?:string }
-/** Where the installer download has got to. Lives on the server and arrives on every `status` event, so
-    leaving Settings mid-download and coming back finds it where it actually is rather than idle. */
-export interface UpdateDownload { state:'idle'|'downloading'|'ready'|'error'; percent:number; received:number
-  total:number|null; version:string|null; path:string|null; error:string|null }
+  published_date:string|null; prerelease:boolean; error?:string
+  /** Update replaces the app in place rather than opening the installer. False is the old flow. */
+  seamless?:boolean; archive_url?:string|null; archive_size?:number|null; signature_url?:string|null }
+/** Lives on the server, so leaving Settings mid-download and coming back finds it where it is. */
+export interface UpdateDownload {
+  state:'idle'|'downloading'|'verifying'|'staged'|'installing'|'ready'|'error'
+  percent:number; received:number; total:number|null; version:string|null; path:string|null
+  error:string|null
+  seamless:boolean
+  /** Transfers in flight, for the restart prompt: restarting loses them. */
+  busy:number
+  deferred:boolean }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -120,6 +127,9 @@ export const api = {
   installUpdate: () => appPost<UpdateDownload>('/api/update/install'),
   updateProgress: () => call<UpdateDownload>('/api/update/progress'),
   openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
+  // `appPost`: an app that quits itself at a stranger's choosing is not an improvement.
+  restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
+  installUpdateOnQuit: () => appPost<UpdateDownload>('/api/update/later'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

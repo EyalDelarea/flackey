@@ -48,10 +48,32 @@ uv run --with pyinstaller pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \
   packaging/Flackey.spec
 
+echo "==> update helper"
+# After PyInstaller and *before* codesign: adding a file to a signed bundle breaks the seal, and macOS
+# treats a bundle whose signature no longer matches worse than an unsigned one.
+#
+# Not routed through Flackey.spec's `binaries` list: PyInstaller rewrites the load commands of
+# everything in there, and this links nothing but libSystem.
+HELPER_DIR="$BUILD/dist/Flackey.app/Contents/Frameworks/bin"
+mkdir -p "$HELPER_DIR"
+clang -O2 -Wall -Wextra -Werror -o "$HELPER_DIR/flackey-update-helper" packaging/update_helper.c
+chmod 755 "$HELPER_DIR/flackey-update-helper"
+
 # A bundle assembled file by file carries no signature, and macOS treats an unsigned-but-modified bundle
 # worse than a plainly unsigned one: an ad-hoc signature is free and makes it merely unsigned.
 echo "==> ad-hoc signature"
 codesign --force --deep --sign - "$BUILD/dist/Flackey.app"
+
+echo "==> update archive"
+# `ditto` rather than `zip`: the bundle contains symlinks (Python.framework) and the signature written
+# above, and `zip` flattens the first and drops the second. --keepParent so the archive contains
+# `Flackey.app` rather than its contents loose.
+#
+# After the signature, so the bytes published are the bytes that get signed with the Ed25519 key.
+VERSION="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' src/flackey/__init__.py)"
+rm -f "$BUILD/Flackey-$VERSION.zip"
+ditto -c -k --keepParent "$BUILD/dist/Flackey.app" "$BUILD/Flackey-$VERSION.zip"
+echo "    $BUILD/Flackey-$VERSION.zip"
 
 echo
 echo "Built $BUILD/dist/Flackey.app"

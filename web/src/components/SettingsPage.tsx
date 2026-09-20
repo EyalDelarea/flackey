@@ -75,6 +75,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   const [installStarting, setInstallStarting] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
   const [releaseBusy, setReleaseBusy] = useState(false)
+  const [restartBusy, setRestartBusy] = useState(false)
   useEffect(() => {
     api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
   }, [authorized])
@@ -195,7 +196,27 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setInstallError(getErrorMessage(e, "Couldn't open the release page.")))
       .finally(() => setReleaseBusy(false))
   }
-  const downloading = download?.state === 'downloading' || installStarting
+  const restartNow = () => {
+    setRestartBusy(true); setInstallError(null)
+    // A window that refuses to close answers 200 and still `staged`, not an error.
+    api.restartForUpdate()
+      .then(next => { if (next.state !== 'installing') {
+        setInstallError(next.error ?? "Couldn't restart to finish the update."); setRestartBusy(false) } })
+      .catch(e => { setInstallError(getErrorMessage(e, "Couldn't restart to finish the update.")); setRestartBusy(false) })
+  }
+  const installOnQuit = () => {
+    setRestartBusy(true); setInstallError(null)
+    api.installUpdateOnQuit()
+      .catch(e => setInstallError(getErrorMessage(e, "Couldn't schedule the update.")))
+      .finally(() => setRestartBusy(false))
+  }
+  // One boolean for "there is something to install", because the server has two independent ways of
+  // saying so and the install endpoint accepts either. A release that carries the signed archive but no
+  // .pkg yet is `available: false, seamless: true`, and gating the button on `available` alone would
+  // render that as "no update" for a release the app can perfectly well install.
+  const installable = !!update?.ok && (update.available || !!update.seamless)
+  const downloading = download?.state === 'downloading' || download?.state === 'verifying' || installStarting
+  const staged = download?.state === 'staged'
   const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`
   const autoUpdateOn = s?.auto_update_check !== false
   const toggleAutoUpdate = () => {
@@ -346,35 +367,50 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           <div className="v">Flackey {s.version}</div>
           {updateChecking && <div className="v">Checking for updates…</div>}
           {!updateChecking && update?.ok && !update.newer && <div className="v">Up to date.</div>}
-          {!updateChecking && update?.ok && update.available && <div className="v">
+          {!updateChecking && installable && <div className="v">
             Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
           </div>}
-          {!updateChecking && update?.ok && update.newer && !update.available && <div className="v">
+          {!updateChecking && update?.ok && update.newer && !installable && <div className="v">
             Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
-          {/* What the press is doing, in the row that was silent before. The percentage only appears once
-              the server knows the size; until then the byte count is the honest thing to show. */}
-          {downloading && <div className="v">
+          {download?.state === 'verifying' && <div className="v">Checking the update is genuine…</div>}
+          {downloading && download?.state !== 'verifying' && <div className="v">
             {download?.total
               ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
-          {/* Not when `ready` carries an error: that is the installer that downloaded but would not open,
-              and saying it is open directly above the line explaining that it isn't helps nobody. */}
+          {/* Names what a restart would cost while transfers are running. */}
+          {staged && !download?.deferred && <div className="v">
+            Version {download?.version} is ready and verified. Flackey will close and reopen to finish.
+            {download?.busy ? ` ${download.busy} ${download.busy === 1 ? 'transfer is' : 'transfers are'} still running and would be lost.` : ''}
+          </div>}
+          {staged && download?.deferred && <div className="v">
+            Version {download?.version} will be installed the next time you quit Flackey.
+          </div>}
+          {download?.state === 'installing' && <div className="v">Closing to install version {download?.version}…</div>}
+          {/* Not when `ready` carries an error: the installer downloaded but would not open. */}
           {download?.state === 'ready' && !download.error && <div className="v">
             Downloaded. The macOS installer is open — follow it through, then reopen Flackey.
           </div>}
           {download?.error && <div className="err">{download.error}</div>}
           {installError && <div className="err">{installError}</div>}
         </div>
-          {update?.available && <div className="actions">
-            <button className="btn-secondary" onClick={startUpdate} disabled={downloading}>
-              {downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
-                : download?.state === 'ready' ? 'Open installer'
-                : download?.state === 'error' ? 'Try again' : 'Download update'}</button>
+          {staged && !download?.deferred && <div className="actions">
+            <button className="btn-secondary" onClick={installOnQuit} disabled={restartBusy}>Install on quit</button>
+            <button className="btn-secondary" onClick={restartNow} disabled={restartBusy}>
+              {restartBusy ? 'Restarting…' : 'Restart now'}</button>
           </div>}
-          {update?.newer && !update.available && <div className="actions">
+          {installable && !staged && download?.state !== 'installing' && <div className="actions">
+            <button className="btn-secondary" onClick={startUpdate} disabled={downloading}>
+              {download?.state === 'verifying' ? 'Verifying…'
+                : downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
+                : download?.state === 'ready' ? 'Open installer'
+                : download?.state === 'error' ? 'Try again'
+                // Do not promise a restart this press will not perform.
+                : update?.seamless ? 'Update' : 'Download update'}</button>
+          </div>}
+          {update?.newer && !installable && <div className="actions">
             <button className="btn-secondary" onClick={openRelease} disabled={releaseBusy}>
               {releaseBusy ? 'Opening…' : 'View release'}</button>
           </div>}</div>

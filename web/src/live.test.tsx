@@ -155,7 +155,8 @@ describe('the update download', () => {
     try {
       vi.spyOn(api, 'health').mockResolvedValue(health)
       const poll = vi.spyOn(api, 'updateProgress').mockResolvedValue({ state: 'ready', percent: 100,
-        received: 8, total: 8, version: '0.1.1', path: '/data/updates/Flackey.pkg', error: null })
+        received: 8, total: 8, version: '0.1.1', path: '/data/updates/Flackey.pkg', error: null,
+        seamless: false, busy: 0, deferred: false })
       const liveRef: { current: Live | null } = { current: null }
       render(<Harness liveRef={liveRef} />)
       await vi.waitFor(() => expect(FakeEventSource.last).not.toBeNull())

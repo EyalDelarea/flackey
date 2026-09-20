@@ -106,6 +106,9 @@ def test_update_reports_new_installer(client):
         "url": "https://example.test/Flackey.pkg", "release_url": "https://example.test/releases/v9.9.9",
         "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
         "published_date": "2026-09-15", "prerelease": False,
+        # A release carrying only the pkg: there is nothing signed to install in place, so the press
+        # leads to Installer.app exactly as it did before.
+        "seamless": False, "archive_url": None, "archive_size": None, "signature_url": None,
     }
 
 

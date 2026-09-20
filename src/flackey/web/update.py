@@ -14,16 +14,17 @@ from fastapi import APIRouter, HTTPException, Request
 from .. import __version__
 from ..config import Settings
 from ..events import Status
+from ..selfupdate import install as selfupdate
+from ..selfupdate import signature
 
 log = logging.getLogger(__name__)
 
 RELEASES_URL = "https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10"
 INSTALLER_NAME = "Flackey.pkg"
-# The installer is ~100MB over a link that can stall for a moment without being dead, so the budget is
-# per read rather than for the whole transfer: a single deadline aborts a slow but healthy download.
+SIGNATURE_SUFFIX = ".sig"
+MAX_SIGNATURE_BYTES = 4096
+# Per read, not for the whole transfer: a single deadline would abort a slow but healthy download.
 DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
-# Where the download's state lives on the shared status dict, which fans every change out over SSE --
-# the page cannot poll its way through a download it may navigate away from and come back to.
 PROGRESS_KEY = "update_download"
 INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
 
@@ -34,25 +35,15 @@ APP_HEADER = "x-flackey-app"
 def from_the_app(request: Request) -> None:
     """Refuse a press that some other page made the browser send.
 
-    Flackey listens on loopback, which is reachable from any site the owner happens to open, and a plain
-    form POST from one needs no permission: CORS hides the reply, but these two endpoints are wanted for
-    what they *do*, not what they answer -- a downloaded installer opening by itself is an admin-password
-    prompt at a stranger's choosing. A header nobody else can set is what separates the app's own page
-    from that: inventing a header turns the request into a preflighted one, and the preflight is answered
-    by the CORS rules in `create_app`, which no outside origin satisfies.
-
-    Deliberately not an `Origin` check. The window is a WKWebView loading an http:// URL and the dev
-    server proxies /api with `changeOrigin`, so what actually arrives in that header could not be
-    established here without running the real app -- and a wrong guess locks the owner out of updating.
-    """
+    Flackey listens on loopback, and these endpoints are wanted for what they *do*, which CORS does
+    not hide. Inventing a header forces a preflight, which only `create_app`'s origins satisfy. Not
+    an `Origin` check: a WKWebView on http:// and a dev-server proxy make that unguessable here."""
     if not request.headers.get(APP_HEADER):
         raise HTTPException(403, "That request did not come from Flackey.")
 
 
 class ShortDownload(Exception):
-    """The body did not match the size the release declared -- too few bytes or too many. Its own type
-    because it is neither an HTTP error nor a disk error, and saying "check your connection" about a
-    stream that ended early is the honest reading of both."""
+    """The body did not match the size the release declared -- too few bytes or too many."""
 
 
 def _version_tuple(v: str) -> tuple[int, int, int]:
@@ -66,23 +57,24 @@ def _size_mb(size: int | None) -> str | None:
     return f"{size / 1e6:.1f} MB" if size else None
 
 
+def archive_name(version: str) -> str:
+    """Built from the version, not matched by pattern, so somebody else's zip cannot be mistaken
+    for this one."""
+    return f"Flackey-{version}.zip"
+
+
 def open_installer(path: Path) -> None:
-    """Hand the .pkg to Installer.app. A plain `open`, not the `-R` that reveals a file in Finder: the
-    owner asked to update, so landing them in the installer is the point -- a selected file in a Finder
-    window is one more thing to double-click and one more place to lose them."""
     subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def open_url(url: str) -> None:
-    """Open a page in the real browser. `window.open` from the page does nothing inside pywebview, which
-    is why every link the app offered was a dead click."""
+    """`window.open` from the page does nothing inside pywebview."""
     webbrowser.open(url)
 
 
 async def latest_release() -> dict:
-    """The answer `GET /api/update` returns, and the same lookup the download runs again for itself --
-    the client never says what to fetch, so a page that has been sitting open on a stale payload cannot
-    talk the app into downloading and opening something else."""
+    """The download runs this lookup again for itself: the client never says what to fetch, so a
+    stale page cannot talk the app into downloading something else."""
     try:
         async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
             res = await client.get(RELEASES_URL)
@@ -94,23 +86,36 @@ async def latest_release() -> dict:
     if not isinstance(releases, list):
         return {"ok": False, "current": __version__, "newer": False, "available": False,
                 "error": "Release feed did not look right."}
-    # Stable only: a prerelease tag (every 0.1.x release so far) should never trigger an update prompt.
     latest = next((item for item in releases
                     if isinstance(item, dict) and not item.get("draft") and not item.get("prerelease")), None)
     assets = latest.get("assets", []) if latest else []
-    installer = next((a for a in assets if isinstance(a, dict) and a.get("name") == INSTALLER_NAME), None)
+
+    def asset(name: str) -> dict | None:
+        return next((a for a in assets if isinstance(a, dict) and a.get("name") == name), None)
+
+    installer = asset(INSTALLER_NAME)
     tag = str(latest.get("tag_name") or "") if latest else ""
     latest_version = tag.removeprefix("v")
-    # A newer tag can exist before its installer is built (e.g. a release job that failed partway
-    # through), so "a newer version exists" and "there is something to download" are tracked
-    # separately -- conflating them is what made a broken release read back as "up to date".
+    archive = asset(archive_name(latest_version)) if latest_version else None
+    archive_sig = asset(archive_name(latest_version) + SIGNATURE_SUFFIX) if latest_version else None
+    # A newer tag can exist before its installer is built, so "newer" and "downloadable" are
+    # separate; conflating them made a broken release read back as "up to date".
     newer = bool(latest and _version_tuple(latest_version) > _version_tuple(__version__))
-    # The declared size is the only thing bounding the download and the only thing that can say it
-    # arrived whole, so an asset without one is not something to offer. Reads to the page as a release
-    # whose installer isn't published yet, which is the same shape of "wait for the next one".
-    raw_size = installer.get("size") if installer else None
-    size = raw_size if isinstance(raw_size, int) and not isinstance(raw_size, bool) and raw_size > 0 else None
+    def declared_size(a: dict | None) -> int | None:
+        """The only thing bounding the download and the only thing that can say it arrived whole."""
+        raw = a.get("size") if a else None
+        return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else None
+
+    size = declared_size(installer)
     available = size is not None and newer
+    archive_size = declared_size(archive)
+    # Will pressing Update replace the app in place, or open an installer? A release missing either
+    # half of the signed pair is not one to install seamlessly, and nor is a build that cannot
+    # verify -- which is the old flow, not a failure.
+    seamless = bool(newer and archive_size is not None and archive_sig
+                    and archive.get("browser_download_url")
+                    and archive_sig.get("browser_download_url")
+                    and selfupdate.seamless_available())
     published = latest.get("published_at") if latest else None
     date = None
     if isinstance(published, str):
@@ -124,32 +129,46 @@ async def latest_release() -> dict:
             "release_url": latest.get("html_url") if latest else None,
             "size": size, "size_label": _size_mb(size),
             "published_at": published, "published_date": date,
-            "prerelease": bool(latest.get("prerelease")) if latest else False}
+            "prerelease": bool(latest.get("prerelease")) if latest else False,
+            "seamless": seamless,
+            "archive_url": archive.get("browser_download_url") if seamless else None,
+            "archive_size": archive_size if seamless else None,
+            "signature_url": archive_sig.get("browser_download_url") if seamless else None}
 
 
-def router(status: Status | dict | None = None, settings: Settings | None = None) -> APIRouter:
+def router(status: Status | dict | None = None, settings: Settings | None = None,
+           quit_app=None) -> APIRouter:
     r = APIRouter(prefix="/api")
-    # One download at a time, tracked on the server rather than in the page: a busy flag in React is lost
-    # the moment the owner leaves Settings, and the download it was describing is not.
+    # Server-side, not in React: a busy flag in the page is lost the moment the owner leaves
+    # Settings, and the download it was describing is not.
+    #
+    # idle -> downloading -> ready, or idle -> downloading -> verifying -> staged -> installing.
     state: dict = {"state": "idle", "percent": 0, "received": 0, "total": None, "version": None,
-                   "path": None, "error": None}
-    # Held only so the running download is not garbage collected mid-flight -- asyncio keeps nothing but a
-    # weak reference to a bare task. Whether one is in progress is answered by `state`, not by this.
+                   "path": None, "error": None, "seamless": False, "busy": 0, "deferred": False}
+    # Held only so the running download is not garbage collected: asyncio keeps a bare task weakly.
     task: asyncio.Task | None = None
+    staged: selfupdate.StagedUpdate | None = None
 
     def publish(**fields) -> None:
         state.update({"percent": 0, "received": 0, "total": None, "version": None, "path": None,
-                      "error": None, **fields})
+                      "error": None, "seamless": False, "busy": 0, "deferred": False, **fields})
         if status is not None:
             status[PROGRESS_KEY] = dict(state)
 
-    def target_path() -> Path:
-        # Beside the log and the database rather than in a temp folder the OS may sweep: "Show in Finder"
-        # already points here, so a download that finished but would not open is somewhere findable.
-        root = settings.data_dir if settings is not None else Path.home()
-        return root / "updates" / INSTALLER_NAME
+    def in_flight() -> int:
+        """How many fetches the worker has open, for the restart prompt."""
+        progress = status.get("fetch_progress") if status is not None else None
+        return len(progress) if isinstance(progress, list) else 0
 
-    def discard(path: Path | None) -> None:
+    def updates_dir() -> Path:
+        # Beside the log and the database rather than a temp folder the OS may sweep.
+        root = settings.data_dir if settings is not None else Path.home()
+        return root / "updates"
+
+    def target_path() -> Path:
+        return updates_dir() / INSTALLER_NAME
+
+    def remove_download(path: Path | None) -> None:
         if path is None:
             return
         try:
@@ -158,27 +177,25 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             log.warning("could not remove the partial download at %s", path)
 
     def finished(t: asyncio.Task) -> None:
-        """Last line of defence for the one state that must never stand: a task cancelled at shutdown
-        raises straight past `except Exception`, and a "downloading" left behind by it would refuse every
-        retry for the rest of the session."""
+        """A task cancelled at shutdown raises past `except Exception`, and the "downloading" it
+        leaves behind would refuse every retry for the rest of the session."""
         if not t.cancelled() and t.exception() is not None:
             log.error("update download ended badly", exc_info=t.exception())
-        if state["state"] == "downloading":
-            publish(state="error", version=state["version"],
+        if state["state"] in ("downloading", "verifying"):
+            publish(state="error", version=state["version"], seamless=state["seamless"],
                     error="The download stopped unexpectedly. Try again.")
 
-    async def download(url: str, total: int | None, version: str) -> None:
+    async def stream_to(url: str, total: int | None, target: Path, version: str,
+                        seamless: bool = False) -> int:
+        """Fetch `url` to `target`, publishing progress. Returns the byte count.
+
+        Written to a .part name and renamed on the last byte: a truncated file at the real name gets
+        called corrupt by Installer.app, or fails its signature check, with nothing pointing at the
+        download. Raises ShortDownload, httpx.HTTPError or OSError -- the callers word each one."""
         received = 0
-        # Bound before the try so the handlers below can clean up after a failure that happened before
-        # there was anything to clean up.
-        partial: Path | None = None
+        partial = target.with_name(target.name + ".part")
+        target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            target = target_path()
-            # Written under a .part name and renamed only once the last byte lands. A truncated file left
-            # at the real name is the one failure worth avoiding outright: macOS opens it, Installer.app
-            # calls it corrupt, and nothing says the download was the thing that went wrong.
-            partial = target.with_name(target.name + ".part")
-            target.parent.mkdir(parents=True, exist_ok=True)
             with partial.open("wb") as fh:
                 async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
                     async with client.stream("GET", url) as res:
@@ -186,48 +203,132 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                         shown = -1
                         async for chunk in res.aiter_bytes():
                             received += len(chunk)
-                            # The release says how big the installer is, so anything past that is not the
-                            # installer. Stop at the ceiling rather than writing a stranger's stream to
-                            # disk until it runs out of room.
+                            # Anything past the declared size is not the download.
                             if total and received > total:
                                 raise ShortDownload(f"body ran past the {total} bytes the release declared")
                             fh.write(chunk)
                             percent = int(received * 100 / total) if total else 0
-                            # Only when the whole number moves: a chunk-by-chunk publish is a few thousand
-                            # SSE frames for one download, and the page cannot draw them anyway.
+                            # Only on a whole-number move: per-chunk is thousands of SSE frames.
                             if percent != shown:
                                 shown = percent
                                 publish(state="downloading", percent=percent, received=received,
-                                        total=total, version=version)
-            # A connection closed cleanly partway is not an HTTP error and nothing upstream objects to it,
-            # so counting the bytes is the only thing standing between a half-installer and Installer.app
-            # calling Flackey corrupt.
+                                        total=total, version=version, seamless=seamless)
+            # A connection closed cleanly partway is not an HTTP error, so counting is what catches it.
             if total and received != total:
                 raise ShortDownload(f"got {received} of {total} bytes")
             partial.replace(target)
+        except BaseException:
+            remove_download(partial)
+            raise
+        return received
+
+    async def fetch_signature(url: str) -> bytes | None:
+        """The detached signature, or None for every way this can go wrong -- the caller refuses on
+        all of them alike, because a signature that cannot be fetched is missing.
+
+        Abandoned at the ceiling rather than fetched and then measured: `res.content` on an endless
+        stream is an out-of-memory kill before there is anything to measure."""
+        body = bytearray()
+        try:
+            async with (httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client,
+                        client.stream("GET", url) as res):
+                res.raise_for_status()
+                async for chunk in res.aiter_bytes():
+                    body += chunk
+                    if len(body) > MAX_SIGNATURE_BYTES:
+                        log.warning("the signature asset at %s ran past %d bytes, so it is not a "
+                                    "signature", url, MAX_SIGNATURE_BYTES)
+                        return None
+        except httpx.HTTPError:
+            log.warning("could not fetch the update signature from %s", url, exc_info=True)
+            return None
+        return signature.decode_signature(bytes(body))
+
+    async def download_archive(url: str, total: int | None, sig_url: str, version: str) -> None:
+        """Fetch the bundle, prove it, stage it, and stop -- nothing is swapped until the owner
+        answers. No failure here falls back to the installer."""
+        nonlocal staged
+        archive = updates_dir() / archive_name(version)
+        try:
+            received = await stream_to(url, total, archive, version, seamless=True)
+        except ShortDownload:
+            log.warning("update archive from %s was incomplete", url, exc_info=True)
+            publish(state="error", version=version, seamless=True, error=INCOMPLETE)
+            return
+        except httpx.HTTPError:
+            log.warning("update archive from %s failed", url, exc_info=True)
+            publish(state="error", version=version, seamless=True,
+                    error="The download stopped before it finished. Check your connection and try again.")
+            return
+        except OSError:
+            log.warning("could not write the update archive to %s", archive, exc_info=True)
+            publish(state="error", version=version, seamless=True,
+                    error="Could not save the update. The disk may be full.")
+            return
+
+        publish(state="verifying", percent=100, received=received, total=total, version=version,
+                seamless=True)
+        sig = await fetch_signature(sig_url)
+        try:
+            payload = archive.read_bytes()
+        except OSError:
+            log.exception("could not read back the downloaded archive at %s", archive)
+            remove_download(archive)
+            publish(state="error", version=version, seamless=True,
+                    error="Could not read the downloaded update. Try again.")
+            return
+        # Below this line the bytes get unpacked into /Applications and then executed. The version is
+        # part of what was signed, so an older archive re-published under this tag fails here.
+        if sig is None or not signature.verify_archive(version, payload, sig):
+            log.error("the update archive for %s did not match its signature; refusing to install it",
+                      version)
+            remove_download(archive)
+            publish(state="error", version=version, seamless=True,
+                    error="This update could not be verified, so Flackey did not install it. "
+                          "Download it from the release page instead.")
+            return
+        del payload
+
+        try:
+            new = selfupdate.stage(archive, version, relaunch=True)
+        except selfupdate.StagingError as exc:
+            log.error("could not stage the verified update for %s: %s", version, exc)
+            remove_download(archive)
+            publish(state="error", version=version, seamless=True, error=str(exc))
+            return
+        except Exception:
+            log.exception("unexpected failure staging the update for %s", version)
+            remove_download(archive)
+            publish(state="error", version=version, seamless=True,
+                    error="The update could not be prepared. The log has the details.")
+            return
+        remove_download(archive)
+        staged = new
+        publish(state="staged", percent=100, received=received, total=total, version=version,
+                path=str(new.path), seamless=True, busy=in_flight())
+
+    async def download(url: str, total: int | None, version: str) -> None:
+        received = 0
+        target = target_path()
+        try:
+            received = await stream_to(url, total, target, version)
         except ShortDownload:
             log.warning("update download from %s was incomplete", url, exc_info=True)
-            discard(partial)
             publish(state="error", version=version, error=INCOMPLETE)
             return
         except httpx.HTTPError:
             log.warning("update download from %s failed", url, exc_info=True)
-            discard(partial)
             publish(state="error", version=version,
                     error="The download stopped before it finished. Check your connection and try again.")
             return
         except OSError:
-            log.warning("could not write the update to %s", partial, exc_info=True)
-            discard(partial)
+            log.warning("could not write the update to %s", target, exc_info=True)
             publish(state="error", version=version,
                     error="Could not save the installer. The disk may be full.")
             return
         except Exception:
-            # Nothing else is expected here, but "downloading" is the one state that must never be the
-            # last word: it is what blocks the next attempt, so an unforeseen failure that left it
-            # standing would wedge the button at 0% with no way back.
+            # "downloading" is what blocks the next attempt, so it must never be the last word.
             log.exception("update download from %s failed unexpectedly", url)
-            discard(partial)
             publish(state="error", version=version,
                     error="The download failed. The log has the details.")
             return
@@ -237,7 +338,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             open_installer(target)
         except Exception:
             log.warning("could not open the downloaded installer at %s", target, exc_info=True)
-            # Still ready, because the file is there and correct -- only the last step needs a hand.
+            # Still ready: the file is there and correct, only the last step needs a hand.
             publish(state="ready", percent=100, received=received, total=total, version=version,
                     path=str(target), error="The installer downloaded but would not open. "
                                             "Open Flackey.pkg from the app data folder to finish.")
@@ -254,20 +355,21 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
     async def install(request: Request) -> dict:
         nonlocal task
         from_the_app(request)
-        # The state, not the task handle, is what says a download is in flight -- the page may press this
-        # from two windows, and the second press should read back the first one's progress, not start a
-        # second 100MB fetch over the top of it.
-        if state["state"] == "downloading":
+        # `state`, not the task handle, is what says a download is in flight: a second press should
+        # read back the first one's progress, not start another 100MB fetch over the top of it.
+        if state["state"] in ("downloading", "verifying"):
             return dict(state)
-        # Already downloaded and still on disk: re-open it rather than fetching 100MB a second time. This
-        # is what the "Open installer" button presses, so the two paths stay one endpoint.
+        if state["state"] == "staged" and staged is not None:
+            return dict(state)
+        if state["state"] == "installing":
+            return dict(state)
+        # Re-open what is already on disk rather than fetching it again. This is also what the
+        # "Open installer" button presses, so the two paths stay one endpoint.
         if state["state"] == "ready" and state["path"] and Path(state["path"]).exists():
             open_installer(Path(state["path"]))
             return dict(state)
-        # Claimed here, before the lookup below -- which awaits. Two presses that both got past the check
-        # while it was running would each start a download onto the same part-file, interleave their
-        # writes, and hand whatever survived to Installer.app. The claim is dropped again on every path
-        # that does not go on to start one.
+        # Claimed before the lookup below, which awaits: two presses that both got past the checks
+        # while it ran would interleave their writes onto the same part-file.
         publish(state="downloading", version=state["version"])
         try:
             info = await latest_release()
@@ -277,13 +379,57 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         if not info.get("ok"):
             publish(state="idle")
             raise HTTPException(502, info.get("error") or "Could not check for updates.")
-        if not info["available"]:
+        if not info["available"] and not info["seamless"]:
             publish(state="idle")
             raise HTTPException(409, f"Version {info['latest']} is out, but its installer isn't published yet."
                                 if info["newer"] else "Flackey is already up to date.")
-        publish(state="downloading", total=info["size"], version=info["latest"])
-        task = asyncio.create_task(download(info["url"], info["size"], info["latest"]))
+        # Chosen once, never as a recovery: a failed seamless attempt does not retry as an installer
+        # download, because fetching a second payload with less checking answers nothing.
+        if info["seamless"]:
+            publish(state="downloading", total=info["archive_size"], version=info["latest"],
+                    seamless=True)
+            task = asyncio.create_task(download_archive(
+                info["archive_url"], info["archive_size"], info["signature_url"], info["latest"]))
+        else:
+            publish(state="downloading", total=info["size"], version=info["latest"])
+            task = asyncio.create_task(download(info["url"], info["size"], info["latest"]))
         task.add_done_callback(finished)
+        return dict(state)
+
+    @r.post("/update/restart")
+    async def restart(request: Request) -> dict:
+        """Commit the staged update and close the app. The quit is the commit, so this refuses
+        unless something really is staged."""
+        from_the_app(request)
+        if state["state"] != "staged" or staged is None:
+            raise HTTPException(409, "There is no update ready to install.")
+        selfupdate.pending.arm(staged)
+        publish(state="installing", percent=100, version=state["version"], seamless=True,
+                path=state["path"])
+        if quit_app is None:
+            log.warning("nothing to quit: the staged update will install when Flackey next stops")
+            return dict(state)
+        try:
+            quit_app()
+        except Exception:
+            # Deliberately still armed: quitting by hand runs the same `finally` that hands over, so
+            # disarming here would make the message below a lie.
+            log.exception("could not close the window to install the update")
+            publish(state="staged", percent=100, version=state["version"], seamless=True,
+                    path=state["path"], busy=in_flight(),
+                    error="Flackey could not close itself. Quit Flackey and it will install on the way out.")
+        return dict(state)
+
+    @r.post("/update/later")
+    async def later(request: Request) -> dict:
+        """Install on quit instead of now: the same helper, armed with `relaunch=False`."""
+        from_the_app(request)
+        if state["state"] != "staged" or staged is None:
+            raise HTTPException(409, "There is no update ready to install.")
+        selfupdate.pending.arm(selfupdate.StagedUpdate(
+            path=staged.path, version=staged.version, relaunch=False))
+        publish(state="staged", percent=100, version=state["version"], seamless=True,
+                path=state["path"], deferred=True)
         return dict(state)
 
     @r.post("/update/release")
