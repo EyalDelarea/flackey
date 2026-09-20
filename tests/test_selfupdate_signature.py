@@ -1,7 +1,5 @@
-"""The gate between bytes off the network and code running as the user.
-
-Every case here answers False rather than raising: a caller that has to wrap `verify` in its own
-try/except is a caller that can get the wrapping wrong.
+"""The gate between bytes off the network and code running as the user. Everything answers False
+rather than raising: a caller that must wrap `verify` is one that can wrap it wrong.
 """
 from __future__ import annotations
 
@@ -87,8 +85,7 @@ def test_a_signature_asset_of_the_wrong_length_decodes_to_nothing(keypair):
 
 
 def test_the_release_key_is_baked_in_and_well_formed():
-    """A cleared or corrupted constant reads as "this build does not do seamless updates", which is
-    silent -- every copy quietly falls back to the installer with nothing to say it went wrong."""
+    """A cleared constant is silent: every copy falls back to the installer saying nothing."""
     key = signature.baked_public_key()
     assert key is not None and len(key) == signature.PUBLIC_KEY_BYTES
     assert signature.seamless_updates_configured() is True

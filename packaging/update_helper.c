@@ -1,24 +1,12 @@
 /*
- * flackey-update-helper -- swap a staged Flackey.app in for the installed one.
+ * flackey-update-helper -- swap a staged Flackey.app in for the installed one, after the app quits.
  *
- * The app stages the new bundle beside the old one, copies this program out of itself, spawns it
- * detached and quits. This program waits for that and then performs the one destructive operation:
+ * Compiled C rather than a shell script for RENAME_SWAP: two `mv`s leave a window in which
+ * /Applications/Flackey.app does not exist. Everything above the swap is input validation, and it
+ * is the security boundary -- this runs detached and unwatched against a path in /Applications, so
+ * every check and the swap are relative to one directory descriptor opened once, never by path.
  *
- *     renameatx_np(dir, ".Flackey-staging-XXXXXX.app", dir, "Flackey.app", RENAME_SWAP)
- *
- * RENAME_SWAP is why this is compiled C and not a shell script. Two `mv`s leave a window in which
- * /Applications/Flackey.app does not exist, and a machine that loses power in that window has no app.
- *
- * Everything above the swap is input validation, and it is the security boundary rather than a
- * formality: this runs detached, unwatched, against a path in /Applications. Anything validated by
- * path could be swapped between the check and the call, so every check and the swap itself are
- * relative to one directory descriptor opened once.
- *
- * Nothing here runs as root: no privileged component, no XPC service, no socket. See
- * docs/specs/2026-09-19-issue-58-update-design.md.
- *
- * Built by packaging/build_app.sh:
- *     clang -O2 -Wall -Wextra -o flackey-update-helper packaging/update_helper.c
+ * Nothing here runs as root. See docs/specs/2026-09-19-issue-58-update-design.md.
  */
 
 #include <ctype.h>
@@ -58,8 +46,7 @@ static void logline(const char *fmt, ...) {
     if (logfile) fflush(logfile);
 }
 
-/* Read back only by a human in the log; the app is gone by the time any of them happen. They exist so
- * that "refused" and "tried and failed" are distinguishable at a glance. */
+/* Read only by a human in the log: "refused" vs "tried and failed". */
 enum {
     EXIT_OK = 0,
     EXIT_USAGE = 2,
@@ -69,9 +56,8 @@ enum {
     EXIT_PARENT_ALIVE = 6,
 };
 
-/* The name is the only thing tying the directory about to be swapped into /Applications to one this
- * app created minutes ago, and it is checked here rather than trusted because an argument is exactly
- * what an attacker would control. */
+/* The only thing tying the directory about to be swapped in to one this app created -- and it
+ * arrives as an argument, which is what an attacker controls. */
 static int staging_name_ok(const char *name) {
     size_t len = strlen(name);
     size_t prefix = strlen(STAGING_PREFIX), suffix = strlen(STAGING_SUFFIX);
@@ -84,8 +70,7 @@ static int staging_name_ok(const char *name) {
     return 1;
 }
 
-/* Never `stat`: a symlink at either name is a refusal, not something to follow. Following one is the
- * classic way an updater is talked into writing outside the directory it was given. */
+/* Never `stat`: following a symlink here is how an updater is talked into writing elsewhere. */
 static int is_real_directory(int dirfd, const char *name, struct stat *out) {
     if (fstatat(dirfd, name, out, AT_SYMLINK_NOFOLLOW) != 0) {
         logline("refusing: cannot stat %s: %s", name, strerror(errno));
@@ -107,10 +92,8 @@ static int has_quarantine(int fd) {
     return n >= 0;
 }
 
-/* A search rather than a parse: Info.plist may be XML or binary, and linking CoreFoundation into a
- * helper that must stay trivially auditable to read two strings is a bad trade. This is a sanity check
- * that the staged directory is a Flackey bundle; the properties doing security work are the ones above
- * it -- no symlink, owned by us, named with a suffix we generated. */
+/* A search, not a parse: Info.plist may be binary, and linking CoreFoundation to read two strings
+ * is a bad trade. A sanity check only -- the security work is done by the rules above. */
 static int declares_flackey_bundle_id(int stagefd) {
     int fd = openat(stagefd, "Contents/Info.plist", O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
@@ -135,8 +118,7 @@ static int declares_flackey_bundle_id(int stagefd) {
     return 1;
 }
 
-/* Swapping in a directory with no executable would leave /Applications/Flackey.app pointing at
- * something unlaunchable, which the owner cannot recover from without a terminal. */
+/* A bundle with no executable satisfies every other rule and still cannot be opened. */
 static int has_runnable_executable(int stagefd) {
     struct stat st;
     if (fstatat(stagefd, "Contents/MacOS/Flackey", &st, AT_SYMLINK_NOFOLLOW) != 0) {
@@ -150,11 +132,8 @@ static int has_runnable_executable(int stagefd) {
     return 1;
 }
 
-/* Returns 1 once the pid is gone, 0 if it outlived the timeout.
- *
- * Refuse rather than proceed on a timeout: swapping under a still-running app would work, but the
- * relaunch afterwards would put a second copy on screen, and two Flackeys sharing one database is
- * worse than an update that did not happen. */
+/* 1 once the pid is gone, 0 on timeout. Refuse rather than proceed: the relaunch would put a second
+ * copy on screen, and two Flackeys sharing one database is worse than no update. */
 static int wait_for_exit(pid_t pid) {
     struct timespec nap = {.tv_sec = 0, .tv_nsec = WAIT_POLL_MS * 1000000L};
     for (int waited = 0; waited < WAIT_TIMEOUT_MS; waited += WAIT_POLL_MS) {
@@ -197,8 +176,7 @@ int main(int argc, char **argv) {
         return EXIT_REFUSED;
     }
 
-    /* Opened once, and every check and the swap below are relative to it: after this the kernel never
-     * resolves the string `dir` again, so nothing swapped in underneath it can redirect what happens. */
+    /* Opened once: after this the kernel never resolves `dir` again. */
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
         logline("refusing: cannot open %s as a directory: %s", dir, strerror(errno));
@@ -214,9 +192,8 @@ int main(int argc, char **argv) {
     if (!is_real_directory(dirfd, staging, &staged_st)) return EXIT_REFUSED;
     if (!is_real_directory(dirfd, TARGET_NAME, &target_st)) return EXIT_REFUSED;
 
-    /* A staging directory owned by anyone else was not created by this app, whatever it is called.
-     * Compared against the real uid: this program is never setuid and must not become useful to
-     * anyone who arranges for it to be. */
+    /* Against the real uid: this is never setuid and must not become useful to anyone who makes
+     * it so. */
     if (staged_st.st_uid != getuid()) {
         logline("refusing: %s is owned by uid %u, not %u", staging, staged_st.st_uid, getuid());
         return EXIT_REFUSED;
@@ -227,9 +204,8 @@ int main(int argc, char **argv) {
         logline("refusing: cannot open %s: %s", staging, strerror(errno));
         return EXIT_REFUSED;
     }
-    /* The app strips com.apple.quarantine after unpacking. If it is still here an assumption broke
-     * upstream, and a quarantined ad-hoc bundle is refused outright by Gatekeeper -- "Flackey is
-     * damaged and can't be opened" -- so swapping it in would brick the install rather than update it. */
+    /* The app strips this after unpacking; still being here means an assumption broke upstream, and
+     * Gatekeeper refuses a quarantined ad-hoc bundle outright. */
     if (has_quarantine(stagefd)) {
         logline("refusing: %s still carries com.apple.quarantine", staging);
         close(stagefd);
@@ -241,8 +217,7 @@ int main(int argc, char **argv) {
     }
     close(stagefd);
 
-    /* The target name is the compiled-in constant rather than an argument: there is exactly one path
-     * this program is allowed to overwrite, and it is not negotiable from the command line. */
+    /* Compiled-in, not an argument: exactly one path this program may overwrite. */
     if (renameatx_np(dirfd, staging, dirfd, TARGET_NAME, RENAME_SWAP) != 0) {
         int err = errno;
         if (err == EPERM || err == EACCES) {
@@ -258,8 +233,7 @@ int main(int argc, char **argv) {
     close(dirfd);
     logline("swapped %s into %s/%s", staging, dir, TARGET_NAME);
 
-    /* Tidying, not part of the update: a failure here leaves a hidden directory in /Applications and
-     * nothing else. */
+    /* Tidying, not part of the update. */
     char old[PATH_MAX];
     snprintf(old, sizeof(old), "%s/%s", dir, staging);
     if (removefile(old, NULL, REMOVEFILE_RECURSIVE) != 0) {

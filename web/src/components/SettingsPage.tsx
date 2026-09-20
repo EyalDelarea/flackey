@@ -198,8 +198,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
   }
   const restartNow = () => {
     setRestartBusy(true); setInstallError(null)
-    // Read out of the answer, not only out of `.catch`: a window that refuses to close comes back 200
-    // and still `staged`, which as a success would leave both buttons disabled for the session.
+    // A window that refuses to close answers 200 and still `staged`, not an error.
     api.restartForUpdate()
       .then(next => { if (next.state !== 'installing') {
         setInstallError(next.error ?? "Couldn't restart to finish the update."); setRestartBusy(false) } })
@@ -375,15 +374,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
-          {/* The percentage only appears once the server knows the size; until then, the byte count. */}
           {download?.state === 'verifying' && <div className="v">Checking the update is genuine…</div>}
           {downloading && download?.state !== 'verifying' && <div className="v">
             {download?.total
               ? `Downloading… ${download.percent}% · ${mb(download.received)} of ${mb(download.total)}`
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
-          {/* Says what happens rather than asking to be trusted, and names what a restart would cost
-              while transfers are running -- that is the owner's call, not one to make quietly. */}
+          {/* Names what a restart would cost while transfers are running. */}
           {staged && !download?.deferred && <div className="v">
             Version {download?.version} is ready and verified. Flackey will close and reopen to finish.
             {download?.busy ? ` ${download.busy} ${download.busy === 1 ? 'transfer is' : 'transfers are'} still running and would be lost.` : ''}
@@ -392,8 +389,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
             Version {download?.version} will be installed the next time you quit Flackey.
           </div>}
           {download?.state === 'installing' && <div className="v">Closing to install version {download?.version}…</div>}
-          {/* Not when `ready` carries an error: that is the installer that downloaded but would not open,
-              and saying it is open directly above the line explaining that it isn't helps nobody. */}
+          {/* Not when `ready` carries an error: the installer downloaded but would not open. */}
           {download?.state === 'ready' && !download.error && <div className="v">
             Downloaded. The macOS installer is open — follow it through, then reopen Flackey.
           </div>}
@@ -411,7 +407,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
                 : downloading ? (download?.total ? `Downloading… ${download.percent}%` : 'Downloading…')
                 : download?.state === 'ready' ? 'Open installer'
                 : download?.state === 'error' ? 'Try again'
-                // The button should not promise a restart it is not going to perform.
+                // Do not promise a restart this press will not perform.
                 : update?.seamless ? 'Update' : 'Download update'}</button>
           </div>}
           {update?.newer && !installable && <div className="actions">

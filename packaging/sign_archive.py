@@ -3,15 +3,8 @@
 
     FLACKEY_UPDATE_SIGNING_KEY=<64 hex chars> packaging/sign_archive.py dist/Flackey-0.1.7.zip
 
-Writes `<archive>.sig`: the detached signature as hex text, which is what the app downloads beside the
-archive and checks before it unpacks anything.
-
-The private key comes from the environment and is never written anywhere. Losing it does not break
-installed copies of Flackey; published updates stop verifying until a new public key is committed, and
-people install from the pkg in the meantime.
-
-Prints and exits 0 without writing anything when the secret is unset, so a release built before the
-owner has generated the keypair still publishes its installer instead of failing the job.
+Writes `<archive>.sig`, the detached signature as hex. Exits 0 without writing when the secret is
+unset, so a release built before the key existed still publishes its installer.
 """
 
 from __future__ import annotations
@@ -58,8 +51,7 @@ def main(argv: list[str]) -> int:
     out.write_text(signature.hex() + "\n")
 
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    # Printed so a mismatch with the key committed in `selfupdate/key.py` shows up in the release log
-    # rather than only as "this update could not be verified" on somebody's Mac.
+    # Printed so a mismatch with `selfupdate/key.py` shows up in the release log.
     print(f"signed {archive.name} -> {out.name}")
     print(f"public key: {public.hex()}")
     return 0

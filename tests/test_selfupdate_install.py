@@ -1,8 +1,4 @@
-"""Staging a verified update, and the handover to the helper.
-
-Every test here checks one face of the same rule: nothing in `install` ever touches the installed
-bundle, and on every failure path what it created is gone and what was already there is untouched.
-"""
+"""Staging a verified update. Nothing in `install` ever touches the installed bundle."""
 from __future__ import annotations
 
 import os
@@ -21,8 +17,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="ditto and xatt
 
 @pytest.fixture
 def bundle(tmp_path) -> Path:
-    """A minimal Flackey.app, including a symlink -- the reason the archive is made with `ditto` and not
-    `zip`, since a zip round-trip flattens symlinks and the real bundle is full of them."""
+    """A minimal Flackey.app. The symlink is why the archive is made with `ditto`, not `zip`."""
     app = tmp_path / "source" / "Flackey.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.flackey.app"}))
@@ -169,8 +164,8 @@ def test_discard_only_ever_removes_a_staging_path(applications):
 
 
 def test_an_installed_build_with_a_key_and_a_helper_is_offered_the_seamless_path(tmp_path, monkeypatch):
-    """The only test here that asserts True. Every other one pins a reason to refuse, so a
-    `seamless_available` broken into always answering False would leave them all green."""
+    """The only test here that asserts True: every other pins a reason to refuse, so an always-False
+    `seamless_available` would leave them all green."""
     bundle = tmp_path / "Applications" / "Flackey.app"
     frameworks = bundle / "Contents" / "Frameworks"
     (frameworks / "bin").mkdir(parents=True)

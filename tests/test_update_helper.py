@@ -1,10 +1,7 @@
 """The helper's refusals, against real directories.
 
-Its input validation is the security boundary, so each rule gets a test that watches it refuse and
-confirms the target was left exactly as it was.
-
-Compiled from source per session rather than taken from a built bundle: a test that passed because it
-ran last month's binary would be testing nothing. macOS only -- `renameatx_np` is Darwin.
+Each rule gets a test that watches it refuse and confirms the target was untouched. Compiled from
+source per session, so it cannot pass on last month's binary. macOS only.
 """
 from __future__ import annotations
 
@@ -63,8 +60,7 @@ def tree(tmp_path):
 
 def run(helper: Path, applications: Path, staging: str = STAGING, *, pid: int | None = None,
         relaunch: str = "0", log: Path | None = None) -> subprocess.CompletedProcess:
-    """Run the helper against `applications`. The parent pid defaults to one that has already exited, so
-    the wait at the top of the helper returns immediately instead of holding the test for a minute."""
+    """The parent pid defaults to one already exited, so the helper's wait returns immediately."""
     if pid is None:
         done = subprocess.Popen(["/usr/bin/true"])
         done.wait()
@@ -122,10 +118,8 @@ def test_a_staging_name_the_app_would_never_produce_is_refused(helper, tree):
 
 
 def test_a_staged_bundle_we_own_is_swapped_in(helper, tree):
-    """Positive case only: handing the staged directory to another uid needs root, so the refusal
-    cannot be exercised unprivileged. This pins down that the check does not reject the
-    ordinary case -- a rule that rejected everything would pass every refusal test and ship an
-    app that can never update."""
+    """Positive case only -- the refusal needs root to set up. A uid check that rejected everything
+    would pass every refusal test here and ship an app that can never update."""
     assert (tree / STAGING).stat().st_uid == os.getuid()
     assert run(helper, tree).returncode == 0
     assert marker_of(tree / TARGET) == "new"

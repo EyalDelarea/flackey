@@ -1,8 +1,6 @@
-"""The seamless path through `POST /api/update/install`, end to end with the network faked.
+"""The seamless path through `POST /api/update/install`, with the network faked.
 
-Most of these approach the same line -- the refusal in `download_archive` when `verify` says no -- from
-every direction a release can be wrong. "Refused" means: nothing unpacked, nothing staged, no fallback
-to the installer, and an error the owner can read.
+"Refused" means: nothing unpacked, nothing staged, no fallback to the installer, and a readable error.
 """
 from __future__ import annotations
 
@@ -39,8 +37,7 @@ INSTALLER_URL = "https://example.test/Flackey.pkg"
 
 
 class EndlessStream(httpx.AsyncByteStream):
-    """A response body that never ends, and counts how much of it was actually pulled. Stops itself
-    well past where a correct reader gives up, since a truly endless one would hang the test."""
+    """Never ends, and counts what was pulled. Stops well past where a correct reader gives up."""
 
     LIMIT = 10_000
 
@@ -56,8 +53,7 @@ class EndlessStream(httpx.AsyncByteStream):
 
 @pytest.fixture(autouse=True)
 def _disarm():
-    """`selfupdate.pending` is process-wide, so a test that armed it and then failed would hand the next
-    one an app that thinks it is about to replace itself. Cleared both ways, so order cannot matter."""
+    """`selfupdate.pending` is process-wide. Cleared both ways, so test order cannot matter."""
     selfupdate.pending.clear()
     yield
     selfupdate.pending.clear()
@@ -70,8 +66,7 @@ def private_key():
 
 @pytest.fixture
 def archive_bytes(tmp_path) -> bytes:
-    """A real ditto archive: the staging step shells out to ditto and will not be fooled by a handful
-    of bytes calling itself a zip."""
+    """A real ditto archive: staging shells out to ditto and will not take a few fake bytes."""
     app = tmp_path / "src" / "Flackey.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.flackey.app"}))
@@ -148,8 +143,8 @@ def serve(payload: bytes, sig: bytes | None, *, archive_size: int | None = None)
 
 
 def press(c: TestClient, want: str = "staged") -> dict:
-    """Press Update and wait for the state it should land in. The download runs as a task, so the answer
-    arrives after the POST that started it, and every request gives the server's loop a turn."""
+    """Press Update and wait for the state it should land in: the download runs as a task, so the
+    answer arrives after the POST that started it."""
     c.post("/api/update/install", headers=FROM_APP)
     return _settle(c, want)
 
@@ -231,8 +226,7 @@ def test_a_signature_asset_that_is_not_a_signature_is_refused(app, archive_bytes
 @respx.mock
 def test_an_endless_signature_asset_is_abandoned_rather_than_read(app, archive_bytes, private_key,
                                                                   applications):
-    """The stream is abandoned at the ceiling rather than fetched and then measured. The generator
-    counts what was actually pulled, so this fails if the bound moves back to the finished body."""
+    """The counter is the assertion: this fails if the bound moves back to the finished body."""
     c, _, _, _ = app
     serve(archive_bytes, private_key.sign(archive_bytes))
     stream = EndlessStream()
