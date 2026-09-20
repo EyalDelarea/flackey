@@ -277,8 +277,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="error", version=version, seamless=True,
                     error="Could not read the downloaded update. Try again.")
             return
-        # Below this line the bytes get unpacked into /Applications and then executed.
-        if sig is None or not signature.verify(payload, sig):
+        # Below this line the bytes get unpacked into /Applications and then executed. The version is
+        # part of what was signed, so an older archive re-published under this tag fails here.
+        if sig is None or not signature.verify_archive(version, payload, sig):
             log.error("the update archive for %s did not match its signature; refusing to install it",
                       version)
             remove_download(archive)

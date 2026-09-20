@@ -1,8 +1,13 @@
-"""Ed25519 over the raw bytes of the update zip. Pure, and nothing here raises."""
+"""Ed25519 over `b"flackey-update-v1\n" + version + b"\n" + sha256(zip)`. Pure, nothing here raises.
+
+The version is inside the signed message so a validly signed older archive cannot be re-published
+under a newer tag: the app asks for the version it was offered, and that signature is for another.
+"""
 
 from __future__ import annotations
 
 import binascii
+import hashlib
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -12,6 +17,18 @@ from .key import PUBLIC_KEY_HEX
 
 PUBLIC_KEY_BYTES = 32
 SIGNATURE_BYTES = 64
+DOMAIN = b"flackey-update-v1"
+
+
+def signing_message(version: str, archive: bytes) -> bytes:
+    """What the release signs and the app checks: defined once so the two cannot drift apart."""
+    digest = hashlib.sha256(archive).digest()
+    return DOMAIN + b"\n" + normalise_version(version).encode() + b"\n" + digest
+
+
+def normalise_version(version: str) -> str:
+    """Tag `v0.1.7` and archive `Flackey-0.1.7.zip` name the same release."""
+    return version.strip().removeprefix("v")
 
 
 def encode_public_key(public_key: Ed25519PublicKey) -> bytes:
@@ -47,13 +64,14 @@ def decode_signature(asset: bytes) -> bytes | None:
     return raw if len(raw) == SIGNATURE_BYTES else None
 
 
-def verify(payload: bytes, sig: bytes, public_key: bytes | None = None) -> bool:
-    """False for every kind of no: wrong signature, wrong key, wrong length, no key at all."""
+def verify_archive(version: str, archive: bytes, sig: bytes,
+                   public_key: bytes | None = None) -> bool:
+    """False for every kind of no: wrong version, wrong signature, wrong key, no key at all."""
     key = public_key if public_key is not None else baked_public_key()
     if key is None or len(key) != PUBLIC_KEY_BYTES or len(sig) != SIGNATURE_BYTES:
         return False
     try:
-        Ed25519PublicKey.from_public_bytes(key).verify(sig, payload)
+        Ed25519PublicKey.from_public_bytes(key).verify(sig, signing_message(version, archive))
     except (InvalidSignature, ValueError):
         return False
     return True

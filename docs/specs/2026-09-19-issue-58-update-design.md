@@ -39,9 +39,10 @@ Settled earlier in the same discussion:
 
 Four pieces, each independently testable:
 
-**`flackey.update.verify`** — pure function. Takes payload bytes and signature bytes, returns
-`True`/`False` against the baked public key. No I/O, no network, no filesystem. Easy to test
-exhaustively: valid, tampered payload, tampered signature, empty signature, wrong key, garbage.
+**`flackey.update.verify_archive`** — pure function. Takes the version, the payload bytes and the
+signature bytes, returns `True`/`False` against the baked public key. No I/O, no network, no
+filesystem. Easy to test exhaustively: valid, tampered payload, tampered signature, empty signature,
+wrong version, wrong key, garbage.
 
 **`flackey.web.update`** (existing) — grows a seamless path beside the pkg path. Downloads the zip and
 the sig, calls `verify`, unpacks, stages, spawns the helper. Chooses the pkg path when the running app
@@ -81,7 +82,12 @@ from `secrets.FLACKEY_UPDATE_SIGNING_KEY`, publishing both as release assets.
 
 ## Verification
 
-Ed25519 over the raw bytes of the zip, detached signature as a separate release asset.
+Ed25519 over `b"flackey-update-v1\n" + version + b"\n" + sha256(zip)`, detached signature as a separate
+release asset. `signing_message` in `selfupdate/signature.py` builds it and both sides call it —
+`packaging/sign_archive.py` imports it from `src/`, so the format is written down once.
+
+Signing the version as well as the bytes is what stops a re-published old release: the archive's own
+signature is valid, but it names 0.1.6, and the app asked for 0.1.7.
 
 This needs **one new dependency**: `cryptography`, for `Ed25519PublicKey.from_public_bytes(...).verify(...)`.
 The project has no Ed25519 implementation today — the `rsa` package in the lock file arrives via
@@ -192,7 +198,9 @@ Three of these come directly from Sparkle's own published CVEs.
   [Helper hardening](#helper-hardening) before swapping.
 - **Privilege escalation via a root helper** — does not apply. Everything runs as the user; there is no
   privileged component. Sparkle's worst bugs were in exactly the component we do not have.
-- **Downgrade** — the `_version_tuple` gate from #56 still applies.
+- **Downgrade** — the `_version_tuple` gate from #56 only compares the *tag*, so on its own it would
+  wave through an old, validly signed zip re-uploaded under a new tag by anyone with release-write
+  access. The signature binds the version, so that archive fails to verify and nothing is staged.
 - **Forged update trigger from a web page** — already handled in #56 and unchanged here.
   `from_the_app()` (`src/flackey/web/update.py:34`) rejects any request without the `x-flackey-app`
   header, which forces a CORS preflight that no outside origin satisfies. It guards both POST routes.
@@ -211,8 +219,9 @@ changed without a commit, not because the file is hard to reach.
 
 ## Testing
 
-Unit, on `verify`: valid signature; tampered payload; tampered signature; truncated signature; empty
-signature; signature from a different key. Each must return `False` and none may raise.
+Unit, on `verify_archive`: valid signature; tampered payload; tampered signature; truncated signature;
+empty signature; signature from a different key; a signature made for another version over the same
+archive. Each must return `False` and none may raise.
 
 Unit, on the staging and helper-spawn logic, with the filesystem faked: refuses an existing staging
 path, refuses when not installed to `/Applications`, refuses when the helper is missing.

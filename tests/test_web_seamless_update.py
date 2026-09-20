@@ -31,6 +31,7 @@ from .test_web import DummyCatalog, DummySource, _settle, fake_youtube
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="staging shells out to ditto and xattr")
 
 FROM_APP = {"x-flackey-app": "1"}
+VERSION = "9.9.9"
 ARCHIVE_URL = "https://example.test/Flackey-9.9.9.zip"
 SIGNATURE_URL = "https://example.test/Flackey-9.9.9.zip.sig"
 INSTALLER_URL = "https://example.test/Flackey.pkg"
@@ -134,6 +135,11 @@ def feed(*, archive: int | None = 1024, sig: bool = True, installer: int | None 
              "assets": assets}]
 
 
+def sign(private: Ed25519PrivateKey, payload: bytes, version: str = VERSION) -> bytes:
+    """What the release publishes: the signature binds the version as well as the bytes."""
+    return private.sign(signature.signing_message(version, payload))
+
+
 def serve(payload: bytes, sig: bytes | None, *, archive_size: int | None = None) -> None:
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(
         200, json=feed(archive=archive_size if archive_size is not None else len(payload), sig=sig is not None)))
@@ -152,7 +158,7 @@ def press(c: TestClient, want: str = "staged") -> dict:
 @respx.mock
 def test_a_signed_release_is_downloaded_verified_and_staged(app, archive_bytes, private_key, applications):
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
 
     state = press(c)
 
@@ -168,7 +174,7 @@ def test_a_signed_release_is_downloaded_verified_and_staged(app, archive_bytes, 
 @respx.mock
 def test_a_tampered_payload_is_refused_and_nothing_is_staged(app, archive_bytes, private_key, applications):
     c, _, _, _ = app
-    sig = private_key.sign(archive_bytes)
+    sig = sign(private_key, archive_bytes)
     serve(archive_bytes[:-1] + bytes([archive_bytes[-1] ^ 0xFF]), sig, archive_size=len(archive_bytes))
 
     state = press(c, "error")
@@ -181,10 +187,24 @@ def test_a_tampered_payload_is_refused_and_nothing_is_staged(app, archive_bytes,
 @respx.mock
 def test_a_signature_from_another_key_is_refused(app, archive_bytes, applications):
     c, _, _, _ = app
-    serve(archive_bytes, Ed25519PrivateKey.generate().sign(archive_bytes))
+    serve(archive_bytes, sign(Ed25519PrivateKey.generate(), archive_bytes))
 
     assert press(c, "error")["state"] == "error"
     assert list(applications.iterdir()) == []
+
+
+@respx.mock
+def test_an_older_archive_republished_under_a_newer_tag_is_refused(app, archive_bytes, private_key,
+                                                                   applications):
+    """Release-write access plus an old signed pair is not enough: the tag is part of what was signed."""
+    c, _, _, _ = app
+    serve(archive_bytes, sign(private_key, archive_bytes, version="9.9.8"))
+
+    state = press(c, "error")
+
+    assert state["state"] == "error" and "could not be verified" in state["error"]
+    assert list(applications.iterdir()) == []
+    assert selfupdate.pending.staged is None
 
 
 @respx.mock
@@ -206,7 +226,7 @@ def test_a_release_with_no_signature_asset_never_reaches_the_seamless_path(app, 
 @respx.mock
 def test_a_signature_asset_that_cannot_be_fetched_is_refused(app, archive_bytes, private_key, applications):
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(404))
 
     assert press(c, "error")["state"] == "error"
@@ -216,7 +236,7 @@ def test_a_signature_asset_that_cannot_be_fetched_is_refused(app, archive_bytes,
 @respx.mock
 def test_a_signature_asset_that_is_not_a_signature_is_refused(app, archive_bytes, private_key, applications):
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(200, content=b"<html>404 not found</html>"))
 
     assert press(c, "error")["state"] == "error"
@@ -228,7 +248,7 @@ def test_an_endless_signature_asset_is_abandoned_rather_than_read(app, archive_b
                                                                   applications):
     """The counter is the assertion: this fails if the bound moves back to the finished body."""
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     stream = EndlessStream()
     respx.get(SIGNATURE_URL).mock(return_value=httpx.Response(200, stream=stream))
 
@@ -242,7 +262,7 @@ def test_an_endless_signature_asset_is_abandoned_rather_than_read(app, archive_b
 def test_a_truncated_download_is_reported_as_a_download_problem(app, archive_bytes, private_key,
                                                                 applications):
     c, _, _, _ = app
-    serve(archive_bytes[:100], private_key.sign(archive_bytes), archive_size=len(archive_bytes))
+    serve(archive_bytes[:100], sign(private_key, archive_bytes), archive_size=len(archive_bytes))
 
     state = press(c, "error")
 
@@ -257,7 +277,7 @@ def test_a_verification_failure_never_falls_back_to_the_installer(app, archive_b
     c, _, _, _ = app
     opened: list = []
     monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
-    serve(archive_bytes, Ed25519PrivateKey.generate().sign(archive_bytes))
+    serve(archive_bytes, sign(Ed25519PrivateKey.generate(), archive_bytes))
 
     assert press(c, "error")["state"] == "error"
     assert opened == []
@@ -266,7 +286,7 @@ def test_a_verification_failure_never_falls_back_to_the_installer(app, archive_b
 @respx.mock
 def test_restart_arms_the_helper_and_closes_the_window(app, archive_bytes, private_key):
     c, _, _, quits = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     press(c)
 
     body = c.post("/api/update/restart", headers=FROM_APP).json()
@@ -283,7 +303,7 @@ def test_a_window_that_will_not_close_leaves_the_update_armed_and_says_so(app, a
                                                                           private_key):
     c, _, _, quits = app
     quits.fail = True
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     press(c)
 
     body = c.post("/api/update/restart", headers=FROM_APP).json()
@@ -297,7 +317,7 @@ def test_a_window_that_will_not_close_leaves_the_update_armed_and_says_so(app, a
 @respx.mock
 def test_install_on_quit_arms_the_helper_without_reopening_the_app(app, archive_bytes, private_key):
     c, _, _, quits = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     press(c)
 
     body = c.post("/api/update/later", headers=FROM_APP).json()
@@ -314,7 +334,7 @@ def test_pressing_update_while_the_app_is_closing_does_not_start_a_fresh_downloa
                                                                                   private_key,
                                                                                   applications):
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     press(c)
     c.post("/api/update/restart", headers=FROM_APP)
 
@@ -345,7 +365,7 @@ def test_a_page_that_is_not_flackeys_cannot_trigger_a_restart(app):
 def test_the_restart_prompt_says_how_many_transfers_are_in_flight(app, archive_bytes, private_key):
     c, _, status, _ = app
     status["fetch_progress"] = [{"id": 1}, {"id": 2}, {"id": 3}]
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
 
     assert press(c)["busy"] == 3
 
@@ -354,7 +374,7 @@ def test_the_restart_prompt_says_how_many_transfers_are_in_flight(app, archive_b
 def test_pressing_update_again_while_one_is_staged_does_not_download_it_twice(app, archive_bytes,
                                                                              private_key, applications):
     c, _, _, _ = app
-    serve(archive_bytes, private_key.sign(archive_bytes))
+    serve(archive_bytes, sign(private_key, archive_bytes))
     first = press(c)
 
     assert press(c)["path"] == first["path"]

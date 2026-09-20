@@ -133,7 +133,9 @@ jobs:
         # unsigned, which reads to every installed copy as "no seamless update here, use the installer".
         env:
           FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
-        run: uv run --with cryptography packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
+        # --no-project: the script reads the signed-message format straight out of src/, so none of
+        # the app's macOS-shaped dependencies need to resolve on this runner.
+        run: uv run --no-project --with cryptography packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
