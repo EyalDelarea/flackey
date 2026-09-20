@@ -121,7 +121,7 @@ def test_a_staging_name_the_app_would_never_produce_is_refused(helper, tree):
     assert marker_of(tree / TARGET) == "old"
 
 
-def test_rule_4_lets_through_a_staged_bundle_we_own(helper, tree):
+def test_a_staged_bundle_we_own_is_swapped_in(helper, tree):
     """Positive case only: handing the staged directory to another uid needs root, so the refusal
     cannot be exercised unprivileged. This pins down that the check does not reject the
     ordinary case -- a rule that rejected everything would pass every refusal test and ship an
