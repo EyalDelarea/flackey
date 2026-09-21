@@ -16,9 +16,14 @@ function RetryCountdown({ seconds }: { seconds: number }) {
     const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000)
     return () => window.clearInterval(timer)
   }, [seconds])
-  const label = remaining <= 0 ? 'Retrying now' : remaining >= 60
-    ? `Retry in ${Math.floor(remaining / 60)}m ${remaining % 60}s`
-    : `Retry in ${remaining}s`
+  // Three scales, because the waits now span three orders of magnitude: 30 s on the quick ladder, 15 min
+  // after a Soulseek queue, and 6 h while the request waits for the people online to change. A bare
+  // `360m 0s` would read as a stuck row.
+  const label = remaining <= 0 ? 'Retrying now' : remaining >= 3600
+    ? `Retry in ${Math.floor(remaining / 3600)}h ${Math.floor((remaining % 3600) / 60)}m`
+    : remaining >= 60
+      ? `Retry in ${Math.floor(remaining / 60)}m ${remaining % 60}s`
+      : `Retry in ${remaining}s`
   return <div className="retry-countdown" aria-live="off">{label}</div>
 }
 

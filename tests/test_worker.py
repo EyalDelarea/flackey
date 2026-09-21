@@ -23,6 +23,7 @@ from flackey.reference import Identification
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
 from flackey.worker import Worker, catalog_candidate
+from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -495,6 +496,43 @@ async def test_without_a_video_reference_text_still_decides(env, monkeypatch):
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert r.state == RequestState.DONE and called == [] and store.get_reference(rid)["kind"] == "deezer"
+
+
+async def test_video_audio_failure_retries_before_the_text_path(env, monkeypatch):
+    """The video's audio identifies the record, so a yt-dlp blip earns the quick ladder; after it the pass
+    goes on by text (checked by the preview on download), so a removed video cannot block the request."""
+    settings, store, notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    calls = []
+
+    async def flaky_youtube(url, tmp_dir, *, duration_s=None):
+        calls.append(url)
+        raise YouTubeError("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1
+    assert r.flag_reason == "video audio unavailable, will retry"
+    assert "Retrying in 30 s" in notifier.sent[-1][0] and "429" in notifier.sent[-1][0]
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 2
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and len(calls) >= 3 and store.get_reference(rid)["kind"] == "deezer"
+
+
+async def test_unreadable_video_audio_goes_straight_to_the_text_path(env, monkeypatch):
+    """The other half of the split: the audio arrived and could not be read, which the next pass would only
+    repeat. `env`'s own fake raises exactly this, which is why every other test here chooses by text at once."""
+    settings, store, notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.attempts == 0
 
 
 async def test_source_not_found(env):

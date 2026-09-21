@@ -306,6 +306,14 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       if (r.retry_after) {
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
+        // The long wait for Soulseek (issue #71) already words itself for the owner -- what is being
+        // waited for and how many looks are left -- so it is shown as it stands rather than reported as a
+        // previous attempt. It is not a previous attempt: the search really does run again.
+        if (/^waiting for Soulseek/i.test(r.flag_reason || '')) {
+          v.status = r.flag_reason!.replace(/^waiting/, 'Waiting')
+          v.statusTone = 'amber'
+          break
+        }
         const reason = (r.flag_reason || 'could not complete')
           .replace(/, will retry$/, '')
           .replace(/^no way to fetch this track:\s*/i, '')

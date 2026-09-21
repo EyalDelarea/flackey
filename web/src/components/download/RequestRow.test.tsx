@@ -46,6 +46,13 @@ it('shows the retry timer separately and counts it down', () => {
   }
 })
 
+it('says a six-hour wait in hours, not in three hundred and sixty minutes', () => {
+  // The wait for Soulseek to turn over is 6 h (issue #71). Counted in minutes it reads as a stuck row.
+  render(<RequestRow view={{ ...base, status: 'Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h',
+    statusTone: 'amber', retryInSeconds: 21600 }} onAction={() => {}} onChoose={() => {}} />)
+  expect(screen.getByText('Retry in 6h 0m')).toBeInTheDocument()
+})
+
 it('fires the row action and candidate choice', () => {
   const onAction = vi.fn(); const onChoose = vi.fn()
   const view: RowView = { ...base, dimmed: false, washed: true, action: { label: 'Skip this track', kind: 'cancel' },

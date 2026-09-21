@@ -395,6 +395,16 @@ describe('a queued track', () => {
     expect(v.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
     expect(v.retryInSeconds).toBe(25)
   })
+
+  it('shows the wait for Soulseek as itself rather than as a previous attempt', () => {
+    // The worker words this one for the owner already (issue #71): what is being waited for and how many
+    // looks are left. "Previous attempt" would be wrong twice over -- the search really does run again.
+    const v = presentRow(bundle({ retry_after: '2026-09-06T16:00:00Z',
+      flag_reason: 'waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h' }), opts)
+    expect(v.status).toBe('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')
+    expect(v.statusTone).toBe('amber')
+    expect(v.retryInSeconds).toBe(21600)
+  })
 })
 
 describe('stopping a track that is already running', () => {
