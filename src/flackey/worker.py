@@ -122,11 +122,6 @@ CATALOG_SOURCE = "beatport"
 # raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
 # owner why" -- without this they would reach the API as a 409 or a 500 on a button that used to answer.
 REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
-# Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
-# was not met is visible on the row rather than buried in the attempt's JSON.
-NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
-                       "fingerprinted -- only the spectral check ran")
-
 
 def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     """A stand-in for the Deezer candidate, built from the Beatport record -- the mirror of
@@ -138,10 +133,11 @@ def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     title, mix name and duration from the catalog whenever one is present, so every pick rule already runs
     on Beatport data rather than on anything a peer said.
 
-    `deezer_id` stays None, and that is the real cost: `fingerprint.check` returns "skipped" rather than
-    running, so identity rests on the duration, title and version rules plus the spectral verify. Callers
-    must set `NO_FINGERPRINT_FLAG` on the request. It is never persisted as a candidate row -- a retry
-    re-matches Beatport, which is cheap, instead of resuming from a candidate the source never offered.
+    `deezer_id` stays None. Since issue #67 the fingerprint's reference is the request's own video, so a
+    Beatport stand-in is checked acoustically like any other candidate; without a video or a Deezer id the
+    attempt ends `fingerprint_unavailable` rather than filing on the match alone. It is never persisted as
+    a candidate row -- a retry re-matches Beatport, which is cheap, instead of resuming from a candidate
+    the source never offered.
     """
     return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
                      artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
@@ -526,7 +522,8 @@ class Worker:
             if not cands:
                 # Either the source is switched off, or it failed with a Beatport match already in hand.
                 # `catalog_candidate` explains what this costs; the short version is that the pick rules
-                # still run entirely on Beatport data and only the fingerprint is lost.
+                # still run entirely on Beatport data, but a request with no video of its own then has
+                # nothing to fingerprint against and the lossless attempt ends `fingerprint_unavailable`.
                 if catalog is None:
                     # Nothing identified the track: the source offered nothing and Beatport has no match.
                     # Terminal, not a retry -- both halves are the same on the next pass, so backing off
@@ -542,7 +539,6 @@ class Worker:
                     # Beatport knows the track, so it exists -- there is just no route to a file right now.
                     await self._no_route(req)
                     return
-                self.store.update_request(req.id, flag_reason=NO_FINGERPRINT_FLAG)
                 await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                 return
 
@@ -1075,6 +1071,10 @@ class Worker:
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
         if fp.status == "failed":
             return None, "fingerprint_failed"
+        if fp.status == "skipped":
+            # Nothing acoustic vouched for the file. Not a fact about this peer, so not SECOND_PICK_AFTER:
+            # the reference is missing for every survivor alike (issue #68).
+            return None, "fingerprint_unavailable"
         self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None

@@ -271,7 +271,8 @@ class LosslessAttempt:
 
 
 ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
-                    "verify_failed", "fingerprint_failed", "convert_failed", "unavailable", "interrupted")
+                    "verify_failed", "fingerprint_failed", "fingerprint_unavailable", "convert_failed",
+                    "unavailable", "interrupted")
 
 # Why a lossless attempt came back empty, in the owner's words rather than the vocabulary above. Every
 # outcome but "filed" needs one: a track kept on the lossy copy is a thing the owner asked to be told
@@ -285,6 +286,7 @@ MISS_REASON = {
     "transfer_timeout": "the people who had it stopped sending part-way through",
     "verify_failed": "the copies offered were not really lossless",
     "fingerprint_failed": "the copies offered were a different recording",
+    "fingerprint_unavailable": "the recording could not be checked acoustically",
     "convert_failed": "the file could not be converted",
     "unavailable": "Soulseek was not reachable at the time",
     "interrupted": "it was interrupted",

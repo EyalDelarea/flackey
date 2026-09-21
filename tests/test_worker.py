@@ -497,8 +497,8 @@ async def test_retry_takes_back_exactly_the_retryable_states(env):
 
 def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
     # Built when the source cannot offer a candidate. Everything `lossless.reference_for` needs comes off
-    # the Beatport record; `deezer_id` stays None, which is what makes `fingerprint.check` skip rather than
-    # run, and what `NO_FINGERPRINT_FLAG` tells the owner.
+    # the Beatport record; `deezer_id` stays None, so a request with no video of its own has nothing to
+    # fingerprint against and the attempt ends `fingerprint_unavailable` rather than filing (issue #68).
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 412_000})
     cand = catalog_candidate(ct)
 

@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     lossless_title_ratio: int = 90
     lossless_require_artist: bool = False
     lossless_max_queue: int | None = None
-    lossless_fingerprint_min: float = 0.90
+    lossless_fingerprint_min: float = 0.79
     lossless_max_picks: int = 4
     lossless_keep_raw_days: int = 30
 
