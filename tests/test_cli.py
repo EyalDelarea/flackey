@@ -115,3 +115,22 @@ def test_lossless_replay_reports_a_structurally_malformed_responses_file(tmp_pat
     assert r.exit_code == 1, r.output
     assert f"stored attempt {aid} is corrupt" in r.output
     assert r.exception is None or isinstance(r.exception, SystemExit)
+
+
+def test_sweep_writes_the_report_and_touches_nothing_else(tmp_path: Path, monkeypatch):
+    from flackey import sweep as sweep_mod
+
+    env = _env(tmp_path)
+    seen = []
+
+    async def fake_run(store, settings, http, *, progress=lambda line: None):
+        progress("1  file 0.97  record 1.00  A - B  (matched)")
+        seen.append(settings.lossless_fingerprint_min)
+        return [sweep_mod.SweepRow(1, "A", "B", 298, 300, 0.97, 1.0, "matched")]
+
+    monkeypatch.setattr(sweep_mod, "run", fake_run)
+    out = tmp_path / "sweep.md"
+    r = runner.invoke(app, ["--env", str(env), "sweep", "--out", str(out)])
+    assert r.exit_code == 0, r.output
+    assert seen == [0.90] and f"wrote {out}" in r.output and "A - B" in r.output
+    assert "| 0.97 | 1.00 |" in out.read_text()

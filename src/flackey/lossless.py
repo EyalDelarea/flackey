@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from rapidfuzz import fuzz
 
@@ -128,9 +128,13 @@ class PickPolicy:
 
     @classmethod
     def from_dict(cls, d: dict) -> PickPolicy:
-        return cls(lossless_extensions=frozenset(d["lossless_extensions"]), duration_tolerance_s=d["duration_tolerance_s"],
-                   title_ratio=d["title_ratio"], require_artist=d["require_artist"],
-                   max_queue_length=d["max_queue_length"], banned_users=frozenset(d["banned_users"]))
+        """Tolerant of fields an older report carries and this policy no longer has (the replay re-reads
+        every stored report, and the oldest of them predate half of these fields)."""
+        known = {f.name for f in fields(cls)}
+        kw = {k: v for k, v in d.items() if k in known}
+        kw["lossless_extensions"] = frozenset(kw.get("lossless_extensions", LOSSLESS_EXTENSIONS))
+        kw["banned_users"] = frozenset(kw.get("banned_users", ()))
+        return cls(**kw)
 
 
 def transfer_ceiling_s(size: int, settings: Settings) -> float:
@@ -217,19 +221,72 @@ def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | No
     return "banned user" if f.username in p.banned_users else None
 
 
+Ranker = Callable[[LosslessFile, Reference], object]
+DURATION_BUCKET_S = 5          # encoding slack between releases of one recording; inside it, peer quality decides
+
+
+def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
+    """`rule_version`'s test as a fact rather than a rejection: does the file's name claim the version the
+    reference is? The rejection keeps its own body because it also has to say which words were wrong."""
+    title, version = file_title(f.name, ref.artist)
+    extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
+    words = set(norm(version or "").split()) | set(extra)
+    if ref.is_original:
+        return not (words & VERSION_WORDS) or "original" in words
+    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
+    have = set(norm(f"{version or ''} {title}").split())
+    return all(w in have for w in want)
+
+
+def rank_version(f: LosslessFile, ref: Reference) -> int:
+    return 0 if _version_agrees(f, ref) else 1
+
+
+def rank_duration(f: LosslessFile, ref: Reference) -> int:
+    """Distance to the nearest length the recording is known by, in buckets. Length is not identity (a
+    626 s file was the 392 s video's recording, and two wrong files sat within 2 s of theirs), so it orders
+    what to try first and the fingerprint decides (issue #69)."""
+    known = ref.durations
+    if not known or f.length_s is None:
+        return 10_000
+    return min(abs(f.length_s - d) for d in known) // DURATION_BUCKET_S
+
+
+def rank_title(f: LosslessFile, ref: Reference) -> int:
+    title, _ = file_title(f.name, ref.artist)
+    return -(int(fuzz.token_set_ratio(norm(ref.title), title)) // 10)
+
+
+def rank_artist(f: LosslessFile, ref: Reference) -> int:
+    return 0 if norm(first_artist(ref.artist)) in norm(f.path) else 1
+
+
 RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
     ("duration", rule_duration), ("title", rule_title), ("version", rule_version), ("artist", rule_artist),
     ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
 
-RANKERS: list[tuple[str, Callable[[LosslessFile], object]]] = [
-    ("free_slot", lambda f: not f.has_free_slot),
-    ("bit_depth", lambda f: {16: 0, 24: 1}.get(f.bit_depth or 0, 2)),   # CD master first; unknown last
-    ("queue_length", lambda f: f.queue_length),
-    ("upload_speed", lambda f: -f.upload_speed_bps),
-    ("size", lambda f: f.size),
+# The gate spec §5 proposes: the hard rules reject only what can never satisfy the goal, and everything
+# about identity ranks survivors instead. Nothing uses these yet but `flackey replay-picks`, which measures
+# them against the stored no-pick reports; the live defaults below stay as they are until that is read.
+HARD_RULES: list[tuple[str, Rule]] = [
+    ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
+    ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
+IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
+    ("version", rank_version), ("duration", rank_duration), ("title", rank_title), ("artist", rank_artist),
+]
+PEER_RANKERS: list[tuple[str, Ranker]] = [
+    ("free_slot", lambda f, ref: not f.has_free_slot),
+    ("bit_depth", lambda f, ref: {16: 0, 24: 1}.get(f.bit_depth or 0, 2)),   # CD master first; unknown last
+    ("queue_length", lambda f, ref: f.queue_length),
+    ("upload_speed", lambda f, ref: -f.upload_speed_bps),
+    ("size", lambda f, ref: f.size),
+]
+
+# Today's order, unchanged. The identity rankers go in front of it only once the replay report is read.
+RANKERS: list[tuple[str, Ranker]] = PEER_RANKERS
 
 
 @dataclass
@@ -264,7 +321,7 @@ class PickReport:
 
 
 def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
-         rules: list[tuple[str, Rule]] = RULES, rankers=RANKERS) -> PickReport:
+         rules: list[tuple[str, Rule]] = RULES, rankers: list[tuple[str, Ranker]] = RANKERS) -> PickReport:
     report = PickReport(reference=ref, policy=policy, seen=len(files))
     for f in files:
         for name, rule in rules:
@@ -274,7 +331,7 @@ def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
                 break
         else:
             report.survivors.append(f)
-    report.survivors.sort(key=lambda f: tuple(fn(f) for _, fn in rankers))
+    report.survivors.sort(key=lambda f: tuple(fn(f, ref) for _, fn in rankers))
     report.chosen = report.survivors[0] if report.survivors else None
     counts = Counter(r.rule for r in report.rejections)
     parts = [f"{n} {rule}" for rule, n in counts.most_common()]
