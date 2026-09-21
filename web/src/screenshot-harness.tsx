@@ -31,8 +31,7 @@ const settingsPanel: AppSettings = {
     sidecar: { port: 5030, host: '127.0.0.1', public: false },
     soulseek_listen: { port: 50300, host: '0.0.0.0', public: true },
   },
-  ranking: { max_picks: 4, duration_tolerance_s: 3, title_ratio: 90, require_artist: false,
-    max_queue: null, fingerprint_min: 0.79 },
+  ranking: { max_picks: 4, max_queue: null, fingerprint_min: 0.79 },
 }
 const stats: Stats = { tracks: 2, bytes: 84_000_000, playlists: 1, rejections: 0,
   library_root: '/Users/dj/Music/Flackey', playlist_dir: '/Users/dj/Music/Flackey/Playlists', requests_by_state: {} }

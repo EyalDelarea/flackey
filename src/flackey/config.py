@@ -85,9 +85,6 @@ class Settings(BaseSettings):
     lossless_transfer_s: int = 600
     lossless_min_rate_kbps: int = 160
     lossless_poll_s: float = 2.0
-    lossless_duration_tolerance_s: int = 3
-    lossless_title_ratio: int = 90
-    lossless_require_artist: bool = False
     lossless_max_queue: int | None = None
     lossless_fingerprint_min: float = 0.79
     lossless_max_picks: int = 4

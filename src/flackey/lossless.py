@@ -1,6 +1,7 @@
 """The gate that turns a provider's search results into one pick, with a report that explains every
-rejection (spec §6). Pure: no I/O, no clock. Rules are cheap filters against downloading the wrong file;
-the fingerprint check (fingerprint.py) is what proves identity after the download."""
+rejection (spec §6). Pure: no I/O, no clock. Rules are the cheap filters that keep files that can never
+satisfy the goal (lossy, implausible) from being downloaded; identity is ordered by the rankers and proven
+by the fingerprint after the download."""
 from __future__ import annotations
 
 import re
@@ -73,8 +74,8 @@ class Reference:
 
     @property
     def durations(self) -> tuple[int, ...]:
-        """Every length this recording is known by, newest evidence first. Two at most, and never a range
-        between them: each stays its own tolerance window, so the gate does not get looser, only less wrong."""
+        """Every length this recording is known by, newest evidence first. `rank_duration` measures against
+        the nearest; nothing rejects on it (issue #69)."""
         return tuple(dict.fromkeys(d for d in (self.duration_s, self.requested_duration_s) if d is not None))
 
 
@@ -117,9 +118,6 @@ def file_title(name: str, artist: str) -> tuple[str, str | None]:
 @dataclass(frozen=True)
 class PickPolicy:
     lossless_extensions: frozenset[str] = LOSSLESS_EXTENSIONS
-    duration_tolerance_s: int = 3
-    title_ratio: int = 90
-    require_artist: bool = False
     max_queue_length: int | None = None
     banned_users: frozenset[str] = frozenset()
 
@@ -149,8 +147,7 @@ def transfer_ceiling_s(size: int, settings: Settings) -> float:
 
 
 def policy_from_settings(settings: Settings) -> PickPolicy:
-    return PickPolicy(duration_tolerance_s=settings.lossless_duration_tolerance_s, title_ratio=settings.lossless_title_ratio,
-                      require_artist=settings.lossless_require_artist, max_queue_length=settings.lossless_max_queue)
+    return PickPolicy(max_queue_length=settings.lossless_max_queue)
 
 
 Rule = Callable[[LosslessFile, Reference, PickPolicy], str | None]
@@ -174,46 +171,6 @@ def rule_plausible_size(f: LosslessFile, ref: Reference, p: PickPolicy) -> str |
     return None
 
 
-def rule_duration(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    known = ref.durations
-    if not known or f.length_s is None:
-        return None
-    if any(abs(f.length_s - d) <= p.duration_tolerance_s for d in known):
-        return None
-    return f"length {f.length_s} s vs {' or '.join(f'{d} s' for d in known)}"
-
-
-def rule_title(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    title, _ = file_title(f.name, ref.artist)
-    score = fuzz.token_set_ratio(norm(ref.title), title)
-    if score < p.title_ratio:
-        return f"title {title!r} scores {score:.0f} < {p.title_ratio}"
-    return None
-
-
-def rule_version(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    title, version = file_title(f.name, ref.artist)
-    extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
-    words = set(norm(version or "").split()) | set(extra)
-    if ref.is_original:
-        hit = words & VERSION_WORDS
-        if hit and "original" not in words:
-            return f"looks like a version ({' '.join(sorted(hit))}) but the reference is the original"
-        return None
-    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
-    have = set(norm(f"{version or ''} {title}").split())
-    missing = [w for w in want if w not in have]
-    if missing:
-        return f"version words {missing} missing for {ref.mix_name!r}"
-    return None
-
-
-def rule_artist(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    if p.require_artist and norm(first_artist(ref.artist)) not in norm(f.path):
-        return "artist not in path"
-    return None
-
-
 def rule_queue(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
     if p.max_queue_length is not None and f.queue_length > p.max_queue_length:
         return f"queue {f.queue_length} > {p.max_queue_length}"
@@ -229,8 +186,8 @@ DURATION_BUCKET_S = 5          # encoding slack between releases of one recordin
 
 
 def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
-    """`rule_version`'s test as a fact rather than a rejection: does the file's name claim the version the
-    reference is? The rejection keeps its own body because it also has to say which words were wrong."""
+    """Does the file's name claim the version the reference is? Until #69 this was a rejection; a file that
+    names the wrong mix is now merely the last thing to try, because only the fingerprint can settle it."""
     title, version = file_title(f.name, ref.artist)
     extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
     words = set(norm(version or "").split()) | set(extra)
@@ -264,15 +221,9 @@ def rank_artist(f: LosslessFile, ref: Reference) -> int:
     return 0 if norm(first_artist(ref.artist)) in norm(f.path) else 1
 
 
-RULES: list[tuple[str, Rule]] = [
-    ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
-    ("duration", rule_duration), ("title", rule_title), ("version", rule_version), ("artist", rule_artist),
-    ("queue", rule_queue), ("banned_user", rule_banned_user),
-]
-
-# The gate spec §5 proposes: the hard rules reject only what can never satisfy the goal, and everything
-# about identity ranks survivors instead. Nothing uses these yet but `flackey replay-picks`, which measures
-# them against the stored no-pick reports; the live defaults below stay as they are until that is read.
+# Spec §5: the hard rules reject only what can never satisfy the goal, and everything about identity ranks
+# survivors instead. `flackey replay-picks` measured this order against the 216 stored no-pick reports
+# (docs/research/2026-09-21-no-pick-replay.md) before it became the live default.
 HARD_RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
     ("queue", rule_queue), ("banned_user", rule_banned_user),
@@ -288,8 +239,10 @@ PEER_RANKERS: list[tuple[str, Ranker]] = [
     ("size", lambda f, ref: f.size),
 ]
 
-# Today's order, unchanged. The identity rankers go in front of it only once the replay report is read.
-RANKERS: list[tuple[str, Ranker]] = PEER_RANKERS
+# What `pick` uses unless a caller says otherwise. Both are bound as `pick`'s defaults below, so they must
+# stay above it: identity orders the survivors, then the peer's ability to actually send the file.
+RULES: list[tuple[str, Rule]] = HARD_RULES
+RANKERS: list[tuple[str, Ranker]] = IDENTITY_RANKERS + PEER_RANKERS
 
 
 @dataclass

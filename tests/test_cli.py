@@ -87,10 +87,10 @@ def test_lossless_replay_diffs_the_pick_under_the_current_policy(tmp_path: Path,
     assert f"stored: {report.chosen.username}" in r.output and f"now:    {report.chosen.username}" in r.output
     assert "same pick" in r.output
 
-    env.write_text(env.read_text() + "LOSSLESS_TITLE_RATIO=101\n")        # nothing can pass the title rule now
+    env.write_text(env.read_text() + "LOSSLESS_MAX_QUEUE=-1\n")           # nothing can pass the queue rule now
     r = runner.invoke(app, ["--env", str(env), "lossless", "replay", str(rid)])
     assert r.exit_code == 0 and "no pick now" in r.output and "now:    -" in r.output
-    assert "title" in r.output and "<-" in r.output
+    assert "queue" in r.output and "<-" in r.output
 
     r = runner.invoke(app, ["--env", str(env), "lossless", "replay", "999"])
     assert r.exit_code == 1 and "no attempt" in r.output
