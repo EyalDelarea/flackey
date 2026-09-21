@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './theme.css'
 import { api } from './api'
-import type { AppSettings, Health, Stats, Track, Bundle, Playlist, Request, RequestState } from './api'
+import type { AppSettings, Health, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
 
 class FakeEventSource {
   onopen: (() => void) | null = null
@@ -76,13 +76,50 @@ const failures: Bundle[] = [
     flag_reason: 'Beatport unreachable, will retry' }),
 ]
 
+/* The Choose window in the only shape that makes it necessary: candidates that share a title and differ
+   only in the version. No amount of text picks between an Original and an Extended Mix, which is exactly
+   what the sample buttons are for. Two rows, because the page holds one player for all of them and
+   starting a sample in one row stops the one running in the other -- a thing only a screenshot shows. */
+const cand = (id: number, artist: string, title: string, mix: string, duration_s: number, score: number,
+              onBeatport: boolean): Candidate => ({
+  id, request_id: 0, source: 'deezer', source_ref: String(id), artist, title, mix_name: mix, duration_s,
+  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: onBeatport ? id : null,
+})
+const choice = (id: number, over: Partial<Request>, candidates: Candidate[]): Bundle => ({
+  request: {
+    id, created_at: '2026-09-21T11:00:00Z', updated_at: '2026-09-21T11:02:00Z', kind: 'yt_track',
+    state: 'awaiting_review', raw_text: 'https://youtu.be/x', playlist_id: null, playlist_position: null,
+    source_url: null, query_version: null, chosen_candidate_id: null, catalog_track_id: null,
+    confidence: null, error_message: null, attempts: 0, retry_after: null, track_id: null,
+    fetch_source: null, reviewed: 1, query_artist: null, query_title: null, query_duration_s: null,
+    flag_reason: null, ...over,
+  },
+  candidates: candidates.map(c => ({ ...c, request_id: id })), catalog: null, track: null, rejection: null,
+})
+
+const choices: Bundle[] = [
+  choice(71, { created_at: '2026-09-21T11:00:00Z', query_artist: 'Vibrasphere', query_title: 'Landmark',
+    query_duration_s: 489, flag_reason: 'three versions matched and none of them won outright' }, [
+    cand(1, 'Vibrasphere', 'Landmark', 'Original Mix', 412, 91, true),
+    cand(2, 'Vibrasphere', 'Landmark', 'Extended Mix', 487, 88, true),
+    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false),
+  ]),
+  /* Two candidates in the second row, not three: at the window's own 1100x720 both rows then stand in one
+     frame, which is the only way a screenshot shows a sample starting here stopping the one above. */
+  choice(72, { created_at: '2026-09-21T10:52:00Z', query_artist: 'Ace Ventura', query_title: 'Presence',
+    query_duration_s: 401, flag_reason: 'the full version and a radio edit both matched' }, [
+    cand(4, 'Ace Ventura', 'Presence', 'Original Mix', 398, 86, true),
+    cand(5, 'Ace Ventura', 'Presence', 'Radio Edit', 228, 69, false),
+  ]),
+]
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : [])
   vi_spy(api, 'stats', async () => stats)
-  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : [] as Bundle[])
+  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : scenario === 'choose' ? choices : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -133,6 +170,17 @@ function scenarioSetup() {
       vi_spy(api, 'soulseekSetup', async () => ({ configured: false, username: null }))
       vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))
       vi_spy(api, 'tools', async () => ({ ffmpeg: true, ffprobe: true, yt_dlp: true }))
+      break
+    case 'choose':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      // Nothing is serving /api/candidates/{id}/preview here, so every button would take a 404, the
+      // element would fire `error`, and all six would latch into "No sample for this version" -- a
+      // screenshot of the layout showing none of the layout. So playback is faked for this scenario
+      // only: `play` resolves, and `src` goes nowhere, so no request is made and no error follows. The
+      // harness is proving the arrangement of the buttons, not the network behind them.
+      HTMLMediaElement.prototype.play = async () => {}
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() { /* no-op */ }, get: () => '' })
       break
     case 'failed':
       // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the
