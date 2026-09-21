@@ -838,12 +838,17 @@ def test_reveal_shows_a_playlist_export_by_its_exported_name(tmp_path: Path):
     opened = []
     app, store, _ = make(tmp_path, opener=lambda p: opened.append(p))
     c = TestClient(app)
+    # Two playlists that sanitize to the same stem: the second gets a " (id)" suffix, and /reveal has to
+    # recognise that suffixed name too -- which it does by calling the same playlist_names() the route does.
     store.upsert_playlist("https://example.test/p", "Late Night")
-    exported = c.get("/api/playlists").json()[0]["file"]
-    Path(exported).parent.mkdir(parents=True, exist_ok=True)
-    Path(exported).write_text("#EXTM3U\n")
-    assert c.post("/api/reveal", json={"path": exported}).status_code == 200
-    assert opened == [Path(exported)]
+    store.upsert_playlist("https://example.test/q", "Late Night")
+    exports = [pl["file"] for pl in c.get("/api/playlists").json()]
+    assert len({Path(e).name for e in exports}) == 2
+    for e in exports:
+        Path(e).parent.mkdir(parents=True, exist_ok=True)
+        Path(e).write_text("#EXTM3U\n")
+        assert c.post("/api/reveal", json={"path": e}).status_code == 200
+    assert opened == [Path(e) for e in exports]
 
 
 def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
