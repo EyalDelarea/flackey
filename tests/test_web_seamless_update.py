@@ -315,21 +315,6 @@ def test_a_window_that_will_not_close_leaves_the_update_armed_and_says_so(app, a
 
 
 @respx.mock
-def test_install_on_quit_arms_the_helper_without_reopening_the_app(app, archive_bytes, private_key):
-    c, _, _, quits = app
-    serve(archive_bytes, sign(private_key, archive_bytes))
-    press(c)
-
-    body = c.post("/api/update/later", headers=FROM_APP).json()
-
-    assert body["state"] == "staged" and body["deferred"] is True
-    assert quits == []
-    armed = selfupdate.pending.staged
-    assert armed is not None and armed.relaunch is False
-    selfupdate.pending.clear()
-
-
-@respx.mock
 def test_pressing_update_while_the_app_is_closing_does_not_start_a_fresh_download(app, archive_bytes,
                                                                                   private_key,
                                                                                   applications):
@@ -348,7 +333,6 @@ def test_restart_refuses_when_nothing_is_staged(app):
     c, _, _, quits = app
 
     assert c.post("/api/update/restart", headers=FROM_APP).status_code == 409
-    assert c.post("/api/update/later", headers=FROM_APP).status_code == 409
     assert quits == []
     assert selfupdate.pending.staged is None
 
@@ -357,7 +341,6 @@ def test_a_page_that_is_not_flackeys_cannot_trigger_a_restart(app):
     c, _, _, quits = app
 
     assert c.post("/api/update/restart").status_code == 403
-    assert c.post("/api/update/later").status_code == 403
     assert quits == []
 
 

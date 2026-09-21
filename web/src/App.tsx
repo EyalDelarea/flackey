@@ -28,6 +28,9 @@ export default function App() {
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [updateDismissed, setUpdateDismissed] = useState(false)
+  // A counter, not a boolean: pressing the banner twice should scroll twice, and the second
+  // press of a boolean already set to true would change nothing.
+  const [focusUpdate, setFocusUpdate] = useState(0)
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [welcomeSeen, setWelcomeSeen] = useState(false)
   const [libraryRoot, setLibraryRoot] = useState('')
@@ -119,8 +122,10 @@ export default function App() {
       : `Flackey ${update.latest} is available.`
     // Sends them to the row that shows the download rather than starting one from under a banner that
     // has nowhere to report a failure.
+    // `setTab` alone read as a dead button whenever Settings was already the open tab, and even
+    // from another tab it left the App version row somewhere below the fold.
     banners.push(<Banner key="update" tone="amber" text={text}
-      action={{ label: dl ? 'Show' : 'Update', onClick: () => setTab('settings') }}
+      action={{ label: dl ? 'Show' : 'Update', onClick: () => { setTab('settings'); setFocusUpdate(n => n + 1) } }}
       onDismiss={() => setUpdateDismissed(true)} />)
   }
   const banner = banners.length ? banners : undefined
@@ -131,7 +136,7 @@ export default function App() {
       {tab === 'download' && <DownloadPage live={live} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}
       {tab === 'uploads' && <UploadsPage />}
-      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} />}
+      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} />}
     </Shell>
   )
 }

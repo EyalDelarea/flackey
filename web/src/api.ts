@@ -75,8 +75,7 @@ export interface UpdateDownload {
   error:string|null
   seamless:boolean
   /** Transfers in flight, for the restart prompt: restarting loses them. */
-  busy:number
-  deferred:boolean }
+  busy:number }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -129,7 +128,6 @@ export const api = {
   openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
   // `appPost`: an app that quits itself at a stranger's choosing is not an improvement.
   restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
-  installUpdateOnQuit: () => appPost<UpdateDownload>('/api/update/later'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),
