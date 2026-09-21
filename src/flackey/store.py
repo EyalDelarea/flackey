@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS lossless_attempts (
   fingerprint_json TEXT, spectrogram_path TEXT, first_byte_ms INTEGER, total_ms INTEGER, raw_dir TEXT
 );
 CREATE INDEX IF NOT EXISTS lossless_attempts_request ON lossless_attempts(request_id);
+-- The ON DELETE CASCADE below does nothing: SQLite ignores foreign keys unless the connection sets
+-- `PRAGMA foreign_keys = ON`, and `Store.__init__` deliberately does not (turning enforcement on would
+-- change the behaviour of every other table at once). The clause is kept because it documents the
+-- relationship and because CREATE TABLE IF NOT EXISTS cannot rewrite the databases already carrying it --
+-- editing it out here would only make this file disagree with them. Enforcement is manual: `delete_request`
+-- and `delete_requests` name this table explicitly, and anything added here must be added there too.
 CREATE TABLE IF NOT EXISTS request_references (
   request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
   json TEXT NOT NULL
@@ -235,20 +241,31 @@ class Store:
         return cur.rowcount
 
     def delete_request(self, request_id: int) -> None:
-        """Forget one request's row, candidates, rejections and lossless attempts. Never touches
-        tracks/playlist_tracks: a filed track and its playlist membership outlive the request that produced it."""
+        """Forget one request's row, candidates, rejections, lossless attempts and acoustic reference. Never
+        touches tracks/playlist_tracks: a filed track and its playlist membership outlive the request that
+        produced it.
+
+        Every child table is named here on purpose. `request_references` declares ON DELETE CASCADE, but this
+        connection does not set `PRAGMA foreign_keys = ON`, so nothing in SQLite enforces it -- see the note
+        above the table in SCHEMA. A child added to the schema and not added here leaks a row per delete,
+        which is exactly what `request_references` did until issue #61."""
         if self.conn.execute("SELECT 1 FROM requests WHERE id=?", (request_id,)).fetchone() is None:
             raise KeyError(request_id)
         self.conn.execute("DELETE FROM candidates WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM rejections WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM lossless_attempts WHERE request_id=?", (request_id,))
+        self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM requests WHERE id=?", (request_id,))
         self.conn.commit()
         self._emit("queue", 0)
 
     def delete_requests(self, states: set[RequestState]) -> list[int]:
-        """Bulk-delete every request whose state is in `states`, plus their candidates, rejections and
-        lossless attempts. Returns the deleted ids. Never touches tracks/playlist_tracks."""
+        """Bulk-delete every request whose state is in `states`, plus their candidates, rejections, lossless
+        attempts and acoustic references. Returns the deleted ids. Never touches tracks/playlist_tracks.
+
+        Same hand-rolled cleanup as `delete_request`, and for the same reason: no foreign key in this
+        database is enforced. Every child delete has to run before the parent rows go, or its `IN (sub)`
+        stops matching anything."""
         if not states:
             return []
         marks = ",".join("?" * len(states))
@@ -259,6 +276,7 @@ class Store:
             self.conn.execute(f"DELETE FROM candidates WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM rejections WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM lossless_attempts WHERE request_id IN ({sub})", params)
+            self.conn.execute(f"DELETE FROM request_references WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM requests WHERE state IN ({marks})", params)
             self.conn.commit()
             self._emit("queue", 0)

@@ -315,3 +315,25 @@ def test_request_reference_is_kept_beside_the_request(tmp_path):
     assert store.get_reference(rid)["ref"] == "b"
     store.set_reference(rid, None)
     assert store.get_reference(rid) is None
+
+
+def test_deleting_a_request_takes_its_acoustic_reference_with_it(store: Store):
+    """A reference is ~50 KB of fingerprint. `request_references` declares ON DELETE CASCADE, but SQLite
+    enforces foreign keys only with `PRAGMA foreign_keys = ON`, which this connection deliberately does not
+    set -- so the delete methods enumerate the table by hand, the same way they do candidates, rejections
+    and attempts. Without that, every request the owner deleted left its reference behind for ever."""
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_reference(rid, {"duration_s": 300.0, "fp": [1, 2, 3]})
+    store.set_state(rid, RequestState.REJECTED)
+    kept = store.add_request("keep", RequestKind.TEXT)
+    store.set_reference(kept, {"duration_s": 200.0, "fp": [4]})
+    store.delete_request(rid)
+    assert store.get_reference(rid) is None
+    assert store.get_reference(kept) is not None            # only the deleted request's row goes
+
+    bulk = store.add_request("b", RequestKind.TEXT)
+    store.set_reference(bulk, {"duration_s": 100.0, "fp": [5]})
+    store.set_state(bulk, RequestState.ERROR)
+    assert store.delete_requests({RequestState.ERROR}) == [bulk]
+    assert store.get_reference(bulk) is None
+    assert store.get_reference(kept) is not None
