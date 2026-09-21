@@ -508,7 +508,8 @@ class Worker:
         retry_after = (datetime.now(UTC) + timedelta(seconds=LONG_RETRY_EVERY_S)).isoformat(timespec="seconds")
         left = MAX_ATTEMPTS + LONG_RETRY_TIMES - attempts
         self._set_state(req, RequestState.QUEUED, attempts=attempts, retry_after=retry_after, lossless_retry=1,
-                        flag_reason=f"waiting for Soulseek: {why}; {left} more looks, one every {hours} h")
+                        flag_reason=f"waiting for Soulseek: {why}; {left} more "
+                                    f"look{'' if left == 1 else 's'}, one every {hours} h")
         if attempts <= MAX_ATTEMPTS:
             await self.notifier.send(f"Waiting for Soulseek: {req.raw_text}\n{why}. Looking again every {hours} h "
                                      f"for {LONG_RETRY_TIMES * hours // 24} days.")
