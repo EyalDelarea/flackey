@@ -123,6 +123,20 @@ def sweep(out: Path = typer.Option(Path("sweep.md"), "--out",  # noqa: B008
     typer.echo(f"wrote {out}")
 
 
+@app.command("replay-picks")
+def replay_picks(out: Path = typer.Option(Path("replay.md"), "--out",  # noqa: B008
+                                          help="Where to write the markdown table")) -> None:
+    """Re-run every stored no-pick report through the proposed hard rules and rankers; no network.
+    Reads the attempt table only and changes nothing."""
+    from .lossless import HARD_RULES, IDENTITY_RANKERS, PEER_RANKERS
+    from .replay import render, run
+    from .store import Store
+
+    rows = run(Store(_settings().db_path), rules=HARD_RULES, rankers=IDENTITY_RANKERS + PEER_RANKERS)
+    out.write_text(render(rows))
+    typer.echo(f"{len(rows)} attempts replayed; wrote {out}")
+
+
 lossless_app = typer.Typer(help="Lossless-upgrade tools (Soulseek through slskd)", no_args_is_help=True)
 app.add_typer(lossless_app, name="lossless")
 

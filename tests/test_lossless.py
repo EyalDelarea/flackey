@@ -4,6 +4,9 @@ import pytest
 
 from flackey.config import Settings
 from flackey.lossless import (
+    HARD_RULES,
+    IDENTITY_RANKERS,
+    PEER_RANKERS,
     RANKERS,
     LosslessFile,
     PickPolicy,
@@ -12,6 +15,9 @@ from flackey.lossless import (
     file_title,
     pick,
     policy_from_settings,
+    rank_duration,
+    rank_title,
+    rank_version,
     reference_for,
     search_text,
     transfer_ceiling_s,
@@ -173,3 +179,29 @@ def test_the_transfer_ceiling_grows_with_the_file_so_a_long_flac_is_not_cut_at_n
     big = transfer_ceiling_s(67_085_339, s)
     assert big / 60 > 55 and big == pytest.approx(67_085_339 * 8 / (s.lossless_min_rate_kbps * 1000))
     assert transfer_ceiling_s(67_085_339, s) > transfer_ceiling_s(40_000_000, s)
+
+
+def test_identity_rankers_order_survivors_instead_of_rejecting_them():
+    far = mk(username="far", length_s=600)
+    near = mk(username="near", length_s=444)                  # 2 s off: same bucket as exact
+    exact_no_slot = mk(username="exact", length_s=442, has_free_slot=False)
+    remix = mk(username="rmx", path="x\\Hallucinogen - Orphic Thrench (Twisted Remix).flac", length_s=442)
+    report = pick([far, remix, exact_no_slot, near], REF, PickPolicy(), rules=HARD_RULES,
+                  rankers=IDENTITY_RANKERS + PEER_RANKERS)
+    assert not report.rejections
+    assert [f.username for f in report.survivors] == ["near", "exact", "far", "rmx"]
+
+
+def test_rankers_measure_against_the_reference():
+    assert rank_version(mk(), REF) == 0
+    assert rank_version(mk(path="x\\Hallucinogen - Orphic Thrench (Live).flac"), REF) == 1
+    assert rank_duration(mk(length_s=442), REF) == 0 and rank_duration(mk(length_s=449), REF) == 1
+    assert rank_duration(mk(length_s=None), REF) == 10_000
+    assert rank_title(mk(), REF) == -10 and rank_title(mk(path="x\\Someone - Else.flac"), REF) > -5
+
+
+def test_pick_policy_from_dict_ignores_fields_older_reports_carry():
+    d = {"lossless_extensions": ["flac"], "duration_tolerance_s": 3, "title_ratio": 90, "require_artist": False,
+         "max_queue_length": None, "banned_users": [], "some_future_field": 1}
+    p = PickPolicy.from_dict(d)
+    assert p.lossless_extensions == frozenset({"flac"}) and p.max_queue_length is None

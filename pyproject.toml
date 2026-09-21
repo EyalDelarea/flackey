@@ -64,7 +64,7 @@ layers = [
   "web",
   "selfupdate",
   "soulseek_link : sharing",
-  "worker : events : inbox : sweep",
+  "worker : events : inbox : sweep : replay",
   "attempts : reference",
   "library : export : tag : verify : store : catalog : deezer : youtube : spotify : source : telegram : convert : fingerprint",
   "lossless",
