@@ -476,8 +476,7 @@ describe('the Soulseek panel', () => {
       sidecar: { port: 5030, host: '127.0.0.1', public: false },
       soulseek_listen: { port: 50300, host: '0.0.0.0', public: true },
     },
-    ranking: { max_picks: 4, duration_tolerance_s: 3, title_ratio: 90, require_artist: false,
-      max_queue: null, fingerprint_min: 0.9 },
+    ranking: { max_picks: 4, max_queue: null, fingerprint_min: 0.79 },
     ...over,
   })
   const lossless = (over: Partial<LosslessHealth> = {}): LosslessHealth =>
@@ -516,6 +515,20 @@ describe('the Soulseek panel', () => {
     expect(details).not.toHaveAttribute('open')
     expect(details).toContainElement(screen.getByText(/50300 — incoming Soulseek transfers/))
     expect(details).toContainElement(screen.getByText(/keeps a copy only if its fingerprint matches/))
+  })
+
+  it('says the length only orders the copies and that the recording check is what decides', () => {
+    // The rules that used to reject a copy on its length, title, version or artist are rankers now
+    // (issue #69), so the panel must not keep promising the owner a match on length and title.
+    show(lossless())
+    expect(screen.getByText(/tried nearest the video's length first; the recording check decides/)).toBeInTheDocument()
+    expect(screen.queryByText(/must match on length/)).not.toBeInTheDocument()
+    expect(screen.getByText(/matches the original at 79% or better/)).toBeInTheDocument()
+  })
+
+  it('names the queue cap in the ranking sentence only when one is set', () => {
+    show(lossless(), settings({ ranking: { max_picks: 4, max_queue: 3, fingerprint_min: 0.79 } }))
+    expect(screen.getByText(/queues longer than 3 are skipped/)).toBeInTheDocument()
   })
 
   it('offers a way out of a stuck sign-in instead of leaving the owner watching it', () => {

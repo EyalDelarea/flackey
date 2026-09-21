@@ -43,8 +43,7 @@ export interface FetchProgress { request_id:number; bytes:number; size:number; p
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */
   phase?:string }
 export interface PortInfo { port:number; host:string; public:boolean }
-export interface Ranking { max_picks:number; duration_tolerance_s:number; title_ratio:number;
-  require_artist:boolean; max_queue:number|null; fingerprint_min:number }
+export interface Ranking { max_picks:number; max_queue:number|null; fingerprint_min:number }
 export interface AppSettings { library_root:string; data_dir:string; version:string; telegram_configured:boolean;
   log_path:string; soulseek_enabled?:boolean; slskd_url?:string; slskd_downloads_dir?:string;
   lossless_filing_format?:string; filing_formats?:string[]; auto_update_check?:boolean;
