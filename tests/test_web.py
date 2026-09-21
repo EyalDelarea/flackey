@@ -506,11 +506,13 @@ def test_candidate_json_says_whether_deezer_has_a_sample(client):
         Candidate(source="s", source_ref="b", artist="A", title="T", rank=2, has_preview=False),
         Candidate(source="s", source_ref="c", artist="A", title="T", rank=3),
     ])
-    cands = c.get(f"/api/requests/{rid}").json()["candidates"]
-    # `is`, not `==`: JSON `1` would satisfy `== True` and break every `=== null` check in the page.
-    assert cands[0]["has_preview"] is True
-    assert cands[1]["has_preview"] is False
-    assert cands[2]["has_preview"] is None
+    # Both surfaces the page reads: the detail bundle and the list it renders the play buttons in.
+    for cands in (c.get(f"/api/requests/{rid}").json()["candidates"],
+                  c.get("/api/queue").json()[0]["candidates"]):
+        # `is`, not `==`: JSON `1` would satisfy `== True` and break every `=== null` check in the page.
+        assert cands[0]["has_preview"] is True
+        assert cands[1]["has_preview"] is False
+        assert cands[2]["has_preview"] is None
 
 
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
