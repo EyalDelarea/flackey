@@ -70,7 +70,7 @@ const failures: Bundle[] = [
   failure(41, 'error', { query_artist: 'Ace Ventura', query_title: 'Presence', attempts: 3,
     error_message: 'the people who had it stopped sending part-way through' }),
   failure(42, 'not_found', { query_artist: 'Vibrasphere', query_title: 'Lime Twig',
-    error_message: 'neither Deezer nor Beatport has a match for it' }),
+    error_message: 'could not identify this track: no Deezer candidates and no Beatport match; no artist and title could be read from the request, so there is nothing to search for' }),
   failure(43, 'rejected', { query_artist: 'Symbolic', query_title: 'Gravity Waves' }),
   failure(44, 'cancelled', { query_artist: 'Human Element', query_title: 'The Answer' }),
   failure(45, 'cancelled', { query_artist: 'Atmos', query_title: 'Klein Aber Doctor',

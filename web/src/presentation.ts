@@ -309,8 +309,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         const reason = (r.flag_reason || 'could not complete')
           .replace(/, will retry$/, '')
           .replace(/^no way to fetch this track:\s*/i, '')
-          .replace(/nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback/i,
-            'No Soulseek match; alternate source unavailable')
+          .replace(/nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on/i,
+            'No Soulseek match; nothing on Deezer to fall back on')
         v.status = `Previous attempt: ${reason}`
         v.statusTone = 'amber'
       } else {

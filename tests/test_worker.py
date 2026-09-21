@@ -433,9 +433,34 @@ async def test_a_youtube_request_with_no_matching_preview_does_not_file_the_text
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CT]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
-    # Task 12 sends this to Soulseek instead; today it parks with a reason the owner can read.
+    # Since issue #69 a request with no record goes to Soulseek on its own words -- but this raw text
+    # carries no " - ", so nothing parsed an artist and a title out of it and there is nothing to search
+    # with. It parks, still carrying the identification's reason for the owner to read, and the text
+    # winner is still not filed, which is what this test is here for.
     assert r.state == RequestState.NOT_FOUND and "none of 1" in r.error_message
-    assert r.track_id is None and notifier.sent[-1][0].startswith("Not available on Deezer")
+    assert "nothing to search for" in r.error_message
+    assert r.track_id is None and notifier.sent[-1][0].startswith("Could not identify")
+
+
+async def test_no_record_and_no_soulseek_errors_instead_of_filing_the_deezer_copy(env, monkeypatch):
+    """The other half of issue #69's gate: the words are there to search with, but this worker has no
+    lossless provider. Nothing may reach `source.fetch` -- a lossy copy of a record nothing chose is
+    exactly the wrong file this epic exists to stop (spec §7)."""
+    _settings, store, _notifier = env
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    source = FakeSource([good_cand()])
+    w = make_worker(env, source, FakeCatalog([CT]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.track_id is None and source.fetched == []
+    assert "Soulseek is switched off" in r.error_message
 
 
 async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypatch):
@@ -476,8 +501,13 @@ async def test_source_not_found(env):
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceNotFound("source bot replied without results: Nothing")), FakeCatalog([CT]))
     r = await w.process(store.add_request("q", RequestKind.TEXT))
+    # Since issue #69 "not on Deezer" is not a verdict on its own: the request falls through to the
+    # request's own words, and only lands here because "q" parses to neither an artist nor a title. The
+    # source's own sentence is now a log line rather than the row's message.
     assert r.state == RequestState.NOT_FOUND
-    assert r.error_message == "source bot replied without results: Nothing"  # kept, so a not-found can be diagnosed
+    assert r.error_message == ("could not identify this track: no Deezer candidates and no Beatport match; "
+                               "no artist and title could be read from the request, so there is nothing to "
+                               "search for")
 
 
 async def test_source_timeout_retries_then_errors(env):

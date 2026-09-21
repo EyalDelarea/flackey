@@ -63,6 +63,9 @@ class Reference:
     # disagrees with it. `match.score_candidate` already refuses to let a wrongly matched Beatport release
     # redefine that length for source candidates; without this the lossless gate was the one place that did.
     requested_duration_s: int | None = None
+    # built from the request's own words rather than a catalogue record or a source candidate; a hit on it
+    # tags from the request
+    from_query: bool = False
 
     @property
     def is_original(self) -> bool:
