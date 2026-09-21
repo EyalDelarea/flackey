@@ -798,18 +798,57 @@ def test_settings_get_and_put(client, tmp_path: Path):
     assert c.get("/api/settings").json()["auto_update_check"] is False
 
 
-def test_reveal_is_confined_to_app_folders(tmp_path: Path):
+def test_reveal_only_opens_places_the_app_itself_named(tmp_path: Path):
+    """The opener is only ever handed a path flackey built: the library folder, the data folder, the log,
+    a playlist export, or a filed track's own row. A name that arrives in the request is compared as a
+    string and then thrown away, so a real file that was never filed -- and a traversal out of the
+    library -- are both simply not on the list."""
     opened = []
-    app, _, settings = make(tmp_path, opener=lambda p: opened.append(p))
+    app, store, settings = make(tmp_path, opener=lambda p: opened.append(p))
     c = TestClient(app)
-    f = settings.library_root / "A" / "x.mp3"
-    f.parent.mkdir(parents=True)
-    f.write_bytes(b"x")
-    assert c.post("/api/reveal", json={"path": str(f)}).json() == {"ok": True} and opened == [f]
+    filed = settings.library_root / "A" / "x.mp3"
+    filed.parent.mkdir(parents=True)
+    filed.write_bytes(b"x")
+    store.add_track(path=filed, fmt="mp3", bitrate_kbps=320, cutoff_hz=19800, file_size=1,
+                    artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
+                    catalog_track_id=None, request_id=None)
+    log_path = settings.data_dir / "flackey.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("")
+    stray = settings.library_root / "A" / "never-filed.mp3"
+    stray.write_bytes(b"x")
+
+    assert c.post("/api/reveal", json={"path": str(filed)}).json() == {"ok": True} and opened == [filed]
     assert c.post("/api/reveal", json={"path": str(settings.library_root)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(settings.data_dir)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(log_path)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(stray)}).status_code == 400
     assert c.post("/api/reveal", json={"path": str(tmp_path / "outside.mp3")}).status_code == 400
-    assert c.post("/api/reveal", json={"path": str(settings.library_root / "missing.mp3")}).status_code == 404
     assert c.post("/api/reveal", json={"path": str(settings.library_root / ".." / "outside.mp3")}).status_code == 400
+    assert c.post("/api/reveal", json={"path": "/etc/passwd"}).status_code == 400
+    assert opened == [filed, settings.library_root, settings.data_dir, log_path]
+
+    filed.unlink()
+    assert c.post("/api/reveal", json={"path": str(filed)}).status_code == 404
+
+
+def test_reveal_shows_a_playlist_export_by_its_exported_name(tmp_path: Path):
+    """The playlists page hands back the .m3u8 path it computed; /reveal has to recognise that same path
+    without trusting it, so the name is rebuilt from the playlist rows rather than taken from the body."""
+    opened = []
+    app, store, _ = make(tmp_path, opener=lambda p: opened.append(p))
+    c = TestClient(app)
+    # Two playlists that sanitize to the same stem: the second gets a " (id)" suffix, and /reveal has to
+    # recognise that suffixed name too -- which it does by calling the same playlist_names() the route does.
+    store.upsert_playlist("https://example.test/p", "Late Night")
+    store.upsert_playlist("https://example.test/q", "Late Night")
+    exports = [pl["file"] for pl in c.get("/api/playlists").json()]
+    assert len({Path(e).name for e in exports}) == 2
+    for e in exports:
+        Path(e).parent.mkdir(parents=True, exist_ok=True)
+        Path(e).write_text("#EXTM3U\n")
+        assert c.post("/api/reveal", json={"path": e}).status_code == 200
+    assert opened == [Path(e) for e in exports]
 
 
 def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
@@ -1315,9 +1354,11 @@ def test_uploads_endpoint_is_calm_when_soulseek_is_off_or_the_sidecar_is_down(cl
         "enabled": False, "provider": None, "uploads": [],
         "summary": {"total": 0, "active": 0, "completed": 0, "peers": 0, "bytes": 0}, "error": None}
 
-    worker.providers = [_Uploader(error=LosslessUnavailable("slskd unreachable: ConnectError"))]
+    worker.providers = [_Uploader(error=LosslessUnavailable("slskd unreachable at http://slskd.test: ConnectError"))]
     down = c.get("/api/lossless/uploads").json()
     assert down["enabled"] is True and down["uploads"] == [] and "unreachable" in down["error"]
+    # The sidecar's own words (its URL, the transport error) stay in the log; the page gets a plain sentence.
+    assert "slskd.test" not in down["error"] and "ConnectError" not in down["error"]
     assert down["summary"]["total"] == 0
 
 

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -47,12 +47,18 @@ def reveal_in_finder(path: Path) -> None:
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _inside(path: Path, roots: list[Path]) -> bool:
-    try:
-        resolved = path.resolve()
-    except OSError:
-        return False
-    return any(resolved == r.resolve() or r.resolve() in resolved.parents for r in roots)
+def _revealable(settings: Settings, store: Store) -> Iterator[Path]:
+    """Every folder and file the UI has a "show in Finder" button for, each one built here out of settings
+    and the database. `/reveal` matches the asked-for name against this list and then opens the *listed*
+    path, so a name that came in over HTTP is only ever compared as a string -- it never reaches the
+    filesystem, and there is no containment check to get subtly wrong."""
+    yield settings.library_root
+    yield settings.data_dir
+    yield settings.data_dir / LOG_FILE
+    playlists = store.list_playlists()
+    names = playlist_names(playlists)
+    for pl in playlists:
+        yield settings.library_root / PLAYLIST_DIR / f"{names[pl.id]}.m3u8"
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -211,12 +217,18 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
 
     @r.post("/reveal")
     async def reveal(body: dict) -> dict:
-        path = Path(body.get("path") or "")
-        if not path.is_absolute() or not _inside(path, [settings.library_root, settings.data_dir]):
+        asked = str(body.get("path") or "")
+        known = next((p for p in _revealable(settings, store) if str(p) == asked), None)
+        if known is None:
+            # The other half of what the UI reveals: a filed track. The lookup is a database query on the
+            # stored name, so the path that gets opened is the one the library wrote, not the one asked for.
+            track = store.find_track_by_path(Path(asked))
+            known = track.path if track else None
+        if known is None:
             raise HTTPException(400, "only files inside the library or app data folder can be shown")
-        if not path.exists():
+        if not known.exists():
             raise HTTPException(404, "that file is no longer there")
-        opener(path)
+        opener(known)
         return {"ok": True}
 
     @r.get("/tools")
