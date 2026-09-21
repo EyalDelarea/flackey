@@ -581,12 +581,6 @@ class Worker:
             except CatalogUnavailable as e:
                 await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
                 return
-            if catalog is None:
-                # the pinned edit/remix has no Beatport record: only the owner may file it on Deezer's word
-                reason = f"the {candidate_version(cand)} is not on Beatport; information cannot be verified"
-                self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=reason)
-                await self._ask_review(req, saved, reason)
-                return
 
         await self._fetch_verify_file(req, cand, catalog)
 

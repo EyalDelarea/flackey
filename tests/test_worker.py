@@ -183,8 +183,8 @@ async def test_duplicate_is_skipped(env):
 async def test_duplicate_is_rechecked_when_review_resumes(env):
     _settings, store, _notifier = env
     src = FakeSource([good_cand()])
-    parked = store.add_request(TEXT, RequestKind.TEXT)
-    await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: not on Beatport
+    parked = store.add_request("q", RequestKind.TEXT)   # raw text nothing matches: parks below threshold
+    await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: confidence below threshold
     assert store.get_request(parked).state == RequestState.AWAITING_REVIEW
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, src, FakeCatalog([ct]))
@@ -243,11 +243,14 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     assert r.attempts == 2 and src.searches == 1 and len(store.get_candidates(rid)) == 1
 
 
-async def test_not_on_beatport_parks(env):
+async def test_not_on_beatport_files_when_confident(env):
+    """No Beatport record, but the candidate convinces on text: the download's own check decides."""
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
-    r = await w.process(store.add_request("q", RequestKind.TEXT))
-    assert r.state == RequestState.AWAITING_REVIEW and "Beatport" in r.flag_reason
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    assert store.get_request(rid).catalog_track_id < 0       # tagged from the fallback catalogue
 
 
 def remix_cand() -> Candidate:
@@ -314,18 +317,16 @@ def _edit_setup(env, catalog_tracks):
     return w, rid
 
 
-async def test_auto_accepted_edit_missing_from_beatport_parks_for_review(env):
-    """Only the owner may decide to file a track without a Beatport record behind it."""
-    _settings, store, notifier = env
+async def test_auto_accepted_edit_missing_from_beatport_files_on_the_fingerprint(env):
+    """The pinned edit has no Beatport record of its own: it files anyway, checked against the video."""
+    _settings, store, _notifier = env
     original = CatalogTrack(**{**CT.__dict__, "duration_ms": 544000})
     w, rid = _edit_setup(env, [original])
     r = await w.process(rid)
-    assert r.state == RequestState.AWAITING_REVIEW and "not on Beatport" in r.flag_reason
-    assert "not on Beatport" in notifier.sent[-1][0]
-    await w.choose(rid, store.get_candidates(rid)[1].id)
-    r = await w.process(rid)
+    assert r.state == RequestState.DONE
     track = store.get_track(r.track_id)
-    assert r.state == RequestState.DONE and (track.mix_name, track.isrc) == ("Album Edit", "EDIT00001")
+    assert (track.mix_name, track.isrc) == ("Album Edit", "EDIT00001")
+    assert store.get_request(rid).catalog_track_id < 0       # tagged from the fallback catalogue
 
 
 async def test_review_message_shows_the_video_length(env):
