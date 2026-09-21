@@ -226,6 +226,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* The meta line does double duty while a sample is resolving or has just failed, so those two readings
    are coloured as the temporary things they are rather than as facts about the track. */
 .candidate .meta.note { color: var(--orange-text); }
+/* On the lit (playing) card the note sits on --sample-tint instead of plain --group, which drops
+   --orange-text below 4.5:1 -- see --orange-text-lit in theme.css. Scoped to this one spot so the
+   ordinary --orange-text used elsewhere on --group is untouched. */
+.candidate.lit .meta.note { color: var(--orange-text-lit); }
 /* The sample button sits to the LEFT of "Use this": the task reads listen-then-choose, and the eye used
    to land on the commitment first. The player is square because its whole content is a glyph, and it
    keeps the 22px height of every other secondary button on the card; 26px wide, up from 22, so a solid

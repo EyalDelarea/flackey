@@ -185,9 +185,10 @@ function scenarioSetup() {
       // is not also playing.
       vi_spy(api, 'choose', async (rid: number, cid: number) => {
         const b = choices.find(b => b.request.id === rid)
-        if (b) b.request.chosen_candidate_id = cid
+        if (!b) throw new Error(`no bundle for request ${rid}`)
+        b.request.chosen_candidate_id = cid
         lastEventSource?.handlers['queue']?.({ data: '' })
-        return b?.request
+        return b.request
       })
       // Nothing is serving /api/candidates/{id}/preview here, so every press would take a 404 and the
       // element would fire `error` -- a screenshot of the playing card showing none of the playing card.
