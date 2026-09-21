@@ -509,13 +509,19 @@ class Worker:
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
 
             cands: list[Candidate] = []
+            # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
+            # different situations and the row used to say which, so it still does: a bot that is switched
+            # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
+            source_why = "the Deezer bot is switched off"
             if self.settings.source_enabled:
+                source_why = "no Deezer candidates"
                 try:
                     cands = await self.source.search(query)
                 except SourceUnauthorized:
                     raise  # handled in process(): subclass of SourceError, so it must be caught before it
                 except SourceNotFound as e:
                     # Not a verdict any more: the request's own words can still reach Soulseek below.
+                    source_why = f"the Deezer bot found nothing ({e})"
                     log.info("req#%d not found at source: %s", req.id, e)
                 except (SourceTimeout, SourceError) as e:
                     if catalog is None:
@@ -541,7 +547,7 @@ class Worker:
                         return
                     await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                     return
-                await self._search_on_the_request(req, query, None, "no Deezer candidates and no Beatport match")
+                await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
                 return
 
             # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
@@ -977,8 +983,11 @@ class Worker:
 
     # ---- lossless ---------------------------------------------------------
     def _reference(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> Reference:
+        """`from_query` says the words in this reference are the request's own. That is a fact about where
+        `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
+        match still searches and tags from the record, because the catalog wins inside `reference_for`."""
         ref = reference_for(catalog, cand, req.query_duration_s)
-        return replace(ref, from_query=True) if cand.source == QUERY_SOURCE else ref
+        return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
 
     async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
                             acoustic: Acoustic) -> LosslessHit | None:

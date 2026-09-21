@@ -987,9 +987,9 @@ async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_o
 
     assert r.state == RequestState.NOT_FOUND
     assert r.retry_after is None                      # terminal: no backoff was scheduled
-    # Since issue #69 the message is about what could be searched with rather than about which of the two
-    # halves was off: the raw text parsed to no artist and no title, so there is nothing to ask Soulseek.
-    assert "no Deezer candidates and no Beatport match" in r.error_message
+    assert "Beatport" in r.error_message and "switched off" in r.error_message
+    # Since issue #69 the message also says why there was no second chance: nothing parsed out of the raw
+    # text, so there were no words to ask Soulseek with either.
     assert "nothing to search for" in r.error_message
     assert source.searches == 0
 
@@ -1269,3 +1269,50 @@ async def test_no_matching_preview_sends_the_request_words_to_soulseek(lenv, mon
     r = await w.process(rid)
     assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
     assert store.get_track(r.track_id).catalog_track_id < 0
+
+
+async def test_a_beatport_match_still_tags_and_searches_from_the_record(lenv, monkeypatch):
+    """The other side of `from_query`: identification rejected every Deezer candidate, but Beatport did
+    match, so `reference_for` reads the words from the record and the flag must say so. Tasks 13 and 14
+    read it to decide which spelling found the file."""
+    _, store, _, provider, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make(lenv)                                   # FakeCatalog([CT3]): Beatport knows this one
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
+    assert attempt_of(store, rid).report["reference"]["from_query"] is False
+    assert store.get_track(r.track_id).catalog_track_id == CT.id      # tagged from the record, not the words
+
+
+async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, monkeypatch):
+    """The candidate list is the current search's answer, not a log. Before issue #69 the branch that
+    writes it was terminal, so it ran once; now the request comes back round the ladder and an append
+    would leave one set of rows per pass on the Choose list."""
+    _, store, _, _, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [], "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make(lenv, provider=FakeProvider(lenv[0].slskd_downloads, []), catalog=FakeCatalog([]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    for _ in range(MAX_ATTEMPTS):                    # no_pick is retryable, so the whole ladder runs
+        r = await w.process(rid)
+    assert r.state == RequestState.ERROR and w.source.searches == MAX_ATTEMPTS
+    assert len(store.get_candidates(rid)) == 1       # one search's worth, not one per pass

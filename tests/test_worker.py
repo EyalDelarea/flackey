@@ -503,11 +503,11 @@ async def test_source_not_found(env):
     r = await w.process(store.add_request("q", RequestKind.TEXT))
     # Since issue #69 "not on Deezer" is not a verdict on its own: the request falls through to the
     # request's own words, and only lands here because "q" parses to neither an artist nor a title. The
-    # source's own sentence is now a log line rather than the row's message.
+    # bot's own sentence is still on the row, which is what a not-found is diagnosed from.
     assert r.state == RequestState.NOT_FOUND
-    assert r.error_message == ("could not identify this track: no Deezer candidates and no Beatport match; "
-                               "no artist and title could be read from the request, so there is nothing to "
-                               "search for")
+    assert r.error_message == ("could not identify this track: the Deezer bot found nothing (source bot "
+                               "replied without results: Nothing) and no Beatport match; no artist and "
+                               "title could be read from the request, so there is nothing to search for")
 
 
 async def test_source_timeout_retries_then_errors(env):

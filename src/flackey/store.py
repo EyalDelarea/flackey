@@ -266,6 +266,22 @@ class Store:
 
     # ---- candidates -----------------------------------------------------
     def add_candidates(self, request_id: int, candidates: list[Candidate]) -> list[Candidate]:
+        """Replace this request's candidate list with what the search just returned.
+
+        Replace, not append: the list is the current search's answer, not a log of every pass. It used to be
+        written at most once per request, because the branch that writes it was terminal; since issue #69 a
+        request with no chosen record goes to Soulseek and comes back round the retry ladder, so an append
+        left one set of rows per pass on the Choose list and on the request page.
+
+        The one pointer at a candidate id that outlives a pass is `requests.chosen_candidate_id` (no foreign
+        key enforces it, and nothing else in the schema references a candidate), so that row is kept
+        whatever happens. In practice the caller only reaches here when it is NULL -- `_process` resumes
+        from the chosen candidate instead of searching -- but stranding it would turn a retry into a
+        KeyError deep in `upgrade()` or the sweep, which is too sharp an edge to leave to the caller.
+        `IS NOT` is SQLite's null-safe comparison: with no choice recorded it keeps nothing."""
+        self.conn.execute(
+            "DELETE FROM candidates WHERE request_id=? "
+            "AND id IS NOT (SELECT chosen_candidate_id FROM requests WHERE id=?)", (request_id, request_id))
         out = []
         for c in candidates:
             cur = self.conn.execute(
