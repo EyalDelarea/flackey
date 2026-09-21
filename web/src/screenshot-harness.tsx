@@ -3,14 +3,17 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './theme.css'
 import { api } from './api'
-import type { AppSettings, Health, Stats, Track, Bundle, Playlist, Request, RequestState } from './api'
+import type { AppSettings, Health, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
 
+// The 'choose' scenario needs this instance after construction, to fire the 'queue' event by hand once a
+// candidate is chosen -- there is no real server here to push it.
+let lastEventSource: FakeEventSource | null = null
 class FakeEventSource {
   onopen: (() => void) | null = null
   handlers: Record<string, (e: { data: string }) => void> = {}
   addEventListener(name: string, fn: (e: { data: string }) => void) { this.handlers[name] = fn }
   close() { /* no-op */ }
-  constructor(_url: string) { /* no-op */ }
+  constructor(_url: string) { lastEventSource = this }
 }
 ;(window as any).EventSource = FakeEventSource
 
@@ -76,13 +79,52 @@ const failures: Bundle[] = [
     flag_reason: 'Beatport unreachable, will retry' }),
 ]
 
+/* The Choose window in the only shape that makes it necessary: candidates that share a title and differ
+   only in the version. No amount of text picks between an Original and an Extended Mix, which is exactly
+   what the sample buttons are for. Two rows, because the page holds one player for all of them and
+   starting a sample in one row stops the one running in the other -- a thing only a screenshot shows. */
+const cand = (id: number, artist: string, title: string, mix: string, duration_s: number, score: number,
+              onBeatport: boolean, hasPreview = true): Candidate => ({
+  id, request_id: 0, source: 'deezer', source_ref: String(id), artist, title, mix_name: mix, duration_s,
+  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: onBeatport ? id : null, has_preview: hasPreview,
+})
+const choice = (id: number, over: Partial<Request>, candidates: Candidate[]): Bundle => ({
+  request: {
+    id, created_at: '2026-09-21T11:00:00Z', updated_at: '2026-09-21T11:02:00Z', kind: 'yt_track',
+    state: 'awaiting_review', raw_text: 'https://youtu.be/x', playlist_id: null, playlist_position: null,
+    source_url: null, query_version: null, chosen_candidate_id: null, catalog_track_id: null,
+    confidence: null, error_message: null, attempts: 0, retry_after: null, track_id: null,
+    fetch_source: null, reviewed: 1, query_artist: null, query_title: null, query_duration_s: null,
+    flag_reason: null, ...over,
+  },
+  candidates: candidates.map(c => ({ ...c, request_id: id })), catalog: null, track: null, rejection: null,
+})
+
+const choices: Bundle[] = [
+  choice(71, { created_at: '2026-09-21T11:00:00Z', query_artist: 'Vibrasphere', query_title: 'Landmark',
+    query_duration_s: 489, flag_reason: 'three versions matched and none of them won outright' }, [
+    cand(1, 'Vibrasphere', 'Landmark', 'Original Mix', 412, 91, true),
+    cand(2, 'Vibrasphere', 'Landmark', 'Extended Mix', 487, 88, true),
+    // No sample available for this one: `has_preview: false` means no control renders at all -- the
+    // state the no-sample screenshot exists to prove.
+    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false, false),
+  ]),
+  /* Two candidates in the second row, not three: at the window's own 1100x720 both rows then stand in one
+     frame, which is the only way a screenshot shows a sample starting here stopping the one above. */
+  choice(72, { created_at: '2026-09-21T10:52:00Z', query_artist: 'Ace Ventura', query_title: 'Presence',
+    query_duration_s: 401, flag_reason: 'the full version and a radio edit both matched' }, [
+    cand(4, 'Ace Ventura', 'Presence', 'Original Mix', 398, 86, true),
+    cand(5, 'Ace Ventura', 'Presence', 'Radio Edit', 228, 69, false),
+  ]),
+]
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : [])
   vi_spy(api, 'stats', async () => stats)
-  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : [] as Bundle[])
+  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : scenario === 'choose' ? choices : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -133,6 +175,46 @@ function scenarioSetup() {
       vi_spy(api, 'soulseekSetup', async () => ({ configured: false, username: null }))
       vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))
       vi_spy(api, 'tools', async () => ({ ffmpeg: true, ffprobe: true, yt_dlp: true }))
+      break
+    case 'choose':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      // There is no server here to push the 'queue' SSE event a real choose triggers, so this stands in
+      // for it: mutate the bundle in place, then fire the event by hand so the page re-fetches `queue()`
+      // and re-renders with the chosen ring -- needed only to screenshot the chosen state on a card that
+      // is not also playing.
+      vi_spy(api, 'choose', async (rid: number, cid: number) => {
+        const b = choices.find(b => b.request.id === rid)
+        if (!b) throw new Error(`no bundle for request ${rid}`)
+        b.request.chosen_candidate_id = cid
+        lastEventSource?.handlers['queue']?.({ data: '' })
+        return b.request
+      })
+      // Nothing is serving /api/candidates/{id}/preview here, so every press would take a 404 and the
+      // element would fire `error` -- a screenshot of the playing card showing none of the playing card.
+      // So the whole clip is faked for this scenario only: `src` goes nowhere, `play` resolves, and a
+      // clock runs for 30 s, dispatching the `timeupdate`s the page drives its rail and its numeral from
+      // and the `ended` it fades on. That makes every state reachable by pressing the button -- the
+      // sliver for the first quarter second, then the fill, then the fade. The harness is proving the
+      // arrangement and the states, not the network behind them.
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() { /* no-op */ }, get: () => '' })
+      {
+        let at = 0
+        let clock = 0
+        Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { get: () => at, set(v: number) { at = v } })
+        Object.defineProperty(HTMLMediaElement.prototype, 'duration', { get: () => 30 })
+        HTMLMediaElement.prototype.pause = function () { window.clearInterval(clock) }
+        HTMLMediaElement.prototype.load = function () { window.clearInterval(clock); at = 0 }
+        HTMLMediaElement.prototype.play = async function () {
+          window.clearInterval(clock)
+          at = 0
+          clock = window.setInterval(() => {
+            at = Math.min(30, at + 0.25)
+            if (at >= 30) window.clearInterval(clock)
+            this.dispatchEvent(new Event(at >= 30 ? 'ended' : 'timeupdate'))
+          }, 250)
+        }
+      }
       break
     case 'failed':
       // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the

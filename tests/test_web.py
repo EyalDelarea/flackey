@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import flackey.web.update
 from flackey import __version__
 from flackey.config import Settings
+from flackey.deezer import DeezerApi
 from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
 from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
@@ -495,6 +496,25 @@ def test_queue_bundles(client, tmp_path):
     assert c.get("/api/requests/999").status_code == 404
 
 
+def test_candidate_json_says_whether_deezer_has_a_sample(client):
+    """The page decides whether to draw a play control before anyone presses anything, so the answer has
+    to ride the bundle. Three values, and `null` is not `false`: nobody ever asked about that candidate."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [
+        Candidate(source="s", source_ref="a", artist="A", title="T", rank=1, has_preview=True),
+        Candidate(source="s", source_ref="b", artist="A", title="T", rank=2, has_preview=False),
+        Candidate(source="s", source_ref="c", artist="A", title="T", rank=3),
+    ])
+    # Both surfaces the page reads: the detail bundle and the list it renders the play buttons in.
+    for cands in (c.get(f"/api/requests/{rid}").json()["candidates"],
+                  c.get("/api/queue").json()[0]["candidates"]):
+        # `is`, not `==`: JSON `1` would satisfy `== True` and break every `=== null` check in the page.
+        assert cands[0]["has_preview"] is True
+        assert cands[1]["has_preview"] is False
+        assert cands[2]["has_preview"] is None
+
+
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
     c, store, _ = client
     rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,
@@ -560,6 +580,74 @@ def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
     assert store.get_request(errored).state == RequestState.QUEUED
     assert store.get_request(not_found).state == RequestState.QUEUED
     assert store.get_request(rejected).state == RequestState.REJECTED
+
+
+# ---- candidate previews ---------------------------------------------------
+# The preview URL Deezer signs expires about fifteen minutes out, so the route resolves it at play time
+# from `candidates.deezer_id` and 302s the browser at the CDN. These fake payloads carry the fields
+# `parse_track_json` actually reads; `preview` is the one that varies per test.
+PREVIEW_URL = ("https://cdnt-preview.dzcdn.net/api/1/1/a/b/c.mp3"
+               "?hdnea=exp=1758999999~acl=/api/1/1/a/b/c.mp3*~hmac=deadbeef")
+
+
+def deezer_track_json(**extra) -> dict:
+    return {"id": 3135556, "title": "Harder Better Faster Stronger", "artist": {"name": "Daft Punk"},
+            "album": {"title": "Discovery"}, "duration": 224, **extra}
+
+
+def candidate_with(store, **kw) -> int:
+    rid = store.add_request("q", RequestKind.TEXT)
+    return store.add_candidates(rid, [Candidate(source="s", source_ref="r", artist="A", title="T",
+                                                rank=1, **kw)])[0].id
+
+
+def test_preview_404s_for_a_candidate_that_does_not_exist(client):
+    c, _, _ = client
+    r = c.get("/api/candidates/999/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "candidate not found"
+
+
+def test_preview_404s_when_the_candidate_has_no_deezer_id(client):
+    # Soulseek results arrive without one, and there is nothing to resolve.
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=None)
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "no preview for this candidate"
+
+
+@respx.mock
+def test_preview_404s_when_deezer_has_no_sample_for_the_track(client):
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json()))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "no preview for this candidate"
+
+
+@respx.mock
+def test_preview_redirects_to_the_signed_deezer_sample(client):
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json(preview=PREVIEW_URL)))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 302
+    # Verbatim, query string and all: the hmac is part of the URL, and a mangled one plays nothing.
+    assert r.headers["location"] == PREVIEW_URL
+    # Without `no-store` the browser caches the redirect and a replay later chases an expired signature.
+    assert r.headers["cache-control"] == "no-store"
+
+
+@respx.mock
+def test_preview_502s_when_deezer_is_unreachable(client):
+    # Upstream being down is not the caller's fault, so it is a gateway error rather than a 404.
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(return_value=httpx.Response(500))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 502 and "Deezer" in r.json()["detail"]
+
 
 
 def test_retry_failed_retries_only_the_ids_it_is_given(client):

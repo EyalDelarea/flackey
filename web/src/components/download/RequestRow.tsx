@@ -7,6 +7,7 @@ import Stepper from './Stepper'
 import Platter from './Platter'
 import Icon from '../Icon'
 import type { RowAction, RowView } from '../../presentation'
+import type { PlayerState } from './DownloadPage'
 
 function RetryCountdown({ seconds }: { seconds: number }) {
   const [remaining, setRemaining] = useState(seconds)
@@ -33,10 +34,18 @@ function RetryCountdown({ seconds }: { seconds: number }) {
   return <div className="retry-countdown" aria-live="off">{label}</div>
 }
 
-interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, candidateId: number) => void }
+interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
+  onChoose: (rowId: number, candidateId: number) => void
+  /** Everything the page's single audio element knows. It lives on the page because the element does; the
+   *  row only spreads it over its cards, and reads one thing off it for its own title line. */
+  player: PlayerState; onPlay: (candidateId: number) => void }
 
-export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Props) {
+export default function RequestRow({ view: v, whyOpen, onAction, onChoose, player, onPlay }: Props) {
   const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected'].filter(Boolean).join(' ')
+  // Which of this row's own candidates is playing, named by the version -- the candidates of a Choose row
+  // share a title and differ only there. It goes inline on the title line and never on a line of its own:
+  // a third line appearing on a press would push the whole candidate grid down every time.
+  const nowPlaying = v.candidates?.find(c => c.id === player.playing)?.version ?? null
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
   return (
@@ -44,7 +53,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
       <div className="row-main">
         <Artwork url={v.artworkUrl} rejected={v.rejected} />
         <div className="row-text">
-          <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
+          <div className="title"><span className="what">{v.title}{v.version && <span className="version"> ({v.version})</span>}</span>
+            {nowPlaying && <span className="now-playing">♪ {nowPlaying}</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
           {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
@@ -71,7 +81,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         </div>
       </div>
       {v.candidates && (<>
-        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)} />)}</div>
+        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)}
+          player={player} onPlay={() => onPlay(c.id)} />)}</div>
         {v.action?.kind === 'cancel' && <div className="skip"><button className="btn-link" onClick={() => onAction('cancel', v.id, undefined)}>{v.action.label}</button></div>}
       </>)}
       {v.rejection && whyOpen && <SpectrogramWell r={v.rejection} />}
