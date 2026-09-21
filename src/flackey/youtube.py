@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from yt_dlp import YoutubeDL
 
@@ -72,3 +74,38 @@ async def fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]:
         return parse_ytdlp_json(data)
     except (AttributeError, KeyError, TypeError) as e:
         raise YouTubeError(f"unexpected yt-dlp output: {e}") from e
+
+
+# Audio only, one video: this is the reference fetch, not the playlist read `_YDL_OPTS` is for.
+_AUDIO_OPTS = {"format": "bestaudio/best", "quiet": True, "no_warnings": True, "noplaylist": True}
+
+
+def video_id(url: str) -> str:
+    """The `v=` (or youtu.be path) id, which is what names a reference. The URL itself when it is neither,
+    so a reference is still labelled with something an owner can recognise."""
+    p = urlparse(url)
+    if "youtu.be" in p.netloc:
+        return p.path.strip("/")
+    return parse_qs(p.query).get("v", [""])[0] or url
+
+
+def _download_audio(url: str, dest_dir: Path) -> Path:
+    """Blocking. The best audio-only stream, whatever container YouTube serves (opus in webm, usually):
+    fpcalc decodes it directly, so nothing is transcoded."""
+    opts = {**_AUDIO_OPTS, "outtmpl": str(dest_dir / "reference.%(ext)s")}
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        return Path(ydl.prepare_filename(info))
+
+
+async def fetch_audio(url: str, dest_dir: Path) -> Path:
+    """The video's audio on disk, for fingerprinting against (issue #67). Same library, same timeout and
+    same error shape as `fetch_youtube`; the caller deletes the file when it has what it needs."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_download_audio, url, dest_dir),
+                                      timeout=YOUTUBE_FETCH_TIMEOUT_S)
+    except TimeoutError:
+        raise YouTubeError(f"yt-dlp timed out after {YOUTUBE_FETCH_TIMEOUT_S}s fetching the audio") from None
+    except Exception as e:
+        raise YouTubeError(str(e).strip()[-500:] or "yt-dlp failed") from e

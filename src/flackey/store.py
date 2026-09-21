@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS lossless_attempts (
   fingerprint_json TEXT, spectrogram_path TEXT, first_byte_ms INTEGER, total_ms INTEGER, raw_dir TEXT
 );
 CREATE INDEX IF NOT EXISTS lossless_attempts_request ON lossless_attempts(request_id);
+CREATE TABLE IF NOT EXISTS request_references (
+  request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+  json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS track_evidence (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track_id INTEGER NOT NULL, kind TEXT NOT NULL,
   value_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -532,6 +536,21 @@ class Store:
         cur = self.conn.execute("UPDATE lossless_attempts SET outcome='interrupted' WHERE outcome IS NULL")
         self.conn.commit()
         return cur.rowcount
+
+    def get_reference(self, request_id: int) -> dict | None:
+        """The request's acoustic reference (`fingerprint.AcousticReference.to_dict`). Its own table: a
+        full fingerprint is ~50 KB and `list_requests` feeds the UI."""
+        r = self.conn.execute("SELECT json FROM request_references WHERE request_id=?", (request_id,)).fetchone()
+        return json.loads(r["json"]) if r else None
+
+    def set_reference(self, request_id: int, reference: dict | None) -> None:
+        with self.conn:
+            if reference is None:
+                self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
+            else:
+                self.conn.execute("INSERT INTO request_references(request_id, json) VALUES (?, ?) "
+                                  "ON CONFLICT(request_id) DO UPDATE SET json=excluded.json",
+                                  (request_id, json.dumps(reference)))
 
     def add_evidence(self, track_id: int, kind: str, value: dict) -> int:
         cur = self.conn.execute(

@@ -281,3 +281,18 @@ def test_a_request_parked_before_the_column_existed_still_earns_its_choose_rung(
     store.conn.close()
 
     assert Store(path).get_request(rid).reviewed
+
+
+def test_request_reference_is_kept_beside_the_request(tmp_path):
+    """Its own table, not a column on `requests`: a full fingerprint is ~50 KB and `list_requests` feeds
+    the UI. Written once and reused by every retry, the lossy fallback and the library sweep."""
+    store = Store(tmp_path / "t.sqlite")
+    rid = store.add_request("x", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=a")
+    assert store.get_reference(rid) is None
+    ref = {"kind": "youtube", "ref": "a", "needles": [[1]], "full": [1, 2], "excerpt_start_s": 0, "excerpt_s": 30}
+    store.set_reference(rid, ref)
+    assert store.get_reference(rid) == ref
+    store.set_reference(rid, {**ref, "ref": "b"})
+    assert store.get_reference(rid)["ref"] == "b"
+    store.set_reference(rid, None)
+    assert store.get_reference(rid) is None
