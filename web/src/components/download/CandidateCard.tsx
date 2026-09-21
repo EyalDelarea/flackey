@@ -5,9 +5,11 @@ interface Props { c: CandidateView; playing: boolean; noPreview: boolean; onChoo
 
 export default function CandidateCard({ c, playing, noPreview, onChoose, onPlay }: Props) {
   const meta = [c.length, c.onBeatport ? 'On Beatport' : 'Not on Beatport', c.lengthNote].filter(Boolean).join(' · ')
-  // The glyph is aria-hidden, so the button's whole name is this label -- and it carries the title because
-  // five of these sit side by side and a row above may hold five more.
-  const label = noPreview ? `No sample for ${c.title}` : `${playing ? 'Stop' : 'Play'} a sample of ${c.title}`
+  // The glyph is aria-hidden, so the button's whole name is this label -- and it carries the title and the
+  // version, because five of these sit side by side, a row above may hold five more, and the ordinary case
+  // is a row of candidates that share a title and differ only in the version beside it.
+  const name = `${c.title} (${c.version})`
+  const label = noPreview ? `No sample for ${name}` : `${playing ? 'Stop' : 'Play'} a sample of ${name}`
   return (
     <div className={`candidate${c.chosen ? ' chosen' : ''}`}>
       <div className="head"><span>{c.title} <span className="version">({c.version})</span></span>{c.score != null && <span className="score">{c.score}% match</span>}</div>

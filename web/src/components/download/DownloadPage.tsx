@@ -35,6 +35,10 @@ export default function DownloadPage({ live }: { live: Live }) {
   // all for a candidate it never matched, and the only signal either way is the element's own error --
   // asking the route up front would cost one Deezer call per candidate on screen.
   const [noPreview, setNoPreview] = useState<Set<number>>(new Set())
+  // Which candidate the element's `src` points at. The error event carries no id, and the handler's own
+  // `playing` can already have moved on to the next press by the time a failed load reports back -- so
+  // the id the blame belongs to rides in a ref, written at the same moment as the `src`.
+  const source = useRef<number | null>(null)
   // What History has already shown: a fresh id that lands in a terminal state while the owner is looking
   // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
   const [seenHistoryIds, setSeenHistoryIds] = useState<Set<number>>(new Set())
@@ -90,9 +94,15 @@ export default function DownloadPage({ live }: { live: Live }) {
     if (playing === cid) { el.currentTime = 0; setPlaying(null); return }
     // Assigning `src` re-runs the element's load, even with the same string -- which is what makes a
     // replay resolve a fresh signature instead of chasing the expired one.
+    source.current = cid
     el.src = candidatePreviewUrl(cid)
     setPlaying(cid)
-    el.play()?.catch(() => setPlaying(null))
+    // Pausing the element -- or repointing its `src` -- rejects a `play()` that has not settled yet, with
+    // an AbortError. Switching candidates does both, so this lands for the candidate left behind, one
+    // microtask after the next one has been made the playing id. Clearing `playing` unconditionally there
+    // would wipe out the new one: its sample would go on playing with its button back on Play, and no
+    // Stop anywhere -- the very state the unmount cleanup exists to prevent.
+    el.play()?.catch(() => setPlaying(p => (p === cid ? null : p)))
   }
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -145,7 +155,8 @@ export default function DownloadPage({ live }: { live: Live }) {
           which latches that one button off too until the window is reopened; the alternative is a button
           that looks live and does nothing. */}
       <audio ref={audio} preload="none" onEnded={() => setPlaying(null)}
-        onError={() => { if (playing != null) { const id = playing; setNoPreview(s => new Set(s).add(id)) } setPlaying(null) }} />
+        onError={() => { const id = source.current; if (id == null) return
+          setNoPreview(s => new Set(s).add(id)); setPlaying(p => (p === id ? null : p)) }} />
     </>
   )
 }

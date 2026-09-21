@@ -198,8 +198,8 @@ it('spreads the page\'s player state over its candidate cards', () => {
     { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false },
     { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false }] }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} playing={5} noPreview={new Set([7])} onPlay={onPlay} />)
-  expect(screen.getByRole('button', { name: 'Stop a sample of Vini Vici – The Tribe' })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'No sample for Vini Vici – The Tribe' })).toBeDisabled()
-  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Vini Vici – The Tribe' }))
+  expect(screen.getByRole('button', { name: 'Stop a sample of Vini Vici – The Tribe (Extended Mix)' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'No sample for Vini Vici – The Tribe (Live)' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Vini Vici – The Tribe (Radio Edit)' }))
   expect(onPlay).toHaveBeenCalledWith(6)
 })

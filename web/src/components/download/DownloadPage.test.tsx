@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import DownloadPage from './DownloadPage'
 import { ApiError, api } from '../../api'
 import type { Bundle, Candidate, Health, Request } from '../../api'
@@ -250,11 +250,14 @@ describe('Retry all on the Failed tab', () => {
 // ---- Samples (issue #53) ----------------------------------------------------------------------
 // The page holds one <audio> for every row on screen, because two requests can sit in `awaiting_review`
 // at once and a sample starting in one has to stop the one already running in the other.
-const cand = (id: number, title: string): Candidate => ({ id, request_id: 1, source: 'deezer', source_ref: `${id}`,
-  artist: 'Ace Ventura', title, mix_name: null, duration_s: 420, deezer_id: id, isrc: null, rank: 1, score: 90, catalog_track_id: null })
-const choiceRow = (id: number, titles: string[]): Bundle => ({
+// Candidates in one row share a title and differ by version -- that is what a Choose window is for, and
+// it is what the buttons have to be able to say apart.
+const cand = (id: number, mix: string): Candidate => ({ id, request_id: 1, source: 'deezer', source_ref: `${id}`,
+  artist: 'Ace Ventura', title: 'The Tribe', mix_name: mix, duration_s: 420, deezer_id: id, isrc: null, rank: 1, score: 90, catalog_track_id: null })
+const choiceRow = (id: number, mixes: string[]): Bundle => ({
   request: { ...baseRequest, id, state: 'awaiting_review', query_title: `Track ${id}`, error_message: null },
-  candidates: titles.map((t, i) => cand(id * 10 + i, t)), catalog: null, track: null, rejection: null })
+  candidates: mixes.map((m, i) => cand(id * 10 + i, m)), catalog: null, track: null, rejection: null })
+const sample = (verb: string, mix: string) => `${verb} a sample of Ace Ventura – The Tribe (${mix})`
 const withStubbedPlayer = (body: (play: ReturnType<typeof vi.fn>, pause: ReturnType<typeof vi.fn>) => void) => {
   // jsdom implements neither, and the real `play()` returns a promise the page attaches a catch to.
   const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve())
@@ -269,15 +272,15 @@ it('plays a sample through the page\'s one player, and starting another stops th
     expect(players).toHaveLength(1)
     const el = players[0] as HTMLAudioElement
     expect(el.getAttribute('src')).toBeNull()   // nothing is resolved until a play is pressed
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
     expect(el.src).toContain('/api/candidates/10/preview')
     expect(play).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Extended Mix' }))
+    expect(screen.getByRole('button', { name: sample('Stop', 'Original Mix') })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Extended Mix') }))
     expect(pause).toHaveBeenCalled()
     expect(el.src).toContain('/api/candidates/20/preview')
-    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Extended Mix' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: sample('Stop', 'Extended Mix') })).toBeInTheDocument()
   })
 })
 
@@ -285,14 +288,18 @@ it('stops on a second press, and goes back to play when the clip runs out on its
   withStubbedPlayer((_play, pause) => {
     const { container } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix'])])} />)
     const el = container.querySelector('audio') as HTMLAudioElement
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Original Mix' }))
+    // jsdom's `currentTime` is 0 whether or not anything assigns it -- nothing here ever plays -- so the
+    // rewind has to be watched at the setter, not read back off the element.
+    const seeks: number[] = []
+    Object.defineProperty(el, 'currentTime', { configurable: true, get: () => 0, set: (v: number) => { seeks.push(v) } })
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
+    fireEvent.click(screen.getByRole('button', { name: sample('Stop', 'Original Mix') }))
     expect(pause).toHaveBeenCalled()
-    expect(el.currentTime).toBe(0)   // a stop rewinds: the next press starts the sample over
-    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    expect(seeks).toEqual([0])   // a stop rewinds: the next press starts the sample over
+    expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
     fireEvent.ended(el)   // 30 seconds later, with nobody pressing anything
-    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeInTheDocument()
   })
 })
 
@@ -302,10 +309,10 @@ it('takes the sample button away from the candidate with no preview, and leaves 
   withStubbedPlayer(() => {
     const { container } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix', 'Extended Mix'])])} />)
     const el = container.querySelector('audio') as HTMLAudioElement
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
     fireEvent.error(el)
-    expect(screen.getByRole('button', { name: 'No sample for Ace Ventura – Original Mix' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Extended Mix' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: `No sample for Ace Ventura – The Tribe (Original Mix)` })).toBeDisabled()
+    expect(screen.getByRole('button', { name: sample('Play', 'Extended Mix') })).toBeEnabled()
   })
 })
 
@@ -314,9 +321,40 @@ it('stops the sample when the page goes away', () => {
   // with no Stop button left anywhere in the app.
   withStubbedPlayer((_play, pause) => {
     const { unmount } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix'])])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
     pause.mockClear()
     unmount()
     expect(pause).toHaveBeenCalled()
   })
+})
+
+it('tells same-titled candidates apart by the version in the button name', () => {
+  // The ordinary Choose window: one track, several versions of it. Both cards are in the same state, so
+  // the version is the only thing separating their buttons -- for a screen reader and for getByRole,
+  // which throws on two matches.
+  withStubbedPlayer(() => {
+    render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix', 'Extended Mix'])])} />)
+    expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeEnabled()
+    expect(screen.getByRole('button', { name: sample('Play', 'Extended Mix') })).toBeEnabled()
+  })
+})
+
+it('keeps the second sample playing when the first press aborts its own play promise', async () => {
+  // Pausing the element and repointing its src -- both of which a switch does -- reject a play() that has
+  // not settled yet, with an AbortError that arrives after the new candidate is already the playing one.
+  // The route resolves against Deezer before anything starts, so there is real time for a second press.
+  let abort: (e: unknown) => void = () => undefined
+  const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { abort = reject }))
+    .mockImplementation(() => Promise.resolve())
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+  try {
+    render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix', 'Extended Mix'])])} />)
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Original Mix') }))
+    fireEvent.click(screen.getByRole('button', { name: sample('Play', 'Extended Mix') }))
+    await act(async () => { abort(new DOMException('interrupted by a new load request', 'AbortError')) })
+    // The late rejection belongs to the candidate that was interrupted, not to the one now playing.
+    expect(screen.getByRole('button', { name: sample('Stop', 'Extended Mix') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeEnabled()
+  } finally { play.mockRestore(); pause.mockRestore() }
 })
