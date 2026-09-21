@@ -43,6 +43,7 @@ from .models import (
     RequestState,
     Track,
     Verdict,
+    norm,
     source_label,
 )
 from .notify import Button, Notifier
@@ -95,6 +96,12 @@ SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # already handles, and no_pick, which is about the search rather than any peer.
 SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
                      "transfer_timeout"}
+# After these, the next spelling gets a search of its own (issue #69). Both say this spelling found nothing
+# that is the recording; neither says anything about the other spellings. Everything else is either a fact
+# about the provider (unavailable, interrupted) or a fact that holds for every spelling alike
+# (fingerprint_unavailable: there is no reference to check against), so typing different words changes
+# nothing and the request stops here.
+SECOND_SEARCH_AFTER = {"no_pick", "fingerprint_failed"}
 # A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
 # possibly have changed. Long enough to be a real second look, short enough that the row is not abandoned.
 SLOW_BACKOFF_S = 900
@@ -179,6 +186,8 @@ class LosslessHit:
     provider: str
     source_fmt: str
     attempt_id: int
+    reference: Reference     # the spelling that actually found this file; `from_query` says whose words
+                             # they were, which is what decides the tags when no record was chosen
 
 
 def format_line(verdict: Verdict, source: str, source_fmt: str | None) -> str:
@@ -656,6 +665,16 @@ class Worker:
             if req.lossless_retry:
                 self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
             hit = await self._try_lossless(req, cand, catalog, acoustic)
+        if (hit is not None and hit.reference.from_query and catalog is not None
+                and cand.source in (CATALOG_SOURCE, QUERY_SOURCE)):
+            # No record vouches for this file: Beatport's spelling found nothing the recording check
+            # accepted and the owner's own words did. The Beatport record is not this recording, so it must
+            # not name the file either. (With a chosen Deezer record the record's tags stand, which is why
+            # the stand-in candidates are the only sources this applies to.)
+            log.info("req#%d: filing on the request's words; the Beatport match was a different recording", req.id)
+            catalog = None
+            cand = query_candidate(req.query(), req.id)
+            self.store.update_request(req.id, catalog_track_id=None)
         if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
             # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
             # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers
@@ -989,40 +1008,77 @@ class Worker:
         ref = reference_for(catalog, cand, req.query_duration_s)
         return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
 
+    def _search_references(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> list[Reference]:
+        """What to type into the network, in order: Beatport's spelling (clean, and for a channel-name artist
+        such as `ShpongleMusic` the only text that finds anything), then the chosen record's, then the
+        request's own words -- each only when its tokens differ from what came before. A wrong Beatport
+        record redirects the first search to a different track (`Power Of Celtic` was searched as `The Power
+        Of The Dark Side`); the fingerprint rejecting that search is what lets the next spelling run.
+
+        Every reference keeps `_reference`'s meaning of `from_query` -- these words are the request's own --
+        so whichever one comes back attached to the hit says where the tags belong."""
+        refs: list[Reference] = []
+        if catalog is not None:
+            refs.append(self._reference(req, catalog_candidate(catalog), catalog))
+        if cand.source not in (CATALOG_SOURCE, QUERY_SOURCE):
+            refs.append(self._reference(req, cand, catalog))
+        query = req.query()
+        if query.artist and query.title:
+            refs.append(self._reference(req, query_candidate(query, req.id), None))
+        seen: list[set[str]] = []
+        out: list[Reference] = []
+        for ref in refs:
+            tokens = set(norm(search_text(ref)).split())
+            if tokens in seen:
+                continue
+            seen.append(tokens)
+            out.append(ref)
+        # A bare-artist request on the catalog-less path leaves `refs` empty; the candidate that got this
+        # far is still worth one search, which is exactly what ran before the sequence existed.
+        return out or [self._reference(req, cand, catalog)]
+
     async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
                             acoustic: Acoustic) -> LosslessHit | None:
-        """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
-        every miss is an attempt row with an outcome (spec §5, §11)."""
+        """Ask each provider in turn for a verified, fingerprinted, converted lossless file, one spelling at
+        a time. Never raises; every miss is an attempt row with an outcome (spec §5, §11)."""
         try:
-            ref = self._reference(req, cand, catalog)
-            query = search_text(ref)
+            refs = self._search_references(req, cand, catalog)
             policy = policy_from_settings(self.settings)
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
             log.exception("req#%d could not build a lossless reference/policy", req.id)
             return None
-        for provider in self.providers:
-            rec = None
-            try:
-                rec = AttemptRecorder(self.store, self.settings.lossless_raw_dir, req.id, provider.name, query,
-                                      clock=self.clock)
-                self.store.update_request(req.id, fetch_source=provider.name)
-                hit = await self._attempt(provider, rec, req, ref, policy, acoustic)
-            except Exception as e:  # the worker must survive any bug in the lossless path
-                log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
+        for ref in refs:
+            query = search_text(ref)
+            outcome: str | None = None
+            for provider in self.providers:
+                rec = None
+                try:
+                    rec = AttemptRecorder(self.store, self.settings.lossless_raw_dir, req.id, provider.name,
+                                          query, clock=self.clock)
+                    self.store.update_request(req.id, fetch_source=provider.name)
+                    hit = await self._attempt(provider, rec, req, ref, policy, acoustic)
+                except Exception as e:  # the worker must survive any bug in the lossless path
+                    log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
+                    if rec is not None:
+                        try:
+                            rec.event("error", type=type(e).__name__, message=str(e)[:300])
+                            rec.finish("transfer_failed")
+                        except Exception:  # the recovery write can fail too; the row may stay NULL, we still fall back
+                            log.exception("req#%d could not record the failed lossless attempt", req.id)
+                    hit = None
+                finally:
+                    # However this attempt ended, the bar it was driving is over. Leaving the last position
+                    # published would strand a full-looking bar on a row that has moved on. Only this
+                    # request's bar: the other tracks are still downloading.
+                    self._publish_progress(req.id, None)
+                if hit is not None:
+                    return hit
                 if rec is not None:
-                    try:
-                        rec.event("error", type=type(e).__name__, message=str(e)[:300])
-                        rec.finish("transfer_failed")
-                    except Exception:  # the recovery write can fail too; the row may stay NULL, we still fall back
-                        log.exception("req#%d could not record the failed lossless attempt", req.id)
-                hit = None
-            finally:
-                # However this attempt ended, the bar it was driving is over. Leaving the last position
-                # published would strand a full-looking bar on a row that has moved on. Only this
-                # request's bar: the other tracks are still downloading.
-                self._publish_progress(req.id, None)
-            if hit is not None:
-                return hit
+                    outcome = self.store.get_attempt(rec.id).outcome
+            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's,
+            # which is the one `_no_route` and `_lossless_miss_line` will read back.
+            if outcome not in SECOND_SEARCH_AFTER:
+                break
         return None
 
     async def _attempt(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
@@ -1164,4 +1220,4 @@ class Worker:
                 out.unlink(missing_ok=True)
             return None, "convert_failed"
         rec.event("convert", fmt=verdict.fmt, ms=int((self.clock() - t0) * 1000))
-        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id), "filed"
+        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref), "filed"
