@@ -2,6 +2,7 @@
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -64,9 +65,12 @@ class FakeProvider:
     name = "soulseek"
 
     def __init__(self, downloads: Path, files=None, *, audio: dict[str, Path] | None = None, health="ok",
-                 search_error=None, download_error=None):
+                 search_error=None, download_error=None, files_for: Callable[[str], list] | None = None):
         self.downloads, self.files, self.audio = downloads, files or [], audio or {}
         self.health_status, self.search_error, self.download_error = health, search_error, download_error
+        # What a peer offers depends on what was typed: the spelling sequence (issue #69) needs a provider
+        # that answers one thing to the record's words and another to the request's own.
+        self.files_for = files_for
         self.searches, self.downloaded, self.cancelled, self.rescans = [], [], 0, 0
 
     async def health(self):
@@ -76,10 +80,11 @@ class FakeProvider:
         self.searches.append(text)
         if self.search_error:
             raise self.search_error
+        files = self.files_for(text) if self.files_for else self.files
         if on_raw:
-            on_raw("search", {"state": "Completed, TimedOut", "fileCount": len(self.files)})
-            on_raw("responses", [{"username": f.username, "files": [{"filename": f.path, "size": f.size}]} for f in self.files])
-        return list(self.files)
+            on_raw("search", {"state": "Completed, TimedOut", "fileCount": len(files)})
+            on_raw("responses", [{"username": f.username, "files": [{"filename": f.path, "size": f.size}]} for f in files])
+        return list(files)
 
     async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, stall_s=None,
                        on_progress=None, on_raw=None):
@@ -1316,3 +1321,60 @@ async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, m
         r = await w.process(rid)
     assert r.state == RequestState.ERROR and w.source.searches == MAX_ATTEMPTS
     assert len(store.get_candidates(rid)) == 1       # one search's worth, not one per pass
+
+
+# ---- one request, several spellings (issue #69) -----------------------------------------------------------
+
+
+async def test_a_wrong_catalogue_record_is_overruled_by_the_second_search(lenv, tmp_path: Path, monkeypatch):
+    """The Asteroids case with no Deezer record: Beatport matched a different act with the same title. The
+    catalogue's spelling finds that act's file, the fingerprint rejects it, the request's own words find the
+    right one, and the tags come from the request rather than the wrong record."""
+    settings, store, _, _, _, _ = lenv
+    wrong = _flac(tmp_path / "wrong.flac")
+    right = _flac(tmp_path / "right.flac")
+    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong, "r": right},
+                            files_for=lambda text: [lf("w", path="x\\Outputmessage - Asteroids.flac")]
+                            if text.startswith("Outputmessage") else [lf("r", path="x\\Universal Sound - Asteroids.flac")])
+    results = iter([FingerprintResult("failed", 0.6, 1.0, "best score 0.60 below 0.79"),
+                    FingerprintResult("matched", 0.97, 1.0, "ok", reference="youtube:abc")])
+
+    async def fake_check_seq(path, reference, *, minimum, missing=""):
+        return next(results)
+
+    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check_seq)
+    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
+    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    t = store.get_track(r.track_id)
+    assert (t.artist, t.title) == ("Universal Sound", "Asteroids") and t.catalog_track_id < 0
+    assert store.get_request(rid).catalog_track_id == t.catalog_track_id
+    assert sorted(a.outcome for a in store.list_attempts(limit=10)) == ["filed", "fingerprint_failed"]
+
+
+async def test_no_second_search_when_the_words_are_the_same(lenv):
+    _, store, _, provider, _, _ = lenv
+    provider.files = []
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    await w.process(rid)
+    assert provider.searches == ["Astral Projection Into the Void"]
+
+
+async def test_a_chosen_record_keeps_its_tags_whichever_spelling_found_the_file(lenv, tmp_path: Path):
+    """With a record the tags are the record's, even when the request's own words found the file."""
+    settings, store, _, _, _, _ = lenv
+    right = _flac(tmp_path / "right.flac")
+    provider = FakeProvider(settings.slskd_downloads, audio={"r": right},
+                            files_for=lambda text: [] if text.startswith("Astral") else [lf("r", path="x\\AP - Into the Void.flac")])
+    w = make(lenv, provider=provider, catalog=FakeCatalog([]))
+    rid = store.add_request("AP - Into the Void", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="AP", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void", "AP Into the Void"]
+    assert store.get_track(r.track_id).artist == "Astral Projection"          # good_cand()'s record, not the request's words
