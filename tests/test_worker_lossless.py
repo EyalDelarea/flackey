@@ -11,10 +11,11 @@ import pytest
 from flackey import worker as worker_mod
 from flackey.config import Settings
 from flackey.convert import ConvertError
-from flackey.fingerprint import AcousticReference, FingerprintResult
+from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
 from flackey.models import CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
+from flackey.reference import Identification
 from flackey.source import LosslessError, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
@@ -133,6 +134,22 @@ def lenv(tmp_path: Path, monkeypatch):
         return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
 
     monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
+
+    # Since issue #68 a request with a video picks its record by audio, which fetches Deezer previews --
+    # the same "nothing here may reach api.deezer.com" rule applies. These requests have no source_url, so
+    # only the test that supplies a video reference reaches this; it says the top candidate is the record.
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        raise FingerprintError("no video audio in tests")
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        top = next((c for c in cands if c.deezer_id), None)
+        if top is None:
+            return Identification(None, None, [], "no Deezer record to check the video against")
+        return Identification(top, 0.98, [(top.deezer_id, 0.98)],
+                              f"deezer:{top.deezer_id} preview matches the video, score 0.98")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
     return settings, store, MemoryNotifier(), provider, fake_check, Clock()
 
 

@@ -6,18 +6,25 @@ the sweep are its callers."""
 from __future__ import annotations
 
 import asyncio
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
 
-from .fingerprint import SUBFRAME_TRIMS_S, AcousticReference, FingerprintError, fingerprint
+from .fingerprint import SUBFRAME_TRIMS_S, AcousticReference, FingerprintError, compare, fingerprint
+from .models import Candidate
 from .verify import VerifyError, probe
 from .youtube import fetch_audio, video_id
+
+log = logging.getLogger(__name__)
 
 EXCERPT_S = 30.0          # the Deezer preview's shape; `compare` needs the needle shorter than the hay
 DEEZER_TRACK = "https://api.deezer.com/track/{id}"
 DEEZER_TRIES = 3
+# Previews tried per request: the bot's menu is text-ordered, so the record is in the first few.
+IDENTIFY_MAX = 5
 
 
 def _needles(path: Path, start_s: float, length_s: float | None) -> list[list[int]]:
@@ -91,3 +98,51 @@ async def deezer_reference(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Pat
     """The Deezer preview as the reference, for a request that has no audio of its own."""
     needles = await deezer_needles(deezer_id, http, tmp_dir)
     return AcousticReference("deezer", str(deezer_id), needles, needles[0], 0.0, EXCERPT_S)
+
+
+@dataclass(frozen=True)
+class Identification:
+    """Which Deezer record the request's own audio says it is (issue #68)."""
+    chosen: Candidate | None
+    score: float | None
+    tried: list[tuple[int, float | None]]   # (deezer_id, best score; None when the preview could not be fetched)
+    reason: str
+
+
+async def identify_record(reference: AcousticReference, cands: list[Candidate], http: httpx.AsyncClient,
+                          tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX) -> Identification:
+    """Which Deezer candidate is the recording the owner pointed at (issue #68): the first whose 30 s preview
+    is found inside the reference's full fingerprint at or above `minimum`. The preview is the needle and
+    the reference's full fingerprint is the hay -- the other way round `compare` would return 0.0 for
+    everything, because a 30 s needle cannot hold a whole track. Candidates are tried in the order given
+    (text score, best first). A text score never overrules this: a candidate whose preview does not match is
+    not the track, however its title reads. Never raises; a preview that cannot be fetched counts as tried
+    with no score."""
+    tried: list[tuple[int, float | None]] = []
+    for cand in [c for c in cands if c.deezer_id][:limit]:
+        try:
+            needles = await deezer_needles(cand.deezer_id, http, tmp_dir)
+            score = round(max(compare(n, reference.full)[0] for n in needles), 3)
+        except FingerprintError as e:
+            log.info("identify: deezer:%d preview unavailable: %s", cand.deezer_id, e)
+            tried.append((cand.deezer_id, None))
+            continue
+        except Exception:
+            # Identification must never sink a request: an unforeseen failure here is one preview missing,
+            # not a verdict about the recording.
+            log.exception("identify: deezer:%d could not be compared", cand.deezer_id)
+            tried.append((cand.deezer_id, None))
+            continue
+        tried.append((cand.deezer_id, score))
+        if score >= minimum:
+            return Identification(cand, score, tried,
+                                  f"deezer:{cand.deezer_id} preview matches the video, score {score:.2f}")
+    # Three different silences, and the owner acts on each differently: nothing to ask (no Deezer record at
+    # all -- true of 33 tracks in the library), nobody answered (every preview failed to download), or the
+    # audio answered no. Only the last is a verdict about the recording.
+    if not tried:
+        return Identification(None, None, tried, "no Deezer record to check the video against")
+    if all(s is None for _, s in tried):
+        return Identification(None, None, tried,
+                              f"none of the {len(tried)} Deezer previews could be fetched")
+    return Identification(None, None, tried, f"none of {len(tried)} Deezer previews is the video's recording")

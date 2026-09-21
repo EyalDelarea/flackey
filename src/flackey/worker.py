@@ -46,7 +46,7 @@ from .models import (
     source_label,
 )
 from .notify import Button, Notifier
-from .reference import deezer_reference, youtube_reference
+from .reference import Identification, deezer_reference, identify_record, youtube_reference
 from .source import (
     LosslessError,
     LosslessProvider,
@@ -542,33 +542,51 @@ class Worker:
                 await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                 return
 
+            # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
+            # `decide` runs either way: it scores every candidate (the order the previews are tried in,
+            # and what the Choose window shows), and its verdict only counts without a video.
+            video, _ = await self._video_reference(req)
             decision = decide(query, cands, catalog)
-            if decision.chosen and decision.chosen.isrc:
+            ident: Identification | None = None
+            if video is not None:
+                ordered = sorted(cands, key=lambda c: -(c.score or 0))
+                async with self._cpu:
+                    ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
+                                                  minimum=self.settings.lossless_fingerprint_min)
+                log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
+            chosen_obj = ident.chosen if ident is not None else decision.chosen
+            if chosen_obj is not None and chosen_obj.isrc:
                 # The source's recording ID disambiguates equally named Beatport releases. Never
                 # substitute a loosely matched release: require the normal search score first.
-                matched_catalog = best_match(query, catalog_tracks, decision.chosen.isrc)
+                matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
                 if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
                     catalog = matched_catalog
                     self.store.upsert_catalog_track(catalog)
                     self.store.update_request(req.id, catalog_track_id=catalog.id)
-                    decision = decide(query, cands, catalog)
+                    if ident is None:
+                        decision = decide(query, cands, catalog)
+                        chosen_obj = decision.chosen
             saved = self.store.add_candidates(req.id, cands)
-            self.store.update_request(req.id, confidence=decision.chosen.score if decision.chosen else None)
-            if decision.chosen is None:
-                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), decision.reason)
-                self._set_state(req, RequestState.NOT_FOUND, error_message=decision.reason)
+            confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
+                          else (chosen_obj.score if chosen_obj else None))
+            self.store.update_request(req.id, confidence=confidence)
+            if chosen_obj is None:
+                reason = ident.reason if ident is not None else decision.reason
+                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
+                self._set_state(req, RequestState.NOT_FOUND,
+                                error_message=f"could not identify this track: {reason}")
                 await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
                 return
-            # `decide` returns one of the objects in `cands`; match by identity, not by source_ref
+            # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
             # (the bot can list the same Deezer id twice)
-            chosen = saved[next(i for i, c in enumerate(cands) if c is decision.chosen)]
+            chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
 
             dup = find_duplicate(self.store, catalog, chosen)
             if dup:
                 await self._mark_duplicate(req, dup.id, dup.path)
                 return
 
-            if not decision.auto:
+            if ident is None and not decision.auto:
                 self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=decision.reason,
                                 chosen_candidate_id=chosen.id)
                 await self._ask_review(req, saved, decision.reason)
