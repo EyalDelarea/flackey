@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -239,6 +240,48 @@ def test_ensure_column_adds_once_and_survives_reopen(tmp_path: Path):
     s1.conn.close()
     s2 = Store(db)  # second open must not fail on ALTER TABLE
     assert s2.conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0
+
+
+# The candidates table as it shipped before `has_preview`, so the migration can be tested against a
+# database that really predates the column rather than one Store just created.
+CANDIDATES_BEFORE_HAS_PREVIEW = """
+CREATE TABLE candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL, rank INTEGER NOT NULL,
+  source TEXT NOT NULL, source_ref TEXT NOT NULL, artist TEXT NOT NULL, title TEXT NOT NULL,
+  mix_name TEXT, duration_s INTEGER, deezer_id INTEGER, isrc TEXT, score INTEGER, catalog_track_id INTEGER
+)"""
+
+
+def test_a_database_written_before_has_preview_gains_the_column_and_reads_back_unknown(tmp_path: Path):
+    """Every candidate row in the owner's database predates this column. It has to open, and those rows
+    have to read as None -- nobody ever asked Deezer about them, which is not the same as no sample."""
+    db = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(db)
+    conn.executescript(CANDIDATES_BEFORE_HAS_PREVIEW)
+    conn.execute("INSERT INTO candidates (request_id, rank, source, source_ref, artist, title) "
+                 "VALUES (1, 1, 'deezer_bot', 'dz_track:1:send', 'A', 'T')")
+    conn.commit()
+    conn.close()
+
+    store = Store(db)  # CREATE TABLE IF NOT EXISTS leaves the old table alone; _ensure_column does the work
+    assert "has_preview" in {r[1] for r in store.conn.execute("PRAGMA table_info(candidates)")}
+    [old] = store.get_candidates(1)
+    assert old.has_preview is None
+
+
+def test_has_preview_round_trips_in_all_three_states(store: Store):
+    """True, False and None are three different answers to the page: play it, do not offer it, and we
+    never asked. SQLite stores 1/0/NULL, so the mapper has to hand back bools rather than ints."""
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [
+        Candidate(source="deezer_bot", source_ref="dz:1", artist="A", title="T", rank=1, has_preview=True),
+        Candidate(source="deezer_bot", source_ref="dz:2", artist="A", title="T", rank=2, has_preview=False),
+        Candidate(source="deezer_bot", source_ref="dz:3", artist="A", title="T", rank=3),
+    ])
+    got = store.get_candidates(rid)
+    assert [c.has_preview for c in got] == [True, False, None]
+    assert got[0].has_preview is True and got[1].has_preview is False
+    assert store.get_candidate(got[1].id).has_preview is False
 
 
 def test_track_source_columns_round_trip(store: Store, tmp_path: Path):

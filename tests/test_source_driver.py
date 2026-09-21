@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from telethon.errors import UnauthorizedError
 
+from flackey.deezer import DeezerError, DeezerTrack
 from flackey.models import Candidate
 from flackey.source.base import SourceTimeout, SourceUnauthorized
 from flackey.source.deezer_bot import DeezerBotSource
@@ -151,3 +152,44 @@ async def test_the_bot_conversation_is_held_by_one_track_at_a_time(tmp_path: Pat
     assert peak == 1, "two tracks were talking to the bot at once"
     assert not source._bot.locked()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["1.mp3", "2.mp3"]
+
+
+# ---- enrichment -----------------------------------------------------------
+# `_enrich` already fetches the Deezer record for every candidate's metadata, so whether Deezer has a
+# 30 s sample costs nothing extra to remember -- and the page needs it before it renders, to decide
+# whether to draw a play control at all.
+
+
+class FakeDeezer:
+    """Only the one method `_enrich` calls. `answer` is either a DeezerTrack or an exception to raise."""
+    def __init__(self, answer):
+        self._answer = answer
+
+    async def track(self, track_id: int):
+        if isinstance(self._answer, Exception):
+            raise self._answer
+        return self._answer
+
+
+def _deezer_track(preview: str | None) -> DeezerTrack:
+    return DeezerTrack(id=1, isrc="X", title="T", artist="A", album=None, duration_s=224,
+                       release_date=None, title_version=None, preview_url=preview)
+
+
+async def test_enrich_records_that_deezer_has_a_sample():
+    source = DeezerBotSource(FakeClient(None, None), "bot",
+                             deezer=FakeDeezer(_deezer_track("https://cdn/x.mp3")))
+    assert (await source._enrich(_candidate())).has_preview is True
+
+
+async def test_enrich_records_that_deezer_has_no_sample():
+    source = DeezerBotSource(FakeClient(None, None), "bot", deezer=FakeDeezer(_deezer_track(None)))
+    assert (await source._enrich(_candidate())).has_preview is False
+
+
+async def test_enrich_leaves_the_sample_unknown_when_the_lookup_fails():
+    """A lookup that never answered knows nothing. Recording False here would hide the play control on a
+    candidate that does have a sample, and the owner would have no way to find out."""
+    for err in (DeezerError("deezer http 500"), ValueError("not json")):
+        source = DeezerBotSource(FakeClient(None, None), "bot", deezer=FakeDeezer(err))
+        assert (await source._enrich(_candidate())).has_preview is None

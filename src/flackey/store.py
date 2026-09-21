@@ -38,7 +38,13 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE TABLE IF NOT EXISTS candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL, rank INTEGER NOT NULL,
   source TEXT NOT NULL, source_ref TEXT NOT NULL, artist TEXT NOT NULL, title TEXT NOT NULL,
-  mix_name TEXT, duration_s INTEGER, deezer_id INTEGER, isrc TEXT, score INTEGER, catalog_track_id INTEGER
+  mix_name TEXT, duration_s INTEGER, deezer_id INTEGER, isrc TEXT, score INTEGER, catalog_track_id INTEGER,
+  -- Whether Deezer has a 30 s sample for this record, so the page knows before it renders whether to draw a
+  -- play control. Three states: 1 = yes, 0 = no, NULL = never resolved -- every row written before this
+  -- column existed, every candidate from a source with no Deezer record, and every one whose enrichment
+  -- call failed. Deliberately nullable with no DEFAULT: a default would collapse "unknown" into "no", and
+  -- the page treats the two differently.
+  has_preview INTEGER
 );
 CREATE TABLE IF NOT EXISTS catalog_tracks (
   id INTEGER PRIMARY KEY, isrc TEXT, artist TEXT NOT NULL, title TEXT NOT NULL, mix_name TEXT NOT NULL,
@@ -117,6 +123,7 @@ class Store:
         self._ensure_column("tracks", "source_fmt", "TEXT")
         self._ensure_column("tracks", "bit_depth", "INTEGER")
         self._ensure_column("tracks", "sample_rate", "INTEGER")
+        self._ensure_column("candidates", "has_preview", "INTEGER")
         self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
@@ -311,15 +318,20 @@ class Store:
         for c in candidates:
             cur = self.conn.execute(
                 "INSERT INTO candidates (request_id, rank, source, source_ref, artist, title, mix_name, "
-                "duration_s, deezer_id, isrc, score, catalog_track_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (request_id, c.rank, c.source, c.source_ref, c.artist, c.title, c.mix_name,
-                 c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id))
+                 c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview))
             out.append(Candidate(**{**c.__dict__, "id": int(cur.lastrowid), "request_id": request_id}))
         self.conn.commit()
         return out
 
     def _row_to_candidate(self, r: sqlite3.Row) -> Candidate:
-        return Candidate(**dict(r))
+        d = dict(r)
+        # SQLite hands back 1/0/NULL; the page branches on all three, and a bare 1 would reach the JSON as
+        # `1` rather than `true`. NULL stays None -- "never resolved" is not "no sample".
+        d["has_preview"] = None if d["has_preview"] is None else bool(d["has_preview"])
+        return Candidate(**d)
 
     def get_candidates(self, request_id: int) -> list[Candidate]:
         rows = self.conn.execute("SELECT * FROM candidates WHERE request_id=? ORDER BY rank", (request_id,))

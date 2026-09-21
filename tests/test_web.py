@@ -496,6 +496,23 @@ def test_queue_bundles(client, tmp_path):
     assert c.get("/api/requests/999").status_code == 404
 
 
+def test_candidate_json_says_whether_deezer_has_a_sample(client):
+    """The page decides whether to draw a play control before anyone presses anything, so the answer has
+    to ride the bundle. Three values, and `null` is not `false`: nobody ever asked about that candidate."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [
+        Candidate(source="s", source_ref="a", artist="A", title="T", rank=1, has_preview=True),
+        Candidate(source="s", source_ref="b", artist="A", title="T", rank=2, has_preview=False),
+        Candidate(source="s", source_ref="c", artist="A", title="T", rank=3),
+    ])
+    cands = c.get(f"/api/requests/{rid}").json()["candidates"]
+    # `is`, not `==`: JSON `1` would satisfy `== True` and break every `=== null` check in the page.
+    assert cands[0]["has_preview"] is True
+    assert cands[1]["has_preview"] is False
+    assert cands[2]["has_preview"] is None
+
+
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
     c, store, _ = client
     rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,
