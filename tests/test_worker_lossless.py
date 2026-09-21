@@ -118,7 +118,11 @@ def lenv(tmp_path: Path, monkeypatch):
     matched = FingerprintResult("matched", 0.98, 12.3, "preview found at 12.3 s, score 0.98", [1, 2, 3], [4, 5, 6])
 
     async def fake_check(path, reference, *, minimum, missing=""):
-        return replace(fake_check.result, reference=reference.label if reference else None)
+        # The no-reference branch is answered the way the real `check` answers it -- "skipped", carrying
+        # the caller's reason -- so a test that removes the reference sees what production would see.
+        if reference is None:
+            return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
+        return replace(fake_check.result, reference=reference.label)
 
     fake_check.result = matched
     monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
@@ -1065,3 +1069,25 @@ async def test_the_video_is_the_reference_and_is_kept_beside_the_request(lenv, m
     assert store.get_reference(rid)["ref"] == "abc"
     ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
     assert ev["recording_match"]["reference"] == "youtube:abc"
+
+
+async def test_a_reference_that_cannot_be_fetched_skips_the_check_instead_of_crashing(lenv, monkeypatch):
+    """`fingerprint.check` used to fetch the preview itself and swallowed every way that could go wrong --
+    fpcalc handing back unparseable JSON (ValueError), a dead disk (OSError) -- into a "skipped" result.
+    The fetch has moved up into the worker, so the tolerance has to move with it: `upgrade()` turns a
+    ValueError into a 409 at the API, and `process()` would fail a request that used to file."""
+    _, store, _, _, _, _ = lenv
+
+    async def boom(deezer_id, http, tmp_dir):
+        raise ValueError("fpcalc printed nonsense")
+
+    monkeypatch.setattr(worker_mod, "deezer_reference", boom)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert r.state == RequestState.DONE and attempt_of(store, rid).outcome == "filed"
+    assert store.get_reference(rid) is None                   # nothing half-written to reuse
+    ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert ev["recording_match"]["status"] == "skipped" and ev["recording_match"]["reference"] is None
+    assert "fpcalc printed nonsense" in ev["recording_match"]["reason"]

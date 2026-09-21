@@ -117,6 +117,11 @@ def _mmss(seconds: int | None) -> str:
 
 
 CATALOG_SOURCE = "beatport"
+# Exactly what `fingerprint.check` used to swallow on its own, now that the fetch happens here instead:
+# a missing reference is a "skipped" check, never a crashed request. fpcalc handing back unparseable JSON
+# raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
+# owner why" -- without this they would reach the API as a 409 or a 500 on a button that used to answer.
+REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
 # Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
 # was not met is visible on the row rather than buried in the attempt's JSON.
 NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
@@ -893,9 +898,9 @@ class Worker:
             async with self._cpu:
                 ref = await youtube_reference(req.source_url, self.settings.tmp_dir / f"req{req.id}",
                                               duration_s=req.query_duration_s)
-        except (YouTubeError, FingerprintError) as e:
+        except REFERENCE_ERRORS as e:
             log.warning("req#%d: no video reference: %s", req.id, e)
-            return None, f"video: {e}"
+            return None, f"video: {e or type(e).__name__}"
         self.store.set_reference(req.id, ref.to_dict())
         return ref, ""
 
@@ -912,8 +917,8 @@ class Worker:
             try:
                 async with self._cpu:
                     ref = await deezer_reference(cand.deezer_id, self.http, self.settings.tmp_dir)
-            except FingerprintError as e:
-                reasons.append(f"deezer preview: {e}")
+            except REFERENCE_ERRORS as e:
+                reasons.append(f"deezer preview: {e or type(e).__name__}")
         if ref is None:
             return Acoustic(None, "; ".join(reasons) or "no video and no Deezer id to fingerprint against")
         self.store.set_reference(req.id, ref.to_dict())
