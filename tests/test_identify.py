@@ -105,3 +105,14 @@ def test_parse_youtube_title_uses_topic_uploader_when_no_dash():
 def test_parse_youtube_title_keeps_remix():
     q = parse_youtube_title("Astral Projection - Into The Void (Vini Vici Remix) | Official Audio")
     assert q.version == "Vini Vici Remix" and q.title == "Into The Void"
+
+
+def test_split_ignores_a_dash_inside_brackets():
+    q = parse_youtube_title("Granada (Remix - 98)", uploader="Granada - Topic")
+    assert (q.artist, q.title, q.version) == ("Granada", "Granada", "Remix - 98")
+    q = parse_text("Artist - Title (Some - Thing)")
+    assert (q.artist, q.title) == ("Artist", "Title (Some - Thing)")
+    q = parse_text("Artist [Live - 1997] - Title")
+    assert (q.artist, q.title) == ("Artist [Live - 1997]", "Title")
+    q = parse_text("Artist [a (b) - c] - Title")  # nested: depth, not an in-bracket flag
+    assert (q.artist, q.title) == ("Artist [a (b) - c]", "Title")
