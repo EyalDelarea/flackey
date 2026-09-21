@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api } from '../../api'
+import { ApiError, api, candidatePreviewUrl } from '../../api'
 import type { Live } from '../../live'
 import { bucketCounts, bucketOf, failedSummary, groupRows } from '../../presentation'
 import type { Bucket, RowAction } from '../../presentation'
@@ -27,6 +27,14 @@ export default function DownloadPage({ live }: { live: Live }) {
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
   const [retryingAll, setRetryingAll] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
+  // One element for the whole page, and the id it is playing: two rows can sit in `awaiting_review` at
+  // once, and starting a sample in one has to stop the one already running in the other.
+  const audio = useRef<HTMLAudioElement>(null)
+  const [playing, setPlaying] = useState<number | null>(null)
+  // Candidates whose sample the element could not load. Deezer has no preview for some tracks and none at
+  // all for a candidate it never matched, and the only signal either way is the element's own error --
+  // asking the route up front would cost one Deezer call per candidate on screen.
+  const [noPreview, setNoPreview] = useState<Set<number>>(new Set())
   // What History has already shown: a fresh id that lands in a terminal state while the owner is looking
   // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
   const [seenHistoryIds, setSeenHistoryIds] = useState<Set<number>>(new Set())
@@ -68,6 +76,23 @@ export default function DownloadPage({ live }: { live: Live }) {
       })
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRetryingAll(false))
+  }
+  // Detaching the element does not stop it -- a removed <audio> keeps playing its audio -- and `App`
+  // swaps this whole page out for Library or Settings. Without this, switching tabs mid-sample leaves a
+  // clip running with nothing on screen to stop it.
+  useEffect(() => { const el = audio.current; return () => { el?.pause() } }, [])
+  const onPlay = (cid: number) => {
+    const el = audio.current
+    if (!el) return
+    el.pause()
+    // A second press on the one that is playing is a stop, and a stop rewinds: the next press should
+    // start the sample over rather than resume its last two seconds.
+    if (playing === cid) { el.currentTime = 0; setPlaying(null); return }
+    // Assigning `src` re-runs the element's load, even with the same string -- which is what makes a
+    // replay resolve a fresh signature instead of chasing the expired one.
+    el.src = candidatePreviewUrl(cid)
+    setPlaying(cid)
+    el.play()?.catch(() => setPlaying(null))
   }
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -111,8 +136,16 @@ export default function DownloadPage({ live }: { live: Live }) {
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
         {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
-        {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => run(api.choose(rid, cid))} onTryNow={ids => ids.forEach(id => run(api.retry(id)))} />)}
+        {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => run(api.choose(rid, cid))} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
+          playing={playing} noPreview={noPreview} onPlay={onPlay} />)}
       </div>
+      {/* The page's one player. `preload="none"` and no `src` until a play is pressed, because the route
+          resolves the sample against Deezer on every request. A 404 -- no `deezer_id`, or no sample for
+          that track -- reaches the page only here, as a load error on whatever is playing. So does a 502,
+          which latches that one button off too until the window is reopened; the alternative is a button
+          that looks live and does nothing. */}
+      <audio ref={audio} preload="none" onEnded={() => setPlaying(null)}
+        onError={() => { if (playing != null) { const id = playing; setNoPreview(s => new Set(s).add(id)) } setPlaying(null) }} />
     </>
   )
 }

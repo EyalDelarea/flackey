@@ -206,6 +206,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .candidate .head .version { font-weight: 400; color: var(--secondary); }
 .candidate .score { font-size: 12px; font-weight: 500; color: var(--secondary); white-space: nowrap; }
 .candidate .meta { font-size: 12px; color: var(--secondary); }
+/* "Use this" and the sample button sit on one line; the player is square because its whole content is a
+   12px glyph, and it keeps the 22px height of every other secondary button on the card. */
+.candidate .actions { display: flex; align-items: center; gap: 6px; }
+.candidate .play { width: 22px; padding: 0; color: var(--secondary); }
 .skip { padding: 0 12px 12px 60px; }
 .well { margin: 0 12px 12px 60px; padding: 12px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); }
 .well img { display: block; width: 100%; height: 84px; object-fit: cover; border-radius: 5px; }

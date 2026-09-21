@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import DownloadPage from './DownloadPage'
 import { ApiError, api } from '../../api'
-import type { Bundle, Health, Request } from '../../api'
+import type { Bundle, Candidate, Health, Request } from '../../api'
 import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
@@ -244,5 +244,79 @@ describe('Retry all on the Failed tab', () => {
     openFailed()
     fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
     expect(await screen.findByText('Nothing could be retried — this list may be out of date.')).toBeInTheDocument()
+  })
+})
+
+// ---- Samples (issue #53) ----------------------------------------------------------------------
+// The page holds one <audio> for every row on screen, because two requests can sit in `awaiting_review`
+// at once and a sample starting in one has to stop the one already running in the other.
+const cand = (id: number, title: string): Candidate => ({ id, request_id: 1, source: 'deezer', source_ref: `${id}`,
+  artist: 'Ace Ventura', title, mix_name: null, duration_s: 420, deezer_id: id, isrc: null, rank: 1, score: 90, catalog_track_id: null })
+const choiceRow = (id: number, titles: string[]): Bundle => ({
+  request: { ...baseRequest, id, state: 'awaiting_review', query_title: `Track ${id}`, error_message: null },
+  candidates: titles.map((t, i) => cand(id * 10 + i, t)), catalog: null, track: null, rejection: null })
+const withStubbedPlayer = (body: (play: ReturnType<typeof vi.fn>, pause: ReturnType<typeof vi.fn>) => void) => {
+  // jsdom implements neither, and the real `play()` returns a promise the page attaches a catch to.
+  const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve())
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+  try { body(play as never, pause as never) } finally { play.mockRestore(); pause.mockRestore() }
+}
+
+it('plays a sample through the page\'s one player, and starting another stops the first', () => {
+  withStubbedPlayer((play, pause) => {
+    const { container } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix']), choiceRow(2, ['Extended Mix'])])} />)
+    const players = container.querySelectorAll('audio')
+    expect(players).toHaveLength(1)
+    const el = players[0] as HTMLAudioElement
+    expect(el.getAttribute('src')).toBeNull()   // nothing is resolved until a play is pressed
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    expect(el.src).toContain('/api/candidates/10/preview')
+    expect(play).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Extended Mix' }))
+    expect(pause).toHaveBeenCalled()
+    expect(el.src).toContain('/api/candidates/20/preview')
+    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Extended Mix' })).toBeInTheDocument()
+  })
+})
+
+it('stops on a second press, and goes back to play when the clip runs out on its own', () => {
+  withStubbedPlayer((_play, pause) => {
+    const { container } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix'])])} />)
+    const el = container.querySelector('audio') as HTMLAudioElement
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop a sample of Ace Ventura – Original Mix' }))
+    expect(pause).toHaveBeenCalled()
+    expect(el.currentTime).toBe(0)   // a stop rewinds: the next press starts the sample over
+    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.ended(el)   // 30 seconds later, with nobody pressing anything
+    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' })).toBeInTheDocument()
+  })
+})
+
+it('takes the sample button away from the candidate with no preview, and leaves the others alone', () => {
+  // A 404 from the route -- no `deezer_id`, or Deezer has no sample for that track -- reaches the page
+  // as a load error on the element, and only the candidate that was playing loses its button.
+  withStubbedPlayer(() => {
+    const { container } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix', 'Extended Mix'])])} />)
+    const el = container.querySelector('audio') as HTMLAudioElement
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    fireEvent.error(el)
+    expect(screen.getByRole('button', { name: 'No sample for Ace Ventura – Original Mix' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Extended Mix' })).toBeEnabled()
+  })
+})
+
+it('stops the sample when the page goes away', () => {
+  // `App` swaps this page out for Library or Settings; a detached <audio> would otherwise keep playing
+  // with no Stop button left anywhere in the app.
+  withStubbedPlayer((_play, pause) => {
+    const { unmount } = render(<DownloadPage live={makeLive([choiceRow(1, ['Original Mix'])])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Ace Ventura – Original Mix' }))
+    pause.mockClear()
+    unmount()
+    expect(pause).toHaveBeenCalled()
   })
 })

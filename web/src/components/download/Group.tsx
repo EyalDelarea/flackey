@@ -2,8 +2,10 @@ import Banner from '../Banner'
 import RequestRow from './RequestRow'
 import type { GroupView, RowAction } from '../../presentation'
 
-interface Props { g: GroupView; whyOpen: Set<number>; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, cid: number) => void; onTryNow: (ids: number[]) => void }
-export default function Group({ g, whyOpen, onAction, onChoose, onTryNow }: Props) {
+interface Props { g: GroupView; whyOpen: Set<number>; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
+  onChoose: (rowId: number, cid: number) => void; onTryNow: (ids: number[]) => void
+  playing: number | null; noPreview: ReadonlySet<number>; onPlay: (cid: number) => void }
+export default function Group({ g, whyOpen, onAction, onChoose, onTryNow, playing, noPreview, onPlay }: Props) {
   const s = g.summary
   return (
     <section className="group-section">
@@ -14,7 +16,8 @@ export default function Group({ g, whyOpen, onAction, onChoose, onTryNow }: Prop
         <span className="group-bar-fill" style={{ width: `${s.pct}%` }} />
         {s.rejected > 0 && <span className="group-bar-bad" style={{ width: `${Math.round((s.rejected / Math.max(s.total, 1)) * 100)}%` }} />}
       </div>
-      <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose} />)}</div>
+      <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
+        playing={playing} noPreview={noPreview} onPlay={onPlay} />)}</div>
       {g.beatportDown && <Banner tone="red" text={`Beatport is unreachable. Matching is paused — trying again in ${g.beatportDown.seconds} seconds. Nothing is lost.`} action={{ label: 'Try now', onClick: () => onTryNow(g.beatportDown!.requestIds) }} />}
     </section>
   )

@@ -33,9 +33,13 @@ function RetryCountdown({ seconds }: { seconds: number }) {
   return <div className="retry-countdown" aria-live="off">{label}</div>
 }
 
-interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, candidateId: number) => void }
+interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
+  onChoose: (rowId: number, candidateId: number) => void
+  /** The one candidate the page's single audio element is playing, and the ones it has found no sample
+   *  for. Both live on the page because the element does; the row only spreads them over its cards. */
+  playing: number | null; noPreview: ReadonlySet<number>; onPlay: (candidateId: number) => void }
 
-export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Props) {
+export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playing, noPreview, onPlay }: Props) {
   const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected'].filter(Boolean).join(' ')
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
@@ -71,7 +75,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         </div>
       </div>
       {v.candidates && (<>
-        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)} />)}</div>
+        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)}
+          playing={playing === c.id} noPreview={noPreview.has(c.id)} onPlay={() => onPlay(c.id)} />)}</div>
         {v.action?.kind === 'cancel' && <div className="skip"><button className="btn-link" onClick={() => onAction('cancel', v.id, undefined)}>{v.action.label}</button></div>}
       </>)}
       {v.rejection && whyOpen && <SpectrogramWell r={v.rejection} />}

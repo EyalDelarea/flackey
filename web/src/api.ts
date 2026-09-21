@@ -167,3 +167,7 @@ export const api = {
   checkSharing: () => post<SharingState>('/api/sharing/check'),
 }
 export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/spectrogram.png`
+// Not a fetch: the `<audio>` element asks for this itself and follows the 302 to Deezer's CDN. The route
+// resolves the signed sample URL upstream on every request, so this is built at the moment play is
+// pressed -- never set on an element that is only sitting there.
+export const candidatePreviewUrl = (candidateId: number) => `/api/candidates/${candidateId}/preview`

@@ -1,4 +1,4 @@
-export type IconName = 'download' | 'library' | 'settings' | 'playlist' | 'search' | 'folder' | 'check' | 'x' | 'chevron' | 'phone' | 'upload'
+export type IconName = 'download' | 'library' | 'settings' | 'playlist' | 'search' | 'folder' | 'check' | 'x' | 'chevron' | 'phone' | 'upload' | 'play' | 'stop'
 const PATHS: Record<IconName, string> = {
   download: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 7v9M8.5 12.5 12 16l3.5-3.5',
   library: 'M4 6h10M4 12h10M4 18h6M19.5 16V7l3-1M14.5 16a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0',
@@ -11,6 +11,8 @@ const PATHS: Record<IconName, string> = {
   upload: 'M12 19V5m0 0-6 6m6-6 6 6',
   chevron: 'm9 6 6 6-6 6',
   phone: 'M7 2.5h10v19H7zM11 18h2',
+  play: 'M8.5 5.5v13l11-6.5z',
+  stop: 'M7 7h10v10H7z',
 }
 export default function Icon({ name, size = 16, stroke = 1.6 }: { name: IconName; size?: number; stroke?: number }) {
   return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke}
