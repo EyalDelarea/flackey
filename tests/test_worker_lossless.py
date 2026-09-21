@@ -920,6 +920,7 @@ async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeyp
     # recording. Since issue #68 that is not enough to file it: the attempt ends rather than flagging a
     # track that reached DONE without ever being fingerprinted.
     assert attempt_of(store, rid).outcome == "fingerprint_unavailable"
+    assert r.track_id is None
     assert r.flag_reason is None
 
 
