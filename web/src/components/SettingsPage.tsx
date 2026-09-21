@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { AppSettings, LosslessHealth, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
@@ -37,7 +37,7 @@ function deezerBotLine(authorized: boolean, enabled: boolean): { dot: string; te
   return { dot: '', text: 'On — Flackey can search and fetch through Telegram' }
 }
 
-export default function SettingsPage({ live, onReconnect }: { live: Live; onReconnect: () => void }) {
+export default function SettingsPage({ live, onReconnect, focusUpdate }: { live: Live; onReconnect: () => void; focusUpdate?: number }) {
   const s = live.settings; const authorized = live.health?.telegram_authorized ?? true
   const [editing, setEditing] = useState(false); const [path, setPath] = useState(''); const [err, setErr] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
@@ -204,12 +204,6 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
         setInstallError(next.error ?? "Couldn't restart to finish the update."); setRestartBusy(false) } })
       .catch(e => { setInstallError(getErrorMessage(e, "Couldn't restart to finish the update.")); setRestartBusy(false) })
   }
-  const installOnQuit = () => {
-    setRestartBusy(true); setInstallError(null)
-    api.installUpdateOnQuit()
-      .catch(e => setInstallError(getErrorMessage(e, "Couldn't schedule the update.")))
-      .finally(() => setRestartBusy(false))
-  }
   // One boolean for "there is something to install", because the server has two independent ways of
   // saying so and the install endpoint accepts either. A release that carries the signed archive but no
   // .pkg yet is `available: false, seamless: true`, and gating the button on `available` alone would
@@ -233,6 +227,13 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
       .catch(e => setPasswordError(getErrorMessage(e, "Couldn't read the saved Soulseek password.")))
       .finally(() => setPasswordBusy(false))
   }
+  // The update banner's button lands here. A ref rather than an id lookup so it cannot go stale, and
+  // `focusUpdate` is a counter so a second press scrolls again.
+  const updateRow = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!focusUpdate) return
+    updateRow.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  }, [focusUpdate])
   const showWebLogin = () => {
     setWebLoginError(null)
     api.slskdCredentials().then(setWebLogin)
@@ -362,7 +363,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
                 them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
           </details></div></div>}
       </div></>}
-      <div className="group">
+      <div className="group" ref={updateRow}>
         <div className="srow"><div className="srow-body"><div className="k">App version</div>
           <div className="v">Flackey {s.version}</div>
           {updateChecking && <div className="v">Checking for updates…</div>}
@@ -381,12 +382,9 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
               : download ? `Downloading… ${mb(download.received)}` : 'Starting the download…'}
           </div>}
           {/* Names what a restart would cost while transfers are running. */}
-          {staged && !download?.deferred && <div className="v">
+          {staged && <div className="v">
             Version {download?.version} is ready and verified. Flackey will close and reopen to finish.
             {download?.busy ? ` ${download.busy} ${download.busy === 1 ? 'transfer is' : 'transfers are'} still running and would be lost.` : ''}
-          </div>}
-          {staged && download?.deferred && <div className="v">
-            Version {download?.version} will be installed the next time you quit Flackey.
           </div>}
           {download?.state === 'installing' && <div className="v">Closing to install version {download?.version}…</div>}
           {/* Not when `ready` carries an error: the installer downloaded but would not open. */}
@@ -396,8 +394,7 @@ export default function SettingsPage({ live, onReconnect }: { live: Live; onReco
           {download?.error && <div className="err">{download.error}</div>}
           {installError && <div className="err">{installError}</div>}
         </div>
-          {staged && !download?.deferred && <div className="actions">
-            <button className="btn-secondary" onClick={installOnQuit} disabled={restartBusy}>Install on quit</button>
+          {staged && <div className="actions">
             <button className="btn-secondary" onClick={restartNow} disabled={restartBusy}>
               {restartBusy ? 'Restarting…' : 'Restart now'}</button>
           </div>}

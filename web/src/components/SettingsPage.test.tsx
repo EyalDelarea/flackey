@@ -60,7 +60,7 @@ const liveWith = (download: UpdateDownload | null) => ({ ...(live as object), up
    from restating the nine it does not care about. */
 const progress = (over: Partial<UpdateDownload> = {}): UpdateDownload => ({
   state: 'idle', percent: 0, received: 0, total: null, version: null, path: null, error: null,
-  seamless: false, busy: 0, deferred: false, ...over })
+  seamless: false, busy: 0, ...over })
 
 it('shows an available app update', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
@@ -187,7 +187,6 @@ it('asks before closing the app, once an update is staged', async () => {
     seamless: true, path: '/Applications/.Flackey-staging-abc123.app' }))} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText(/ready and verified/)).toBeInTheDocument())
   expect(screen.getByText('Restart now')).toBeEnabled()
-  expect(screen.getByText('Install on quit')).toBeEnabled()
   // The press that started this is over; offering it again would start a second download.
   expect(screen.queryByText('Update')).not.toBeInTheDocument()
 })
@@ -235,7 +234,6 @@ it('hands the buttons back when the app could not close itself', async () => {
   fireEvent.click(await screen.findByText('Restart now'))
   await waitFor(() => expect(screen.getByText(/could not close itself/)).toBeInTheDocument())
   expect(screen.getByText('Restart now')).toBeEnabled()
-  expect(screen.getByText('Install on quit')).toBeEnabled()
 })
 
 /* `available` is the .pkg and `seamless` is the signed archive, and the server installs from either.
@@ -249,22 +247,12 @@ it('offers the update when only the signed archive is published', async () => {
   expect(screen.queryByText(/installer isn't published yet/)).not.toBeInTheDocument()
 })
 
-it('schedules the update for the next quit instead, when asked to', async () => {
-  const later = vi.spyOn(api, 'installUpdateOnQuit').mockResolvedValue(
-    progress({ state: 'staged', percent: 100, version: '0.1.1', seamless: true, deferred: true }))
+it('offers exactly one way to install a staged update', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
   render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
     seamless: true }))} onReconnect={() => {}} />)
-  fireEvent.click(await screen.findByText('Install on quit'))
-  await waitFor(() => expect(later).toHaveBeenCalled())
-})
-
-it('stops asking once the owner has chosen to install on quit', async () => {
-  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: true })
-  render(<SettingsPage live={liveWith(progress({ state: 'staged', percent: 100, version: '0.1.1',
-    seamless: true, deferred: true }))} onReconnect={() => {}} />)
-  await waitFor(() => expect(screen.getByText(/next time you quit Flackey/)).toBeInTheDocument())
-  expect(screen.queryByText('Restart now')).not.toBeInTheDocument()
+  expect(await screen.findByText('Restart now')).toBeInTheDocument()
+  expect(screen.queryByText('Install on quit')).not.toBeInTheDocument()
 })
 
 it('says plainly when an update could not be verified', async () => {

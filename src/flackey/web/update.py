@@ -144,14 +144,14 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
     #
     # idle -> downloading -> ready, or idle -> downloading -> verifying -> staged -> installing.
     state: dict = {"state": "idle", "percent": 0, "received": 0, "total": None, "version": None,
-                   "path": None, "error": None, "seamless": False, "busy": 0, "deferred": False}
+                   "path": None, "error": None, "seamless": False, "busy": 0}
     # Held only so the running download is not garbage collected: asyncio keeps a bare task weakly.
     task: asyncio.Task | None = None
     staged: selfupdate.StagedUpdate | None = None
 
     def publish(**fields) -> None:
         state.update({"percent": 0, "received": 0, "total": None, "version": None, "path": None,
-                      "error": None, "seamless": False, "busy": 0, "deferred": False, **fields})
+                      "error": None, "seamless": False, "busy": 0, **fields})
         if status is not None:
             status[PROGRESS_KEY] = dict(state)
 
@@ -418,18 +418,6 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="staged", percent=100, version=state["version"], seamless=True,
                     path=state["path"], busy=in_flight(),
                     error="Flackey could not close itself. Quit Flackey and it will install on the way out.")
-        return dict(state)
-
-    @r.post("/update/later")
-    async def later(request: Request) -> dict:
-        """Install on quit instead of now: the same helper, armed with `relaunch=False`."""
-        from_the_app(request)
-        if state["state"] != "staged" or staged is None:
-            raise HTTPException(409, "There is no update ready to install.")
-        selfupdate.pending.arm(selfupdate.StagedUpdate(
-            path=staged.path, version=staged.version, relaunch=False))
-        publish(state="staged", percent=100, version=state["version"], seamless=True,
-                path=state["path"], deferred=True)
         return dict(state)
 
     @r.post("/update/release")
