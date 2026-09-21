@@ -96,9 +96,8 @@ def test_lossless_is_off_until_an_api_key_is_set(tmp_path: Path):
     assert s.lossless_raw_dir == tmp_path / "lossless" / "attempts"
     assert (s.lossless_filing_format, s.lossless_search_wait_s, s.lossless_first_byte_s, s.lossless_transfer_s,
             s.lossless_poll_s) == ("aiff", 30, 60, 600, 2.0)
-    assert (s.lossless_duration_tolerance_s, s.lossless_title_ratio, s.lossless_require_artist,
-            s.lossless_max_queue, s.lossless_fingerprint_min, s.lossless_max_picks,
-            s.lossless_keep_raw_days) == (3, 90, False, None, 0.90, 4, 30)
+    assert (s.lossless_max_queue, s.lossless_fingerprint_min, s.lossless_max_picks,
+            s.lossless_keep_raw_days) == (None, 0.79, 4, 30)
     on = Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="k")
     assert on.soulseek_enabled is True and on.lossless_enabled is True
 

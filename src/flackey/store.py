@@ -64,7 +64,13 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
 );
 CREATE TABLE IF NOT EXISTS rejections (
   id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL, reason TEXT NOT NULL,
-  bitrate_kbps INTEGER, cutoff_hz INTEGER, spectrogram_path TEXT, created_at TEXT NOT NULL
+  bitrate_kbps INTEGER, cutoff_hz INTEGER, spectrogram_path TEXT, created_at TEXT NOT NULL,
+  -- What the file failed, as a value rather than as prose the page has to parse: 'quality' (the spectral
+  -- check said the audio is not what it claims) or 'different_recording' (the audio is genuine, it is the
+  -- wrong track). The page draws a different explanation for each, and reading the kind is the only way it
+  -- can tell them apart -- `reason` is written for a human and `cutoff_hz` is absent on both a
+  -- different-recording rejection and an unsupported-format one.
+  kind TEXT NOT NULL DEFAULT 'quality'
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS lossless_attempts (
@@ -73,6 +79,16 @@ CREATE TABLE IF NOT EXISTS lossless_attempts (
   fingerprint_json TEXT, spectrogram_path TEXT, first_byte_ms INTEGER, total_ms INTEGER, raw_dir TEXT
 );
 CREATE INDEX IF NOT EXISTS lossless_attempts_request ON lossless_attempts(request_id);
+-- The ON DELETE CASCADE below does nothing: SQLite ignores foreign keys unless the connection sets
+-- `PRAGMA foreign_keys = ON`, and `Store.__init__` deliberately does not (turning enforcement on would
+-- change the behaviour of every other table at once). The clause is kept because it documents the
+-- relationship and because CREATE TABLE IF NOT EXISTS cannot rewrite the databases already carrying it --
+-- editing it out here would only make this file disagree with them. Enforcement is manual: `delete_request`
+-- and `delete_requests` name this table explicitly, and anything added here must be added there too.
+CREATE TABLE IF NOT EXISTS request_references (
+  request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+  json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS track_evidence (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track_id INTEGER NOT NULL, kind TEXT NOT NULL,
   value_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -101,6 +117,7 @@ class Store:
         self._ensure_column("tracks", "source_fmt", "TEXT")
         self._ensure_column("tracks", "bit_depth", "INTEGER")
         self._ensure_column("tracks", "sample_rate", "INTEGER")
+        self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
@@ -231,20 +248,31 @@ class Store:
         return cur.rowcount
 
     def delete_request(self, request_id: int) -> None:
-        """Forget one request's row, candidates, rejections and lossless attempts. Never touches
-        tracks/playlist_tracks: a filed track and its playlist membership outlive the request that produced it."""
+        """Forget one request's row, candidates, rejections, lossless attempts and acoustic reference. Never
+        touches tracks/playlist_tracks: a filed track and its playlist membership outlive the request that
+        produced it.
+
+        Every child table is named here on purpose. `request_references` declares ON DELETE CASCADE, but this
+        connection does not set `PRAGMA foreign_keys = ON`, so nothing in SQLite enforces it -- see the note
+        above the table in SCHEMA. A child added to the schema and not added here leaks a row per delete,
+        which is exactly what `request_references` did until issue #61."""
         if self.conn.execute("SELECT 1 FROM requests WHERE id=?", (request_id,)).fetchone() is None:
             raise KeyError(request_id)
         self.conn.execute("DELETE FROM candidates WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM rejections WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM lossless_attempts WHERE request_id=?", (request_id,))
+        self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
         self.conn.execute("DELETE FROM requests WHERE id=?", (request_id,))
         self.conn.commit()
         self._emit("queue", 0)
 
     def delete_requests(self, states: set[RequestState]) -> list[int]:
-        """Bulk-delete every request whose state is in `states`, plus their candidates, rejections and
-        lossless attempts. Returns the deleted ids. Never touches tracks/playlist_tracks."""
+        """Bulk-delete every request whose state is in `states`, plus their candidates, rejections, lossless
+        attempts and acoustic references. Returns the deleted ids. Never touches tracks/playlist_tracks.
+
+        Same hand-rolled cleanup as `delete_request`, and for the same reason: no foreign key in this
+        database is enforced. Every child delete has to run before the parent rows go, or its `IN (sub)`
+        stops matching anything."""
         if not states:
             return []
         marks = ",".join("?" * len(states))
@@ -255,6 +283,7 @@ class Store:
             self.conn.execute(f"DELETE FROM candidates WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM rejections WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM lossless_attempts WHERE request_id IN ({sub})", params)
+            self.conn.execute(f"DELETE FROM request_references WHERE request_id IN ({sub})", params)
             self.conn.execute(f"DELETE FROM requests WHERE state IN ({marks})", params)
             self.conn.commit()
             self._emit("queue", 0)
@@ -262,6 +291,22 @@ class Store:
 
     # ---- candidates -----------------------------------------------------
     def add_candidates(self, request_id: int, candidates: list[Candidate]) -> list[Candidate]:
+        """Replace this request's candidate list with what the search just returned.
+
+        Replace, not append: the list is the current search's answer, not a log of every pass. It used to be
+        written at most once per request, because the branch that writes it was terminal; since issue #69 a
+        request with no chosen record goes to Soulseek and comes back round the retry ladder, so an append
+        left one set of rows per pass on the Choose list and on the request page.
+
+        The one pointer at a candidate id that outlives a pass is `requests.chosen_candidate_id` (no foreign
+        key enforces it, and nothing else in the schema references a candidate), so that row is kept
+        whatever happens. In practice the caller only reaches here when it is NULL -- `_process` resumes
+        from the chosen candidate instead of searching -- but stranding it would turn a retry into a
+        KeyError deep in `upgrade()` or the sweep, which is too sharp an edge to leave to the caller.
+        `IS NOT` is SQLite's null-safe comparison: with no choice recorded it keeps nothing."""
+        self.conn.execute(
+            "DELETE FROM candidates WHERE request_id=? "
+            "AND id IS NOT (SELECT chosen_candidate_id FROM requests WHERE id=?)", (request_id, request_id))
         out = []
         for c in candidates:
             cur = self.conn.execute(
@@ -448,12 +493,15 @@ class Store:
 
     # ---- rejections -----------------------------------------------------
     def add_rejection(self, request_id: int, reason: str, bitrate_kbps: int | None, cutoff_hz: int | None,
-                      spectrogram_path: Path | None) -> int:
+                      spectrogram_path: Path | None, *, kind: str = "quality") -> int:
+        """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
+        genuine audio of the wrong track). Keyword-only so no caller can drift into the positional slot that
+        the spectrogram already holds."""
         cur = self.conn.execute(
-            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, kind) "
+            "VALUES (?,?,?,?,?,?,?)",
             (request_id, reason, bitrate_kbps, cutoff_hz,
-             None if spectrogram_path is None else str(spectrogram_path), _now()))
+             None if spectrogram_path is None else str(spectrogram_path), _now(), kind))
         self.conn.commit()
         return int(cur.lastrowid)
 
@@ -532,6 +580,21 @@ class Store:
         cur = self.conn.execute("UPDATE lossless_attempts SET outcome='interrupted' WHERE outcome IS NULL")
         self.conn.commit()
         return cur.rowcount
+
+    def get_reference(self, request_id: int) -> dict | None:
+        """The request's acoustic reference (`fingerprint.AcousticReference.to_dict`). Its own table: a
+        full fingerprint is ~50 KB and `list_requests` feeds the UI."""
+        r = self.conn.execute("SELECT json FROM request_references WHERE request_id=?", (request_id,)).fetchone()
+        return json.loads(r["json"]) if r else None
+
+    def set_reference(self, request_id: int, reference: dict | None) -> None:
+        with self.conn:
+            if reference is None:
+                self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
+            else:
+                self.conn.execute("INSERT INTO request_references(request_id, json) VALUES (?, ?) "
+                                  "ON CONFLICT(request_id) DO UPDATE SET json=excluded.json",
+                                  (request_id, json.dumps(reference)))
 
     def add_evidence(self, track_id: int, kind: str, value: dict) -> int:
         cur = self.conn.execute(

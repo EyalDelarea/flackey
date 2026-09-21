@@ -1,4 +1,6 @@
-from flackey.youtube import parse_ytdlp_json
+from pathlib import Path
+
+from flackey.youtube import fetch_audio, parse_ytdlp_json, video_id
 
 
 def test_parse_ytdlp_playlist_json():
@@ -54,3 +56,27 @@ async def test_a_link_is_read_without_any_yt_dlp_on_the_path(monkeypatch):
     assert name == "Set"
     assert [e.title for e in entries] == ["Track"]
     assert entries[0].duration_s == 61
+
+
+async def test_fetch_audio_downloads_into_the_folder(tmp_path: Path, monkeypatch):
+    """The reference audio (issue #67): the best audio-only stream, in whatever container YouTube serves,
+    landed in this request's own folder under a name the caller chose rather than the video's title."""
+    class FakeYDL:
+        def __init__(self, opts): self.opts = opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=True):
+            assert download and self.opts["format"] == "bestaudio/best" and self.opts["noplaylist"]
+            out = Path(self.opts["outtmpl"].replace("%(ext)s", "webm"))
+            out.write_bytes(b"audio")
+            return {"id": "jNQXAC9IVRw", "ext": "webm"}
+        def prepare_filename(self, info):
+            return self.opts["outtmpl"].replace("%(ext)s", info["ext"])
+    monkeypatch.setattr("flackey.youtube.YoutubeDL", FakeYDL)
+    got = await fetch_audio("https://www.youtube.com/watch?v=jNQXAC9IVRw", tmp_path / "req1")
+    assert got == tmp_path / "req1" / "reference.webm" and got.read_bytes() == b"audio"
+
+
+def test_video_id():
+    assert video_id("https://www.youtube.com/watch?v=jNQXAC9IVRw") == "jNQXAC9IVRw"
+    assert video_id("https://youtu.be/jNQXAC9IVRw") == "jNQXAC9IVRw"

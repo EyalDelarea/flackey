@@ -142,6 +142,41 @@ describe('presentRow', () => {
       caption: 'A real 320 kbps file has sound up to 20 kHz. This one stops at 16 kHz — it was blown up from a smaller file.' })
     expect(presentRow(bundle({ state: 'rejected' }, { rejection }), { ...opts, whyOpen: true }).action?.label).toBe('Hide why')
   })
+  // Issue #61 added a second reason a file can be refused: it is genuine 320 kbps audio of the *wrong
+  // recording*. The upscale caption is about the spectral check and quotes its cutoff, so saying it here
+  // would tell the owner a healthy file is a fake and print a frequency that is perfectly fine as the proof.
+  it('a different-recording rejection explains the real reason and quotes no cutoff', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording: best score 0.61 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: '/x.png', created_at: '', kind: 'different_recording' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
+    expect(v.status).toBe('a different recording: best score 0.61 below 0.79. Deleted, not added to your library.')
+    expect(v.rejection).toEqual({ reason: 'a different recording: best score 0.61 below 0.79', cutoffKhz: null,
+      spectrogramUrl: '/api/rejections/7/spectrogram.png',
+      caption: 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.' })
+    // Nothing failed a cutoff, so no cutoff is claimed either way round.
+    expect(v.checks).toEqual([])
+  })
+  it('a rejected row does not borrow the Soulseek attempt\'s fingerprint: it refused a different file', () => {
+    const attempt = { id: 8, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
+      fingerprint: { status: 'failed', score: 0.61, offset_s: null, reason: 'below 0.79' }, spectrogram_path: null,
+      first_byte_ms: null, total_ms: null }
+    const rejection = { id: 9, request_id: 1, reason: 'a different recording: best score 0.55 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null, created_at: '', kind: 'different_recording' }
+    expect(presentRow(bundle({ state: 'rejected' }, { attempt, rejection }), opts).checks).toEqual([])
+  })
+  // The peer's copy scored 0.61 and was thrown away; the Deezer copy that was actually filed scored 0.98,
+  // and that score is nowhere in the bundle. Showing the attempt's number here described the wrong file.
+  it('a track filed from Deezer does not show the discarded peer copy\'s match', () => {
+    const track = { id: 11, path: '/l/A - T.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 20500, file_size: 1,
+      artist: 'A', title: 'T', mix_name: 'Original Mix', duration_s: 442, isrc: null, catalog_track_id: null,
+      request_id: 1, added_at: '', verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null,
+      bit_depth: null, sample_rate: 44100, catalog: null }
+    const attempt = { id: 12, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
+      fingerprint: { status: 'failed', score: 0.61, offset_s: null, reason: 'below 0.79' }, spectrogram_path: null,
+      first_byte_ms: null, total_ms: null }
+    expect(presentRow(bundle({ state: 'done', track_id: 11 }, { track, attempt }), opts).checks)
+      .toEqual([{ label: 'Verified to', value: '20.5 kHz', ok: true }])
+  })
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')
     // "Skipped" said what happened without saying who did it, on a row sitting under a red "Failed" badge.
@@ -391,9 +426,19 @@ describe('a queued track', () => {
 
   it('shortens the verbose Soulseek fallback warning without losing its meaning', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
-      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback' }), opts)
-    expect(v.status).toBe('Previous attempt: No Soulseek match; alternate source unavailable')
+      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on' }), opts)
+    expect(v.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
     expect(v.retryInSeconds).toBe(25)
+  })
+
+  it('shows the wait for Soulseek as itself rather than as a previous attempt', () => {
+    // The worker words this one for the owner already (issue #74): what is being waited for and how many
+    // looks are left. "Previous attempt" would be wrong twice over -- the search really does run again.
+    const v = presentRow(bundle({ retry_after: '2026-09-06T16:00:00Z',
+      flag_reason: 'waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h' }), opts)
+    expect(v.status).toBe('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')
+    expect(v.statusTone).toBe('amber')
+    expect(v.retryInSeconds).toBe(21600)
   })
 })
 

@@ -357,10 +357,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate }: { live:
                 return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : '· this Mac only'}</div>
               })}</div></>}
             {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
-              <div className="v">Files a peer offers must match on length (±{s.ranking.duration_tolerance_s}s) and
-                title ({s.ranking.title_ratio}% or closer){s.ranking.require_artist ? ', and name the artist' : ''}.
-                Survivors are ordered by quality, then by who can send now. Flackey tries up to {s.ranking.max_picks} of
-                them, and keeps a copy only if its fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
+              <div className="v">Files a peer offers are tried nearest the video's length first
+                {s.ranking.max_queue != null ? ` (queues longer than ${s.ranking.max_queue} are skipped)` : ''}; the
+                recording check decides. Survivors are then ordered by quality and by who can send now. Flackey tries
+                up to {s.ranking.max_picks} of them, and keeps a copy only if its fingerprint matches the original
+                at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
           </details></div></div>}
       </div></>}
       <div className="group" ref={updateRow}>

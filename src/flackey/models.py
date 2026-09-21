@@ -69,6 +69,13 @@ def norm(s: str | None) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", s).split())
 
 
+# The least a Beatport record's title may agree with the request (token_set_ratio) and still name the file.
+# Measured on 105 filed requests with a Beatport match: 103 score >= 90, none between 70 and 89, and the
+# only two below 70 are the two files that were wrong (issue #63). Tags only: the record and the file are
+# chosen by audio, not by this number.
+TITLE_FLOOR = 75
+
+
 SOURCE_LABELS = {"deezer_bot": "Deezer", "soulseek": "Soulseek"}
 
 
@@ -244,6 +251,10 @@ class Rejection:
     cutoff_hz: int | None
     spectrogram_path: str | None
     created_at: str
+    # Which check the file failed, for a page that has to explain it: 'quality' or 'different_recording'.
+    # Defaulted so a row written before the column existed still loads, and reads as the only kind there
+    # was then.
+    kind: str = "quality"
 
 
 @dataclass
@@ -264,7 +275,8 @@ class LosslessAttempt:
 
 
 ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
-                    "verify_failed", "fingerprint_failed", "convert_failed", "unavailable", "interrupted")
+                    "verify_failed", "fingerprint_failed", "fingerprint_unavailable", "convert_failed",
+                    "unavailable", "interrupted")
 
 # Why a lossless attempt came back empty, in the owner's words rather than the vocabulary above. Every
 # outcome but "filed" needs one: a track kept on the lossy copy is a thing the owner asked to be told
@@ -278,6 +290,7 @@ MISS_REASON = {
     "transfer_timeout": "the people who had it stopped sending part-way through",
     "verify_failed": "the copies offered were not really lossless",
     "fingerprint_failed": "the copies offered were a different recording",
+    "fingerprint_unavailable": "the recording could not be checked acoustically",
     "convert_failed": "the file could not be converted",
     "unavailable": "Soulseek was not reachable at the time",
     "interrupted": "it was interrupted",

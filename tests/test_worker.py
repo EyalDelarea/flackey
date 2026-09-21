@@ -5,8 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from flackey import worker as worker_mod
 from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
+from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
+from flackey.match import decide
 from flackey.models import (
     RETRYABLE_STATES,
     Candidate,
@@ -16,9 +19,11 @@ from flackey.models import (
     RequestState,
 )
 from flackey.notify import MemoryNotifier
+from flackey.reference import Identification
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
 from flackey.worker import Worker, catalog_candidate
+from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -82,12 +87,48 @@ def good_cand() -> Candidate:
 
 
 @pytest.fixture
-def env(tmp_path: Path):
+def env(tmp_path: Path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
     notifier = MemoryNotifier()
+
+    # Every filed request now fetches an acoustic reference first, and `good_cand()` carries a real Deezer
+    # id -- without this the suite would call api.deezer.com for it.
+    async def fake_deezer(deezer_id, http, tmp_dir):
+        return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
+
+    # Since issue #68 every YT_TRACK request with a source_url fetches its video before choosing a record,
+    # so without this the suite would run yt-dlp. A permanent failure on purpose: Task 15 makes transient
+    # yt-dlp failures retry, and the fixture must stay off that ladder. Tests about the audio path
+    # override it with `_video_ref`.
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        raise FingerprintError("no video audio in tests")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+
+    # Since issue #68 the lossy copy is fingerprinted before it is filed, and every request in this file
+    # files the lossy copy. Without this the suite would run fpcalc against the fake reference above --
+    # which answers "skipped" wherever chromaprint is not installed (CI) and "failed" wherever it is,
+    # because three made-up frames match no real audio. Answered the way `fingerprint.check` answers:
+    # "skipped" carrying the caller's reason when there is no reference at all, "matched" otherwise.
+    # Tests about a download that is the wrong recording live in `test_worker_lossless.py`, which has a
+    # fake whose result they can set.
+    async def fake_check(path, reference, *, minimum, missing=""):
+        if reference is None:
+            return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
+        return FingerprintResult("matched", 0.98, 12.3, f"{reference.label} found at 12.3 s, score 0.98",
+                                 [1, 2, 3], [4, 5, 6], reference.label)
+
+    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
     return settings, store, notifier
+
+
+async def _video_ref(url, tmp_dir, *, duration_s=None):
+    """A stand-in for the request's own video, for the tests where audio picks the record."""
+    return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
 
 
 def make_worker(env, source, catalog):
@@ -174,8 +215,8 @@ async def test_duplicate_is_skipped(env):
 async def test_duplicate_is_rechecked_when_review_resumes(env):
     _settings, store, _notifier = env
     src = FakeSource([good_cand()])
-    parked = store.add_request(TEXT, RequestKind.TEXT)
-    await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: not on Beatport
+    parked = store.add_request("q", RequestKind.TEXT)   # raw text nothing matches: parks below threshold
+    await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: confidence below threshold
     assert store.get_request(parked).state == RequestState.AWAITING_REVIEW
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, src, FakeCatalog([ct]))
@@ -234,11 +275,14 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     assert r.attempts == 2 and src.searches == 1 and len(store.get_candidates(rid)) == 1
 
 
-async def test_not_on_beatport_parks(env):
+async def test_not_on_beatport_files_when_confident(env):
+    """No Beatport record, but the candidate convinces on text: the download's own check decides."""
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
-    r = await w.process(store.add_request("q", RequestKind.TEXT))
-    assert r.state == RequestState.AWAITING_REVIEW and "Beatport" in r.flag_reason
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    assert store.get_request(rid).catalog_track_id < 0       # tagged from the fallback catalogue
 
 
 def remix_cand() -> Candidate:
@@ -305,18 +349,16 @@ def _edit_setup(env, catalog_tracks):
     return w, rid
 
 
-async def test_auto_accepted_edit_missing_from_beatport_parks_for_review(env):
-    """Only the owner may decide to file a track without a Beatport record behind it."""
-    _settings, store, notifier = env
+async def test_auto_accepted_edit_missing_from_beatport_files_on_the_fingerprint(env):
+    """The pinned edit has no Beatport record of its own: it files anyway, checked against the video."""
+    _settings, store, _notifier = env
     original = CatalogTrack(**{**CT.__dict__, "duration_ms": 544000})
     w, rid = _edit_setup(env, [original])
     r = await w.process(rid)
-    assert r.state == RequestState.AWAITING_REVIEW and "not on Beatport" in r.flag_reason
-    assert "not on Beatport" in notifier.sent[-1][0]
-    await w.choose(rid, store.get_candidates(rid)[1].id)
-    r = await w.process(rid)
+    assert r.state == RequestState.DONE
     track = store.get_track(r.track_id)
-    assert r.state == RequestState.DONE and (track.mix_name, track.isrc) == ("Album Edit", "EDIT00001")
+    assert (track.mix_name, track.isrc) == ("Album Edit", "EDIT00001")
+    assert store.get_request(rid).catalog_track_id < 0       # tagged from the fallback catalogue
 
 
 async def test_review_message_shows_the_video_length(env):
@@ -343,12 +385,167 @@ async def test_chosen_without_beatport_is_tagged_from_the_candidate(env):
     assert track.path.parent == settings.library_root / "Astral Projection" and track.isrc == "UKU932231081"
 
 
+async def test_a_youtube_request_files_the_candidate_whose_preview_is_the_video(env, monkeypatch):
+    """Issue #68: text cannot tell these two apart -- both score 100 against the Beatport record, so
+    `decide` auto-files the first, 'Between The Lines'. The video's audio says the second one is the
+    track. Audio wins, no review, and the confidence is the audio score, not the text score."""
+    _settings, store, notifier = env
+    # Neither is on Beatport (#70's case), so nothing but the audio can separate them and the file is
+    # tagged from the record the audio chose.
+    wrong = good_cand()
+    wrong.title, wrong.deezer_id, wrong.source_ref, wrong.isrc = "Between The Lines", 1, "dz_track:1:send", None
+    right = good_cand()
+    right.title, right.deezer_id, right.source_ref, right.isrc = "Nothing but a Title", 2, "dz_track:2:send", None
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        assert reference.label == "youtube:abc" and minimum == 0.79
+        chosen = next(c for c in cands if c.deezer_id == 2)
+        return Identification(chosen, 0.97, [(1, 0.41), (2, 0.97)],
+                              "deezer:2 preview matches the video, score 0.97")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make_worker(env, FakeSource([wrong, right]), FakeCatalog([CT]))
+    # #70's real mistake: the video is titled after the record it is not. Text reads the title and agrees
+    # with itself; only the audio knows better.
+    rid = store.add_request("Astral Projection - Between The Lines", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.confidence == 97
+    assert store.get_track(r.track_id).title == "Nothing but a Title"
+    assert not [m for m in notifier.sent if m[0].startswith("Review needed")]
+    # What text alone would have done, so the override is not vacuous: it auto-files the wrong record at
+    # 100%. The stored scores are the ones `decide` wrote on the way through.
+    by_title = {c.title: c.score for c in store.get_candidates(rid)}
+    assert by_title == {"Between The Lines": 100, "Nothing but a Title": 86}
+    text_only = decide(store.get_request(rid).query(), [wrong, right], None)
+    assert text_only.auto and text_only.chosen.title == "Between The Lines"
+
+
+async def test_a_youtube_request_with_no_matching_preview_does_not_file_the_text_winner(env, monkeypatch):
+    _settings, store, notifier = env
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CT]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    # Since issue #69 a request with no record goes to Soulseek on its own words -- but this raw text
+    # carries no " - ", so nothing parsed an artist and a title out of it and there is nothing to search
+    # with. It parks, still carrying the identification's reason for the owner to read, and the text
+    # winner is still not filed, which is what this test is here for.
+    assert r.state == RequestState.NOT_FOUND and "none of 1" in r.error_message
+    assert "nothing to search for" in r.error_message
+    assert r.track_id is None and notifier.sent[-1][0].startswith("Could not identify")
+
+
+async def test_no_record_and_no_soulseek_errors_instead_of_filing_the_deezer_copy(env, monkeypatch):
+    """The other half of issue #69's gate: the words are there to search with, but this worker has no
+    lossless provider. Nothing may reach `source.fetch` -- a lossy copy of a record nothing chose is
+    exactly the wrong file this epic exists to stop (spec §7)."""
+    _settings, store, _notifier = env
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    source = FakeSource([good_cand()])
+    w = make_worker(env, source, FakeCatalog([CT]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.track_id is None and source.fetched == []
+    assert "Soulseek is switched off" in r.error_message
+
+
+async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypatch):
+    """The epic's one rule: a text score of 95 does not overrule the audio, and there is no Choose window
+    on this path -- the request parks instead of asking."""
+    _settings, store, notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(1754956977, 0.31)], "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert store.get_candidates(rid)[0].score == 100        # text would have auto-filed it
+    assert r.state == RequestState.NOT_FOUND and r.chosen_candidate_id is None
+    assert not [m for m in notifier.sent if m[0].startswith("Review needed")]
+
+
+async def test_without_a_video_reference_text_still_decides(env, monkeypatch):
+    _settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    called = []
+
+    async def fake_identify(*a, **kw):
+        called.append(1)
+
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)   # env's fake_youtube already fails
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and called == [] and store.get_reference(rid)["kind"] == "deezer"
+
+
+async def test_video_audio_failure_retries_before_the_text_path(env, monkeypatch):
+    """The video's audio identifies the record, so a yt-dlp blip earns the quick ladder; after it the pass
+    goes on by text (checked by the preview on download), so a removed video cannot block the request."""
+    settings, store, notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    calls = []
+
+    async def flaky_youtube(url, tmp_dir, *, duration_s=None):
+        calls.append(url)
+        raise YouTubeError("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1
+    assert r.flag_reason == "video audio unavailable, will retry"
+    assert "Retrying in 30 s" in notifier.sent[-1][0] and "429" in notifier.sent[-1][0]
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 2
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and len(calls) >= 3 and store.get_reference(rid)["kind"] == "deezer"
+
+
+async def test_unreadable_video_audio_goes_straight_to_the_text_path(env, monkeypatch):
+    """The other half of the split: the audio arrived and could not be read, which the next pass would only
+    repeat. `env`'s own fake raises exactly this, which is why every other test here chooses by text at once."""
+    settings, store, notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.attempts == 0
+
+
 async def test_source_not_found(env):
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceNotFound("source bot replied without results: Nothing")), FakeCatalog([CT]))
     r = await w.process(store.add_request("q", RequestKind.TEXT))
+    # Since issue #69 "not on Deezer" is not a verdict on its own: the request falls through to the
+    # request's own words, and only lands here because "q" parses to neither an artist nor a title. The
+    # bot's own sentence is still on the row, which is what a not-found is diagnosed from.
     assert r.state == RequestState.NOT_FOUND
-    assert r.error_message == "source bot replied without results: Nothing"  # kept, so a not-found can be diagnosed
+    assert r.error_message == ("could not identify this track: the Deezer bot found nothing (source bot "
+                               "replied without results: Nothing) and no Beatport match; no artist and "
+                               "title could be read from the request, so there is nothing to search for")
 
 
 async def test_source_timeout_retries_then_errors(env):
@@ -488,8 +685,8 @@ async def test_retry_takes_back_exactly_the_retryable_states(env):
 
 def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
     # Built when the source cannot offer a candidate. Everything `lossless.reference_for` needs comes off
-    # the Beatport record; `deezer_id` stays None, which is what makes `fingerprint.check` skip rather than
-    # run, and what `NO_FINGERPRINT_FLAG` tells the owner.
+    # the Beatport record; `deezer_id` stays None, so a request with no video of its own has nothing to
+    # fingerprint against and the attempt ends `fingerprint_unavailable` rather than filing (issue #68).
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 412_000})
     cand = catalog_candidate(ct)
 

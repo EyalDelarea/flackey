@@ -116,6 +116,14 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
 }
 
+/** The long wait for Soulseek (issue #74), as the owner should read it, or null when this is not one.
+ *  The worker already words that flag -- what is being waited for, and how many looks are left -- so every
+ *  place that prints a queued row's reason shows it as it stands rather than labelling it a previous
+ *  attempt: it is not one, because the search really does run again. Exported because the playlist import
+ *  list prints the same field, and that is exactly how the two came to disagree before. */
+export const soulseekWait = (flag: string | null | undefined): string | null =>
+  flag && /^waiting for Soulseek/i.test(flag) ? flag.replace(/^waiting/i, 'Waiting') : null
+
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
@@ -128,6 +136,7 @@ const MISS_REASON: Record<string, string> = {
   transfer_timeout: 'the people who had it stopped sending part-way through',
   verify_failed: 'the copies offered were not really lossless',
   fingerprint_failed: 'the copies offered were a different recording',
+  fingerprint_unavailable: 'the recording could not be checked acoustically',
   convert_failed: 'the file could not be converted',
   unavailable: 'Soulseek was not reachable at the time',
   interrupted: 'it was interrupted',
@@ -204,7 +213,17 @@ function stepsFor(r: Request): StepView[] | null {
  *  Both already ride along in the bundle - the UI simply never showed them. */
 function checksFor(b: Bundle): CheckView[] {
   const out: CheckView[] = []
-  const fp = b.attempt?.fingerprint
+  // `attempt.fingerprint` scores the file the *Soulseek attempt* pulled down, which is not always the file
+  // this row ended up being about: the lossy Deezer fallback is fingerprinted separately and that score is
+  // never stored, so a track filed from Deezer after a peer's copy scored 0.61 would have shown "61.0%
+  // match" beside a file that in fact matched at 0.98. Show it only where it describes this row's file --
+  // while the attempt is the only file there is, or when the filed track came from that same provider. Every
+  // rejection row is the Deezer copy (both `add_rejection` calls sit on the lossy path), so none qualifies.
+  const attempt = b.attempt ?? null
+  const aboutThisFile = attempt != null && (b.track != null
+    ? b.track.source === attempt.provider
+    : b.rejection == null)
+  const fp = aboutThisFile ? attempt!.fingerprint : null
   if (fp && fp.score != null) out.push({ label: 'Same recording', value: `${(fp.score * 100).toFixed(1)}% match`, ok: fp.status !== 'failed' })
   const hz = b.track?.cutoff_hz ?? b.rejection?.cutoff_hz ?? null
   // "Verified to 22.1 kHz", not "Audio to": the number is the highest frequency carrying real content, and
@@ -305,11 +324,17 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       if (r.retry_after) {
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
+        const waiting = soulseekWait(r.flag_reason)
+        if (waiting) {
+          v.status = waiting
+          v.statusTone = 'amber'
+          break
+        }
         const reason = (r.flag_reason || 'could not complete')
           .replace(/, will retry$/, '')
           .replace(/^no way to fetch this track:\s*/i, '')
-          .replace(/nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback/i,
-            'No Soulseek match; alternate source unavailable')
+          .replace(/nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on/i,
+            'No Soulseek match; nothing on Deezer to fall back on')
         v.status = `Previous attempt: ${reason}`
         v.statusTone = 'amber'
       } else {
@@ -360,9 +385,15 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.status = `${reason.replace(/\.$/, '')}. Deleted, not added to your library.`
       v.statusTone = 'red'; v.rejected = true
       const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
+      // Two different refusals, two different explanations. The upscale line is about the spectral check
+      // and quotes its cutoff; saying it over a file that failed the *fingerprint* would call a genuine
+      // 320 kbps file a fake. `kind` is what the worker wrote, not something guessed from the prose --
+      // a rejection reason is written for a human and must stay free to change wording.
       v.rejection = {
         reason, cutoffKhz: khz,
-        caption: khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
+        caption: b.rejection?.kind === 'different_recording'
+          ? 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
+          : khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
           : 'The file did not pass the quality check.',
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,
       }

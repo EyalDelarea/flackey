@@ -1,12 +1,13 @@
 """The gate that turns a provider's search results into one pick, with a report that explains every
-rejection (spec §6). Pure: no I/O, no clock. Rules are cheap filters against downloading the wrong file;
-the fingerprint check (fingerprint.py) is what proves identity after the download."""
+rejection (spec §6). Pure: no I/O, no clock. Rules are the cheap filters that keep files that can never
+satisfy the goal (lossy, implausible) from being downloaded; identity is ordered by the rankers and proven
+by the fingerprint after the download."""
 from __future__ import annotations
 
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from rapidfuzz import fuzz
 
@@ -63,6 +64,9 @@ class Reference:
     # disagrees with it. `match.score_candidate` already refuses to let a wrongly matched Beatport release
     # redefine that length for source candidates; without this the lossless gate was the one place that did.
     requested_duration_s: int | None = None
+    # built from the request's own words rather than a catalogue record or a source candidate; a hit on it
+    # tags from the request
+    from_query: bool = False
 
     @property
     def is_original(self) -> bool:
@@ -70,8 +74,8 @@ class Reference:
 
     @property
     def durations(self) -> tuple[int, ...]:
-        """Every length this recording is known by, newest evidence first. Two at most, and never a range
-        between them: each stays its own tolerance window, so the gate does not get looser, only less wrong."""
+        """Every length this recording is known by, newest evidence first. `rank_duration` measures against
+        the nearest; nothing rejects on it (issue #69)."""
         return tuple(dict.fromkeys(d for d in (self.duration_s, self.requested_duration_s) if d is not None))
 
 
@@ -114,9 +118,6 @@ def file_title(name: str, artist: str) -> tuple[str, str | None]:
 @dataclass(frozen=True)
 class PickPolicy:
     lossless_extensions: frozenset[str] = LOSSLESS_EXTENSIONS
-    duration_tolerance_s: int = 3
-    title_ratio: int = 90
-    require_artist: bool = False
     max_queue_length: int | None = None
     banned_users: frozenset[str] = frozenset()
 
@@ -128,9 +129,13 @@ class PickPolicy:
 
     @classmethod
     def from_dict(cls, d: dict) -> PickPolicy:
-        return cls(lossless_extensions=frozenset(d["lossless_extensions"]), duration_tolerance_s=d["duration_tolerance_s"],
-                   title_ratio=d["title_ratio"], require_artist=d["require_artist"],
-                   max_queue_length=d["max_queue_length"], banned_users=frozenset(d["banned_users"]))
+        """Tolerant of fields an older report carries and this policy no longer has (the replay re-reads
+        every stored report, and the oldest of them predate half of these fields)."""
+        known = {f.name for f in fields(cls)}
+        kw = {k: v for k, v in d.items() if k in known}
+        kw["lossless_extensions"] = frozenset(kw.get("lossless_extensions", LOSSLESS_EXTENSIONS))
+        kw["banned_users"] = frozenset(kw.get("banned_users", ()))
+        return cls(**kw)
 
 
 def transfer_ceiling_s(size: int, settings: Settings) -> float:
@@ -142,8 +147,7 @@ def transfer_ceiling_s(size: int, settings: Settings) -> float:
 
 
 def policy_from_settings(settings: Settings) -> PickPolicy:
-    return PickPolicy(duration_tolerance_s=settings.lossless_duration_tolerance_s, title_ratio=settings.lossless_title_ratio,
-                      require_artist=settings.lossless_require_artist, max_queue_length=settings.lossless_max_queue)
+    return PickPolicy(max_queue_length=settings.lossless_max_queue)
 
 
 Rule = Callable[[LosslessFile, Reference, PickPolicy], str | None]
@@ -167,46 +171,6 @@ def rule_plausible_size(f: LosslessFile, ref: Reference, p: PickPolicy) -> str |
     return None
 
 
-def rule_duration(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    known = ref.durations
-    if not known or f.length_s is None:
-        return None
-    if any(abs(f.length_s - d) <= p.duration_tolerance_s for d in known):
-        return None
-    return f"length {f.length_s} s vs {' or '.join(f'{d} s' for d in known)}"
-
-
-def rule_title(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    title, _ = file_title(f.name, ref.artist)
-    score = fuzz.token_set_ratio(norm(ref.title), title)
-    if score < p.title_ratio:
-        return f"title {title!r} scores {score:.0f} < {p.title_ratio}"
-    return None
-
-
-def rule_version(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    title, version = file_title(f.name, ref.artist)
-    extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
-    words = set(norm(version or "").split()) | set(extra)
-    if ref.is_original:
-        hit = words & VERSION_WORDS
-        if hit and "original" not in words:
-            return f"looks like a version ({' '.join(sorted(hit))}) but the reference is the original"
-        return None
-    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
-    have = set(norm(f"{version or ''} {title}").split())
-    missing = [w for w in want if w not in have]
-    if missing:
-        return f"version words {missing} missing for {ref.mix_name!r}"
-    return None
-
-
-def rule_artist(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    if p.require_artist and norm(first_artist(ref.artist)) not in norm(f.path):
-        return "artist not in path"
-    return None
-
-
 def rule_queue(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
     if p.max_queue_length is not None and f.queue_length > p.max_queue_length:
         return f"queue {f.queue_length} > {p.max_queue_length}"
@@ -217,19 +181,68 @@ def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | No
     return "banned user" if f.username in p.banned_users else None
 
 
-RULES: list[tuple[str, Rule]] = [
+Ranker = Callable[[LosslessFile, Reference], object]
+DURATION_BUCKET_S = 5          # encoding slack between releases of one recording; inside it, peer quality decides
+
+
+def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
+    """Does the file's name claim the version the reference is? Until #69 this was a rejection; a file that
+    names the wrong mix is now merely the last thing to try, because only the fingerprint can settle it."""
+    title, version = file_title(f.name, ref.artist)
+    extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
+    words = set(norm(version or "").split()) | set(extra)
+    if ref.is_original:
+        return not (words & VERSION_WORDS) or "original" in words
+    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
+    have = set(norm(f"{version or ''} {title}").split())
+    return all(w in have for w in want)
+
+
+def rank_version(f: LosslessFile, ref: Reference) -> int:
+    return 0 if _version_agrees(f, ref) else 1
+
+
+def rank_duration(f: LosslessFile, ref: Reference) -> int:
+    """Distance to the nearest length the recording is known by, in buckets. Length is not identity (a
+    626 s file was the 392 s video's recording, and two wrong files sat within 2 s of theirs), so it orders
+    what to try first and the fingerprint decides (issue #69)."""
+    known = ref.durations
+    if not known or f.length_s is None:
+        return 10_000
+    return min(abs(f.length_s - d) for d in known) // DURATION_BUCKET_S
+
+
+def rank_title(f: LosslessFile, ref: Reference) -> int:
+    title, _ = file_title(f.name, ref.artist)
+    return -(int(fuzz.token_set_ratio(norm(ref.title), title)) // 10)
+
+
+def rank_artist(f: LosslessFile, ref: Reference) -> int:
+    return 0 if norm(first_artist(ref.artist)) in norm(f.path) else 1
+
+
+# Spec §5: the hard rules reject only what can never satisfy the goal, and everything about identity ranks
+# survivors instead. `flackey replay-picks` measured this order against the 216 stored no-pick reports
+# (docs/research/2026-09-21-no-pick-replay.md) before it became the live default.
+HARD_RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
-    ("duration", rule_duration), ("title", rule_title), ("version", rule_version), ("artist", rule_artist),
     ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
-
-RANKERS: list[tuple[str, Callable[[LosslessFile], object]]] = [
-    ("free_slot", lambda f: not f.has_free_slot),
-    ("bit_depth", lambda f: {16: 0, 24: 1}.get(f.bit_depth or 0, 2)),   # CD master first; unknown last
-    ("queue_length", lambda f: f.queue_length),
-    ("upload_speed", lambda f: -f.upload_speed_bps),
-    ("size", lambda f: f.size),
+IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
+    ("version", rank_version), ("duration", rank_duration), ("title", rank_title), ("artist", rank_artist),
 ]
+PEER_RANKERS: list[tuple[str, Ranker]] = [
+    ("free_slot", lambda f, ref: not f.has_free_slot),
+    ("bit_depth", lambda f, ref: {16: 0, 24: 1}.get(f.bit_depth or 0, 2)),   # CD master first; unknown last
+    ("queue_length", lambda f, ref: f.queue_length),
+    ("upload_speed", lambda f, ref: -f.upload_speed_bps),
+    ("size", lambda f, ref: f.size),
+]
+
+# What `pick` uses unless a caller says otherwise. Both are bound as `pick`'s defaults below, so they must
+# stay above it: identity orders the survivors, then the peer's ability to actually send the file.
+RULES: list[tuple[str, Rule]] = HARD_RULES
+RANKERS: list[tuple[str, Ranker]] = IDENTITY_RANKERS + PEER_RANKERS
 
 
 @dataclass
@@ -264,7 +277,7 @@ class PickReport:
 
 
 def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
-         rules: list[tuple[str, Rule]] = RULES, rankers=RANKERS) -> PickReport:
+         rules: list[tuple[str, Rule]] = RULES, rankers: list[tuple[str, Ranker]] = RANKERS) -> PickReport:
     report = PickReport(reference=ref, policy=policy, seen=len(files))
     for f in files:
         for name, rule in rules:
@@ -274,7 +287,7 @@ def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
                 break
         else:
             report.survivors.append(f)
-    report.survivors.sort(key=lambda f: tuple(fn(f) for _, fn in rankers))
+    report.survivors.sort(key=lambda f: tuple(fn(f, ref) for _, fn in rankers))
     report.chosen = report.survivors[0] if report.survivors else None
     counts = Counter(r.rule for r in report.rejections)
     parts = [f"{n} {rule}" for rule, n in counts.most_common()]

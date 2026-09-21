@@ -83,6 +83,25 @@ def test_candidates_roundtrip(store: Store):
     assert store.get_candidate(2).source_ref == "dz_track:2:send"
 
 
+def test_a_second_search_replaces_the_candidates_but_keeps_the_chosen_one(store: Store):
+    """The list is the current search's answer, not a log of every pass -- since issue #69 a request with
+    no chosen record goes to Soulseek and comes back round the retry ladder, so it is written more than
+    once. The row the request points at is the exception: no foreign key protects it, and `upgrade()`,
+    the sweep and the request page all dereference `chosen_candidate_id`."""
+    def cand(ref: str, rank: int) -> Candidate:
+        return Candidate(source="deezer_bot", source_ref=ref, artist="A", title="T", rank=rank)
+
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [cand("dz:1", 1), cand("dz:2", 2)])
+    [kept] = store.add_candidates(rid, [cand("dz:3", 1)])
+    assert [c.source_ref for c in store.get_candidates(rid)] == ["dz:3"]
+
+    store.update_request(rid, chosen_candidate_id=kept.id)
+    store.add_candidates(rid, [cand("dz:4", 1), cand("dz:5", 2)])
+    assert sorted(c.source_ref for c in store.get_candidates(rid)) == ["dz:3", "dz:4", "dz:5"]
+    assert store.get_candidate(kept.id).source_ref == "dz:3"      # never stranded the pointer
+
+
 def test_catalog_upsert(store: Store):
     ct = _catalog()
     store.upsert_catalog_track(ct)
@@ -124,9 +143,16 @@ def test_rejections_and_stats(store: Store, tmp_path: Path):
     rid = store.add_request("q", RequestKind.TEXT)
     rj = store.add_rejection(rid, "cutoff 16000 Hz below 18000", 320, 16000, tmp_path / "s.png")
     assert store.get_rejection(rj).reason.startswith("cutoff")
-    assert len(store.list_rejections()) == 1
+    # The spectral check is what a rejection used to mean, and still what one means when nobody says
+    # otherwise -- rows written before the column existed read the same way.
+    assert store.get_rejection(rj).kind == "quality"
+    other = store.add_rejection(rid, "a different recording: best score 0.61 below 0.79", 320, None, None,
+                                kind="different_recording")
+    assert store.get_rejection(other).kind == "different_recording"
+    assert store.get_rejection(other).cutoff_hz is None
+    assert len(store.list_rejections()) == 2
     s = store.stats()
-    assert s["rejections"] == 1 and s["tracks"] == 0
+    assert s["rejections"] == 2 and s["tracks"] == 0
     assert s["requests_by_state"]["queued"] == 1
 
 
@@ -281,3 +307,40 @@ def test_a_request_parked_before_the_column_existed_still_earns_its_choose_rung(
     store.conn.close()
 
     assert Store(path).get_request(rid).reviewed
+
+
+def test_request_reference_is_kept_beside_the_request(tmp_path):
+    """Its own table, not a column on `requests`: a full fingerprint is ~50 KB and `list_requests` feeds
+    the UI. Written once and reused by every retry, the lossy fallback and the library sweep."""
+    store = Store(tmp_path / "t.sqlite")
+    rid = store.add_request("x", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=a")
+    assert store.get_reference(rid) is None
+    ref = {"kind": "youtube", "ref": "a", "needles": [[1]], "full": [1, 2], "excerpt_start_s": 0, "excerpt_s": 30}
+    store.set_reference(rid, ref)
+    assert store.get_reference(rid) == ref
+    store.set_reference(rid, {**ref, "ref": "b"})
+    assert store.get_reference(rid)["ref"] == "b"
+    store.set_reference(rid, None)
+    assert store.get_reference(rid) is None
+
+
+def test_deleting_a_request_takes_its_acoustic_reference_with_it(store: Store):
+    """A reference is ~50 KB of fingerprint. `request_references` declares ON DELETE CASCADE, but SQLite
+    enforces foreign keys only with `PRAGMA foreign_keys = ON`, which this connection deliberately does not
+    set -- so the delete methods enumerate the table by hand, the same way they do candidates, rejections
+    and attempts. Without that, every request the owner deleted left its reference behind for ever."""
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_reference(rid, {"duration_s": 300.0, "fp": [1, 2, 3]})
+    store.set_state(rid, RequestState.REJECTED)
+    kept = store.add_request("keep", RequestKind.TEXT)
+    store.set_reference(kept, {"duration_s": 200.0, "fp": [4]})
+    store.delete_request(rid)
+    assert store.get_reference(rid) is None
+    assert store.get_reference(kept) is not None            # only the deleted request's row goes
+
+    bulk = store.add_request("b", RequestKind.TEXT)
+    store.set_reference(bulk, {"duration_s": 100.0, "fp": [5]})
+    store.set_state(bulk, RequestState.ERROR)
+    assert store.delete_requests({RequestState.ERROR}) == [bulk]
+    assert store.get_reference(bulk) is None
+    assert store.get_reference(kept) is not None

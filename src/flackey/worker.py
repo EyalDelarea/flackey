@@ -19,7 +19,7 @@ from .catalog import CatalogUnavailable, best_match
 from .config import Settings
 from .convert import ConvertError, to_format
 from .export import write_playlist
-from .fingerprint import FPS, FingerprintResult
+from .fingerprint import FPS, AcousticReference, FingerprintError, FingerprintResult
 from .fingerprint import check as fingerprint_check
 from .identify import parse_text
 from .library import file_track, final_path, find_duplicate, prune_missing_tracks
@@ -39,12 +39,15 @@ from .models import (
     CatalogTrack,
     Query,
     Request,
+    RequestKind,
     RequestState,
     Track,
     Verdict,
+    norm,
     source_label,
 )
 from .notify import Button, Notifier
+from .reference import Identification, deezer_reference, identify_record, youtube_reference
 from .source import (
     LosslessError,
     LosslessProvider,
@@ -58,6 +61,7 @@ from .source import (
 from .store import Store
 from .tag import fetch_artwork, write_tags
 from .verify import VerifyError, probe, verify
+from .youtube import YouTubeError
 
 log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -92,12 +96,29 @@ SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # already handles, and no_pick, which is about the search rather than any peer.
 SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
                      "transfer_timeout"}
+# After these, the next spelling gets a search of its own (issue #69). Both say this spelling found nothing
+# that is the recording; neither says anything about the other spellings. Everything else is either a fact
+# about the provider (unavailable, interrupted) or a fact that holds for every spelling alike
+# (fingerprint_unavailable: there is no reference to check against), so typing different words changes
+# nothing and the request stops here.
+SECOND_SEARCH_AFTER = {"no_pick", "fingerprint_failed"}
 # A Soulseek queue moves in minutes to hours, so the 30 s/120 s ladder would ask again before anything could
 # possibly have changed. Long enough to be a real second look, short enough that the row is not abandoned.
 SLOW_BACKOFF_S = 900
 # Outcomes whose answer can only change on the timescale of a Soulseek queue moving or the people online
 # turning over. The 30 s/120 s ladder would ask again long before either could happen.
 SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
+# Outcomes whose answer changes only as the people online turn over. Soulseek is a population, not a
+# library: the search for "Space Dwarfs" found nothing at 11:40 on 2026-09-10 and two copies at 14:51.
+# After the quick ladder (RETRY_BACKOFF_S) a request that ended in one of these waits LONG_RETRY_EVERY_S in
+# `queued` and looks again, LONG_RETRY_TIMES times, before it parks in `error`. `fingerprint_failed` is
+# here although it is a verdict: every copy offered was a different recording, which says nothing about
+# the copies tomorrow's peers will offer. Not here: a missing reference or nothing to search for, which no
+# amount of waiting changes.
+LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "first_byte_timeout",
+                       "transfer_timeout", "queued", "unavailable", "interrupted"}
+LONG_RETRY_EVERY_S = 6 * 3600
+LONG_RETRY_TIMES = 12            # 3 days at 6 h
 MAINTENANCE_EVERY_S = 86_400
 LOSSLESS_HEALTH_EVERY_S = 60        # once the provider answers "ok"
 LOSSLESS_HEALTH_SETTLING_S = 5      # while it is still connecting, or has gone away
@@ -114,11 +135,12 @@ def _mmss(seconds: int | None) -> str:
 
 
 CATALOG_SOURCE = "beatport"
-# Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
-# was not met is visible on the row rather than buried in the attempt's JSON.
-NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
-                       "fingerprinted -- only the spectral check ran")
-
+QUERY_SOURCE = "query"      # a candidate built from the request itself; see query_candidate
+# Exactly what `fingerprint.check` used to swallow on its own, now that the fetch happens here instead:
+# a missing reference is a "skipped" check, never a crashed request. fpcalc handing back unparseable JSON
+# raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
+# owner why" -- without this they would reach the API as a 409 or a 500 on a button that used to answer.
+REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
 
 def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     """A stand-in for the Deezer candidate, built from the Beatport record -- the mirror of
@@ -130,14 +152,25 @@ def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     title, mix name and duration from the catalog whenever one is present, so every pick rule already runs
     on Beatport data rather than on anything a peer said.
 
-    `deezer_id` stays None, and that is the real cost: `fingerprint.check` returns "skipped" rather than
-    running, so identity rests on the duration, title and version rules plus the spectral verify. Callers
-    must set `NO_FINGERPRINT_FLAG` on the request. It is never persisted as a candidate row -- a retry
-    re-matches Beatport, which is cheap, instead of resuming from a candidate the source never offered.
+    `deezer_id` stays None. Since issue #67 the fingerprint's reference is the request's own video, so a
+    Beatport stand-in is checked acoustically like any other candidate; without a video or a Deezer id the
+    attempt ends `fingerprint_unavailable` rather than filing on the match alone. It is never persisted as
+    a candidate row -- a retry re-matches Beatport, which is cheap, instead of resuming from a candidate
+    the source never offered.
     """
     return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
                      artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
                      duration_s=catalog.duration_s, isrc=catalog.isrc)
+
+
+def query_candidate(query: Query, request_id: int) -> Candidate:
+    """What the owner asked for, as a candidate: the parsed artist, title and version plus the video's length.
+    Built when no record was chosen (issue #69). `lossless.reference_for` takes the search text from it and
+    `_fallback_catalog` the tags; the only thing that vouches for the file is the fingerprint against the
+    request's own audio, which is exactly the check that never depended on either catalogue. Never
+    persisted: a retry rebuilds it from the row's query columns."""
+    return Candidate(source=QUERY_SOURCE, source_ref=f"{QUERY_SOURCE}:{request_id}", artist=query.artist or "",
+                     title=query.title or "", mix_name=query.version or "Original Mix", duration_s=query.duration_s)
 
 
 def _fallback_catalog(cand: Candidate) -> CatalogTrack:
@@ -149,6 +182,13 @@ def _fallback_catalog(cand: Candidate) -> CatalogTrack:
 
 
 @dataclass
+class Acoustic:
+    """What the fingerprint compares a download against, or why there is nothing to compare against."""
+    reference: AcousticReference | None
+    missing: str = ""
+
+
+@dataclass
 class LosslessHit:
     path: Path                 # converted file in tmp_dir; to_format always rebuilds (flac included), so
                                # this is never `src` -- the only temp file left
@@ -157,6 +197,8 @@ class LosslessHit:
     provider: str
     source_fmt: str
     attempt_id: int
+    reference: Reference     # the spelling that actually found this file; `from_query` says whose words
+                             # they were, which is what decides the tags when no record was chosen
 
 
 def format_line(verdict: Verdict, source: str, source_fmt: str | None) -> str:
@@ -434,7 +476,9 @@ class Worker:
         self._set_state(req, RequestState.QUEUED, flag_reason=None)
 
     async def _retry_or_fail(self, req: Request, reason: str, *, flag: str | None = None,
-                             wait_s: int | None = None) -> None:
+                             wait_s: int | None = None, long_after: str | None = None) -> None:
+        """The quick ladder (RETRY_BACKOFF_S) while attempts < MAX_ATTEMPTS, then `error` -- or, when
+        `long_after` names why the answer may change, the long wait for Soulseek first."""
         attempts = req.attempts + 1
         if attempts < MAX_ATTEMPTS:
             wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1] if wait_s is None else wait_s
@@ -442,9 +486,33 @@ class Worker:
             self._set_state(req, RequestState.QUEUED, attempts=attempts, flag_reason=flag or reason,
                             retry_after=retry_after)
             await self.notifier.send(f"Attempt {attempts} failed for {req.raw_text}: {reason}\nRetrying in {wait} s.")
+        elif long_after:
+            await self._wait_for_soulseek(req, long_after, attempts)
         else:
             self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
             await self.notifier.send(f"Gave up after {attempts} attempts: {req.raw_text}\n{reason}")
+
+    async def _wait_for_soulseek(self, req: Request, why: str, attempts: int) -> None:
+        """Park the request in `queued` for LONG_RETRY_EVERY_S with `lossless_retry` granted, so the next
+        pass really searches whatever the last outcome was (`_lossless_allowed`); or in `error` once the
+        LONG_RETRY_TIMES looks are spent. Told to the owner once, when the quick ladder hands over; the row
+        shows the countdown and the reason meanwhile. `attempts` keeps counting past MAX_ATTEMPTS so the
+        budget survives a restart: it lives on the row, not in memory."""
+        hours = LONG_RETRY_EVERY_S // 3600
+        if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
+            reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
+                      f"Use Try again in the app to search once more")
+            self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
+            await self.notifier.send(f"Gave up: {req.raw_text}\n{reason}")
+            return
+        retry_after = (datetime.now(UTC) + timedelta(seconds=LONG_RETRY_EVERY_S)).isoformat(timespec="seconds")
+        left = MAX_ATTEMPTS + LONG_RETRY_TIMES - attempts
+        self._set_state(req, RequestState.QUEUED, attempts=attempts, retry_after=retry_after, lossless_retry=1,
+                        flag_reason=f"waiting for Soulseek: {why}; {left} more "
+                                    f"look{'' if left == 1 else 's'}, one every {hours} h")
+        if attempts <= MAX_ATTEMPTS:
+            await self.notifier.send(f"Waiting for Soulseek: {req.raw_text}\n{why}. Looking again every {hours} h "
+                                     f"for {LONG_RETRY_TIMES * hours // 24} days.")
 
     async def _catalog_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack | None:
         """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
@@ -487,21 +555,25 @@ class Worker:
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
 
             cands: list[Candidate] = []
+            # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
+            # different situations and the row used to say which, so it still does: a bot that is switched
+            # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
+            source_why = "the Deezer bot is switched off"
             if self.settings.source_enabled:
+                source_why = "no Deezer candidates"
                 try:
                     cands = await self.source.search(query)
                 except SourceUnauthorized:
                     raise  # handled in process(): subclass of SourceError, so it must be caught before it
-                except (SourceNotFound, SourceTimeout, SourceError) as e:
+                except SourceNotFound as e:
+                    # Not a verdict any more: the request's own words can still reach Soulseek below.
+                    source_why = f"the Deezer bot found nothing ({e})"
+                    log.info("req#%d not found at source: %s", req.id, e)
+                except (SourceTimeout, SourceError) as e:
                     if catalog is None:
-                        # Neither side identified the track. Without a Beatport record there is no reference
-                        # to search a lossless provider with, so this is as far as the request goes.
-                        if isinstance(e, SourceNotFound):
-                            log.info("req#%d not found at source: %s", req.id, e)
-                            self._set_state(req, RequestState.NOT_FOUND, error_message=str(e))
-                            await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
-                        else:
-                            await self._retry_or_fail(req, f"source error: {e}")
+                        # The source may be back in an hour and would offer a lossy fallback the query-only
+                        # path does not have; a retry is worth more than a Soulseek-or-nothing pass now.
+                        await self._retry_or_fail(req, f"source error: {e}")
                         return
                     # Beatport knows the track, so the request is still actionable: fall through to the
                     # catalog-only path rather than retrying a source that may be down for hours.
@@ -509,55 +581,71 @@ class Worker:
                              "Beatport match alone", req.id, e)
 
             if not cands:
-                # Either the source is switched off, or it failed with a Beatport match already in hand.
-                # `catalog_candidate` explains what this costs; the short version is that the pick rules
-                # still run entirely on Beatport data and only the fingerprint is lost.
-                if catalog is None:
-                    # Nothing identified the track: the source offered nothing and Beatport has no match.
-                    # Terminal, not a retry -- both halves are the same on the next pass, so backing off
-                    # and asking again only delays the same answer. This is where `decide` used to land a
-                    # request with an empty candidate list, and it keeps landing there.
-                    why = ("no match on Beatport, and the Deezer bot is switched off"
-                           if not self.settings.source_enabled else
-                           "neither Deezer nor Beatport has a match for it")
-                    self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}")
-                    await self.notifier.send(f"Could not identify: {req.raw_text}")
+                # Either the source is switched off, or it found nothing, or it failed with a Beatport
+                # match already in hand.
+                if catalog is not None:
+                    # `catalog_candidate` explains what this costs; the short version is that the pick
+                    # rules still run entirely on Beatport data, but a request with no video of its own
+                    # then has nothing to fingerprint against and the attempt ends `fingerprint_unavailable`.
+                    if not self._lossless_allowed(req):
+                        # Beatport knows the track, so it exists -- there is just no route to a file now.
+                        await self._no_route(req)
+                        return
+                    await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                     return
-                if not self._lossless_allowed(req):
-                    # Beatport knows the track, so it exists -- there is just no route to a file right now.
-                    await self._no_route(req)
-                    return
-                self.store.update_request(req.id, flag_reason=NO_FINGERPRINT_FLAG)
-                await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
+                await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
                 return
 
+            # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
+            # `decide` runs either way: it scores every candidate (the order the previews are tried in,
+            # and what the Choose window shows), and its verdict only counts without a video.
+            video, why = await self._video_reference(req)
+            if video is None and why.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+                # yt-dlp fails for a minute (429, a network blip) far more often than for good, and the
+                # video's audio is what identifies the record: a short wait beats choosing by text. After the
+                # ladder the pass goes on without it, so a removed video cannot block the request.
+                await self._retry_or_fail(req, f"could not fetch the video's audio: {why[7:]}",
+                                          flag="video audio unavailable, will retry")
+                return
             decision = decide(query, cands, catalog)
-            if decision.chosen and decision.chosen.isrc:
+            ident: Identification | None = None
+            if video is not None:
+                ordered = sorted(cands, key=lambda c: -(c.score or 0))
+                async with self._cpu:
+                    ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
+                                                  minimum=self.settings.lossless_fingerprint_min)
+                log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
+            chosen_obj = ident.chosen if ident is not None else decision.chosen
+            if chosen_obj is not None and chosen_obj.isrc:
                 # The source's recording ID disambiguates equally named Beatport releases. Never
                 # substitute a loosely matched release: require the normal search score first.
-                matched_catalog = best_match(query, catalog_tracks, decision.chosen.isrc)
+                matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
                 if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
                     catalog = matched_catalog
                     self.store.upsert_catalog_track(catalog)
                     self.store.update_request(req.id, catalog_track_id=catalog.id)
-                    decision = decide(query, cands, catalog)
+                    if ident is None:
+                        decision = decide(query, cands, catalog)
+                        chosen_obj = decision.chosen
             saved = self.store.add_candidates(req.id, cands)
-            self.store.update_request(req.id, confidence=decision.chosen.score if decision.chosen else None)
-            if decision.chosen is None:
-                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), decision.reason)
-                self._set_state(req, RequestState.NOT_FOUND, error_message=decision.reason)
-                await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
+            confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
+                          else (chosen_obj.score if chosen_obj else None))
+            self.store.update_request(req.id, confidence=confidence)
+            if chosen_obj is None:
+                reason = ident.reason if ident is not None else decision.reason
+                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
+                await self._search_on_the_request(req, query, catalog, reason)
                 return
-            # `decide` returns one of the objects in `cands`; match by identity, not by source_ref
+            # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
             # (the bot can list the same Deezer id twice)
-            chosen = saved[next(i for i, c in enumerate(cands) if c is decision.chosen)]
+            chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
 
             dup = find_duplicate(self.store, catalog, chosen)
             if dup:
                 await self._mark_duplicate(req, dup.id, dup.path)
                 return
 
-            if not decision.auto:
+            if ident is None and not decision.auto:
                 self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=decision.reason,
                                 chosen_candidate_id=chosen.id)
                 await self._ask_review(req, saved, decision.reason)
@@ -570,14 +658,22 @@ class Worker:
             except CatalogUnavailable as e:
                 await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
                 return
-            if catalog is None:
-                # the pinned edit/remix has no Beatport record: only the owner may file it on Deezer's word
-                reason = f"the {candidate_version(cand)} is not on Beatport; information cannot be verified"
-                self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=reason)
-                await self._ask_review(req, saved, reason)
-                return
 
         await self._fetch_verify_file(req, cand, catalog)
+
+    async def _search_on_the_request(self, req: Request, query: Query, catalog: CatalogTrack | None,
+                                     why: str) -> None:
+        """No record was chosen. Soulseek is the only network that has this library's music, and the
+        fingerprint is what proves the file; the owner's own words are enough to ask with (issue #69)."""
+        if not (query.artist and query.title):
+            self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}; "
+                            f"no artist and title could be read from the request, so there is nothing to search for")
+            await self.notifier.send(f"Could not identify: {req.raw_text}")
+            return
+        if not self._lossless_allowed(req):
+            await self._no_route(req)
+            return
+        await self._fetch_verify_file(req, query_candidate(query, req.id), catalog)
 
     async def _mark_duplicate(self, req: Request, track_id: int | None, path: Path) -> None:
         self._set_state(req, RequestState.DUPLICATE, track_id=track_id)
@@ -605,14 +701,40 @@ class Worker:
             await self._mark_duplicate(req, dup.id, dup.path)
             return
         self._set_state(req, RequestState.FETCHING)
+        # Once per request, before anything downloads: the reference is what every pick below, the lossy
+        # fallback and any later retry are checked against, and it does not change between them.
+        acoustic = await self._acoustic_reference(req, cand)
+        if acoustic.reference is None and acoustic.missing.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+            # The same quick ladder `_process` gives a request whose record is chosen by audio, for the route
+            # that has no record at all. Since issue #69 the catalogue-less path is how a track Beatport has
+            # never heard of gets filed, and on it the video is the *only* reference: a stand-in candidate has
+            # no Deezer preview to fall back on, so a yt-dlp blip used to end the request in `error` on its
+            # first pass -- after a real search and a download it then had nothing to check. Only a fetch that
+            # failed ("video: "), never audio that arrived unreadable, and only while the ladder has budget:
+            # after it the pass goes on and ends `fingerprint_unavailable` as before.
+            await self._retry_or_fail(req, f"could not fetch the video's audio: {acoustic.missing[7:]}",
+                                      flag="video audio unavailable, will retry")
+            return
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:
                 self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
-            hit = await self._try_lossless(req, cand, catalog)
-        if hit is None and cand.source == CATALOG_SOURCE:
-            # A Beatport stand-in has no source_ref the bot would recognise, so there is no Deezer copy to
-            # fall back to -- the providers were the only route and this pass produced no file.
+            hit = await self._try_lossless(req, cand, catalog, acoustic)
+        if (hit is not None and hit.reference.from_query and catalog is not None
+                and cand.source in (CATALOG_SOURCE, QUERY_SOURCE)):
+            # No record vouches for this file: Beatport's spelling found nothing the recording check
+            # accepted and the owner's own words did. The Beatport record is not this recording, so it must
+            # not name the file either. (With a chosen Deezer record the record's tags stand, which is why
+            # the stand-in candidates are the only sources this applies to.)
+            log.info("req#%d: filing on the request's words; the Beatport match was a different recording", req.id)
+            catalog = None
+            cand = query_candidate(req.query(), req.id)
+            self.store.update_request(req.id, catalog_track_id=None)
+        if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
+            # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
+            # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers
+            # were the only route and this pass produced no file. This returns before the fetch below,
+            # which is what spec §7's "no lossy fallback on that path" means in code.
             await self._no_route(req)
             return
         if hit is None:
@@ -636,7 +758,7 @@ class Worker:
         else:
             tmp = hit.path
         try:
-            await self._verify_and_file(req, cand, catalog, tmp, hit)
+            await self._verify_and_file(req, cand, catalog, tmp, hit, acoustic)
         finally:
             tmp.unlink(missing_ok=True)  # gone already when file_track moved it; garbage in every other outcome
             shutil.rmtree(self.settings.tmp_dir / f"req{req.id}", ignore_errors=True)  # spec §13: leave tmp_dir empty
@@ -663,13 +785,22 @@ class Worker:
             why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
         fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
-                    if not self.settings.source_enabled else "the source is unavailable for the lossy fallback")
+                    if not self.settings.source_enabled else "Deezer offered nothing to fall back on")
         reason = f"no way to fetch this track: {why}, {fallback}"
+        transient = outcome in LONG_RETRY_OUTCOMES
         if self._lossless_allowed(self.store.get_request(req.id)):
-            await self._retry_or_fail(req, reason,
-                                      wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None)
+            await self._retry_or_fail(req, reason, wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None,
+                                      long_after=why if transient else None)
             return
-        reason += ". Use Try again in the app to search once more"
+        if transient:
+            # A verdict the next minute would only repeat (every copy was a different recording, every peer
+            # refused): no quick ladder, straight to the wait for the people online to change.
+            await self._wait_for_soulseek(req, why, max(req.attempts + 1, MAX_ATTEMPTS))
+            return
+        # "Try again" is the right advice for a miss a later search could answer differently -- but not for
+        # one that cannot be checked at all: with no reference, the next search reaches the same dead end.
+        reason += (". Use Try again once it can be checked" if outcome == "fingerprint_unavailable"
+                   else ". Use Try again in the app to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
 
@@ -683,7 +814,7 @@ class Worker:
         return last is None or last.outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
 
     async def _verify_and_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
-                               hit: LosslessHit | None = None) -> None:
+                               hit: LosslessHit | None = None, acoustic: Acoustic | None = None) -> None:
         if hit is None:
             self._set_state(req, RequestState.VERIFYING)
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
@@ -698,8 +829,40 @@ class Worker:
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
                 await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{verdict.reason}")
                 return
+            # The lossy copy is checked against the same reference, at the same threshold, as a peer's
+            # file (spec §7). It used to be filed on the spectral check alone -- which says the audio is
+            # really 320 kbps, and nothing at all about it being the recording that was asked for. This is
+            # the last path that could file a track no fingerprint vouched for.
+            async with self._cpu:
+                fp = await fingerprint_check(tmp, acoustic.reference if acoustic else None,
+                                             minimum=self.settings.lossless_fingerprint_min,
+                                             missing=acoustic.missing if acoustic else "")
+            log.info("req#%d lossy copy fingerprint: %s %s", req.id, fp.status, fp.reason)
+            if fp.status == "failed":
+                reason = f"a different recording: {fp.reason}"
+                # No cutoff on this one. This branch is only reached with `verdict.passed` already true, so
+                # `verdict.cutoff_hz` here is a *healthy* number -- and the page turns any cutoff it is given
+                # into "it stops at N kHz, it was blown up from a smaller file", which would tell the owner a
+                # genuine 320 kbps file is a fake and quote a frequency that is fine as the proof. What this
+                # file failed is the fingerprint, so the row says so in `kind` and carries no spectral
+                # evidence it did not fail on. The spectrogram stays: it is a true picture of the audio, and
+                # the rejection row is the only handle `unlink_spectrogram` has for deleting the PNG later.
+                self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, None,
+                                         verdict.spectrogram_path, kind="different_recording")
+                self._set_state(req, RequestState.REJECTED)
+                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}")
+                return
+            if fp.status == "skipped":
+                # Nothing to check against, so nothing to file on, and nothing a retry would change on its
+                # own: the owner is told what is missing and the row waits for them (spec §6).
+                reason = (f"the recording could not be checked acoustically ({fp.reason}). "
+                          "Use Try again once it can be checked")
+                self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
+                await self.notifier.send(f"Could not verify: {req.raw_text}\n{reason}")
+                return
         else:
             verdict = hit.verdict                     # verified and fingerprinted inside the attempt
+            fp = hit.fingerprint
         source = hit.provider if hit else self.source.name
         source_fmt = hit.source_fmt if hit else None
 
@@ -724,8 +887,7 @@ class Worker:
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
-        if hit:
-            self._record_evidence(track_id, hit, cand)
+        self._record_evidence(track_id, fp, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
@@ -788,7 +950,8 @@ class Worker:
         cand = self.store.get_candidate(req.chosen_candidate_id)
         catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
 
-        hit = await self._try_lossless(req, cand, catalog)
+        acoustic = await self._acoustic_reference(req, cand)
+        hit = await self._try_lossless(req, cand, catalog, acoustic)
         if hit is None:
             miss = self._lossless_miss_line(req)
             return miss or "No lossless copy turned up this time."
@@ -825,7 +988,7 @@ class Worker:
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
             sample_rate=hit.verdict.sample_rate)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
-        self._record_evidence(t.id, hit, cand)
+        self._record_evidence(t.id, hit.fingerprint, hit)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:
@@ -838,12 +1001,15 @@ class Worker:
         await self.notifier.send(f"Upgraded: {catalog.artist} - {catalog.title} - {line}")
         return f"Upgraded to {line}."
 
-    def _record_evidence(self, track_id: int, hit: LosslessHit, cand: Candidate) -> None:
-        fp = hit.fingerprint
-        self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
-                                                     "attempt_id": hit.attempt_id})
+    def _record_evidence(self, track_id: int, fp: FingerprintResult, hit: LosslessHit | None) -> None:
+        """What the filed file was checked against. `source` names the peer and the attempt behind it, so
+        it only exists for a lossless hit; the recording check is recorded for the lossy copy too, because
+        since issue #68 that copy is fingerprinted as well and the owner should be able to see it."""
+        if hit is not None:
+            self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
+                                                         "attempt_id": hit.attempt_id})
         self.store.add_evidence(track_id, "recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
-                                                              "reference": f"deezer:{cand.deezer_id}", "reason": fp.reason})
+                                                              "reference": fp.reference, "reason": fp.reason})
         if fp.track:
             self.store.add_evidence(track_id, "fingerprint", {"frames": fp.track, "fps": FPS})
 
@@ -866,44 +1032,135 @@ class Worker:
             self._progress[request_id] = position
         self.status["fetch_progress"] = list(self._progress.values())
 
-    # ---- lossless ---------------------------------------------------------
-    async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> LosslessHit | None:
-        """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
-        every miss is an attempt row with an outcome (spec §5, §11)."""
+    # ---- the acoustic reference ------------------------------------------
+    async def _video_reference(self, req: Request) -> tuple[AcousticReference | None, str]:
+        """The video's own audio as the reference (issue #67), stored once found, or None and the reason.
+        Playlist entries are YT_TRACK rows with their own source_url, so they qualify too."""
+        stored = self.store.get_reference(req.id)
+        if stored and stored["kind"] == "youtube":
+            return AcousticReference.from_dict(stored), ""
+        if req.kind != RequestKind.YT_TRACK or not req.source_url:
+            return None, "not a YouTube request"
         try:
-            ref = reference_for(catalog, cand, req.query_duration_s)
-            query = search_text(ref)
+            async with self._cpu:
+                ref = await youtube_reference(req.source_url, self.settings.tmp_dir / f"req{req.id}",
+                                              duration_s=req.query_duration_s)
+        except YouTubeError as e:
+            # Transient until proven otherwise: yt-dlp fails for a minute (429, a network blip) far more
+            # often than for good, and `_process` puts the request on the quick ladder for it.
+            log.warning("req#%d: no video reference: %s", req.id, e)
+            return None, f"video: {e or type(e).__name__}"
+        except REFERENCE_ERRORS as e:
+            # The audio came and could not be read (ffmpeg, fpcalc, a broken file): no retry -- the next
+            # pass would hand the same bytes to the same tools.
+            log.warning("req#%d: video audio unreadable: %s", req.id, e)
+            return None, f"video audio: {e or type(e).__name__}"
+        self.store.set_reference(req.id, ref.to_dict())
+        return ref, ""
+
+    async def _acoustic_reference(self, req: Request, cand: Candidate) -> Acoustic:
+        """The request's own video when there is one, else the candidate's Deezer preview. Fetched once and
+        kept beside the request: every pick, the lossy fallback, a retry and the library sweep reuse it.
+        A failure to get one is a fact about this request, worded for the attempt row and the owner."""
+        stored = self.store.get_reference(req.id)
+        if stored:
+            return Acoustic(AcousticReference.from_dict(stored))
+        ref, why = await self._video_reference(req)
+        reasons = [why] if ref is None and why else []
+        if ref is None and cand.deezer_id:
+            try:
+                async with self._cpu:
+                    ref = await deezer_reference(cand.deezer_id, self.http, self.settings.tmp_dir)
+            except REFERENCE_ERRORS as e:
+                reasons.append(f"deezer preview: {e or type(e).__name__}")
+        if ref is None:
+            return Acoustic(None, "; ".join(reasons) or "no video and no Deezer id to fingerprint against")
+        self.store.set_reference(req.id, ref.to_dict())
+        return Acoustic(ref)
+
+    # ---- lossless ---------------------------------------------------------
+    def _reference(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> Reference:
+        """`from_query` says the words in this reference are the request's own. That is a fact about where
+        `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
+        match still searches and tags from the record, because the catalog wins inside `reference_for`."""
+        ref = reference_for(catalog, cand, req.query_duration_s)
+        return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
+
+    def _search_references(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> list[Reference]:
+        """What to type into the network, in order: Beatport's spelling (clean, and for a channel-name artist
+        such as `ShpongleMusic` the only text that finds anything), then the chosen record's, then the
+        request's own words -- each only when its tokens differ from what came before. A wrong Beatport
+        record redirects the first search to a different track (`Power Of Celtic` was searched as `The Power
+        Of The Dark Side`); the fingerprint rejecting that search is what lets the next spelling run.
+
+        Every reference keeps `_reference`'s meaning of `from_query` -- these words are the request's own --
+        so whichever one comes back attached to the hit says where the tags belong."""
+        refs: list[Reference] = []
+        if catalog is not None:
+            refs.append(self._reference(req, catalog_candidate(catalog), catalog))
+        if cand.source not in (CATALOG_SOURCE, QUERY_SOURCE):
+            refs.append(self._reference(req, cand, catalog))
+        query = req.query()
+        if query.artist and query.title:
+            refs.append(self._reference(req, query_candidate(query, req.id), None))
+        seen: list[set[str]] = []
+        out: list[Reference] = []
+        for ref in refs:
+            tokens = set(norm(search_text(ref)).split())
+            if tokens in seen:
+                continue
+            seen.append(tokens)
+            out.append(ref)
+        # A bare-artist request on the catalog-less path leaves `refs` empty; the candidate that got this
+        # far is still worth one search, which is exactly what ran before the sequence existed.
+        return out or [self._reference(req, cand, catalog)]
+
+    async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
+                            acoustic: Acoustic) -> LosslessHit | None:
+        """Ask each provider in turn for a verified, fingerprinted, converted lossless file, one spelling at
+        a time. Never raises; every miss is an attempt row with an outcome (spec §5, §11)."""
+        try:
+            refs = self._search_references(req, cand, catalog)
             policy = policy_from_settings(self.settings)
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
             log.exception("req#%d could not build a lossless reference/policy", req.id)
             return None
-        for provider in self.providers:
-            rec = None
-            try:
-                rec = AttemptRecorder(self.store, self.settings.lossless_raw_dir, req.id, provider.name, query,
-                                      clock=self.clock)
-                self.store.update_request(req.id, fetch_source=provider.name)
-                hit = await self._attempt(provider, rec, req, ref, policy)
-            except Exception as e:  # the worker must survive any bug in the lossless path
-                log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
+        for ref in refs:
+            query = search_text(ref)
+            outcome: str | None = None
+            for provider in self.providers:
+                rec = None
+                try:
+                    rec = AttemptRecorder(self.store, self.settings.lossless_raw_dir, req.id, provider.name,
+                                          query, clock=self.clock)
+                    self.store.update_request(req.id, fetch_source=provider.name)
+                    hit = await self._attempt(provider, rec, req, ref, policy, acoustic)
+                except Exception as e:  # the worker must survive any bug in the lossless path
+                    log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
+                    if rec is not None:
+                        try:
+                            rec.event("error", type=type(e).__name__, message=str(e)[:300])
+                            rec.finish("transfer_failed")
+                        except Exception:  # the recovery write can fail too; the row may stay NULL, we still fall back
+                            log.exception("req#%d could not record the failed lossless attempt", req.id)
+                    hit = None
+                finally:
+                    # However this attempt ended, the bar it was driving is over. Leaving the last position
+                    # published would strand a full-looking bar on a row that has moved on. Only this
+                    # request's bar: the other tracks are still downloading.
+                    self._publish_progress(req.id, None)
+                if hit is not None:
+                    return hit
                 if rec is not None:
-                    try:
-                        rec.event("error", type=type(e).__name__, message=str(e)[:300])
-                        rec.finish("transfer_failed")
-                    except Exception:  # the recovery write can fail too; the row may stay NULL, we still fall back
-                        log.exception("req#%d could not record the failed lossless attempt", req.id)
-                hit = None
-            finally:
-                # However this attempt ended, the bar it was driving is over. Leaving the last position
-                # published would strand a full-looking bar on a row that has moved on. Only this
-                # request's bar: the other tracks are still downloading.
-                self._publish_progress(req.id, None)
-            if hit is not None:
-                return hit
+                    outcome = self.store.get_attempt(rec.id).outcome
+            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's,
+            # which is the one `_no_route` and `_lossless_miss_line` will read back.
+            if outcome not in SECOND_SEARCH_AFTER:
+                break
         return None
 
     async def _attempt(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                       policy) -> LosslessHit | None:
+                       policy, acoustic: Acoustic) -> LosslessHit | None:
         s = self.settings
         health = await provider.health()
         self.status["lossless_provider"] = {"name": provider.name, **health}
@@ -934,7 +1191,7 @@ class Worker:
             if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n)
+            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
             if hit is not None:
                 try:
                     rec.finish("filed")
@@ -948,7 +1205,7 @@ class Worker:
         return None
 
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                                  file, n: int) -> tuple[LosslessHit | None, str]:
+                                  file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
@@ -987,13 +1244,13 @@ class Worker:
             rec.event("move_failed", error=str(e))
             landed.unlink(missing_ok=True)
             return None, "transfer_failed"
-        hit, outcome = await self._check_and_convert(rec, req, ref, file, tmp)
+        hit, outcome = await self._check_and_convert(rec, req, ref, file, tmp, acoustic)
         if hit is None:
             tmp.unlink(missing_ok=True)
         return hit, outcome
 
     async def _check_and_convert(self, rec: AttemptRecorder, req: Request, ref: Reference, file,
-                                 tmp: Path) -> tuple[LosslessHit | None, str]:
+                                 tmp: Path, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
         self._publish_phase(req.id, "verifying")
         try:
@@ -1009,13 +1266,17 @@ class Worker:
             return None, "verify_failed"
         self._publish_phase(req.id, "fingerprinting")
         async with self._cpu:   # fpcalc decodes the whole file; it belongs with the other ffmpeg work
-            fp = await fingerprint_check(tmp, ref.deezer_id, self.http, minimum=s.lossless_fingerprint_min,
-                                         tmp_dir=s.tmp_dir)
+            fp = await fingerprint_check(tmp, acoustic.reference, minimum=s.lossless_fingerprint_min,
+                                         missing=acoustic.missing)
         rec.raw("fingerprint", {"preview": fp.preview, "track": fp.track})
         self.store.update_attempt(rec.id, fingerprint=fp.to_dict())
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
         if fp.status == "failed":
             return None, "fingerprint_failed"
+        if fp.status == "skipped":
+            # Nothing acoustic vouched for the file. Not a fact about this peer, so not SECOND_PICK_AFTER:
+            # the reference is missing for every survivor alike (issue #68).
+            return None, "fingerprint_unavailable"
         self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None
@@ -1037,4 +1298,4 @@ class Worker:
                 out.unlink(missing_ok=True)
             return None, "convert_failed"
         rec.event("convert", fmt=verdict.fmt, ms=int((self.clock() - t0) * 1000))
-        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id), "filed"
+        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref), "filed"
