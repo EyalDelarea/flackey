@@ -5,12 +5,15 @@ import './theme.css'
 import { api } from './api'
 import type { AppSettings, Health, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
 
+// The 'choose' scenario needs this instance after construction, to fire the 'queue' event by hand once a
+// candidate is chosen -- there is no real server here to push it.
+let lastEventSource: FakeEventSource | null = null
 class FakeEventSource {
   onopen: (() => void) | null = null
   handlers: Record<string, (e: { data: string }) => void> = {}
   addEventListener(name: string, fn: (e: { data: string }) => void) { this.handlers[name] = fn }
   close() { /* no-op */ }
-  constructor(_url: string) { /* no-op */ }
+  constructor(_url: string) { lastEventSource = this }
 }
 ;(window as any).EventSource = FakeEventSource
 
@@ -81,9 +84,9 @@ const failures: Bundle[] = [
    what the sample buttons are for. Two rows, because the page holds one player for all of them and
    starting a sample in one row stops the one running in the other -- a thing only a screenshot shows. */
 const cand = (id: number, artist: string, title: string, mix: string, duration_s: number, score: number,
-              onBeatport: boolean): Candidate => ({
+              onBeatport: boolean, hasPreview = true): Candidate => ({
   id, request_id: 0, source: 'deezer', source_ref: String(id), artist, title, mix_name: mix, duration_s,
-  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: onBeatport ? id : null,
+  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: onBeatport ? id : null, has_preview: hasPreview,
 })
 const choice = (id: number, over: Partial<Request>, candidates: Candidate[]): Bundle => ({
   request: {
@@ -102,7 +105,9 @@ const choices: Bundle[] = [
     query_duration_s: 489, flag_reason: 'three versions matched and none of them won outright' }, [
     cand(1, 'Vibrasphere', 'Landmark', 'Original Mix', 412, 91, true),
     cand(2, 'Vibrasphere', 'Landmark', 'Extended Mix', 487, 88, true),
-    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false),
+    // No sample available for this one: `has_preview: false` means no control renders at all -- the
+    // state the no-sample screenshot exists to prove.
+    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false, false),
   ]),
   /* Two candidates in the second row, not three: at the window's own 1100x720 both rows then stand in one
      frame, which is the only way a screenshot shows a sample starting here stopping the one above. */
@@ -174,6 +179,16 @@ function scenarioSetup() {
     case 'choose':
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
+      // There is no server here to push the 'queue' SSE event a real choose triggers, so this stands in
+      // for it: mutate the bundle in place, then fire the event by hand so the page re-fetches `queue()`
+      // and re-renders with the chosen ring -- needed only to screenshot the chosen state on a card that
+      // is not also playing.
+      vi_spy(api, 'choose', async (rid: number, cid: number) => {
+        const b = choices.find(b => b.request.id === rid)
+        if (b) b.request.chosen_candidate_id = cid
+        lastEventSource?.handlers['queue']?.({ data: '' })
+        return b?.request
+      })
       // Nothing is serving /api/candidates/{id}/preview here, so every press would take a 404 and the
       // element would fire `error` -- a screenshot of the playing card showing none of the playing card.
       // So the whole clip is faked for this scenario only: `src` goes nowhere, `play` resolves, and a
