@@ -83,6 +83,25 @@ def test_candidates_roundtrip(store: Store):
     assert store.get_candidate(2).source_ref == "dz_track:2:send"
 
 
+def test_a_second_search_replaces_the_candidates_but_keeps_the_chosen_one(store: Store):
+    """The list is the current search's answer, not a log of every pass -- since issue #69 a request with
+    no chosen record goes to Soulseek and comes back round the retry ladder, so it is written more than
+    once. The row the request points at is the exception: no foreign key protects it, and `upgrade()`,
+    the sweep and the request page all dereference `chosen_candidate_id`."""
+    def cand(ref: str, rank: int) -> Candidate:
+        return Candidate(source="deezer_bot", source_ref=ref, artist="A", title="T", rank=rank)
+
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [cand("dz:1", 1), cand("dz:2", 2)])
+    [kept] = store.add_candidates(rid, [cand("dz:3", 1)])
+    assert [c.source_ref for c in store.get_candidates(rid)] == ["dz:3"]
+
+    store.update_request(rid, chosen_candidate_id=kept.id)
+    store.add_candidates(rid, [cand("dz:4", 1), cand("dz:5", 2)])
+    assert sorted(c.source_ref for c in store.get_candidates(rid)) == ["dz:3", "dz:4", "dz:5"]
+    assert store.get_candidate(kept.id).source_ref == "dz:3"      # never stranded the pointer
+
+
 def test_catalog_upsert(store: Store):
     ct = _catalog()
     store.upsert_catalog_track(ct)
