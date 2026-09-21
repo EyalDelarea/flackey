@@ -79,11 +79,13 @@ def test_best_match_uses_raw_text_when_unstructured(tracks):
 def test_best_match_word_boundary_excludes_aboriginal_mix():
     # "Aboriginal Mix" must not be treated as an original mix just because it contains "original":
     # an exact-title match tagged "Aboriginal Mix" should lose the no-version-requested original-mix
-    # bonus and fall behind a genuine (if less exact) "Original Mix" match.
+    # bonus and fall behind a genuine (if less exact) "Original Mix" match. The less exact title has to
+    # stay above TITLE_FLOOR (#63) -- a record whose title disagrees outright is now refused outright,
+    # so "Into Nowhere" would never reach the comparison this test is about.
     q = Query(raw="", artist="Astral Projection", title="Into the Void")
     aboriginal = CatalogTrack(id=1, artist="Astral Projection", title="Into the Void",
                                mix_name="Aboriginal Mix", label="L", genre="G")
-    genuine_original = CatalogTrack(id=2, artist="Astral Projection", title="Into Nowhere",
+    genuine_original = CatalogTrack(id=2, artist="Astral Projection", title="Into the Voids",
                                      mix_name="Original Mix", label="L", genre="G")
     m = best_match(q, [aboriginal, genuine_original])
     assert m.id == 2
@@ -166,3 +168,29 @@ def test_a_remix_far_from_the_videos_length_keeps_losing_to_the_original():
               _ct(6, "Sun Project", title="Space Dwarfs", mix="1997 Unreleased Mix", dur_s=532, date="2021-09-21")]
     assert not _length_pins_a_version(q, tracks)
     assert best_match(q, tracks).id == 2
+
+
+def _row(**kw) -> CatalogTrack:
+    base = {"id": 1, "artist": "New Born", "title": "Between The Lines", "mix_name": "Original Mix",
+            "label": "L", "genre": "G", "duration_ms": 355000}
+    return CatalogTrack(**{**base, **kw})
+
+
+def test_best_match_refuses_a_record_whose_title_disagrees():
+    # req#205: artist 100, title 44, average 72.2 -- accepted today, and the file was mistagged for it
+    q = Query(raw="", artist="New Born", title="Nothing but a Title", duration_s=353)
+    assert best_match(q, [_row()]) is None
+
+
+def test_best_match_keeps_a_superset_title():
+    # token_set_ratio scores a polluted-but-correct title at 100; the floor must not touch it
+    q = Query(raw="", artist="Sheyba", title="Ganesh - Flying Rhino Records - 1995", duration_s=431)
+    t = _row(artist="Sheyba", title="Ganesh", duration_ms=431000)
+    assert best_match(q, [t]) is t
+
+
+def test_source_isrc_bypasses_the_title_floor():
+    q = Query(raw="", artist="New Born", title="Nothing but a Title")
+    t = _row(isrc="QT6EC2645809")
+    assert best_match(q, [t]) is None
+    assert best_match(q, [t], preferred_isrc="qt6ec2645809") is t

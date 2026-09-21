@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from rapidfuzz import fuzz
 
-from .models import CatalogTrack, Query, norm
+from .models import TITLE_FLOOR, CatalogTrack, Query, norm
 
 _NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL)
 BROWSER = "chrome"
@@ -104,6 +104,10 @@ def _length_pins_a_version(query: Query, tracks: list[CatalogTrack]) -> bool:
             and not any(_matches_length(t, query.duration_s) and _is_original(t.mix_name) for t in tracks))
 
 
+def _same_isrc(t: CatalogTrack, isrc: str | None) -> bool:
+    return bool(isrc and t.isrc and t.isrc.upper() == isrc.upper())
+
+
 def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | None = None) -> CatalogTrack | None:
     if not tracks:
         return None
@@ -117,6 +121,10 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
             # token_sort for the artist: "Hallucinogen In Dub" must not equal "Hallucinogen"
             a = fuzz.token_sort_ratio(_norm(query.artist), _norm(t.artist))
             ti = fuzz.token_set_ratio(_norm(query.title), _norm(t.title))
+            if ti < TITLE_FLOOR and not _same_isrc(t, preferred_isrc):
+                # A weighted average lets artist 100 carry title 44 over the bar. The source's ISRC is
+                # the one thing that outranks the title: it names the recording itself.
+                continue
             s = 0.5 * a + 0.5 * ti
         else:
             # token_sort, not token_set: token_set scores 100 for any *subset* of tokens, so
@@ -135,7 +143,7 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
     # Identical artist/title/mix releases can have different masters and labels. When the source
     # identifies the recording by ISRC, that evidence outranks a release-date tie-breaker.
     scored.sort(key=lambda x: (-round(x[0], 3),
-                               0 if preferred_isrc and x[1].isrc and x[1].isrc.upper() == preferred_isrc.upper() else 1,
+                               not _same_isrc(x[1], preferred_isrc),
                                x[1].release_date or "9999", x[1].id))
     s, t = scored[0]
     return t if s >= 70 else None

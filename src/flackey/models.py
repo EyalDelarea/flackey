@@ -69,6 +69,13 @@ def norm(s: str | None) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", s).split())
 
 
+# The least a Beatport record's title may agree with the request (token_set_ratio) and still name the file.
+# Measured on 105 filed requests with a Beatport match: 103 score >= 90, none between 70 and 89, and the
+# only two below 70 are the two files that were wrong (issue #63). Tags only: the record and the file are
+# chosen by audio, not by this number.
+TITLE_FLOOR = 75
+
+
 SOURCE_LABELS = {"deezer_bot": "Deezer", "soulseek": "Soulseek"}
 
 
