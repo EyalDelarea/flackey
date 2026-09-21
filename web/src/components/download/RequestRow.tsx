@@ -10,12 +10,18 @@ import type { RowAction, RowView } from '../../presentation'
 
 function RetryCountdown({ seconds }: { seconds: number }) {
   const [remaining, setRemaining] = useState(seconds)
+  useEffect(() => { setRemaining(seconds) }, [seconds])
+  // Above an hour the label only changes once a minute, so tick once a minute: the 6 h wait for Soulseek
+  // (issue #74) was otherwise 21,600 re-renders of the same five words. Inside the hour it goes back to a
+  // real per-second countdown, which is where a countdown is worth watching.
+  const coarse = remaining > 3600
+  const done = remaining <= 0
   useEffect(() => {
-    setRemaining(seconds)
-    if (seconds <= 0) return
-    const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000)
+    if (done) return
+    const step = coarse ? 60 : 1
+    const timer = window.setInterval(() => setRemaining(value => Math.max(0, value - step)), step * 1000)
     return () => window.clearInterval(timer)
-  }, [seconds])
+  }, [coarse, done])
   // Three scales, because the waits now span three orders of magnitude: 30 s on the quick ladder, 15 min
   // after a Soulseek queue, and 6 h while the request waits for the people online to change. A bare
   // `360m 0s` would read as a stuck row.

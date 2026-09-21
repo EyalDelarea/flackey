@@ -703,6 +703,17 @@ class Worker:
         # Once per request, before anything downloads: the reference is what every pick below, the lossy
         # fallback and any later retry are checked against, and it does not change between them.
         acoustic = await self._acoustic_reference(req, cand)
+        if acoustic.reference is None and acoustic.missing.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+            # The same quick ladder `_process` gives a request whose record is chosen by audio, for the route
+            # that has no record at all. Since issue #69 the catalogue-less path is how a track Beatport has
+            # never heard of gets filed, and on it the video is the *only* reference: a stand-in candidate has
+            # no Deezer preview to fall back on, so a yt-dlp blip used to end the request in `error` on its
+            # first pass -- after a real search and a download it then had nothing to check. Only a fetch that
+            # failed ("video: "), never audio that arrived unreadable, and only while the ladder has budget:
+            # after it the pass goes on and ends `fingerprint_unavailable` as before.
+            await self._retry_or_fail(req, f"could not fetch the video's audio: {acoustic.missing[7:]}",
+                                      flag="video audio unavailable, will retry")
+            return
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:

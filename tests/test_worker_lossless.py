@@ -21,6 +21,7 @@ from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
+from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
 
@@ -1505,3 +1506,41 @@ async def test_a_permanent_miss_still_parks_at_once(lenv):
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
     assert r.error_message.endswith("Use Try again once it can be checked")
+
+
+async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(lenv, monkeypatch):
+    """Measured before the fix: a single 429 from yt-dlp on the catalogue-less route ended the request in
+    `error` on its first pass -- attempts 1, no retry_after, outcome `fingerprint_unavailable`, advising
+    "Use Try again once it can be checked" for something that would have been fine a minute later. That
+    route is how a track Beatport has never heard of gets filed at all since issue #69, and on it the
+    video's audio is the only reference there is: a stand-in candidate has no Deezer preview behind it."""
+    _, store, notifier, provider, _, _ = lenv
+    calls = []
+
+    async def flaky_youtube(url, tmp_dir, *, duration_s=None):
+        calls.append(url)
+        raise YouTubeError("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
+    assert r.flag_reason == "video audio unavailable, will retry"
+    assert "Retrying in 30 s" in notifier.sent[-1][0] and "429" in notifier.sent[-1][0]
+    # And it costs nothing on the network: the search and the download used to run first, only to be thrown
+    # away for want of anything to check them against.
+    assert provider.searches == [] and store.get_attempt_for_request(rid) is None
+
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 2
+
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    # The ladder is spent, so the pass goes on without the video and ends where it used to end at once. A
+    # video that is really gone still cannot block the request for ever.
+    assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
+    assert provider.searches and len(calls) == 3
