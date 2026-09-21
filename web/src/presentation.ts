@@ -128,6 +128,7 @@ const MISS_REASON: Record<string, string> = {
   transfer_timeout: 'the people who had it stopped sending part-way through',
   verify_failed: 'the copies offered were not really lossless',
   fingerprint_failed: 'the copies offered were a different recording',
+  fingerprint_unavailable: 'the recording could not be checked acoustically',
   convert_failed: 'the file could not be converted',
   unavailable: 'Soulseek was not reachable at the time',
   interrupted: 'it was interrupted',

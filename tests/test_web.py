@@ -781,7 +781,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
                            "soulseek_listen": {"port": 50300, "host": "0.0.0.0", "public": True}},
                  "ranking": {"max_picks": 4, "duration_tolerance_s": 3, "title_ratio": 90,
-                             "require_artist": False, "max_queue": None, "fingerprint_min": 0.90},
+                             "require_artist": False, "max_queue": None, "fingerprint_min": 0.79},
                  "filing_formats": ["aiff", "wav", "flac"]}
     # Only one of the three is reachable from outside this machine, and it has to be: peers connect
     # inbound to it to download from the shared library.

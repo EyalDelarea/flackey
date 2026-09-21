@@ -126,12 +126,12 @@ def decide(query: Query, cands: list[Candidate], catalog: CatalogTrack | None) -
         return Decision(False, top, "only remixes/edits available; no version was requested")
     if not query.version and not pinned and not _is_original(candidate_version(top)):
         return Decision(False, top, f"best match is a {candidate_version(top)}; no version was requested")
-    if catalog is None:
-        return Decision(False, top, "not found on Beatport; information cannot be verified")
     if (top.score or 0) < THRESHOLD:
         return Decision(False, top, f"confidence {top.score}% below {THRESHOLD}%")
     if pinned and not _is_original(candidate_version(top)):
         return Decision(True, top, f"confidence {top.score}%; the {candidate_version(top)} is the video's length")
+    if catalog is None:
+        return Decision(True, top, f"confidence {top.score}%; not on Beatport, the recording check decides")
     return Decision(True, top, f"confidence {top.score}%")
 
 

@@ -80,9 +80,12 @@ def test_decide_parks_when_below_threshold():
     assert not d.auto and "below" in d.reason and d.chosen is not None
 
 
-def test_decide_parks_without_catalog():
+def test_decide_auto_files_without_catalog_when_confident():
+    # No Beatport record is no longer a reason to ask the owner: the download is fingerprinted against
+    # the request's own recording, and a candidate that does not convince on text still parks.
     d = decide(Q, [cand()], None)
-    assert not d.auto and "Beatport" in d.reason
+    assert d.auto and "recording check" in d.reason
+    assert not decide(Q, [cand(artist="Someone Else", title="Something", duration_s=100)], None).auto
 
 
 def test_decide_parks_when_only_remixes_and_no_version_requested():

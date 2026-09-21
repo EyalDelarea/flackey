@@ -7,25 +7,30 @@ full fingerprint (would audio identification have picked the same record?).
 
 ## Decision
 
+**The owner listened to both unsure rows and ruled: track 50 `correct`, track 35 `wrong`.** The
+arithmetic below is that ruling; the two rows and the "one answer that would trip the gate" section are
+amended to match.
+
 | | |
 |---|---|
-| `min_correct` | **0.94** — track 69, *Sun Project – Computer Breath* |
-| `max_wrong` | **0.72** — no `wrong` row in this sweep (Task 1 removed both); the brief's Shiva Shidapu fallback |
-| gap (`min_correct - max_wrong`) | **0.22** — at or above 0.10, so the Step 3 gate does **not** trip |
-| midpoint | (0.94 + 0.72) / 2 = **0.83** exactly |
-| `round(midpoint, 2)` | 0.83 |
-| capped at 0.90 | **threshold = 0.83** |
+| `min_correct` | **0.86** — track 50, *Growling Mad Scientists – Do Androids Dream of Electric Sheep* (owner-certified by ear) |
+| `max_wrong` | **0.72** — track 35 is `wrong` at 0.59, below the brief's Shiva Shidapu fallback, which therefore stands |
+| gap (`min_correct - max_wrong`) | **0.14** — at or above 0.10, so the Step 3 gate does **not** trip |
+| midpoint | (0.86 + 0.72) / 2 = **0.79** exactly |
+| `round(midpoint, 2)` | 0.79 |
+| capped at 0.90 | **threshold = 0.79** |
 | identification disagreements (Step 4) | **0** — the gate does not trip |
 
-**`lossless_fingerprint_min` becomes 0.83** (from 0.90). Task 8 applies it to
+**`lossless_fingerprint_min` becomes 0.79** (from 0.90). Task 8 applies it to
 `src/flackey/config.py` and to `fingerprint_min` in `web/src/screenshot-harness.tsx`. Nothing is
 changed here.
 
-`min_correct` is not an artefact of how the executor certified rows: **0.94 is also the lowest score of
-any `matched` row in the sweep**, so every certification rule that admits the rows production already
-accepts lands on the same number.
+The lowest score of any `matched` row in the sweep is **0.94** (track 69, *Sun Project – Computer
+Breath*), so on the executor's own rule — which cannot certify a row below the shipped 0.90 gate —
+`min_correct` would have been 0.94 and the threshold 0.83. The owner's ear is what moves it: track 50 is
+a real, legitimate 0.86 that the old gate rejected.
 
-## Two rows the owner must rule on
+## Two rows the owner ruled on
 
 The executor cannot listen to audio and has no channel to the owner, so **no row is called `wrong` on the
 executor's authority**. Everything not certifiable from objective evidence is `unsure`. Two rows scored
@@ -34,8 +39,8 @@ under 0.90, and both were profiled further (below). Neither changes the arithmet
 
 | track | artist – title | file | record | file s | video s | verdict |
 |---|---|---|---|---|---|---|
-| 35 | Space Cat – Spacecat (Club Mix) | **0.59** | – | 503 | 507 | `unsure` (**proposed: wrong**) |
-| 50 | Growling Mad Scientists – Do Androids Dream of Electric Sheep | **0.86** | – | 522 | 518 | `unsure` (**proposed: correct**) |
+| 35 | Space Cat – Spacecat (Club Mix) | **0.59** | – | 503 | 507 | **`wrong`** (owner ruled, by ear) |
+| 50 | Growling Mad Scientists – Do Androids Dream of Electric Sheep | **0.86** | – | 522 | 518 | **`correct`** (owner ruled, by ear) |
 
 ### Why the profile settles what a single score cannot
 
@@ -76,21 +81,19 @@ with ISRC `UKR6V2050424`, and the video is titled *"Spacecat Club Mix"* on a `Sp
 Only the audio differs. This is the same failure class as the *Nothing but a Title* case Task 1 fixed: the
 text agreed all the way down and the recording was still wrong.
 
-**The executor proposes `wrong` and does not write it.** Confirming it would **not** change the threshold:
-0.59 is below the 0.72 fallback, so `max_wrong` stays 0.72 either way.
+**The executor proposed `wrong` and did not write it; the owner then listened and ruled `wrong`.** That
+does not change the threshold: 0.59 is below the 0.72 fallback, so `max_wrong` stays 0.72 either way.
 
-### The one answer that would trip the Step 3 gate
+### The owner's ruling
 
-If the owner rules **track 50 `wrong`**, then `max_wrong = 0.86`, the gap becomes `0.94 − 0.86 = 0.08`,
-which is **under 0.10 — Step 3 trips** and the threshold must be re-decided with the owner rather than
-computed. The profile above argues strongly against that answer, but it is the owner's call and it is the
-only answer that changes the outcome.
+The owner listened to both rows and ruled **track 50 `correct`** and **track 35 `wrong`**. So
+`min_correct = 0.86`, the gap is `0.86 − 0.72 = 0.14` (clear of 0.10, the Step 3 gate does not trip) and
+the threshold is **0.79**. The other answer — track 50 `wrong` — would have made `max_wrong = 0.86` and
+the gap `0.94 − 0.86 = 0.08`, under 0.10, which would have tripped Step 3 and forced the threshold to be
+re-decided with the owner rather than computed. It was not the answer.
 
-If the owner rules **track 50 `correct`** — the likely answer — then `min_correct = 0.86`, the gap is
-`0.86 − 0.72 = 0.14` (still clear of 0.10) and the threshold would be **0.79** instead of 0.83. Both
-numbers reject track 35 and admit track 50; 0.79 simply leaves more headroom. The executor's decided
-number is **0.83**, because the pre-registered rule does not let it certify a row below the shipped gate
-without the owner's ear. The margin above track 50 at 0.83 is only 0.03.
+0.79 and 0.83 both reject track 35 and admit track 50; 0.79 simply leaves more headroom above the lowest
+score now known to be correct. 0.83 would have left a margin of only 0.03 over track 50.
 
 ## Step 4 — identification agreement
 
@@ -101,8 +104,8 @@ The other 33 have no record score at all, so "0 disagreements" means *0 of 63 as
 
 | bucket | count |
 |---|---|
-| `correct` rows whose record score is **below 0.83** | **0 of the 63 that could be asked — the gate does not trip** |
-| `correct` rows whose record score is at or above 0.83 (agrees) | 63 |
+| `correct` rows whose record score is **below 0.79** | **0 of the 63 that could be asked — the gate does not trip** |
+| `correct` rows whose record score is at or above 0.79 (agrees) | 63 |
 | `correct` rows with **no** record score (the question cannot be put) | 33 |
 | rows where record score is the `compare` sentinel `0.00` (needle longer than the hay) | 0 |
 
@@ -156,15 +159,17 @@ The certification rule was **written down before any score was read** so the gat
 tuned to the numbers. A row is `correct` only when its status is `matched` (≥ 0.90, what production
 already accepts), the file and video lengths agree within 15 s, and the track's artist and title agree
 with what the request asked for. Everything below 0.90 is `unsure`; anything that looks wrong is
-`unsure (proposed: wrong)`; nothing is ever written `wrong` without the owner. 96 rows are certified
-`correct`. Eight `matched` rows are left `unsure` only because they fail the strict length or name check —
+`unsure (proposed: wrong)`; nothing is ever written `wrong` without the owner. That rule certified 96 rows
+`correct`; the owner's ruling then certified track 50 `correct` and wrote track 35 `wrong`, the one row in
+this sweep the executor could not have certified either way. Eight `matched` rows are left `unsure` only because they fail the strict length or name check —
 collaborations credited differently (tracks 53, 56, 16, 57), an `Original Mix` / `2023 Remaster` suffix
 (98, 47), and two long uploads (38 at 626 s vs 392 s, 30 at 516 s vs 547 s). All eight score 0.96–0.99, so
 none of them could lower `min_correct`; they are listed as `unsure` for honesty, not because they are in
 doubt.
 
-The two profile deep-dives were run **after** the threshold was computed and change none of the
-arithmetic.
+The two profile deep-dives were run **after** the threshold was computed. They changed none of the
+arithmetic by themselves; the owner's ruling on the two rows they profiled is what moved the threshold
+from 0.83 to 0.79.
 
 ## Reproduce
 
@@ -183,8 +188,8 @@ Sorted by file score, unscored rows last.
 
 | track | artist - title | file s | video s | file | record | note | verdict |
 |---|---|---|---|---|---|---|---|
-| 35 | Space Cat - Spacecat | 503 | 507 | 0.59 | - | failed | unsure (proposed: **wrong** - incoherent offsets, flat 0.56-0.60: not the same recording) |
-| 50 | Growling Mad Scientists - Do Androids Dream of Electric Sheep | 522 | 518 | 0.86 | - | failed | unsure (proposed: **correct** - constant +2.5 s offset at all eight probe positions: same recording, different master) |
+| 35 | Space Cat - Spacecat | 503 | 507 | 0.59 | - | failed | **wrong** (owner ruled by ear - incoherent offsets, flat 0.56-0.60: not the same recording) |
+| 50 | Growling Mad Scientists - Do Androids Dream of Electric Sheep | 522 | 518 | 0.86 | - | failed | **correct** (owner ruled by ear - constant +2.5 s offset at all eight probe positions: same recording, different master) |
 | 69 | Sun Project - Computer Breath | 520 | 520 | 0.94 | 0.98 | matched | correct |
 | 34 | Delta - As a Child | 487 | 487 | 0.95 | - | matched | correct |
 | 38 | Astral Projection - Searching For UFO's | 626 | 392 | 0.96 | - | matched | unsure (scored 0.96 >= 0.90 but length gap 234s > 15s) |

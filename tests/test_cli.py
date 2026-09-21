@@ -132,5 +132,5 @@ def test_sweep_writes_the_report_and_touches_nothing_else(tmp_path: Path, monkey
     out = tmp_path / "sweep.md"
     r = runner.invoke(app, ["--env", str(env), "sweep", "--out", str(out)])
     assert r.exit_code == 0, r.output
-    assert seen == [0.90] and f"wrote {out}" in r.output and "A - B" in r.output
+    assert seen == [0.79] and f"wrote {out}" in r.output and "A - B" in r.output
     assert "| 0.97 | 1.00 |" in out.read_text()

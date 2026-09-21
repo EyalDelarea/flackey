@@ -46,7 +46,7 @@ from .models import (
     source_label,
 )
 from .notify import Button, Notifier
-from .reference import deezer_reference, youtube_reference
+from .reference import Identification, deezer_reference, identify_record, youtube_reference
 from .source import (
     LosslessError,
     LosslessProvider,
@@ -122,11 +122,6 @@ CATALOG_SOURCE = "beatport"
 # raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
 # owner why" -- without this they would reach the API as a 409 or a 500 on a button that used to answer.
 REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
-# Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
-# was not met is visible on the row rather than buried in the attempt's JSON.
-NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
-                       "fingerprinted -- only the spectral check ran")
-
 
 def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     """A stand-in for the Deezer candidate, built from the Beatport record -- the mirror of
@@ -138,10 +133,11 @@ def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     title, mix name and duration from the catalog whenever one is present, so every pick rule already runs
     on Beatport data rather than on anything a peer said.
 
-    `deezer_id` stays None, and that is the real cost: `fingerprint.check` returns "skipped" rather than
-    running, so identity rests on the duration, title and version rules plus the spectral verify. Callers
-    must set `NO_FINGERPRINT_FLAG` on the request. It is never persisted as a candidate row -- a retry
-    re-matches Beatport, which is cheap, instead of resuming from a candidate the source never offered.
+    `deezer_id` stays None. Since issue #67 the fingerprint's reference is the request's own video, so a
+    Beatport stand-in is checked acoustically like any other candidate; without a video or a Deezer id the
+    attempt ends `fingerprint_unavailable` rather than filing on the match alone. It is never persisted as
+    a candidate row -- a retry re-matches Beatport, which is cheap, instead of resuming from a candidate
+    the source never offered.
     """
     return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
                      artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
@@ -526,7 +522,8 @@ class Worker:
             if not cands:
                 # Either the source is switched off, or it failed with a Beatport match already in hand.
                 # `catalog_candidate` explains what this costs; the short version is that the pick rules
-                # still run entirely on Beatport data and only the fingerprint is lost.
+                # still run entirely on Beatport data, but a request with no video of its own then has
+                # nothing to fingerprint against and the lossless attempt ends `fingerprint_unavailable`.
                 if catalog is None:
                     # Nothing identified the track: the source offered nothing and Beatport has no match.
                     # Terminal, not a retry -- both halves are the same on the next pass, so backing off
@@ -542,37 +539,54 @@ class Worker:
                     # Beatport knows the track, so it exists -- there is just no route to a file right now.
                     await self._no_route(req)
                     return
-                self.store.update_request(req.id, flag_reason=NO_FINGERPRINT_FLAG)
                 await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                 return
 
+            # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
+            # `decide` runs either way: it scores every candidate (the order the previews are tried in,
+            # and what the Choose window shows), and its verdict only counts without a video.
+            video, _ = await self._video_reference(req)
             decision = decide(query, cands, catalog)
-            if decision.chosen and decision.chosen.isrc:
+            ident: Identification | None = None
+            if video is not None:
+                ordered = sorted(cands, key=lambda c: -(c.score or 0))
+                async with self._cpu:
+                    ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
+                                                  minimum=self.settings.lossless_fingerprint_min)
+                log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
+            chosen_obj = ident.chosen if ident is not None else decision.chosen
+            if chosen_obj is not None and chosen_obj.isrc:
                 # The source's recording ID disambiguates equally named Beatport releases. Never
                 # substitute a loosely matched release: require the normal search score first.
-                matched_catalog = best_match(query, catalog_tracks, decision.chosen.isrc)
+                matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
                 if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
                     catalog = matched_catalog
                     self.store.upsert_catalog_track(catalog)
                     self.store.update_request(req.id, catalog_track_id=catalog.id)
-                    decision = decide(query, cands, catalog)
+                    if ident is None:
+                        decision = decide(query, cands, catalog)
+                        chosen_obj = decision.chosen
             saved = self.store.add_candidates(req.id, cands)
-            self.store.update_request(req.id, confidence=decision.chosen.score if decision.chosen else None)
-            if decision.chosen is None:
-                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), decision.reason)
-                self._set_state(req, RequestState.NOT_FOUND, error_message=decision.reason)
+            confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
+                          else (chosen_obj.score if chosen_obj else None))
+            self.store.update_request(req.id, confidence=confidence)
+            if chosen_obj is None:
+                reason = ident.reason if ident is not None else decision.reason
+                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
+                self._set_state(req, RequestState.NOT_FOUND,
+                                error_message=f"could not identify this track: {reason}")
                 await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
                 return
-            # `decide` returns one of the objects in `cands`; match by identity, not by source_ref
+            # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
             # (the bot can list the same Deezer id twice)
-            chosen = saved[next(i for i, c in enumerate(cands) if c is decision.chosen)]
+            chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
 
             dup = find_duplicate(self.store, catalog, chosen)
             if dup:
                 await self._mark_duplicate(req, dup.id, dup.path)
                 return
 
-            if not decision.auto:
+            if ident is None and not decision.auto:
                 self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=decision.reason,
                                 chosen_candidate_id=chosen.id)
                 await self._ask_review(req, saved, decision.reason)
@@ -584,12 +598,6 @@ class Worker:
                 catalog = await self._catalog_for(req, cand, catalog)
             except CatalogUnavailable as e:
                 await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
-                return
-            if catalog is None:
-                # the pinned edit/remix has no Beatport record: only the owner may file it on Deezer's word
-                reason = f"the {candidate_version(cand)} is not on Beatport; information cannot be verified"
-                self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=reason)
-                await self._ask_review(req, saved, reason)
                 return
 
         await self._fetch_verify_file(req, cand, catalog)
@@ -716,8 +724,33 @@ class Worker:
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
                 await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{verdict.reason}")
                 return
+            # The lossy copy is checked against the same reference, at the same threshold, as a peer's
+            # file (spec §7). It used to be filed on the spectral check alone -- which says the audio is
+            # really 320 kbps, and nothing at all about it being the recording that was asked for. This is
+            # the last path that could file a track no fingerprint vouched for.
+            async with self._cpu:
+                fp = await fingerprint_check(tmp, acoustic.reference if acoustic else None,
+                                             minimum=self.settings.lossless_fingerprint_min,
+                                             missing=acoustic.missing if acoustic else "")
+            log.info("req#%d lossy copy fingerprint: %s %s", req.id, fp.status, fp.reason)
+            if fp.status == "failed":
+                reason = f"a different recording: {fp.reason}"
+                self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, verdict.cutoff_hz,
+                                         verdict.spectrogram_path)
+                self._set_state(req, RequestState.REJECTED)
+                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}")
+                return
+            if fp.status == "skipped":
+                # Nothing to check against, so nothing to file on, and nothing a retry would change on its
+                # own: the owner is told what is missing and the row waits for them (spec §6).
+                reason = (f"the recording could not be checked acoustically ({fp.reason}). "
+                          "Use Try again once it can be checked")
+                self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
+                await self.notifier.send(f"Could not verify: {req.raw_text}\n{reason}")
+                return
         else:
             verdict = hit.verdict                     # verified and fingerprinted inside the attempt
+            fp = hit.fingerprint
         source = hit.provider if hit else self.source.name
         source_fmt = hit.source_fmt if hit else None
 
@@ -742,8 +775,7 @@ class Worker:
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
-        if hit:
-            self._record_evidence(track_id, hit)
+        self._record_evidence(track_id, fp, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
@@ -844,7 +876,7 @@ class Worker:
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
             sample_rate=hit.verdict.sample_rate)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
-        self._record_evidence(t.id, hit)
+        self._record_evidence(t.id, hit.fingerprint, hit)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:
@@ -857,10 +889,13 @@ class Worker:
         await self.notifier.send(f"Upgraded: {catalog.artist} - {catalog.title} - {line}")
         return f"Upgraded to {line}."
 
-    def _record_evidence(self, track_id: int, hit: LosslessHit) -> None:
-        fp = hit.fingerprint
-        self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
-                                                     "attempt_id": hit.attempt_id})
+    def _record_evidence(self, track_id: int, fp: FingerprintResult, hit: LosslessHit | None) -> None:
+        """What the filed file was checked against. `source` names the peer and the attempt behind it, so
+        it only exists for a lossless hit; the recording check is recorded for the lossy copy too, because
+        since issue #68 that copy is fingerprinted as well and the owner should be able to see it."""
+        if hit is not None:
+            self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
+                                                         "attempt_id": hit.attempt_id})
         self.store.add_evidence(track_id, "recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
                                                               "reference": fp.reference, "reason": fp.reason})
         if fp.track:
@@ -1075,6 +1110,10 @@ class Worker:
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
         if fp.status == "failed":
             return None, "fingerprint_failed"
+        if fp.status == "skipped":
+            # Nothing acoustic vouched for the file. Not a fact about this peer, so not SECOND_PICK_AFTER:
+            # the reference is missing for every survivor alike (issue #68).
+            return None, "fingerprint_unavailable"
         self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None
