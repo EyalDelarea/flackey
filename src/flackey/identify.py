@@ -16,6 +16,7 @@ _VERSION_WORDS = re.compile(
     r"extended|radio|club|vip|original)\b", re.IGNORECASE)
 _TRAIL_RE = re.compile(r"\s*[\(\[]([^\)\]]+)[\)\]]\s*$")
 _DASH_VERSION_RE = re.compile(r"\s+[-–—]\s+([^-–—]+)$")
+_SPLIT_TOKENS = re.compile(r"[(\[]|[)\]]|\s+[-–—]\s+")
 
 
 def _clean_url(url: str) -> str:
@@ -88,9 +89,17 @@ def _strip_noise(s: str) -> str:
 
 
 def _split_artist_title(s: str) -> tuple[str | None, str]:
-    parts = re.split(r"\s+[-–—]\s+", s, maxsplit=1)
-    if len(parts) == 2:
-        return parts[0].strip(), parts[1].strip()
+    """Artist and title around the first ` - ` that is not inside brackets. `Granada (Remix - 98)` is one
+    title with a version in it, not artist `Granada (Remix` and title `98)` (issue #66)."""
+    depth = 0
+    for m in _SPLIT_TOKENS.finditer(s):
+        tok = m.group(0)
+        if tok in ("(", "["):
+            depth += 1
+        elif tok in (")", "]"):
+            depth = max(depth - 1, 0)
+        elif depth == 0:
+            return s[: m.start()].strip(), s[m.end():].strip()
     return None, s.strip()
 
 
