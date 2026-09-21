@@ -7,8 +7,13 @@ export interface Request { id:number; created_at:string; updated_at:string; raw_
   /** 1 once the request has been parked for the owner to choose; never cleared. The only durable record
       that a choice was ever asked for -- `flag_reason` is wiped when they answer. */
   reviewed?:number }
+// `has_preview` is resolved when the candidate is enriched, not when a play is pressed: the bot already
+// asks Deezer for the track and can keep the one boolean. Optional and nullable on purpose -- every row
+// that predates the column, and every enrichment that failed, answers `null`, which means "unknown" and
+// is offered a button like any other. Only an explicit `false` hides the control.
 export interface Candidate { id:number; request_id:number; source:string; source_ref:string; artist:string; title:string; mix_name:string|null;
-  duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null }
+  duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null;
+  has_preview?:boolean|null }
 export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;
   catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null }
 export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:number|null; source:string; source_fmt:string|null; label:string }

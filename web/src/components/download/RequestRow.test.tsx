@@ -2,9 +2,11 @@ import { act, render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
 import type { RowView } from '../../presentation'
+import type { PlayerState } from './DownloadPage'
 
-// Every row needs the page's player state; only the preview tests care what is in it.
-const preview = { playing: null, noPreview: new Set<number>(), onPlay: () => {} }
+// Every row needs the page's player state; only the sample tests care what is in it.
+const idle: PlayerState = { playing: null, clock: null, slow: false, failed: null, noSample: new Set<number>() }
+const preview = { player: idle, onPlay: () => {} }
 
 const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted',
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
@@ -189,17 +191,40 @@ it('sweeps without claiming a queue when the transfer has started but the size i
   expect(screen.getByLabelText('Downloading from someone')).toHaveClass('waiting')
 })
 
+const threeVersions: RowView['candidates'] = [
+  { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: '', chosen: false },
+  { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false },
+  { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false }]
+
 it('spreads the page\'s player state over its candidate cards', () => {
-  // The row holds no player of its own: it turns "which id is playing" and "which have no sample" into
-  // one card\'s Stop, one card\'s Play and one card with nothing to press.
+  // The row holds no player of its own: it turns "which id is playing" and "which Deezer has no sample
+  // for" into one card\'s Stop, one card\'s Play and one card with nothing to press at all.
   const onPlay = vi.fn()
-  const view: RowView = { ...base, candidates: [
-    { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: '', chosen: false },
-    { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false },
-    { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false }] }
-  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} playing={5} noPreview={new Set([7])} onPlay={onPlay} />)
+  const { container } = render(<RequestRow view={{ ...base, candidates: threeVersions }} onAction={() => {}} onChoose={() => {}}
+    player={{ ...idle, playing: 5, noSample: new Set([7]) }} onPlay={onPlay} />)
   expect(screen.getByRole('button', { name: 'Stop a sample of Vini Vici – The Tribe (Extended Mix)' })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'No sample for Vini Vici – The Tribe (Live)' })).toBeDisabled()
+  // No control at all on the one with no sample -- not a disabled one, which is a thing to try that never
+  // works and which drops out of tab order under the keyboard user who just reached it.
+  expect(screen.queryByRole('button', { name: /sample of Vini Vici – The Tribe \(Live\)/ })).toBeNull()
+  expect([...container.querySelectorAll('.candidate')][2].querySelectorAll('button')).toHaveLength(1)
   fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Vini Vici – The Tribe (Radio Edit)' }))
   expect(onPlay).toHaveBeenCalledWith(6)
+})
+
+it('names the playing version inline on the title line, without adding a line to the row', () => {
+  // A third line appearing on a press would push the whole candidate grid down every time -- the shift
+  // this whole direction exists to avoid.
+  const view: RowView = { ...base, candidates: threeVersions }
+  const { container, rerender } = render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  const lines = container.querySelector('.row-text')!.children.length
+  expect(container.querySelector('.now-playing')).toBeNull()
+  rerender(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} player={{ ...idle, playing: 6 }} onPlay={() => {}} />)
+  expect(container.querySelector('.title .now-playing')).toHaveTextContent('Radio Edit')
+  expect(container.querySelector('.row-text')!.children.length).toBe(lines)
+})
+
+it('puts the sample button before Use this, so the row reads listen-then-choose', () => {
+  const { container } = render(<RequestRow view={{ ...base, candidates: [threeVersions[0]] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  const labels = [...container.querySelectorAll('.candidate .actions button')].map(b => b.getAttribute('aria-label') ?? b.textContent)
+  expect(labels).toEqual(['Play a sample of Vini Vici – The Tribe (Extended Mix)', 'Use this'])
 })

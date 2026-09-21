@@ -14,7 +14,10 @@ const PATHS: Record<IconName, string> = {
   play: 'M8.5 5.5v13l11-6.5z',
   stop: 'M7 7h10v10H7z',
 }
-export default function Icon({ name, size = 16, stroke = 1.6 }: { name: IconName; size?: number; stroke?: number }) {
-  return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke}
+/* `filled` paints the path as well as stroking it, with the round join rounding the corners of the solid
+   shape. It exists for the two transport glyphs: a hollow 12px square is an empty checkbox, and a hairline
+   triangle is a disclosure arrow -- both of them read as something other than a control. */
+export default function Icon({ name, size = 16, stroke = 1.6, filled = false }: { name: IconName; size?: number; stroke?: number; filled?: boolean }) {
+  return (<svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={stroke}
     strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flex: 'none' }}><path d={PATHS[name]} /></svg>)
 }

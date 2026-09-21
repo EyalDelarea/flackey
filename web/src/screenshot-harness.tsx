@@ -174,13 +174,31 @@ function scenarioSetup() {
     case 'choose':
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
-      // Nothing is serving /api/candidates/{id}/preview here, so every button would take a 404, the
-      // element would fire `error`, and all six would latch into "No sample for this version" -- a
-      // screenshot of the layout showing none of the layout. So playback is faked for this scenario
-      // only: `play` resolves, and `src` goes nowhere, so no request is made and no error follows. The
-      // harness is proving the arrangement of the buttons, not the network behind them.
-      HTMLMediaElement.prototype.play = async () => {}
+      // Nothing is serving /api/candidates/{id}/preview here, so every press would take a 404 and the
+      // element would fire `error` -- a screenshot of the playing card showing none of the playing card.
+      // So the whole clip is faked for this scenario only: `src` goes nowhere, `play` resolves, and a
+      // clock runs for 30 s, dispatching the `timeupdate`s the page drives its rail and its numeral from
+      // and the `ended` it fades on. That makes every state reachable by pressing the button -- the
+      // sliver for the first quarter second, then the fill, then the fade. The harness is proving the
+      // arrangement and the states, not the network behind them.
       Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() { /* no-op */ }, get: () => '' })
+      {
+        let at = 0
+        let clock = 0
+        Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { get: () => at, set(v: number) { at = v } })
+        Object.defineProperty(HTMLMediaElement.prototype, 'duration', { get: () => 30 })
+        HTMLMediaElement.prototype.pause = function () { window.clearInterval(clock) }
+        HTMLMediaElement.prototype.load = function () { window.clearInterval(clock); at = 0 }
+        HTMLMediaElement.prototype.play = async function () {
+          window.clearInterval(clock)
+          at = 0
+          clock = window.setInterval(() => {
+            at = Math.min(30, at + 0.25)
+            if (at >= 30) window.clearInterval(clock)
+            this.dispatchEvent(new Event(at >= 30 ? 'ended' : 'timeupdate'))
+          }, 250)
+        }
+      }
       break
     case 'failed':
       // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the

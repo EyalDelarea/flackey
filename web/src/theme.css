@@ -20,6 +20,10 @@
   --platter-ink: #FFFFFF; --platter-track: rgba(0,0,0,.13);
   --orange: #FF9500; --green: #34C759; --red: #FF3B30;
   --orange-wash: rgba(255,149,0,.08); --red-wash: rgba(255,59,48,.07);
+  /* The tint that lights the candidate whose sample is playing, laid over --group. Pale on purpose: at any
+     moment there is exactly one of these on screen, and it sits among white cards on the amber "needs your
+     choice" wash, where blue is the largest hue gap the palette has. */
+  --sample-tint: rgba(0,122,255,.07);
   /* --orange/--green read fine as small dots and icons, but at ~2.2:1 they fail WCAG AA for actual text
      on a light background -- the dot stays vivid, the word beside it needs to be darker to be read. */
   --orange-text: #B45309; --green-text: #157A32;
@@ -46,6 +50,9 @@
     --platter-ink: rgba(255,255,255,.92); --platter-track: rgba(255,255,255,.16);
     --orange: #FF9F0A; --green: #30D158; --red: #FF453A;
     --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
+    /* Double the light value. --group is already dark here, so a 7% tint over it is a step the eye does
+       not find: dark palettes need more separation between levels, not less. */
+    --sample-tint: rgba(10,132,255,.14);
     /* Dark mode's vivid orange/green already clear 4.5:1 against the dark window -- the light-mode
        override above exists because white, not the window colour, is what they sit on there. */
     --orange-text: var(--orange); --green-text: var(--green);
