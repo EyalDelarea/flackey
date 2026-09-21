@@ -150,7 +150,7 @@ it('shows failed and in-progress playlist entries beside the filed tracks', asyn
 
 it('reads a queued entry\'s reason as a previous attempt, except the wait for Soulseek', async () => {
   // This list prints the same `flag_reason` the download rows do, and it is where the two came to
-  // disagree: the long wait (issue #71) is about the look still to come, not about the attempt behind it.
+  // disagree: the long wait (issue #74) is about the look still to come, not about the attempt behind it.
   vi.mocked(api.library).mockResolvedValue([])
   const playlist: Playlist = { id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '', track_ids: [1], track_positions: [1, 4], file: '/lib/Goa.m3u8' }
   const queued = (id: number, position: number, raw_text: string, flag_reason: string) => ({

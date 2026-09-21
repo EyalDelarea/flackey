@@ -116,7 +116,7 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
 }
 
-/** The long wait for Soulseek (issue #71), as the owner should read it, or null when this is not one.
+/** The long wait for Soulseek (issue #74), as the owner should read it, or null when this is not one.
  *  The worker already words that flag -- what is being waited for, and how many looks are left -- so every
  *  place that prints a queued row's reason shows it as it stands rather than labelling it a previous
  *  attempt: it is not one, because the search really does run again. Exported because the playlist import

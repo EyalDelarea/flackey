@@ -1438,7 +1438,7 @@ async def test_two_spellings_ending_in_a_wrong_recording_wait_instead_of_parking
     assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
 
 
-# ---- the long wait for Soulseek (issue #71) ---------------------------------------------------------------
+# ---- the long wait for Soulseek (issue #74) ---------------------------------------------------------------
 
 
 async def test_a_transient_soulseek_miss_waits_and_looks_again(lenv):
