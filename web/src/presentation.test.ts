@@ -391,8 +391,8 @@ describe('a queued track', () => {
 
   it('shortens the verbose Soulseek fallback warning without losing its meaning', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
-      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, the source is unavailable for the lossy fallback' }), opts)
-    expect(v.status).toBe('Previous attempt: No Soulseek match; alternate source unavailable')
+      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on' }), opts)
+    expect(v.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
     expect(v.retryInSeconds).toBe(25)
   })
 })

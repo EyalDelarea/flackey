@@ -13,10 +13,10 @@ from flackey.config import Settings
 from flackey.convert import ConvertError
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
-from flackey.models import CatalogTrack, RequestKind, RequestState
+from flackey.models import CatalogTrack, Query, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
-from flackey.source import LosslessError, SourceTimeout, TransferProgress
+from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from tests.conftest import requires_ffmpeg
@@ -957,7 +957,7 @@ async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(len
     # The row waits rather than burning the 30 s ladder on a question nothing could have answered yet:
     # who is online changes over a quarter of an hour, so that is how long it waits before asking again.
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
-    assert "nothing on Soulseek matched" in r.flag_reason and "source is unavailable" in r.flag_reason
+    assert "nothing on Soulseek matched" in r.flag_reason and "Deezer offered nothing" in r.flag_reason
 
 
 async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(lenv):
@@ -988,6 +988,9 @@ async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_o
     assert r.state == RequestState.NOT_FOUND
     assert r.retry_after is None                      # terminal: no backoff was scheduled
     assert "Beatport" in r.error_message and "switched off" in r.error_message
+    # Since issue #69 the message also says why there was no second chance: nothing parsed out of the raw
+    # text, so there were no words to ask Soulseek with either.
+    assert "nothing to search for" in r.error_message
     assert source.searches == 0
 
 
@@ -1199,3 +1202,117 @@ async def test_a_reference_that_cannot_be_fetched_skips_the_check_instead_of_cra
     # The reason moved with the outcome, so it is on the attempt the owner can open too.
     fp = attempt_of(store, rid).fingerprint
     assert fp["status"] == "skipped" and "fpcalc printed nonsense" in fp["reason"]
+
+
+async def test_no_record_anywhere_still_searches_soulseek_on_the_request(lenv, monkeypatch):
+    """Issue #69: 'no Beatport record' means unverified, not unavailable. The parsed words and the video's
+    length go to Soulseek and the fingerprint decides; tags come from the request."""
+    _, store, _, provider, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    # The request's own audio is the whole safety argument on this path: without a record there is no
+    # Deezer preview to fall back on, so a request whose video cannot be fetched has nothing to check the
+    # download against and ends `fingerprint_unavailable` (the test below its sibling covers that).
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
+    t = store.get_track(r.track_id)
+    assert (t.artist, t.title, t.mix_name) == ("Astral Projection", "Into the Void", "Original Mix") and t.catalog_track_id < 0
+    assert attempt_of(store, rid).report["reference"]["from_query"] is True
+
+
+async def test_no_record_anywhere_and_no_lossless_copy_has_no_lossy_fallback(lenv):
+    _, store, _, provider, _, _ = lenv
+    provider.files = []
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK, query=Query(raw="", artist="A", title="B", duration_s=3))
+    # `no_pick` is a retryable outcome (the people online turn over), so the quick ladder runs first; the
+    # request parks once it is spent. What matters on every pass is that Deezer is never asked for a lossy
+    # copy of a track no record was chosen for.
+    for _ in range(MAX_ATTEMPTS):
+        r = await w.process(rid)
+    assert r.state == RequestState.ERROR and "nothing on Soulseek matched" in r.error_message
+    assert attempt_of(store, rid).outcome == "no_pick"
+    assert w.source.fetched == []
+
+
+async def test_a_bare_artist_request_ends_not_found_with_a_reason(lenv):
+    _, store, _, provider, _, _ = lenv
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    rid = store.add_request("Oforia", RequestKind.YT_TRACK, query=Query(raw="Oforia", artist="Oforia"))
+    r = await w.process(rid)
+    assert r.state == RequestState.NOT_FOUND and "no artist and title" in r.error_message and provider.searches == []
+
+
+async def test_no_matching_preview_sends_the_request_words_to_soulseek(lenv, monkeypatch):
+    """Task 10 ended this in NOT_FOUND; with the gate open the words go to Soulseek and the video decides."""
+    _, store, _, provider, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make(lenv, catalog=FakeCatalog([]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
+    assert store.get_track(r.track_id).catalog_track_id < 0
+
+
+async def test_a_beatport_match_still_tags_and_searches_from_the_record(lenv, monkeypatch):
+    """The other side of `from_query`: identification rejected every Deezer candidate, but Beatport did
+    match, so `reference_for` reads the words from the record and the flag must say so. Tasks 13 and 14
+    read it to decide which spelling found the file."""
+    _, store, _, provider, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
+                              "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make(lenv)                                   # FakeCatalog([CT3]): Beatport knows this one
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
+    assert attempt_of(store, rid).report["reference"]["from_query"] is False
+    assert store.get_track(r.track_id).catalog_track_id == CT.id      # tagged from the record, not the words
+
+
+async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, monkeypatch):
+    """The candidate list is the current search's answer, not a log. Before issue #69 the branch that
+    writes it was terminal, so it ran once; now the request comes back round the ladder and an append
+    would leave one set of rows per pass on the Choose list."""
+    _, store, _, _, _, _ = lenv
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        return Identification(None, None, [], "none of 1 Deezer previews is the video's recording")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    w = make(lenv, provider=FakeProvider(lenv[0].slskd_downloads, []), catalog=FakeCatalog([]))
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    for _ in range(MAX_ATTEMPTS):                    # no_pick is retryable, so the whole ladder runs
+        r = await w.process(rid)
+    assert r.state == RequestState.ERROR and w.source.searches == MAX_ATTEMPTS
+    assert len(store.get_candidates(rid)) == 1       # one search's worth, not one per pass

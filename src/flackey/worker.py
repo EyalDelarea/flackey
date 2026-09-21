@@ -117,6 +117,7 @@ def _mmss(seconds: int | None) -> str:
 
 
 CATALOG_SOURCE = "beatport"
+QUERY_SOURCE = "query"      # a candidate built from the request itself; see query_candidate
 # Exactly what `fingerprint.check` used to swallow on its own, now that the fetch happens here instead:
 # a missing reference is a "skipped" check, never a crashed request. fpcalc handing back unparseable JSON
 # raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
@@ -142,6 +143,16 @@ def catalog_candidate(catalog: CatalogTrack) -> Candidate:
     return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
                      artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
                      duration_s=catalog.duration_s, isrc=catalog.isrc)
+
+
+def query_candidate(query: Query, request_id: int) -> Candidate:
+    """What the owner asked for, as a candidate: the parsed artist, title and version plus the video's length.
+    Built when no record was chosen (issue #69). `lossless.reference_for` takes the search text from it and
+    `_fallback_catalog` the tags; the only thing that vouches for the file is the fingerprint against the
+    request's own audio, which is exactly the check that never depended on either catalogue. Never
+    persisted: a retry rebuilds it from the row's query columns."""
+    return Candidate(source=QUERY_SOURCE, source_ref=f"{QUERY_SOURCE}:{request_id}", artist=query.artist or "",
+                     title=query.title or "", mix_name=query.version or "Original Mix", duration_s=query.duration_s)
 
 
 def _fallback_catalog(cand: Candidate) -> CatalogTrack:
@@ -498,21 +509,25 @@ class Worker:
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
 
             cands: list[Candidate] = []
+            # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
+            # different situations and the row used to say which, so it still does: a bot that is switched
+            # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
+            source_why = "the Deezer bot is switched off"
             if self.settings.source_enabled:
+                source_why = "no Deezer candidates"
                 try:
                     cands = await self.source.search(query)
                 except SourceUnauthorized:
                     raise  # handled in process(): subclass of SourceError, so it must be caught before it
-                except (SourceNotFound, SourceTimeout, SourceError) as e:
+                except SourceNotFound as e:
+                    # Not a verdict any more: the request's own words can still reach Soulseek below.
+                    source_why = f"the Deezer bot found nothing ({e})"
+                    log.info("req#%d not found at source: %s", req.id, e)
+                except (SourceTimeout, SourceError) as e:
                     if catalog is None:
-                        # Neither side identified the track. Without a Beatport record there is no reference
-                        # to search a lossless provider with, so this is as far as the request goes.
-                        if isinstance(e, SourceNotFound):
-                            log.info("req#%d not found at source: %s", req.id, e)
-                            self._set_state(req, RequestState.NOT_FOUND, error_message=str(e))
-                            await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
-                        else:
-                            await self._retry_or_fail(req, f"source error: {e}")
+                        # The source may be back in an hour and would offer a lossy fallback the query-only
+                        # path does not have; a retry is worth more than a Soulseek-or-nothing pass now.
+                        await self._retry_or_fail(req, f"source error: {e}")
                         return
                     # Beatport knows the track, so the request is still actionable: fall through to the
                     # catalog-only path rather than retrying a source that may be down for hours.
@@ -520,26 +535,19 @@ class Worker:
                              "Beatport match alone", req.id, e)
 
             if not cands:
-                # Either the source is switched off, or it failed with a Beatport match already in hand.
-                # `catalog_candidate` explains what this costs; the short version is that the pick rules
-                # still run entirely on Beatport data, but a request with no video of its own then has
-                # nothing to fingerprint against and the lossless attempt ends `fingerprint_unavailable`.
-                if catalog is None:
-                    # Nothing identified the track: the source offered nothing and Beatport has no match.
-                    # Terminal, not a retry -- both halves are the same on the next pass, so backing off
-                    # and asking again only delays the same answer. This is where `decide` used to land a
-                    # request with an empty candidate list, and it keeps landing there.
-                    why = ("no match on Beatport, and the Deezer bot is switched off"
-                           if not self.settings.source_enabled else
-                           "neither Deezer nor Beatport has a match for it")
-                    self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}")
-                    await self.notifier.send(f"Could not identify: {req.raw_text}")
+                # Either the source is switched off, or it found nothing, or it failed with a Beatport
+                # match already in hand.
+                if catalog is not None:
+                    # `catalog_candidate` explains what this costs; the short version is that the pick
+                    # rules still run entirely on Beatport data, but a request with no video of its own
+                    # then has nothing to fingerprint against and the attempt ends `fingerprint_unavailable`.
+                    if not self._lossless_allowed(req):
+                        # Beatport knows the track, so it exists -- there is just no route to a file now.
+                        await self._no_route(req)
+                        return
+                    await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
                     return
-                if not self._lossless_allowed(req):
-                    # Beatport knows the track, so it exists -- there is just no route to a file right now.
-                    await self._no_route(req)
-                    return
-                await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
+                await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
                 return
 
             # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
@@ -573,9 +581,7 @@ class Worker:
             if chosen_obj is None:
                 reason = ident.reason if ident is not None else decision.reason
                 log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
-                self._set_state(req, RequestState.NOT_FOUND,
-                                error_message=f"could not identify this track: {reason}")
-                await self.notifier.send(f"Not available on Deezer: {req.raw_text}")
+                await self._search_on_the_request(req, query, catalog, reason)
                 return
             # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
             # (the bot can list the same Deezer id twice)
@@ -601,6 +607,20 @@ class Worker:
                 return
 
         await self._fetch_verify_file(req, cand, catalog)
+
+    async def _search_on_the_request(self, req: Request, query: Query, catalog: CatalogTrack | None,
+                                     why: str) -> None:
+        """No record was chosen. Soulseek is the only network that has this library's music, and the
+        fingerprint is what proves the file; the owner's own words are enough to ask with (issue #69)."""
+        if not (query.artist and query.title):
+            self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}; "
+                            f"no artist and title could be read from the request, so there is nothing to search for")
+            await self.notifier.send(f"Could not identify: {req.raw_text}")
+            return
+        if not self._lossless_allowed(req):
+            await self._no_route(req)
+            return
+        await self._fetch_verify_file(req, query_candidate(query, req.id), catalog)
 
     async def _mark_duplicate(self, req: Request, track_id: int | None, path: Path) -> None:
         self._set_state(req, RequestState.DUPLICATE, track_id=track_id)
@@ -636,9 +656,11 @@ class Worker:
             if req.lossless_retry:
                 self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
             hit = await self._try_lossless(req, cand, catalog, acoustic)
-        if hit is None and cand.source == CATALOG_SOURCE:
-            # A Beatport stand-in has no source_ref the bot would recognise, so there is no Deezer copy to
-            # fall back to -- the providers were the only route and this pass produced no file.
+        if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
+            # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
+            # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers
+            # were the only route and this pass produced no file. This returns before the fetch below,
+            # which is what spec §7's "no lossy fallback on that path" means in code.
             await self._no_route(req)
             return
         if hit is None:
@@ -689,7 +711,7 @@ class Worker:
             why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
         fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
-                    if not self.settings.source_enabled else "the source is unavailable for the lossy fallback")
+                    if not self.settings.source_enabled else "Deezer offered nothing to fall back on")
         reason = f"no way to fetch this track: {why}, {fallback}"
         if self._lossless_allowed(self.store.get_request(req.id)):
             await self._retry_or_fail(req, reason,
@@ -960,12 +982,19 @@ class Worker:
         return Acoustic(ref)
 
     # ---- lossless ---------------------------------------------------------
+    def _reference(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> Reference:
+        """`from_query` says the words in this reference are the request's own. That is a fact about where
+        `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
+        match still searches and tags from the record, because the catalog wins inside `reference_for`."""
+        ref = reference_for(catalog, cand, req.query_duration_s)
+        return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
+
     async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
                             acoustic: Acoustic) -> LosslessHit | None:
         """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
         every miss is an attempt row with an outcome (spec §5, §11)."""
         try:
-            ref = reference_for(catalog, cand, req.query_duration_s)
+            ref = self._reference(req, cand, catalog)
             query = search_text(ref)
             policy = policy_from_settings(self.settings)
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
