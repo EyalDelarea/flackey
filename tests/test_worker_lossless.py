@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -20,6 +21,7 @@ from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
+from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
 
@@ -1010,8 +1012,12 @@ async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(len
 
     for _ in range(3):                       # exhaust the backoff: no peer has it, no source to fall back to
         await w.process(rid)
-    assert store.get_request(rid).state == RequestState.ERROR
-    assert attempt_of(store, rid).outcome == "no_pick"   # not a retryable outcome, so the worker stops here
+    parked = store.get_request(rid)
+    # Since Task 15 the quick ladder hands over to the 6 h wait for Soulseek rather than parking outright.
+    # The button is still what an owner who does not want to wait six hours presses, which is what this
+    # covers: it must search the provider again the moment it is pressed.
+    assert parked.state == RequestState.QUEUED and parked.retry_after is not None
+    assert attempt_of(store, rid).outcome == "no_pick"
 
     # The owner presses "Try again", which is what `_lossless_miss_line` told them to do. A peer has it now.
     stocked = FakeProvider(lenv[0].slskd_downloads, [lf("a")], audio={"a": _flac(lenv[0].data_dir / "again.flac")})
@@ -1066,7 +1072,8 @@ async def test_the_wait_is_reported_as_a_wait_not_as_nothing_found(lenv):
 async def test_an_empty_search_with_no_source_waits_on_the_long_backoff_and_then_gives_up(lenv):
     """It used to end on the first pass, on the theory that nothing about an empty search could change.
     It can -- but only on Soulseek's timescale, so the wait is a quarter of an hour rather than the 30 s
-    ladder, and MAX_ATTEMPTS still ends it rather than asking forever."""
+    ladder. Since Task 15 the ladder hands over to the 6 h wait instead of parking at MAX_ATTEMPTS, and
+    LONG_RETRY_TIMES is what ends it rather than asking forever."""
     settings, store, _, _, _, _ = lenv
     empty = FakeProvider(settings.slskd_downloads, [])
     w = make(lenv, provider=empty, settings=settings.model_copy(update={"source_enabled": False}))
@@ -1079,8 +1086,16 @@ async def test_an_empty_search_with_no_source_waits_on_the_long_backoff_and_then
     for _ in range(MAX_ATTEMPTS - 1):
         store.update_request(rid, retry_after=None)
         r = await w.process(rid)
-    assert r.state == RequestState.ERROR and r.retry_after is None
+    assert r.state == RequestState.QUEUED and r.attempts == MAX_ATTEMPTS
+    assert r.flag_reason.startswith("waiting for Soulseek")
     assert len(empty.searches) == MAX_ATTEMPTS      # every pass asked a question that could have changed
+
+    for _ in range(worker_mod.LONG_RETRY_TIMES):    # and the long wait is bounded too
+        store.update_request(rid, retry_after=None)
+        r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.retry_after is None
+    assert "looked 12 times over 72 h" in r.error_message
+    assert len(empty.searches) == MAX_ATTEMPTS + worker_mod.LONG_RETRY_TIMES
 
 
 async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
@@ -1093,7 +1108,10 @@ async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
     r = await w.process(rid)
 
     assert attempt_of(store, rid).outcome == "first_byte_timeout"
-    assert "never started sending" in r.error_message and "found nothing" not in r.error_message
+    # A peer that never starts sending is a fact about that peer, not about the track, so since Task 15 the
+    # request waits for the people online to change instead of parking. The words are what this covers.
+    assert r.state == RequestState.QUEUED and r.error_message is None
+    assert "never started sending" in r.flag_reason and "found nothing" not in r.flag_reason
 
 
 async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, tmp_path: Path):
@@ -1242,7 +1260,10 @@ async def test_no_record_anywhere_and_no_lossless_copy_has_no_lossy_fallback(len
     # copy of a track no record was chosen for.
     for _ in range(MAX_ATTEMPTS):
         r = await w.process(rid)
-    assert r.state == RequestState.ERROR and "nothing on Soulseek matched" in r.error_message
+    # Since Task 15 the spent ladder hands over to the 6 h wait rather than parking; either way Deezer was
+    # never asked, which is what this covers.
+    assert r.state == RequestState.QUEUED and "nothing on Soulseek matched" in r.flag_reason
+    assert r.flag_reason.startswith("waiting for Soulseek")
     assert attempt_of(store, rid).outcome == "no_pick"
     assert w.source.fetched == []
 
@@ -1319,7 +1340,7 @@ async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, m
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
     for _ in range(MAX_ATTEMPTS):                    # no_pick is retryable, so the whole ladder runs
         r = await w.process(rid)
-    assert r.state == RequestState.ERROR and w.source.searches == MAX_ATTEMPTS
+    assert r.state == RequestState.QUEUED and w.source.searches == MAX_ATTEMPTS
     assert len(store.get_candidates(rid)) == 1       # one search's worth, not one per pass
 
 
@@ -1378,3 +1399,148 @@ async def test_a_chosen_record_keeps_its_tags_whichever_spelling_found_the_file(
     r = await w.process(rid)
     assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void", "AP Into the Void"]
     assert store.get_track(r.track_id).artist == "Astral Projection"          # good_cand()'s record, not the request's words
+
+
+async def test_two_spellings_ending_in_a_wrong_recording_wait_instead_of_parking(lenv, tmp_path: Path,
+                                                                                monkeypatch):
+    """Task 14's measured regression, and the reason this wait exists at all. The catalogue's spelling finds
+    nothing (`no_pick`) and the request's own words find a copy the fingerprint rejects
+    (`fingerprint_failed`). `_lossless_allowed` reads only the *latest* attempt and `fingerprint_failed` is
+    not in `SEARCH_AGAIN_AFTER`, so the second spelling used to make the request worse than no second
+    spelling at all: it parked terminally in `error` on the first pass where before it sat `queued` with a
+    15-minute retry. Every copy offered today being a different recording says nothing about the copies
+    tomorrow's peers will offer, so it belongs in the long wait."""
+    settings, store, notifier, _, fake_check, _ = lenv
+    wrong = _flac(tmp_path / "wrong.flac")
+    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong},
+                            files_for=lambda text: [] if text.startswith("Outputmessage")
+                            else [lf("w", path="x\\Universal Sound - Asteroids.flac")])
+    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
+    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
+
+    r = await w.process(rid)
+
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    assert sorted(a.outcome for a in store.list_attempts(limit=10)) == ["fingerprint_failed", "no_pick"]
+    assert r.state == RequestState.QUEUED and r.error_message is None    # not terminal
+    assert r.attempts == worker_mod.MAX_ATTEMPTS and r.lossless_retry == 1
+    assert r.flag_reason.startswith("waiting for Soulseek: the copies offered were a different recording")
+    wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
+    assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
+    assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
+
+
+# ---- the long wait for Soulseek (issue #74) ---------------------------------------------------------------
+
+
+async def test_a_transient_soulseek_miss_waits_and_looks_again(lenv):
+    """After the quick ladder, a miss that can change as people come online waits LONG_RETRY_EVERY_S in
+    `queued` and really searches again, LONG_RETRY_TIMES times, before it parks."""
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = []                                                   # no_pick on every pass
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="A", title="B", duration_s=3))
+    store.update_request(rid, attempts=worker_mod.MAX_ATTEMPTS - 1)       # the quick ladder is spent
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.lossless_retry == 1 and r.attempts == worker_mod.MAX_ATTEMPTS
+    assert r.flag_reason.startswith("waiting for Soulseek: nothing on Soulseek matched")
+    wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
+    assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
+    assert notifier.sent[-1][0].startswith("Waiting for Soulseek")
+    store.update_request(rid, retry_after=None)                           # 6 h later
+    r = await w.process(rid)
+    assert len(provider.searches) == 2 and r.state == RequestState.QUEUED
+    assert r.attempts == worker_mod.MAX_ATTEMPTS + 1 and r.lossless_retry == 1
+    # Said once, when the ladder handed over: the row carries the countdown and the reason meanwhile.
+    assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
+
+
+async def test_the_long_wait_gives_up_after_its_budget(lenv):
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = []
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="A", title="B", duration_s=3))
+    store.update_request(rid, attempts=worker_mod.MAX_ATTEMPTS + worker_mod.LONG_RETRY_TIMES - 1,
+                         lossless_retry=1)
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and "looked 12 times over 72 h" in r.error_message
+    assert "Use Try again" in r.error_message and notifier.sent[-1][0].startswith("Gave up")
+
+
+async def test_a_wrong_recording_everywhere_skips_the_quick_ladder(lenv, monkeypatch):
+    """`fingerprint_failed` is a verdict the next minute would repeat: no 30 s retry, straight to the wait."""
+    _, store, _, _, fake_check, _ = lenv
+    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)   # else there is nothing to check
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="A", title="B", duration_s=3))
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "fingerprint_failed"
+    assert r.state == RequestState.QUEUED and r.attempts == worker_mod.MAX_ATTEMPTS
+    assert r.flag_reason.startswith("waiting for Soulseek: the copies offered were a different recording")
+
+
+async def test_a_permanent_miss_still_parks_at_once(lenv):
+    """No reference to check against: waiting changes nothing, and the advice must not send the owner back
+    round the same dead end."""
+    _, store, _, _, _, _ = lenv        # no source_url and no Deezer id: nothing to fingerprint against
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="A", title="B", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
+    assert r.error_message.endswith("Use Try again once it can be checked")
+
+
+async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(lenv, monkeypatch):
+    """Measured before the fix: a single 429 from yt-dlp on the catalogue-less route ended the request in
+    `error` on its first pass -- attempts 1, no retry_after, outcome `fingerprint_unavailable`, advising
+    "Use Try again once it can be checked" for something that would have been fine a minute later. That
+    route is how a track Beatport has never heard of gets filed at all since issue #69, and on it the
+    video's audio is the only reference there is: a stand-in candidate has no Deezer preview behind it."""
+    _, store, notifier, provider, _, _ = lenv
+    calls = []
+
+    async def flaky_youtube(url, tmp_dir, *, duration_s=None):
+        calls.append(url)
+        raise YouTubeError("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
+    assert r.flag_reason == "video audio unavailable, will retry"
+    assert "Retrying in 30 s" in notifier.sent[-1][0] and "429" in notifier.sent[-1][0]
+    # And it costs nothing on the network: the search and the download used to run first, only to be thrown
+    # away for want of anything to check them against.
+    assert provider.searches == [] and store.get_attempt_for_request(rid) is None
+
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 2
+
+    store.update_request(rid, retry_after=None)
+    r = await w.process(rid)
+    # The ladder is spent, so the pass goes on without the video and ends where it used to end at once. A
+    # video that is really gone still cannot block the request for ever.
+    assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
+    assert provider.searches and len(calls) == 3

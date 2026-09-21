@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
-import { bucketOf, canRetry, gb } from '../../presentation'
+import { bucketOf, canRetry, gb, soulseekWait } from '../../presentation'
 import Icon from '../Icon'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
@@ -41,15 +41,21 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
     <h2>Import status <span>{filed.size} of {total} in library{active ? ` · ${active} processing` : ''}{failed ? ` · ${failed} not in library` : ''}</span></h2>
     {unresolved.length
       ? <><p>These entries haven’t been added yet. Completed entries are listed in the playlist above.</p>
-        <ul>{unresolved.map(b => <li key={b.request.id}>
-          <span className="ellipsis">{b.request.raw_text || b.request.query_title || 'Untitled track'}
-            {(b.request.error_message || b.request.flag_reason) && <small className="playlist-status-reason">
-              {b.request.state === 'queued' ? 'Previous attempt: ' : ''}{b.request.error_message || b.request.flag_reason}
-            </small>}
-          </span>
-          <span className={isFailed(b.request.state) ? 'rej' : 'needs'}>{LABEL[b.request.state] ?? b.request.state}</span>
-          {canRetry(b.request.state) && <button className="btn-secondary" onClick={() => onRetry(b.request.id)}>Retry</button>}
-        </li>)}</ul></>
+        <ul>{unresolved.map(b => {
+          // A queued row is reporting the attempt behind it -- except the long wait for Soulseek, which is
+          // about the look still to come and words itself. The download list makes the same distinction.
+          const waiting = b.request.error_message ? null : soulseekWait(b.request.flag_reason)
+          const reason = waiting || b.request.error_message || b.request.flag_reason
+          return <li key={b.request.id}>
+            <span className="ellipsis">{b.request.raw_text || b.request.query_title || 'Untitled track'}
+              {reason && <small className="playlist-status-reason">
+                {b.request.state === 'queued' && !waiting ? 'Previous attempt: ' : ''}{reason}
+              </small>}
+            </span>
+            <span className={isFailed(b.request.state) ? 'rej' : 'needs'}>{LABEL[b.request.state] ?? b.request.state}</span>
+            {canRetry(b.request.state) && <button className="btn-secondary" onClick={() => onRetry(b.request.id)}>Retry</button>}
+          </li>
+        })}</ul></>
       : <p>All playlist entries are in the library.</p>}
   </section>
 }

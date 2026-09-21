@@ -147,3 +147,20 @@ it('shows failed and in-progress playlist entries beside the filed tracks', asyn
   expect(screen.getByText('Getting file')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
 })
+
+it('reads a queued entry\'s reason as a previous attempt, except the wait for Soulseek', async () => {
+  // This list prints the same `flag_reason` the download rows do, and it is where the two came to
+  // disagree: the long wait (issue #74) is about the look still to come, not about the attempt behind it.
+  vi.mocked(api.library).mockResolvedValue([])
+  const playlist: Playlist = { id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '', track_ids: [1], track_positions: [1, 4], file: '/lib/Goa.m3u8' }
+  const queued = (id: number, position: number, raw_text: string, flag_reason: string) => ({
+    request: { id, playlist_id: 7, playlist_position: position, raw_text, state: 'queued', flag_reason },
+  }) as Bundle
+  const live = { ...makeLive(), playlists: [playlist], bundles: new Map([
+    [2, queued(2, 2, 'Waiting one', 'waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')],
+    [3, queued(3, 3, 'Backing off', 'Beatport unreachable, will retry')],
+  ]) }
+  render(<LibraryPage live={live} selectedPlaylist={7} />)
+  expect(await screen.findByText('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')).toBeInTheDocument()
+  expect(screen.getByText('Previous attempt: Beatport unreachable, will retry')).toBeInTheDocument()
+})

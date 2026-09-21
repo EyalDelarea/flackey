@@ -108,6 +108,17 @@ SLOW_BACKOFF_S = 900
 # Outcomes whose answer can only change on the timescale of a Soulseek queue moving or the people online
 # turning over. The 30 s/120 s ladder would ask again long before either could happen.
 SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
+# Outcomes whose answer changes only as the people online turn over. Soulseek is a population, not a
+# library: the search for "Space Dwarfs" found nothing at 11:40 on 2026-09-10 and two copies at 14:51.
+# After the quick ladder (RETRY_BACKOFF_S) a request that ended in one of these waits LONG_RETRY_EVERY_S in
+# `queued` and looks again, LONG_RETRY_TIMES times, before it parks in `error`. `fingerprint_failed` is
+# here although it is a verdict: every copy offered was a different recording, which says nothing about
+# the copies tomorrow's peers will offer. Not here: a missing reference or nothing to search for, which no
+# amount of waiting changes.
+LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "first_byte_timeout",
+                       "transfer_timeout", "queued", "unavailable", "interrupted"}
+LONG_RETRY_EVERY_S = 6 * 3600
+LONG_RETRY_TIMES = 12            # 3 days at 6 h
 MAINTENANCE_EVERY_S = 86_400
 LOSSLESS_HEALTH_EVERY_S = 60        # once the provider answers "ok"
 LOSSLESS_HEALTH_SETTLING_S = 5      # while it is still connecting, or has gone away
@@ -465,7 +476,9 @@ class Worker:
         self._set_state(req, RequestState.QUEUED, flag_reason=None)
 
     async def _retry_or_fail(self, req: Request, reason: str, *, flag: str | None = None,
-                             wait_s: int | None = None) -> None:
+                             wait_s: int | None = None, long_after: str | None = None) -> None:
+        """The quick ladder (RETRY_BACKOFF_S) while attempts < MAX_ATTEMPTS, then `error` -- or, when
+        `long_after` names why the answer may change, the long wait for Soulseek first."""
         attempts = req.attempts + 1
         if attempts < MAX_ATTEMPTS:
             wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1] if wait_s is None else wait_s
@@ -473,9 +486,33 @@ class Worker:
             self._set_state(req, RequestState.QUEUED, attempts=attempts, flag_reason=flag or reason,
                             retry_after=retry_after)
             await self.notifier.send(f"Attempt {attempts} failed for {req.raw_text}: {reason}\nRetrying in {wait} s.")
+        elif long_after:
+            await self._wait_for_soulseek(req, long_after, attempts)
         else:
             self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
             await self.notifier.send(f"Gave up after {attempts} attempts: {req.raw_text}\n{reason}")
+
+    async def _wait_for_soulseek(self, req: Request, why: str, attempts: int) -> None:
+        """Park the request in `queued` for LONG_RETRY_EVERY_S with `lossless_retry` granted, so the next
+        pass really searches whatever the last outcome was (`_lossless_allowed`); or in `error` once the
+        LONG_RETRY_TIMES looks are spent. Told to the owner once, when the quick ladder hands over; the row
+        shows the countdown and the reason meanwhile. `attempts` keeps counting past MAX_ATTEMPTS so the
+        budget survives a restart: it lives on the row, not in memory."""
+        hours = LONG_RETRY_EVERY_S // 3600
+        if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
+            reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
+                      f"Use Try again in the app to search once more")
+            self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
+            await self.notifier.send(f"Gave up: {req.raw_text}\n{reason}")
+            return
+        retry_after = (datetime.now(UTC) + timedelta(seconds=LONG_RETRY_EVERY_S)).isoformat(timespec="seconds")
+        left = MAX_ATTEMPTS + LONG_RETRY_TIMES - attempts
+        self._set_state(req, RequestState.QUEUED, attempts=attempts, retry_after=retry_after, lossless_retry=1,
+                        flag_reason=f"waiting for Soulseek: {why}; {left} more "
+                                    f"look{'' if left == 1 else 's'}, one every {hours} h")
+        if attempts <= MAX_ATTEMPTS:
+            await self.notifier.send(f"Waiting for Soulseek: {req.raw_text}\n{why}. Looking again every {hours} h "
+                                     f"for {LONG_RETRY_TIMES * hours // 24} days.")
 
     async def _catalog_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack | None:
         """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
@@ -562,7 +599,14 @@ class Worker:
             # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
             # `decide` runs either way: it scores every candidate (the order the previews are tried in,
             # and what the Choose window shows), and its verdict only counts without a video.
-            video, _ = await self._video_reference(req)
+            video, why = await self._video_reference(req)
+            if video is None and why.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+                # yt-dlp fails for a minute (429, a network blip) far more often than for good, and the
+                # video's audio is what identifies the record: a short wait beats choosing by text. After the
+                # ladder the pass goes on without it, so a removed video cannot block the request.
+                await self._retry_or_fail(req, f"could not fetch the video's audio: {why[7:]}",
+                                          flag="video audio unavailable, will retry")
+                return
             decision = decide(query, cands, catalog)
             ident: Identification | None = None
             if video is not None:
@@ -660,6 +704,17 @@ class Worker:
         # Once per request, before anything downloads: the reference is what every pick below, the lossy
         # fallback and any later retry are checked against, and it does not change between them.
         acoustic = await self._acoustic_reference(req, cand)
+        if acoustic.reference is None and acoustic.missing.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+            # The same quick ladder `_process` gives a request whose record is chosen by audio, for the route
+            # that has no record at all. Since issue #69 the catalogue-less path is how a track Beatport has
+            # never heard of gets filed, and on it the video is the *only* reference: a stand-in candidate has
+            # no Deezer preview to fall back on, so a yt-dlp blip used to end the request in `error` on its
+            # first pass -- after a real search and a download it then had nothing to check. Only a fetch that
+            # failed ("video: "), never audio that arrived unreadable, and only while the ladder has budget:
+            # after it the pass goes on and ends `fingerprint_unavailable` as before.
+            await self._retry_or_fail(req, f"could not fetch the video's audio: {acoustic.missing[7:]}",
+                                      flag="video audio unavailable, will retry")
+            return
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:
@@ -732,11 +787,20 @@ class Worker:
         fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
                     if not self.settings.source_enabled else "Deezer offered nothing to fall back on")
         reason = f"no way to fetch this track: {why}, {fallback}"
+        transient = outcome in LONG_RETRY_OUTCOMES
         if self._lossless_allowed(self.store.get_request(req.id)):
-            await self._retry_or_fail(req, reason,
-                                      wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None)
+            await self._retry_or_fail(req, reason, wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None,
+                                      long_after=why if transient else None)
             return
-        reason += ". Use Try again in the app to search once more"
+        if transient:
+            # A verdict the next minute would only repeat (every copy was a different recording, every peer
+            # refused): no quick ladder, straight to the wait for the people online to change.
+            await self._wait_for_soulseek(req, why, max(req.attempts + 1, MAX_ATTEMPTS))
+            return
+        # "Try again" is the right advice for a miss a later search could answer differently -- but not for
+        # one that cannot be checked at all: with no reference, the next search reaches the same dead end.
+        reason += (". Use Try again once it can be checked" if outcome == "fingerprint_unavailable"
+                   else ". Use Try again in the app to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
 
@@ -974,9 +1038,16 @@ class Worker:
             async with self._cpu:
                 ref = await youtube_reference(req.source_url, self.settings.tmp_dir / f"req{req.id}",
                                               duration_s=req.query_duration_s)
-        except REFERENCE_ERRORS as e:
+        except YouTubeError as e:
+            # Transient until proven otherwise: yt-dlp fails for a minute (429, a network blip) far more
+            # often than for good, and `_process` puts the request on the quick ladder for it.
             log.warning("req#%d: no video reference: %s", req.id, e)
             return None, f"video: {e or type(e).__name__}"
+        except REFERENCE_ERRORS as e:
+            # The audio came and could not be read (ffmpeg, fpcalc, a broken file): no retry -- the next
+            # pass would hand the same bytes to the same tools.
+            log.warning("req#%d: video audio unreadable: %s", req.id, e)
+            return None, f"video audio: {e or type(e).__name__}"
         self.store.set_reference(req.id, ref.to_dict())
         return ref, ""
 
