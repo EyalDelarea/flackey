@@ -8,7 +8,7 @@ import pytest
 from flackey import worker as worker_mod
 from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
-from flackey.fingerprint import AcousticReference, FingerprintError
+from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.match import decide
 from flackey.models import (
     RETRYABLE_STATES,
@@ -107,6 +107,21 @@ def env(tmp_path: Path, monkeypatch):
         raise FingerprintError("no video audio in tests")
 
     monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+
+    # Since issue #68 the lossy copy is fingerprinted before it is filed, and every request in this file
+    # files the lossy copy. Without this the suite would run fpcalc against the fake reference above --
+    # which answers "skipped" wherever chromaprint is not installed (CI) and "failed" wherever it is,
+    # because three made-up frames match no real audio. Answered the way `fingerprint.check` answers:
+    # "skipped" carrying the caller's reason when there is no reference at all, "matched" otherwise.
+    # Tests about a download that is the wrong recording live in `test_worker_lossless.py`, which has a
+    # fake whose result they can set.
+    async def fake_check(path, reference, *, minimum, missing=""):
+        if reference is None:
+            return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
+        return FingerprintResult("matched", 0.98, 12.3, f"{reference.label} found at 12.3 s, score 0.98",
+                                 [1, 2, 3], [4, 5, 6], reference.label)
+
+    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
     return settings, store, notifier
 
 

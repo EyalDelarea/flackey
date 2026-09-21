@@ -140,12 +140,14 @@ database. Rekordbox stays the source of truth for performance metadata.
 
 Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every request first asks the
 Soulseek network for a FLAC of the matched track. The file is verified (spectral cutoff), proven to be the
-same recording as the Deezer match with a Chromaprint fingerprint against Deezer's 30 s preview, converted to
-AIFF (audio untouched, peer tags dropped) and tagged from Beatport. On any miss the Deezer MP3 is fetched as
-before. The Done line says what you got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or
-`MP3 320 kbps via Deezer`.
+same recording as what you asked for with a Chromaprint fingerprint against the request's own audio (the
+YouTube video, or the matched record's 30 s preview), converted to AIFF (audio untouched, peer tags dropped)
+and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same
+reference, so a copy that is a different recording is rejected rather than filed. The Done line says what you
+got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or `MP3 320 kbps via Deezer`.
 
-1. `brew install chromaprint` (for `fpcalc`; without it the recording check is skipped and shown as such).
+1. `brew install chromaprint` (for `fpcalc`; without it nothing can be checked, and a request says so
+   instead of filing a copy nothing vouched for).
 2. Download the slskd release for macOS, put it in `~/Library/Application Support/Flackey/slskd/` with a
    `slskd.yml` like:
 

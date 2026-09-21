@@ -724,8 +724,33 @@ class Worker:
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
                 await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{verdict.reason}")
                 return
+            # The lossy copy is checked against the same reference, at the same threshold, as a peer's
+            # file (spec §7). It used to be filed on the spectral check alone -- which says the audio is
+            # really 320 kbps, and nothing at all about it being the recording that was asked for. This is
+            # the last path that could file a track no fingerprint vouched for.
+            async with self._cpu:
+                fp = await fingerprint_check(tmp, acoustic.reference if acoustic else None,
+                                             minimum=self.settings.lossless_fingerprint_min,
+                                             missing=acoustic.missing if acoustic else "")
+            log.info("req#%d lossy copy fingerprint: %s %s", req.id, fp.status, fp.reason)
+            if fp.status == "failed":
+                reason = f"a different recording: {fp.reason}"
+                self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, verdict.cutoff_hz,
+                                         verdict.spectrogram_path)
+                self._set_state(req, RequestState.REJECTED)
+                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}")
+                return
+            if fp.status == "skipped":
+                # Nothing to check against, so nothing to file on, and nothing a retry would change on its
+                # own: the owner is told what is missing and the row waits for them (spec §6).
+                reason = (f"the recording could not be checked acoustically ({fp.reason}). "
+                          "Use Try again once it can be checked")
+                self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
+                await self.notifier.send(f"Could not verify: {req.raw_text}\n{reason}")
+                return
         else:
             verdict = hit.verdict                     # verified and fingerprinted inside the attempt
+            fp = hit.fingerprint
         source = hit.provider if hit else self.source.name
         source_fmt = hit.source_fmt if hit else None
 
@@ -750,8 +775,7 @@ class Worker:
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
-        if hit:
-            self._record_evidence(track_id, hit)
+        self._record_evidence(track_id, fp, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
@@ -852,7 +876,7 @@ class Worker:
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
             sample_rate=hit.verdict.sample_rate)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
-        self._record_evidence(t.id, hit)
+        self._record_evidence(t.id, hit.fingerprint, hit)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:
@@ -865,10 +889,13 @@ class Worker:
         await self.notifier.send(f"Upgraded: {catalog.artist} - {catalog.title} - {line}")
         return f"Upgraded to {line}."
 
-    def _record_evidence(self, track_id: int, hit: LosslessHit) -> None:
-        fp = hit.fingerprint
-        self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
-                                                     "attempt_id": hit.attempt_id})
+    def _record_evidence(self, track_id: int, fp: FingerprintResult, hit: LosslessHit | None) -> None:
+        """What the filed file was checked against. `source` names the peer and the attempt behind it, so
+        it only exists for a lossless hit; the recording check is recorded for the lossy copy too, because
+        since issue #68 that copy is fingerprinted as well and the owner should be able to see it."""
+        if hit is not None:
+            self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
+                                                         "attempt_id": hit.attempt_id})
         self.store.add_evidence(track_id, "recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
                                                               "reference": fp.reference, "reason": fp.reason})
         if fp.track:
