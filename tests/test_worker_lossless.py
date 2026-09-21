@@ -392,8 +392,16 @@ async def test_the_lossy_fallback_is_rejected_when_it_is_a_different_recording(l
     rid = store.add_request(TEXT, RequestKind.YT_TRACK)
     r = await w.process(rid)
     assert r.state == RequestState.REJECTED
-    assert "different recording" in store.get_rejection_for_request(rid).reason
-    assert "best score 0.61" in store.get_rejection_for_request(rid).reason
+    rj = store.get_rejection_for_request(rid)
+    assert "different recording" in rj.reason
+    assert "best score 0.61" in rj.reason
+    # The row has to say *what* was wrong, not just in prose. This file passed the spectral check -- it is
+    # genuine 320 kbps audio of the wrong track -- so it carries no cutoff to be misread as an upscale
+    # (the page turns any cutoff into "it stops at N kHz, it was blown up from a smaller file"), and its
+    # kind is the fingerprint, not the quality. The spectrogram stays: deleting the row is what deletes it.
+    assert rj.kind == "different_recording"
+    assert rj.cutoff_hz is None and rj.bitrate_kbps == 320
+    assert rj.spectrogram_path is not None
     assert r.track_id is None and "Rejected" in notifier.sent[-1][0]
     assert not any(w.settings.tmp_dir.rglob("*"))
 

@@ -64,7 +64,13 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
 );
 CREATE TABLE IF NOT EXISTS rejections (
   id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL, reason TEXT NOT NULL,
-  bitrate_kbps INTEGER, cutoff_hz INTEGER, spectrogram_path TEXT, created_at TEXT NOT NULL
+  bitrate_kbps INTEGER, cutoff_hz INTEGER, spectrogram_path TEXT, created_at TEXT NOT NULL,
+  -- What the file failed, as a value rather than as prose the page has to parse: 'quality' (the spectral
+  -- check said the audio is not what it claims) or 'different_recording' (the audio is genuine, it is the
+  -- wrong track). The page draws a different explanation for each, and reading the kind is the only way it
+  -- can tell them apart -- `reason` is written for a human and `cutoff_hz` is absent on both a
+  -- different-recording rejection and an unsupported-format one.
+  kind TEXT NOT NULL DEFAULT 'quality'
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS lossless_attempts (
@@ -111,6 +117,7 @@ class Store:
         self._ensure_column("tracks", "source_fmt", "TEXT")
         self._ensure_column("tracks", "bit_depth", "INTEGER")
         self._ensure_column("tracks", "sample_rate", "INTEGER")
+        self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
@@ -486,12 +493,15 @@ class Store:
 
     # ---- rejections -----------------------------------------------------
     def add_rejection(self, request_id: int, reason: str, bitrate_kbps: int | None, cutoff_hz: int | None,
-                      spectrogram_path: Path | None) -> int:
+                      spectrogram_path: Path | None, *, kind: str = "quality") -> int:
+        """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
+        genuine audio of the wrong track). Keyword-only so no caller can drift into the positional slot that
+        the spectrogram already holds."""
         cur = self.conn.execute(
-            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, kind) "
+            "VALUES (?,?,?,?,?,?,?)",
             (request_id, reason, bitrate_kbps, cutoff_hz,
-             None if spectrogram_path is None else str(spectrogram_path), _now()))
+             None if spectrogram_path is None else str(spectrogram_path), _now(), kind))
         self.conn.commit()
         return int(cur.lastrowid)
 

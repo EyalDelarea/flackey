@@ -251,6 +251,10 @@ class Rejection:
     cutoff_hz: int | None
     spectrogram_path: str | None
     created_at: str
+    # Which check the file failed, for a page that has to explain it: 'quality' or 'different_recording'.
+    # Defaulted so a row written before the column existed still loads, and reads as the only kind there
+    # was then.
+    kind: str = "quality"
 
 
 @dataclass

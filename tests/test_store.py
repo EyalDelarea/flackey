@@ -143,9 +143,16 @@ def test_rejections_and_stats(store: Store, tmp_path: Path):
     rid = store.add_request("q", RequestKind.TEXT)
     rj = store.add_rejection(rid, "cutoff 16000 Hz below 18000", 320, 16000, tmp_path / "s.png")
     assert store.get_rejection(rj).reason.startswith("cutoff")
-    assert len(store.list_rejections()) == 1
+    # The spectral check is what a rejection used to mean, and still what one means when nobody says
+    # otherwise -- rows written before the column existed read the same way.
+    assert store.get_rejection(rj).kind == "quality"
+    other = store.add_rejection(rid, "a different recording: best score 0.61 below 0.79", 320, None, None,
+                                kind="different_recording")
+    assert store.get_rejection(other).kind == "different_recording"
+    assert store.get_rejection(other).cutoff_hz is None
+    assert len(store.list_rejections()) == 2
     s = store.stats()
-    assert s["rejections"] == 1 and s["tracks"] == 0
+    assert s["rejections"] == 2 and s["tracks"] == 0
     assert s["requests_by_state"]["queued"] == 1
 
 

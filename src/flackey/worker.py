@@ -840,8 +840,15 @@ class Worker:
             log.info("req#%d lossy copy fingerprint: %s %s", req.id, fp.status, fp.reason)
             if fp.status == "failed":
                 reason = f"a different recording: {fp.reason}"
-                self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, verdict.cutoff_hz,
-                                         verdict.spectrogram_path)
+                # No cutoff on this one. This branch is only reached with `verdict.passed` already true, so
+                # `verdict.cutoff_hz` here is a *healthy* number -- and the page turns any cutoff it is given
+                # into "it stops at N kHz, it was blown up from a smaller file", which would tell the owner a
+                # genuine 320 kbps file is a fake and quote a frequency that is fine as the proof. What this
+                # file failed is the fingerprint, so the row says so in `kind` and carries no spectral
+                # evidence it did not fail on. The spectrogram stays: it is a true picture of the audio, and
+                # the rejection row is the only handle `unlink_spectrogram` has for deleting the PNG later.
+                self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, None,
+                                         verdict.spectrogram_path, kind="different_recording")
                 self._set_state(req, RequestState.REJECTED)
                 await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}")
                 return

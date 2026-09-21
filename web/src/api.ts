@@ -18,7 +18,10 @@ export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number
 export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
 export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;
   fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
-export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string }
+/** `kind` says which check the file failed -- 'quality' (the spectral check) or 'different_recording'
+    (genuine audio, wrong track). Optional so a fixture or a row written before the column existed still
+    type-checks; absent reads as 'quality', which is all there was then. */
+export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string; kind?:string }
 export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null }
 export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; track_positions?:number[]; file:string }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
