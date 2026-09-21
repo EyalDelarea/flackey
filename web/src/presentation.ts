@@ -116,6 +116,14 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
 }
 
+/** The long wait for Soulseek (issue #71), as the owner should read it, or null when this is not one.
+ *  The worker already words that flag -- what is being waited for, and how many looks are left -- so every
+ *  place that prints a queued row's reason shows it as it stands rather than labelling it a previous
+ *  attempt: it is not one, because the search really does run again. Exported because the playlist import
+ *  list prints the same field, and that is exactly how the two came to disagree before. */
+export const soulseekWait = (flag: string | null | undefined): string | null =>
+  flag && /^waiting for Soulseek/i.test(flag) ? flag.replace(/^waiting/i, 'Waiting') : null
+
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
@@ -306,11 +314,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       if (r.retry_after) {
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
-        // The long wait for Soulseek (issue #71) already words itself for the owner -- what is being
-        // waited for and how many looks are left -- so it is shown as it stands rather than reported as a
-        // previous attempt. It is not a previous attempt: the search really does run again.
-        if (/^waiting for Soulseek/i.test(r.flag_reason || '')) {
-          v.status = r.flag_reason!.replace(/^waiting/, 'Waiting')
+        const waiting = soulseekWait(r.flag_reason)
+        if (waiting) {
+          v.status = waiting
           v.statusTone = 'amber'
           break
         }
