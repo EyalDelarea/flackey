@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from flackey import worker as worker_mod
 from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
+from flackey.fingerprint import AcousticReference
 from flackey.models import (
     RETRYABLE_STATES,
     Candidate,
@@ -82,11 +84,18 @@ def good_cand() -> Candidate:
 
 
 @pytest.fixture
-def env(tmp_path: Path):
+def env(tmp_path: Path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
     notifier = MemoryNotifier()
+
+    # Every filed request now fetches an acoustic reference first, and `good_cand()` carries a real Deezer
+    # id -- without this the suite would call api.deezer.com for it.
+    async def fake_deezer(deezer_id, http, tmp_dir):
+        return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
     return settings, store, notifier
 
 

@@ -19,7 +19,7 @@ from .catalog import CatalogUnavailable, best_match
 from .config import Settings
 from .convert import ConvertError, to_format
 from .export import write_playlist
-from .fingerprint import FPS, FingerprintResult
+from .fingerprint import FPS, AcousticReference, FingerprintError, FingerprintResult
 from .fingerprint import check as fingerprint_check
 from .identify import parse_text
 from .library import file_track, final_path, find_duplicate, prune_missing_tracks
@@ -39,12 +39,14 @@ from .models import (
     CatalogTrack,
     Query,
     Request,
+    RequestKind,
     RequestState,
     Track,
     Verdict,
     source_label,
 )
 from .notify import Button, Notifier
+from .reference import deezer_reference, youtube_reference
 from .source import (
     LosslessError,
     LosslessProvider,
@@ -58,6 +60,7 @@ from .source import (
 from .store import Store
 from .tag import fetch_artwork, write_tags
 from .verify import VerifyError, probe, verify
+from .youtube import YouTubeError
 
 log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -114,6 +117,11 @@ def _mmss(seconds: int | None) -> str:
 
 
 CATALOG_SOURCE = "beatport"
+# Exactly what `fingerprint.check` used to swallow on its own, now that the fetch happens here instead:
+# a missing reference is a "skipped" check, never a crashed request. fpcalc handing back unparseable JSON
+# raises ValueError and a dead disk raises OSError, and neither is `upgrade()`'s "ValueError means tell the
+# owner why" -- without this they would reach the API as a 409 or a 500 on a button that used to answer.
+REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
 # Set on the request when a file was accepted without the acoustic fingerprint, so the one guarantee that
 # was not met is visible on the row rather than buried in the attempt's JSON.
 NO_FINGERPRINT_FLAG = ("filed on the Beatport match alone: no Deezer id, so the recording could not be "
@@ -146,6 +154,13 @@ def _fallback_catalog(cand: Candidate) -> CatalogTrack:
     return CatalogTrack(id=fallback_id, isrc=cand.isrc,
                         artist=cand.artist, title=cand.title, mix_name=candidate_version(cand),
                         label="Unknown", genre="Unknown", duration_ms=(cand.duration_s or 0) * 1000 or None)
+
+
+@dataclass
+class Acoustic:
+    """What the fingerprint compares a download against, or why there is nothing to compare against."""
+    reference: AcousticReference | None
+    missing: str = ""
 
 
 @dataclass
@@ -605,11 +620,14 @@ class Worker:
             await self._mark_duplicate(req, dup.id, dup.path)
             return
         self._set_state(req, RequestState.FETCHING)
+        # Once per request, before anything downloads: the reference is what every pick below, the lossy
+        # fallback and any later retry are checked against, and it does not change between them.
+        acoustic = await self._acoustic_reference(req, cand)
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:
                 self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
-            hit = await self._try_lossless(req, cand, catalog)
+            hit = await self._try_lossless(req, cand, catalog, acoustic)
         if hit is None and cand.source == CATALOG_SOURCE:
             # A Beatport stand-in has no source_ref the bot would recognise, so there is no Deezer copy to
             # fall back to -- the providers were the only route and this pass produced no file.
@@ -636,7 +654,7 @@ class Worker:
         else:
             tmp = hit.path
         try:
-            await self._verify_and_file(req, cand, catalog, tmp, hit)
+            await self._verify_and_file(req, cand, catalog, tmp, hit, acoustic)
         finally:
             tmp.unlink(missing_ok=True)  # gone already when file_track moved it; garbage in every other outcome
             shutil.rmtree(self.settings.tmp_dir / f"req{req.id}", ignore_errors=True)  # spec §13: leave tmp_dir empty
@@ -683,7 +701,7 @@ class Worker:
         return last is None or last.outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
 
     async def _verify_and_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
-                               hit: LosslessHit | None = None) -> None:
+                               hit: LosslessHit | None = None, acoustic: Acoustic | None = None) -> None:
         if hit is None:
             self._set_state(req, RequestState.VERIFYING)
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
@@ -725,7 +743,7 @@ class Worker:
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
         if hit:
-            self._record_evidence(track_id, hit, cand)
+            self._record_evidence(track_id, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
@@ -788,7 +806,8 @@ class Worker:
         cand = self.store.get_candidate(req.chosen_candidate_id)
         catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
 
-        hit = await self._try_lossless(req, cand, catalog)
+        acoustic = await self._acoustic_reference(req, cand)
+        hit = await self._try_lossless(req, cand, catalog, acoustic)
         if hit is None:
             miss = self._lossless_miss_line(req)
             return miss or "No lossless copy turned up this time."
@@ -825,7 +844,7 @@ class Worker:
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
             sample_rate=hit.verdict.sample_rate)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
-        self._record_evidence(t.id, hit, cand)
+        self._record_evidence(t.id, hit)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:
@@ -838,12 +857,12 @@ class Worker:
         await self.notifier.send(f"Upgraded: {catalog.artist} - {catalog.title} - {line}")
         return f"Upgraded to {line}."
 
-    def _record_evidence(self, track_id: int, hit: LosslessHit, cand: Candidate) -> None:
+    def _record_evidence(self, track_id: int, hit: LosslessHit) -> None:
         fp = hit.fingerprint
         self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
                                                      "attempt_id": hit.attempt_id})
         self.store.add_evidence(track_id, "recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
-                                                              "reference": f"deezer:{cand.deezer_id}", "reason": fp.reason})
+                                                              "reference": fp.reference, "reason": fp.reason})
         if fp.track:
             self.store.add_evidence(track_id, "fingerprint", {"frames": fp.track, "fps": FPS})
 
@@ -866,8 +885,48 @@ class Worker:
             self._progress[request_id] = position
         self.status["fetch_progress"] = list(self._progress.values())
 
+    # ---- the acoustic reference ------------------------------------------
+    async def _video_reference(self, req: Request) -> tuple[AcousticReference | None, str]:
+        """The video's own audio as the reference (issue #67), stored once found, or None and the reason.
+        Playlist entries are YT_TRACK rows with their own source_url, so they qualify too."""
+        stored = self.store.get_reference(req.id)
+        if stored and stored["kind"] == "youtube":
+            return AcousticReference.from_dict(stored), ""
+        if req.kind != RequestKind.YT_TRACK or not req.source_url:
+            return None, "not a YouTube request"
+        try:
+            async with self._cpu:
+                ref = await youtube_reference(req.source_url, self.settings.tmp_dir / f"req{req.id}",
+                                              duration_s=req.query_duration_s)
+        except REFERENCE_ERRORS as e:
+            log.warning("req#%d: no video reference: %s", req.id, e)
+            return None, f"video: {e or type(e).__name__}"
+        self.store.set_reference(req.id, ref.to_dict())
+        return ref, ""
+
+    async def _acoustic_reference(self, req: Request, cand: Candidate) -> Acoustic:
+        """The request's own video when there is one, else the candidate's Deezer preview. Fetched once and
+        kept beside the request: every pick, the lossy fallback, a retry and the library sweep reuse it.
+        A failure to get one is a fact about this request, worded for the attempt row and the owner."""
+        stored = self.store.get_reference(req.id)
+        if stored:
+            return Acoustic(AcousticReference.from_dict(stored))
+        ref, why = await self._video_reference(req)
+        reasons = [why] if ref is None and why else []
+        if ref is None and cand.deezer_id:
+            try:
+                async with self._cpu:
+                    ref = await deezer_reference(cand.deezer_id, self.http, self.settings.tmp_dir)
+            except REFERENCE_ERRORS as e:
+                reasons.append(f"deezer preview: {e or type(e).__name__}")
+        if ref is None:
+            return Acoustic(None, "; ".join(reasons) or "no video and no Deezer id to fingerprint against")
+        self.store.set_reference(req.id, ref.to_dict())
+        return Acoustic(ref)
+
     # ---- lossless ---------------------------------------------------------
-    async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> LosslessHit | None:
+    async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
+                            acoustic: Acoustic) -> LosslessHit | None:
         """Ask each provider in turn for a verified, fingerprinted, converted lossless file. Never raises;
         every miss is an attempt row with an outcome (spec §5, §11)."""
         try:
@@ -883,7 +942,7 @@ class Worker:
                 rec = AttemptRecorder(self.store, self.settings.lossless_raw_dir, req.id, provider.name, query,
                                       clock=self.clock)
                 self.store.update_request(req.id, fetch_source=provider.name)
-                hit = await self._attempt(provider, rec, req, ref, policy)
+                hit = await self._attempt(provider, rec, req, ref, policy, acoustic)
             except Exception as e:  # the worker must survive any bug in the lossless path
                 log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
                 if rec is not None:
@@ -903,7 +962,7 @@ class Worker:
         return None
 
     async def _attempt(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                       policy) -> LosslessHit | None:
+                       policy, acoustic: Acoustic) -> LosslessHit | None:
         s = self.settings
         health = await provider.health()
         self.status["lossless_provider"] = {"name": provider.name, **health}
@@ -934,7 +993,7 @@ class Worker:
             if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n)
+            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
             if hit is not None:
                 try:
                     rec.finish("filed")
@@ -948,7 +1007,7 @@ class Worker:
         return None
 
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                                  file, n: int) -> tuple[LosslessHit | None, str]:
+                                  file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
@@ -987,13 +1046,13 @@ class Worker:
             rec.event("move_failed", error=str(e))
             landed.unlink(missing_ok=True)
             return None, "transfer_failed"
-        hit, outcome = await self._check_and_convert(rec, req, ref, file, tmp)
+        hit, outcome = await self._check_and_convert(rec, req, ref, file, tmp, acoustic)
         if hit is None:
             tmp.unlink(missing_ok=True)
         return hit, outcome
 
     async def _check_and_convert(self, rec: AttemptRecorder, req: Request, ref: Reference, file,
-                                 tmp: Path) -> tuple[LosslessHit | None, str]:
+                                 tmp: Path, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
         self._publish_phase(req.id, "verifying")
         try:
@@ -1009,8 +1068,8 @@ class Worker:
             return None, "verify_failed"
         self._publish_phase(req.id, "fingerprinting")
         async with self._cpu:   # fpcalc decodes the whole file; it belongs with the other ffmpeg work
-            fp = await fingerprint_check(tmp, ref.deezer_id, self.http, minimum=s.lossless_fingerprint_min,
-                                         tmp_dir=s.tmp_dir)
+            fp = await fingerprint_check(tmp, acoustic.reference, minimum=s.lossless_fingerprint_min,
+                                         missing=acoustic.missing)
         rec.raw("fingerprint", {"preview": fp.preview, "track": fp.track})
         self.store.update_attempt(rec.id, fingerprint=fp.to_dict())
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)

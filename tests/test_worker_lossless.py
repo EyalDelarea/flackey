@@ -2,6 +2,7 @@
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -10,7 +11,7 @@ import pytest
 from flackey import worker as worker_mod
 from flackey.config import Settings
 from flackey.convert import ConvertError
-from flackey.fingerprint import FingerprintResult
+from flackey.fingerprint import AcousticReference, FingerprintResult
 from flackey.lossless import LosslessFile
 from flackey.models import CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
@@ -116,11 +117,22 @@ def lenv(tmp_path: Path, monkeypatch):
     provider = FakeProvider(downloads, [lf("a")], audio={"a": good, "b": good})
     matched = FingerprintResult("matched", 0.98, 12.3, "preview found at 12.3 s, score 0.98", [1, 2, 3], [4, 5, 6])
 
-    async def fake_check(path, deezer_id, http, *, minimum, tmp_dir):
-        return fake_check.result
+    async def fake_check(path, reference, *, minimum, missing=""):
+        # The no-reference branch is answered the way the real `check` answers it -- "skipped", carrying
+        # the caller's reason -- so a test that removes the reference sees what production would see.
+        if reference is None:
+            return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
+        return replace(fake_check.result, reference=reference.label)
 
     fake_check.result = matched
     monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
+
+    # These requests have no source_url, so the reference is the candidate's Deezer preview; `good_cand()`
+    # carries a real Deezer id and nothing here may reach api.deezer.com.
+    async def fake_deezer(deezer_id, http, tmp_dir):
+        return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
     return settings, store, MemoryNotifier(), provider, fake_check, Clock()
 
 
@@ -777,23 +789,23 @@ async def test_upgrade_runs_even_though_a_normal_retry_would_be_refused(lenv):
 # catalog stand-in built from Beatport, and the fingerprint step skipped rather than failed.
 
 
-def _capture_deezer_id(fake_check):
-    """Record the deezer_id the fingerprint step is handed, and answer the way `fingerprint.check` really
-    does when there is none -- "skipped", which is not a rejection."""
-    seen: list[int | None] = []
+def _capture_reference(fake_check):
+    """Record which acoustic reference the fingerprint step is handed, and answer the way
+    `fingerprint.check` really does when there is none -- "skipped", which is not a rejection."""
+    seen: list[str | None] = []
 
-    async def check(path, deezer_id, http, *, minimum, tmp_dir):
-        seen.append(deezer_id)
-        if deezer_id is None:
-            return FingerprintResult("skipped", None, None, "no deezer id for this request")
-        return fake_check.result
+    async def check(path, reference, *, minimum, missing=""):
+        seen.append(reference.label if reference else None)
+        if reference is None:
+            return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
+        return replace(fake_check.result, reference=reference.label)
 
     return seen, check
 
 
 async def test_source_switched_off_fetches_on_the_beatport_match_alone(lenv, monkeypatch):
     settings, store, _, _, fake_check, _ = lenv
-    seen, check = _capture_deezer_id(fake_check)
+    seen, check = _capture_reference(fake_check)
     monkeypatch.setattr(worker_mod, "fingerprint_check", check)
     source = FakeSource([good_cand()])
     w = make(lenv, source=source, settings=settings.model_copy(update={"source_enabled": False}))
@@ -804,13 +816,13 @@ async def test_source_switched_off_fetches_on_the_beatport_match_alone(lenv, mon
     assert r.state == RequestState.DONE
     assert (source.searches, source.fetched) == (0, [])   # the bot is never spoken to, not even to time out
     assert store.get_track(r.track_id).source == "soulseek"
-    assert seen == [None]                                 # no Deezer id, so identity could not be proven
+    assert seen == [None]                                 # no video and no Deezer id: identity unproven
     assert attempt_of(store, rid).outcome == "filed"
 
 
 async def test_a_file_taken_without_a_fingerprint_says_so_on_the_request(lenv, monkeypatch):
     settings, store, _, _, fake_check, _ = lenv
-    _, check = _capture_deezer_id(fake_check)
+    _, check = _capture_reference(fake_check)
     monkeypatch.setattr(worker_mod, "fingerprint_check", check)
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
 
@@ -824,7 +836,7 @@ async def test_a_file_taken_without_a_fingerprint_says_so_on_the_request(lenv, m
 
 async def test_a_silent_source_falls_back_to_the_providers_instead_of_failing_the_request(lenv, monkeypatch):
     _, store, _, _, fake_check, _ = lenv
-    _, check = _capture_deezer_id(fake_check)
+    _, check = _capture_reference(fake_check)
     monkeypatch.setattr(worker_mod, "fingerprint_check", check)
     # Exactly the live failure: `conv.get_response()` times out, so the bot offers no candidate at all.
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
@@ -884,7 +896,7 @@ async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_o
 
 async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(lenv, monkeypatch):
     _, store, _, _, fake_check, _ = lenv
-    _, check = _capture_deezer_id(fake_check)
+    _, check = _capture_reference(fake_check)
     monkeypatch.setattr(worker_mod, "fingerprint_check", check)
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
     empty = FakeProvider(lenv[0].slskd_downloads, [])
@@ -1036,3 +1048,46 @@ async def test_a_lossy_filing_after_an_empty_search_does_not_promise_a_retry_tha
 
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
     assert "Try again" in notifier.sent[-1][0] and "try again on its own" not in notifier.sent[-1][0]
+
+
+async def test_the_video_is_the_reference_and_is_kept_beside_the_request(lenv, monkeypatch):
+    """Issue #67. A YouTube request carries the audio the owner actually pointed at, so nothing needs a
+    Deezer id to prove identity: the video's own fingerprints are fetched once and stored beside the
+    request, and the attempt's evidence names them."""
+    _, store, _, _, _, _ = lenv
+    calls = []
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        calls.append(url)
+        return AcousticReference("youtube", "abc", [[9, 9, 9]], [9, 9, 9, 9], 10.0, 30.0)
+
+    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and calls == ["https://www.youtube.com/watch?v=abc"]
+    assert store.get_reference(rid)["ref"] == "abc"
+    ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert ev["recording_match"]["reference"] == "youtube:abc"
+
+
+async def test_a_reference_that_cannot_be_fetched_skips_the_check_instead_of_crashing(lenv, monkeypatch):
+    """`fingerprint.check` used to fetch the preview itself and swallowed every way that could go wrong --
+    fpcalc handing back unparseable JSON (ValueError), a dead disk (OSError) -- into a "skipped" result.
+    The fetch has moved up into the worker, so the tolerance has to move with it: `upgrade()` turns a
+    ValueError into a 409 at the API, and `process()` would fail a request that used to file."""
+    _, store, _, _, _, _ = lenv
+
+    async def boom(deezer_id, http, tmp_dir):
+        raise ValueError("fpcalc printed nonsense")
+
+    monkeypatch.setattr(worker_mod, "deezer_reference", boom)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert r.state == RequestState.DONE and attempt_of(store, rid).outcome == "filed"
+    assert store.get_reference(rid) is None                   # nothing half-written to reuse
+    ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert ev["recording_match"]["status"] == "skipped" and ev["recording_match"]["reference"] is None
+    assert "fpcalc printed nonsense" in ev["recording_match"]["reason"]
