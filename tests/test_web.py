@@ -600,8 +600,8 @@ def test_preview_404s_when_the_candidate_has_no_deezer_id(client):
 def test_preview_404s_when_deezer_has_no_sample_for_the_track(client):
     c, store, _ = client
     cid = candidate_with(store, deezer_id=3135556)
-    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(return_value=httpx.Response(200,
-                                                                                 json=deezer_track_json()))
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json()))
     r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
     assert r.status_code == 404 and r.json()["detail"] == "no preview for this candidate"
 
