@@ -132,15 +132,20 @@ static int has_runnable_executable(int stagefd) {
     return 1;
 }
 
-/* 1 once the pid is gone, 0 on timeout. Refuse rather than proceed: the relaunch would put a second
- * copy on screen, and two Flackeys sharing one database is worse than no update. */
+/* 1 once the pid is gone, 0 on timeout, measured by the clock because naps overshoot on a busy
+ * machine. Refuse on timeout rather than proceed: a relaunch beside a live copy is two Flackeys
+ * sharing one database, which is worse than no update. */
 static int wait_for_exit(pid_t pid) {
     struct timespec nap = {.tv_sec = 0, .tv_nsec = WAIT_POLL_MS * 1000000L};
-    for (int waited = 0; waited < WAIT_TIMEOUT_MS; waited += WAIT_POLL_MS) {
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
         if (kill(pid, 0) != 0 && errno == ESRCH) return 1;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long elapsed_ms = (now.tv_sec - start.tv_sec) * 1000L + (now.tv_nsec - start.tv_nsec) / 1000000L;
+        if (elapsed_ms >= WAIT_TIMEOUT_MS) return 0;
         nanosleep(&nap, NULL);
     }
-    return 0;
 }
 
 static void relaunch(const char *dir) {
