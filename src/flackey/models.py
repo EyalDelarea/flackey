@@ -161,6 +161,7 @@ class Verdict:
     spectrogram_path: Path | None = None
     bit_depth: int | None = None      # lossless only; None for mp3
     sample_rate: int | None = None
+    analysis: dict | None = None     # versioned measurements; no calibrated probability implied
 
 
 @dataclass
