@@ -9,12 +9,14 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from telethon.errors import (
+    AuthKeyError,
     FloodWaitError,
     PasswordHashInvalidError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     PhoneNumberInvalidError,
     SessionPasswordNeededError,
+    UnauthorizedError,
 )
 
 log = logging.getLogger(__name__)
@@ -25,6 +27,56 @@ log = logging.getLogger(__name__)
 # cover a slow first connection, short enough that a wedged one becomes a sentence the owner can act
 # on. Overridden in tests.
 QR_START_TIMEOUT_S = 20.0
+
+# The probe below runs on the failure path of a request that has already gone wrong, and one of the
+# reasons it can go wrong is a network that answers nothing at all. Without a deadline of its own it
+# would hang the worker exactly when the worker most needs to get on with deciding what happened.
+# Overridden in tests.
+PROBE_TIMEOUT_S = 8.0
+
+
+async def probe_authorized(client: LoginClient) -> bool | None:
+    """Ask Telegram itself whether this session is still signed in.
+
+    Returns True (signed in), False (the session is gone) or None (could not tell -- the network is
+    down, Telegram is unreachable).
+
+    `is_user_authorized()` cannot answer this. Telethon caches `_authorized` at sign-in and clears it
+    nowhere except `log_out()`: neither `disconnect()` nor the update loop's own teardown touches it,
+    so once this run has signed in successfully the cached answer stays True for the rest of the run
+    even after Telegram has revoked the key underneath us. `get_me()` is a real request, which is the
+    only thing that knows -- and when the session is gone it answers `None` rather than raising,
+    because it catches `UnauthorizedError` itself (telethon/client/users.py).
+
+    The three-valued result is the whole point. A revoked session and a wifi drop reach this code as
+    the same builtin `ConnectionError`, and calling a wifi drop a revoked session would pause the
+    worker and raise a "sign in again" banner over a session that is perfectly fine."""
+    try:
+        async with asyncio.timeout(PROBE_TIMEOUT_S):
+            if not client.is_connected():
+                # Telethon tears its own socket down when the update loop sees the key rejected, so the
+                # client this is called on is usually already disconnected and could otherwise only
+                # ever answer "cannot tell". `GetConfig` needs no auth, so connecting proves nothing on
+                # its own -- the get_me() below is what decides.
+                await client.connect()
+            me = await client.get_me()
+    except (UnauthorizedError, AuthKeyError):
+        # Telegram itself saying no. `get_me()` swallows UnauthorizedError, so in the wild this clause
+        # catches the key errors that sit beside it (AuthKeyError is a sibling under RPCError, not a
+        # subclass, so nothing swallows those) -- and it keeps the answer right if a future telethon
+        # stops swallowing, or if connect() is the call that gets the refusal.
+        return False
+    except (OSError, TimeoutError):
+        # ConnectionError is an OSError; so is every socket failure underneath it. Telegram was not
+        # reached, so nothing here says anything about the session.
+        return None
+    except Exception:
+        # Anything else is a surprise, and a surprise is not evidence that the owner has been signed
+        # out. Guessing "signed out" here would pause the worker and cover the app in a sign-in banner
+        # for what may be a bug in this line; "cannot tell" costs a retry.
+        log.warning("could not check whether the Telegram session is still signed in", exc_info=True)
+        return None
+    return me is not None
 
 
 class LoginError(Exception):
@@ -69,11 +121,28 @@ class TelegramLogin:
             # a never-connected client exists only in the unconfigured case (app.py's credential guard);
             # calling it would raise rather than answer, so answer without touching it.
             return {"authorized": False, "configured": False, "phone_masked": None}
-        authorized = await self.client.is_user_authorized()
+        # Not `is_user_authorized()`: it answers from a cache that a revoked session never clears, so
+        # the Settings page and the sidebar used to keep saying "connected" for the rest of the run
+        # after Telegram had thrown this session out (issue #91). The probe asks Telegram.
+        authorized = await probe_authorized(self.client)
+        if authorized is None:
+            # Telegram was not reached, so we know nothing new -- and putting a "sign in again" screen
+            # over a working session because the wifi dropped is worse than saying nothing changed.
+            # The client's own cached answer is the last thing that was actually true: it only ever
+            # says True when this run signed in successfully. With nothing cached it makes a request
+            # of its own, which fails on the same dead socket -- and a client that has never signed in
+            # is, correctly, not signed in.
+            try:
+                authorized = await self.client.is_user_authorized()
+            except Exception:
+                # The page needs an answer and "no" is the safe one: it offers a sign-in.
+                log.warning("could not reach Telegram to check the session", exc_info=True)
+                authorized = False
         phone = None
         if authorized:
             try:
-                phone = (await self.client.get_me()).phone
+                me = await self.client.get_me()
+                phone = me.phone if me is not None else None
             except Exception:
                 # a failed lookup must not hide the connected state
                 log.warning("could not read the account's phone number", exc_info=True)
