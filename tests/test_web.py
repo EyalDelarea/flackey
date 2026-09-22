@@ -890,6 +890,25 @@ def _kept_rejection(store, settings, name="kept.mp3") -> tuple[int, Path]:
     return rj, kept
 
 
+def test_the_queue_hands_the_page_both_halves_of_the_comparison(client):
+    """The block the owner decides with is drawn from two fields on one list payload: the path to the copy
+    that was kept, and what it was checked against. Either one missing and the page silently draws nothing
+    at all -- no error, no empty state, just a rejected row that looks like every other rejected row. The
+    routes that serve the audio are tested above; this pins the list that says there is any to serve."""
+    c, store, settings = client
+    rj, _kept = _kept_rejection(store, settings)
+    rid = store.get_rejection(rj).request_id
+    store.set_state(rid, RequestState.REJECTED)
+    store.set_reference(rid, {"kind": "deezer", "ref": "3135556", "needles": [[1]], "full": [1],
+                              "excerpt_start_s": 95.0, "excerpt_s": 30.0})
+
+    b = next(b for b in c.get("/api/queue").json() if b["request"]["id"] == rid)
+
+    assert b["rejection"]["kind"] == "different_recording"
+    assert b["rejection"]["audio_path"].endswith("kept.mp3")
+    assert b["reference"] == {"kind": "deezer", "ref": "3135556", "excerpt_start_s": 95.0}
+
+
 def test_rejected_audio_serves_the_copy_that_was_kept(client):
     c, store, settings = client
     rj, kept = _kept_rejection(store, settings)

@@ -370,8 +370,6 @@ describe('failedSummary', () => {
                           failed(4, 'cancelled'), failed(5, 'cancelled')]))
       // Ordered by FAILED_COPY, not by what the list happens to hold first, so the sentence does not
       // reshuffle itself under the owner every time a row is retried or removed.
-      // Ordered by FAILED_COPY, not by what the list happens to hold first, so the sentence does not
-      // reshuffle itself under the owner every time a row is retried or removed.
       .toBe('1 of these 5 cannot be tried again — 1 failed the quality check. That row says what to do '
             + 'instead. 2 of these you stopped yourself, so Retry all leaves them out — press Try again '
             + 'on a row to start that one again.')
@@ -391,6 +389,17 @@ describe('failedSummary', () => {
   it('says so plainly when the button is disabled because nothing here can move', () => {
     expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected')]))
       .toBe('Nothing here can be tried again — 2 failed the quality check. Each row says what to do instead.')
+  })
+
+  it('counts the two refusals apart, because only one of them is about quality', () => {
+    // One `rejected` state, two entirely different things to have happened. Saying "3 failed the quality
+    // check" over a row that offers to file the file would be the summary contradicting the row (#92).
+    const different = bundle({ id: 3, state: 'rejected' }, { rejection: { id: 3, request_id: 3,
+      reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null,
+      created_at: '', kind: 'different_recording' } })
+    expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected'), different]))
+      .toBe('Nothing here can be tried again — 2 failed the quality check, 1 turned out to be a different '
+            + 'recording. Each row says what to do instead.')
   })
 
   it('stays silent when there is no gap to explain', () => {

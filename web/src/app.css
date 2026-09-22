@@ -275,7 +275,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    clip, decide. Only the shape differs. A card is a column because it carries four facts; these carry one
    each, so they are rows, and the two labels line up in a column so the eye can drop straight from "what
    you asked for" to "what Flackey found" without re-reading either. */
-.compare { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px 60px; }
+/* Held to a reading width rather than the row's: the block is two short lines and a button, and stretched
+   across the whole window it is mostly empty box with a control marooned at the left edge. */
+.compare { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px 60px; max-width: 520px; }
 .compare-head { font-size: 11px; font-weight: 500; color: var(--secondary); }
 /* Same edge, radius and wash as `.candidate`, and `position: relative` + `overflow: hidden` for the same
    two reasons: the rail anchors to the padding box, and a 2px bar must not overhang the 8px corner. */
@@ -296,6 +298,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* The one control on a failed row that changes anything, so it is the one thing drawn as a commitment --
    and the sentence beside it says exactly what it commits to, because "anyway" alone does not. */
 .compare-act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.compare-act .btn-primary { gap: 5px; }
 .compare-act .muted { font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .compare-side::before { transition: none; } }
 .skip { padding: 0 12px 12px 60px; }

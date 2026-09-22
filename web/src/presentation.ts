@@ -301,6 +301,18 @@ function outcomeOf(b: Bundle): OutcomeView | null {
   return copy ? { retryable: canRetry(state), note: copy.note } : null
 }
 
+/* `rejected` is one state and two refusals, and the summary must not merge them: telling the owner a track
+   "failed the quality check" while the row under it says the audio is genuine and offers to file it is the
+   same contradiction the row itself stopped making. So the tally is read off the rejection, not off the
+   state, and the two readings sit next to each other in the fixed order below. */
+const DIFFERENT_RECORDING_TALLY = 'turned out to be a different recording'
+const tallyOf = (b: Bundle): string | null =>
+  b.request.state === 'rejected' && b.rejection?.kind === 'different_recording'
+    ? DIFFERENT_RECORDING_TALLY
+    : FAILED_COPY[b.request.state]?.tally ?? null
+const TALLY_ORDER: string[] = (Object.keys(FAILED_COPY) as RequestState[])
+  .flatMap(s => s === 'rejected' ? [FAILED_COPY[s]!.tally, DIFFERENT_RECORDING_TALLY] : [FAILED_COPY[s]!.tally])
+
 /** The sentence beside "Retry all N" that reconciles it with the "Failed N" badge above it. The two numbers
  *  differ for two separate reasons, and the line answers whichever ones are on screen. A failure can be
  *  final, so no button will ever move it; or it can be a track the owner stopped, which has a Try again on
@@ -318,10 +330,10 @@ export function failedSummary(bundles: Bundle[]): string | null {
   if (finals.length === 0 && stopped.length === 0) return null
   const sentences: string[] = []
   if (finals.length > 0) {
-    // Fixed key order, not first-seen order: the line must read the same on every refresh, and the map is
+    // Fixed order, not first-seen order: the line must read the same on every refresh, and the tallies are
     // rebuilt from scratch each time the list changes.
-    const parts = (Object.keys(FAILED_COPY) as RequestState[])
-      .map(s => ({ n: finals.filter(b => b.request.state === s).length, tally: FAILED_COPY[s]!.tally }))
+    const parts = TALLY_ORDER
+      .map(tally => ({ n: finals.filter(b => tallyOf(b) === tally).length, tally }))
       .filter(p => p.n > 0)
       .map(p => `${p.n} ${p.tally}`)
     // No count in the head when the whole tab is final: "None of these 5" needs the reader to check the
