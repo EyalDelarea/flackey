@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from ..config import Settings
 from ..deezer import DeezerApi, DeezerError
 from ..inbox import BadLink, Inbox
-from ..models import FAILED_STATES, TERMINAL_STATES, RequestState
+from ..models import FAILED_STATES, SWEEPABLE_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
 from ..worker import Worker
 from . import Bundles, to_dict
@@ -109,10 +109,13 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
     @r.post("/requests/retry-failed")
     async def retry_failed(body: dict) -> dict:
         """"Retry all" on the Failed tab: the same `worker.retry` the per-row button calls, once per id,
-        so one place keeps deciding what re-queuing means. The ids come from the rows the owner can see,
-        so the batch honours whatever they have filtered down to. An id the worker refuses -- deleted, or
-        moved on since the page last heard -- lands in `skipped` instead of failing the whole batch, and
-        the caller can tell the owner that nothing was re-queued."""
+        so one place keeps deciding what re-queuing *means*. What the batch may touch is narrower than what
+        the button may, and that is decided here: `SWEEPABLE_STATES` leaves out CANCELLED, so a sweep never
+        restarts tracks the owner stopped on purpose (issue #92) even if a stale page sends their ids. The
+        rest of the ids come from the rows the owner can see, so the batch honours whatever they have
+        filtered down to. An id the worker refuses -- deleted, stopped, or moved on since the page last
+        heard -- lands in `skipped` instead of failing the whole batch, and the caller can tell the owner
+        that nothing was re-queued."""
         ids = body.get("ids")
         if not isinstance(ids, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
             raise HTTPException(400, "ids must be a list of request ids")
@@ -120,6 +123,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         skipped: list[int] = []
         for rid in ids:
             try:
+                if store.get_request(rid).state not in SWEEPABLE_STATES:
+                    raise ValueError("not swept by Retry all")
                 await worker.retry(rid)
             except (KeyError, ValueError):  # gone, or not in a state that can be retried
                 skipped.append(rid)

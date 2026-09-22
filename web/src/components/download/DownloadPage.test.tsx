@@ -218,8 +218,23 @@ describe('Retry all on the Failed tab', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'rejected'), mk(3, 'cancelled')])} />)
     expect(screen.getByRole('button', { name: /^Failed/ })).toHaveTextContent('Failed 3')
     openFailed()
+    // One rejected row is final; the stopped one has its own Try again and is not swept, so the button
+    // counts one and the sentence has to account for the other two separately (issue #92).
     expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
-    expect(screen.getByText(/2 of these 3 cannot be tried again — 1 failed the quality check, 1 you stopped/))
+    expect(screen.getByText(/1 of these 3 cannot be tried again — 1 failed the quality check/))
+      .toBeInTheDocument()
+    expect(screen.getByText(/One of these you stopped yourself, so Retry all leaves it out/))
+      .toBeInTheDocument()
+  })
+
+  it('does not offer to sweep the tracks the owner stopped', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'cancelled'), mk(2, 'cancelled')])} />)
+    openFailed()
+    // Every row has a Try again; the sweep has nothing to take, and the line under it says why rather
+    // than leaving a disabled button beside two live ones.
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
+    expect(screen.getByText(/2 of these you stopped yourself, so Retry all leaves them out/))
       .toBeInTheDocument()
   })
 
@@ -235,7 +250,8 @@ describe('Retry all on the Failed tab', () => {
     openFailed()
     // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
     expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
-    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(2)
+    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(1)
+    expect(screen.getAllByText(/Retry all leaves stopped tracks alone/)).toHaveLength(1)
   })
 
   it('says so when the call succeeds but nothing was re-queued', async () => {

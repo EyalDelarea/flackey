@@ -582,6 +582,24 @@ def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
     assert store.get_request(rejected).state == RequestState.REJECTED
 
 
+def test_retry_failed_never_sweeps_a_track_the_owner_stopped(client):
+    """Issue #92 gave a stopped track its own Try again, which the per-row route honours. The batch must
+    not: "Retry all" pressed once would otherwise restart an afternoon of deliberate stops. The page
+    already leaves those ids out, so this is the half that holds when the page is stale."""
+    c, store, _ = client
+    errored = store.add_request("e", RequestKind.TEXT)
+    store.set_state(errored, RequestState.ERROR, error_message="x")
+    stopped = store.add_request("c", RequestKind.TEXT)
+    store.set_state(stopped, RequestState.CANCELLED)
+
+    r = c.post("/api/requests/retry-failed", json={"ids": [errored, stopped]})
+
+    assert r.json() == {"retried": [errored], "skipped": [stopped]}
+    assert store.get_request(stopped).state == RequestState.CANCELLED
+    # ...and the row's own button still works on the very same request.
+    assert c.post(f"/api/requests/{stopped}/retry").json()["state"] == "queued"
+
+
 # ---- candidate previews ---------------------------------------------------
 # The preview URL Deezer signs expires about fifteen minutes out, so the route resolves it at play time
 # from `candidates.deezer_id` and 302s the browser at the CDN. These fake payloads carry the fields

@@ -95,9 +95,10 @@ export default function DownloadPage({ live }: { live: Live }) {
   const counts = bucketCounts(scoped)
   const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
   // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
-  // down to is what "Retry all" retries, and only the rows carrying a retry button can be re-queued at all
-  // -- a rejected or skipped track has nothing for the worker to try again, so it is not in the count.
-  const retryableIds = groups.flatMap(g => g.rows).filter(r => r.action?.kind === 'retry').map(r => r.id)
+  // down to is what "Retry all" retries. `sweepable`, not "has a retry button" -- a track the owner stopped
+  // carries the button and is still left out, so counting the buttons would promise a sweep of seventeen
+  // and move none of them (issue #92). The sentence beside the button says so.
+  const retryableIds = groups.flatMap(g => g.rows).filter(r => r.sweepable).map(r => r.id)
   // Same rows, same filter, so the sentence and the button count the same population.
   const summary = failedSummary(scoped)
   const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."

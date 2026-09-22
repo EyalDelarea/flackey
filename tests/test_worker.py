@@ -664,6 +664,40 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     assert r.state == RequestState.QUEUED and r.error_message is None and r.lossless_retry == 1
 
 
+async def test_retry_restarts_a_track_the_owner_stopped(env):
+    """Issue #92: a stopped track is the owner's decision, so the owner may undo it. The state that used
+    to be a dead end now comes straight back to the queue, keeping the version they had already chosen --
+    changing your mind about stopping is not a reason to be asked to pick again."""
+    settings, store, notifier = env
+    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request("q", RequestKind.TEXT)
+    cid = store.add_candidates(rid, [good_cand()])[0].id
+    store.update_request(rid, chosen_candidate_id=cid, attempts=2,
+                         flag_reason="Beatport unreachable, will retry")
+    await w.cancel(rid)
+    assert store.get_request(rid).state == RequestState.CANCELLED
+
+    r = await w.retry(rid)
+
+    assert r.state == RequestState.QUEUED
+    assert r.chosen_candidate_id == cid
+    # The row said "will retry" when it was stopped and the Failed tab refused to print that promise;
+    # coming back is what makes the promise true again, so the stale flag goes rather than being shown.
+    assert r.flag_reason is None and r.attempts == 0
+    assert [q.id for q in store.due_queued()] == [rid]
+
+
+async def test_retry_still_refuses_a_rejected_track(env):
+    """The one failure with no attempt left to repeat: the file was checked, failed and deleted. Widening
+    retry to CANCELLED must not widen it to this -- `accept_rejection` is the way back here."""
+    settings, store, notifier = env
+    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_state(rid, RequestState.REJECTED)
+    with pytest.raises(ValueError, match="nothing to retry"):
+        await w.retry(rid)
+
+
 async def test_retry_takes_back_exactly_the_retryable_states(env):
     """Three surfaces draw a retry button from this one decision -- the row's Try again, the Failed tab's
     Retry all, and the playlist import list -- and the Failed tab now puts it into words on every row. Walk

@@ -406,12 +406,15 @@ class Worker:
     async def retry(self, request_id: int) -> Request:
         """"Try now" on a backoff, "Try again" on a failure.
 
-        Only the two states in `RETRYABLE_STATES` come back. Both are the pipeline running out of road, and
-        another pass really can end differently. The other two failures are decisions rather than dead ends:
-        REJECTED means a file was checked, failed and thrown away, CANCELLED means the owner stopped the
-        track. Reviving either would overturn a verdict rather than repeat an attempt, so retry refuses them
-        and the way back is to submit the link again -- which starts a fresh request and leaves the decided
-        one as the record of what happened.
+        Only the three states in `RETRYABLE_STATES` come back. ERROR and NOT_FOUND are the pipeline running
+        out of road, and another pass really can end differently. CANCELLED is the owner's own decision, and
+        it comes back for exactly that reason (issue #92): pressing Try again on a track you stopped is you
+        changing your mind, not the app overturning a verdict. It is kept out of "Retry all" instead -- see
+        `SWEEPABLE_STATES` -- so an afternoon of deliberate stops cannot be undone by one press.
+
+        REJECTED is the one failure that stays out. A file was checked, failed and thrown away, so there is
+        no attempt to repeat: the way back is `accept_rejection` when the owner has listened and decided the
+        recording is fine after all, or submitting the link again for a fresh search.
         """
         req = self.store.get_request(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:
