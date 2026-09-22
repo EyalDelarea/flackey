@@ -582,6 +582,24 @@ def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
     assert store.get_request(rejected).state == RequestState.REJECTED
 
 
+def test_retry_failed_never_sweeps_a_track_the_owner_stopped(client):
+    """Issue #92 gave a stopped track its own Try again, which the per-row route honours. The batch must
+    not: "Retry all" pressed once would otherwise restart an afternoon of deliberate stops. The page
+    already leaves those ids out, so this is the half that holds when the page is stale."""
+    c, store, _ = client
+    errored = store.add_request("e", RequestKind.TEXT)
+    store.set_state(errored, RequestState.ERROR, error_message="x")
+    stopped = store.add_request("c", RequestKind.TEXT)
+    store.set_state(stopped, RequestState.CANCELLED)
+
+    r = c.post("/api/requests/retry-failed", json={"ids": [errored, stopped]})
+
+    assert r.json() == {"retried": [errored], "skipped": [stopped]}
+    assert store.get_request(stopped).state == RequestState.CANCELLED
+    # ...and the row's own button still works on the very same request.
+    assert c.post(f"/api/requests/{stopped}/retry").json()["state"] == "queued"
+
+
 # ---- candidate previews ---------------------------------------------------
 # The preview URL Deezer signs expires about fifteen minutes out, so the route resolves it at play time
 # from `candidates.deezer_id` and 302s the browser at the CDN. These fake payloads carry the fields
@@ -648,6 +666,55 @@ def test_preview_502s_when_deezer_is_unreachable(client):
     r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
     assert r.status_code == 502 and "Deezer" in r.json()["detail"]
 
+
+
+def test_accept_answers_400_when_there_is_no_copy_to_keep(client):
+    """The route is `act` over `worker.accept_rejection`, so the worker keeps deciding what the button
+    means; what is pinned here is that a refusal reaches the page as a sentence it can show, not a 500.
+    Filing the copy itself is exercised where the files are real, in test_worker.py."""
+    c, store, settings = client
+    rj, _kept = _kept_rejection(store, settings)
+    rid = store.get_rejection(rj).request_id
+
+    assert c.post(f"/api/requests/{rid}/accept").status_code == 400   # still REJECTED? no: not rejected yet
+    store.set_state(rid, RequestState.REJECTED)
+    store.clear_rejection_audio(rj)
+    r = c.post(f"/api/requests/{rid}/accept")
+    assert r.status_code == 400 and "no copy of it to keep" in r.json()["detail"]
+    assert c.post("/api/requests/999/accept").status_code == 404
+
+
+@respx.mock
+def test_reference_audio_plays_the_deezer_preview_a_request_was_checked_against(client):
+    """"A different recording" has to say different from *what*. When the reference is a Deezer preview
+    the browser can hear it, resolved at play time like a candidate's because the signature expires."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_reference(rid, {"kind": "deezer", "ref": "3135556", "needles": [[1]], "full": [1],
+                              "excerpt_start_s": 0.0, "excerpt_s": 30.0})
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json(preview=PREVIEW_URL)))
+
+    r = c.get(f"/api/requests/{rid}/reference/audio", follow_redirects=False)
+
+    assert r.status_code == 302 and r.headers["location"] == PREVIEW_URL
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_reference_audio_404s_for_a_video_reference_and_for_none_at_all(client):
+    """The other half of the reference is the owner's own YouTube video, and nothing local keeps its
+    audio -- the page links to it at the excerpt offset instead, from `reference` on the bundle."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    assert c.get(f"/api/requests/{rid}/reference/audio").status_code == 404
+    store.set_reference(rid, {"kind": "youtube", "ref": "abc123", "needles": [[1]], "full": [1],
+                              "excerpt_start_s": 131.5, "excerpt_s": 30.0})
+    assert c.get(f"/api/requests/{rid}/reference/audio").status_code == 404
+    assert c.get("/api/requests/999/reference/audio").status_code == 404
+
+    # The bundle carries what the page needs to draw that link, and none of the fingerprints it does not.
+    ref = c.get(f"/api/requests/{rid}").json()["reference"]
+    assert ref == {"kind": "youtube", "ref": "abc123", "excerpt_start_s": 131.5}
 
 
 def test_retry_failed_retries_only_the_ids_it_is_given(client):
@@ -811,6 +878,97 @@ def test_spectrogram(client, tmp_path: Path):
     r = c.get(f"/api/rejections/{rj}/spectrogram.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
     assert c.get("/api/rejections/999/spectrogram.png").status_code == 404
+
+
+def _kept_rejection(store, settings, name="kept.mp3") -> tuple[int, Path]:
+    rid = store.add_request("wrong take", RequestKind.TEXT)
+    settings.rejected_dir.mkdir(parents=True, exist_ok=True)
+    kept = settings.rejected_dir / name
+    kept.write_bytes(b"ID3fake audio")
+    rj = store.add_rejection(rid, "a different recording: best score 0.77 below 0.79", 320, None, None,
+                             kind="different_recording", audio_path=kept)
+    return rj, kept
+
+
+def test_the_queue_hands_the_page_both_halves_of_the_comparison(client):
+    """The block the owner decides with is drawn from two fields on one list payload: the path to the copy
+    that was kept, and what it was checked against. Either one missing and the page silently draws nothing
+    at all -- no error, no empty state, just a rejected row that looks like every other rejected row. The
+    routes that serve the audio are tested above; this pins the list that says there is any to serve."""
+    c, store, settings = client
+    rj, _kept = _kept_rejection(store, settings)
+    rid = store.get_rejection(rj).request_id
+    store.set_state(rid, RequestState.REJECTED)
+    store.set_reference(rid, {"kind": "deezer", "ref": "3135556", "needles": [[1]], "full": [1],
+                              "excerpt_start_s": 95.0, "excerpt_s": 30.0})
+
+    b = next(b for b in c.get("/api/queue").json() if b["request"]["id"] == rid)
+
+    assert b["rejection"]["kind"] == "different_recording"
+    assert b["rejection"]["audio_path"].endswith("kept.mp3")
+    assert b["reference"] == {"kind": "deezer", "ref": "3135556", "excerpt_start_s": 95.0}
+
+
+def test_rejected_audio_serves_the_copy_that_was_kept(client):
+    c, store, settings = client
+    rj, kept = _kept_rejection(store, settings)
+
+    r = c.get(f"/api/rejections/{rj}/audio")
+
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg"
+    assert r.content == kept.read_bytes()
+
+
+def test_rejected_audio_404s_when_there_is_nothing_to_play(client, tmp_path: Path):
+    """Three ways to have no copy, one answer. A quality rejection never kept one; a kept one can be
+    filed or cleaned up out from under the row; and a path outside `rejected_dir` is not this route's to
+    read, whichever build or hand wrote it there."""
+    c, store, settings = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    quality = store.add_rejection(rid, "bitrate too low", 128, 15000, None)
+    assert c.get(f"/api/rejections/{quality}/audio").status_code == 404
+    assert c.get("/api/rejections/999/audio").status_code == 404
+
+    rj, kept = _kept_rejection(store, settings, "gone.mp3")
+    kept.unlink()
+    assert c.get(f"/api/rejections/{rj}/audio").status_code == 404
+
+    elsewhere = tmp_path / "secret.mp3"
+    elsewhere.write_bytes(b"not yours")
+    stray = store.add_rejection(store.add_request("q2", RequestKind.TEXT), "x", 320, None, None,
+                                kind="different_recording", audio_path=elsewhere)
+    assert c.get(f"/api/rejections/{stray}/audio").status_code == 404
+
+
+def test_rejected_audio_refuses_a_format_the_browser_cannot_play(client):
+    # Refused rather than served under a guessed type: a wrong content type is a player that fails
+    # silently, which reads as a broken feature instead of an unplayable file.
+    c, store, settings = client
+    rj, _kept = _kept_rejection(store, settings, "odd.aac")
+    r = c.get(f"/api/rejections/{rj}/audio")
+    assert r.status_code == 415 and "aac" in r.json()["detail"]
+
+
+def test_delete_takes_the_kept_copy_with_the_row(client):
+    c, store, settings = client
+    rj, kept = _kept_rejection(store, settings)
+    rid = store.get_rejection(rj).request_id
+    store.set_state(rid, RequestState.REJECTED)
+
+    assert c.delete(f"/api/requests/{rid}").status_code == 200
+
+    assert not kept.exists()
+
+
+def test_clear_failed_takes_the_kept_copies_too(client):
+    c, store, settings = client
+    rj, kept = _kept_rejection(store, settings)
+    rid = store.get_rejection(rj).request_id
+    store.set_state(rid, RequestState.REJECTED)
+
+    assert c.post("/api/requests/clear-failed").json()["removed"] == [rid]
+
+    assert not kept.exists()
 
 
 def test_static_ui_mount(tmp_path: Path):

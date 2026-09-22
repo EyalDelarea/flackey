@@ -44,7 +44,7 @@ TERMINAL_STATES = {
     RequestState.ERROR,
 }
 # "Terminal" here means the pipeline has stopped and the row may be deleted -- not that the state can never
-# change. Two of the six below are handed back to the queue by `Worker.retry`; see RETRYABLE_STATES.
+# change. Three of the six below are handed back to the queue by `Worker.retry`; see RETRYABLE_STATES.
 FAILED_STATES = {
     RequestState.REJECTED,
     RequestState.CANCELLED,
@@ -54,8 +54,13 @@ FAILED_STATES = {
 # The subset of FAILED_STATES `Worker.retry` takes back, and the reason the Failed badge and the "Retry all"
 # button count differently. Defined once so every surface that offers a retry -- the worker, the row button,
 # the batch route, the words the UI puts on a row -- reads the same set; `test_failed_states_match_the_ui`
-# pins `web/src/presentation.ts` to both sets so the browser copy cannot drift away from the worker.
-RETRYABLE_STATES = {RequestState.ERROR, RequestState.NOT_FOUND}
+# pins `web/src/presentation.ts` to all three sets so the browser copy cannot drift away from the worker.
+RETRYABLE_STATES = {RequestState.ERROR, RequestState.NOT_FOUND, RequestState.CANCELLED}
+# What "Retry all" sweeps: the failures the pipeline arrived at by itself. CANCELLED is retryable but not
+# swept, because it is the one failure that was a decision -- a batch that re-queued every track the owner
+# had deliberately stopped would undo an afternoon of stopping them with one press (issue #92). The row's
+# own "Try again" is how a stopped track comes back, one deliberate press for one deliberate stop.
+SWEEPABLE_STATES = RETRYABLE_STATES - {RequestState.CANCELLED}
 
 
 def is_original(version: str | None) -> bool:
@@ -262,6 +267,9 @@ class Rejection:
     # Defaulted so a row written before the column existed still loads, and reads as the only kind there
     # was then.
     kind: str = "quality"
+    # The refused file, kept so the owner can hear it before deciding (issue #92). Only ever set on a
+    # 'different_recording' rejection, and cleared the moment the file leaves -- filed or deleted.
+    audio_path: str | None = None
 
 
 @dataclass

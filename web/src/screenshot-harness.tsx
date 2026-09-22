@@ -57,7 +57,7 @@ const track = (over: Partial<Track>): Track => ({
 
 /* One failure of each kind, which is the only way to see the Failed tab answer its own question: two rows
    the worker will take back, two it will not, and a summary line reconciling the badge with the button. */
-const failure = (id: number, state: RequestState, over: Partial<Request> = {}): Bundle => ({
+const failure = (id: number, state: RequestState, over: Partial<Request> = {}, rest: Partial<Bundle> = {}): Bundle => ({
   request: {
     id, created_at: '2026-09-16T20:00:00Z', updated_at: '2026-09-16T20:05:00Z', kind: 'yt_track', state,
     raw_text: 'https://youtu.be/x', playlist_id: null, playlist_position: null, source_url: null,
@@ -65,7 +65,7 @@ const failure = (id: number, state: RequestState, over: Partial<Request> = {}): 
     chosen_candidate_id: null, catalog_track_id: null, confidence: null, flag_reason: null, error_message: null,
     attempts: 0, retry_after: null, track_id: null, fetch_source: null, ...over,
   },
-  candidates: [], catalog: null, track: null, rejection: null,
+  candidates: [], catalog: null, track: null, rejection: null, ...rest,
 })
 
 const failures: Bundle[] = [
@@ -73,7 +73,15 @@ const failures: Bundle[] = [
     error_message: 'the people who had it stopped sending part-way through' }),
   failure(42, 'not_found', { query_artist: 'Vibrasphere', query_title: 'Lime Twig',
     error_message: 'could not identify this track: no Deezer candidates and no Beatport match; no artist and title could be read from the request, so there is nothing to search for' }),
-  failure(43, 'rejected', { query_artist: 'Symbolic', query_title: 'Gravity Waves' }),
+  /* The row issue #92 is about: genuine audio the fingerprint called a different recording. Its copy was
+     kept, and the reference it was checked against is a Deezer preview, so both halves of the compare
+     block are playable -- which is the whole state the screenshot has to show. */
+  failure(43, 'rejected', { query_artist: 'Symbolic', query_title: 'Gravity Waves' }, {
+    rejection: { id: 8, request_id: 43, reason: 'a different recording: best score 0.77 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null, created_at: '2026-09-16T20:05:00Z',
+      kind: 'different_recording', audio_path: '/data/rejected/req43-1758000000.flac' },
+    reference: { kind: 'deezer', ref: '1109731', excerpt_start_s: 95 },
+  }),
   failure(44, 'cancelled', { query_artist: 'Human Element', query_title: 'The Answer' }),
   failure(45, 'cancelled', { query_artist: 'Atmos', query_title: 'Klein Aber Doctor',
     flag_reason: 'Beatport unreachable, will retry' }),
@@ -233,31 +241,7 @@ function scenarioSetup() {
         lastEventSource?.handlers['queue']?.({ data: '' })
         return b.request
       })
-      // Nothing is serving /api/candidates/{id}/preview here, so every press would take a 404 and the
-      // element would fire `error` -- a screenshot of the playing card showing none of the playing card.
-      // So the whole clip is faked for this scenario only: `src` goes nowhere, `play` resolves, and a
-      // clock runs for 30 s, dispatching the `timeupdate`s the page drives its rail and its numeral from
-      // and the `ended` it fades on. That makes every state reachable by pressing the button -- the
-      // sliver for the first quarter second, then the fill, then the fade. The harness is proving the
-      // arrangement and the states, not the network behind them.
-      Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() { /* no-op */ }, get: () => '' })
-      {
-        let at = 0
-        let clock = 0
-        Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { get: () => at, set(v: number) { at = v } })
-        Object.defineProperty(HTMLMediaElement.prototype, 'duration', { get: () => 30 })
-        HTMLMediaElement.prototype.pause = function () { window.clearInterval(clock) }
-        HTMLMediaElement.prototype.load = function () { window.clearInterval(clock); at = 0 }
-        HTMLMediaElement.prototype.play = async function () {
-          window.clearInterval(clock)
-          at = 0
-          clock = window.setInterval(() => {
-            at = Math.min(30, at + 0.25)
-            if (at >= 30) window.clearInterval(clock)
-            this.dispatchEvent(new Event(at >= 30 ? 'ended' : 'timeupdate'))
-          }, 250)
-        }
-      }
+      fakeAudio()
       break
     case 'failed':
       // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the
@@ -265,6 +249,9 @@ function scenarioSetup() {
       // harness that forced the view would stop proving the chip reaches it.
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
+      // The refused copy and the reference it was compared against are played through the same element
+      // the candidate samples use, so this tab needs the same stand-in clip (issue #92).
+      fakeAudio()
       break
     default:
       vi_spy(api, 'health', async () => health())
@@ -277,6 +264,32 @@ const playlist: Playlist = { id: 1, source_url: 'https://open.spotify.com/playli
 
 function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K]) {
   ;(obj as any)[key] = impl
+}
+
+/* Nothing is serving audio here, so every press would take a 404 and the element would fire `error` -- a
+   screenshot of the playing card showing none of the playing card. So the whole clip is faked: `src` goes
+   nowhere, `play` resolves, and a clock runs for 30 s, dispatching the `timeupdate`s the page drives its
+   rail and its numeral from and the `ended` it fades on. That makes every state reachable by pressing the
+   button -- the sliver for the first quarter second, then the fill, then the fade. The harness is proving
+   the arrangement and the states, not the network behind them. Called by whichever scenarios have
+   something to play; the prototype is patched once either way. */
+function fakeAudio() {
+  Object.defineProperty(HTMLMediaElement.prototype, 'src', { set() { /* no-op */ }, get: () => '' })
+  let at = 0
+  let clock = 0
+  Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { get: () => at, set(v: number) { at = v } })
+  Object.defineProperty(HTMLMediaElement.prototype, 'duration', { get: () => 30 })
+  HTMLMediaElement.prototype.pause = function () { window.clearInterval(clock) }
+  HTMLMediaElement.prototype.load = function () { window.clearInterval(clock); at = 0 }
+  HTMLMediaElement.prototype.play = async function () {
+    window.clearInterval(clock)
+    at = 0
+    clock = window.setInterval(() => {
+      at = Math.min(30, at + 0.25)
+      if (at >= 30) window.clearInterval(clock)
+      this.dispatchEvent(new Event(at >= 30 ? 'ended' : 'timeupdate'))
+    }, 250)
+  }
 }
 
 scenarioSetup()

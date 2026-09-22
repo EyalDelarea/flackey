@@ -76,7 +76,14 @@ CREATE TABLE IF NOT EXISTS rejections (
   -- wrong track). The page draws a different explanation for each, and reading the kind is the only way it
   -- can tell them apart -- `reason` is written for a human and `cutoff_hz` is absent on both a
   -- different-recording rejection and an unsupported-format one.
-  kind TEXT NOT NULL DEFAULT 'quality'
+  kind TEXT NOT NULL DEFAULT 'quality',
+  -- Where the refused file was kept, for the one rejection the owner may overrule. A 'different_recording'
+  -- verdict says the audio is genuine and not the track that was asked for, which is a judgement an ear can
+  -- overturn -- an old track remastered or re-mixed can score below the floor and still be the copy the
+  -- owner wants (issue #92). So that file is moved aside instead of deleted: this path is what the row
+  -- plays and what "Keep it anyway" files. NULL on every other rejection, and on one whose file has since
+  -- been filed or removed.
+  audio_path TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS lossless_attempts (
@@ -125,6 +132,7 @@ class Store:
         self._ensure_column("tracks", "sample_rate", "INTEGER")
         self._ensure_column("candidates", "has_preview", "INTEGER")
         self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
+        self._ensure_column("rejections", "audio_path", "TEXT")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
@@ -505,17 +513,26 @@ class Store:
 
     # ---- rejections -----------------------------------------------------
     def add_rejection(self, request_id: int, reason: str, bitrate_kbps: int | None, cutoff_hz: int | None,
-                      spectrogram_path: Path | None, *, kind: str = "quality") -> int:
+                      spectrogram_path: Path | None, *, kind: str = "quality",
+                      audio_path: Path | None = None) -> int:
         """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
-        genuine audio of the wrong track). Keyword-only so no caller can drift into the positional slot that
-        the spectrogram already holds."""
+        genuine audio of the wrong track). `audio_path` is the refused file, kept only for the second kind.
+        Both keyword-only so no caller can drift into the positional slot that the spectrogram already
+        holds."""
         cur = self.conn.execute(
-            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, kind) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, "
+            "kind, audio_path) VALUES (?,?,?,?,?,?,?,?)",
             (request_id, reason, bitrate_kbps, cutoff_hz,
-             None if spectrogram_path is None else str(spectrogram_path), _now(), kind))
+             None if spectrogram_path is None else str(spectrogram_path), _now(), kind,
+             None if audio_path is None else str(audio_path)))
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def clear_rejection_audio(self, rejection_id: int) -> None:
+        """The kept file is gone -- filed by "Keep it anyway", or deleted. The row stays as the record of
+        what happened; only the promise that there is something to play is withdrawn."""
+        self.conn.execute("UPDATE rejections SET audio_path=NULL WHERE id=?", (rejection_id,))
+        self.conn.commit()
 
     def get_rejection(self, rejection_id: int) -> Rejection:
         r = self.conn.execute("SELECT * FROM rejections WHERE id=?", (rejection_id,)).fetchone()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, candidatePreviewUrl } from '../../api'
+import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
 import { bucketCounts, bucketOf, failedSummary, groupRows } from '../../presentation'
 import type { Bucket, RowAction } from '../../presentation'
@@ -12,16 +12,16 @@ import PasteBar from './PasteBar'
 /** Everything the page's one <audio> knows, spread over the cards that might be the one playing. It lives
  *  here because the element does; `Group` and `RequestRow` only carry it down. */
 export interface PlayerState {
-  /** The candidate the owner pressed. Set on the press, not on the audio: the card lights immediately. */
-  playing: number | null
+  /** The sample the owner pressed, by `SampleView.key`. Set on the press, not on the audio: the control
+   *  lights immediately. A key rather than a candidate id since issue #92 -- a rejected row plays two
+   *  clips that belong to no candidate, and one player has to be able to tell all of them apart. */
+  playing: string | null
   /** Where that clip is, once the element has reported a position at all. Null means pressed and waiting. */
-  clock: { id: number; at: number; of: number } | null
+  clock: { key: string; at: number; of: number } | null
   /** Four seconds after a press with still nothing to play. */
   slow: boolean
-  /** The candidate whose last press could not be loaded. Transient -- the next press clears it. */
-  failed: number | null
-  /** Candidates Deezer has no sample for, known before any of this is drawn. They show no play control. */
-  noSample: ReadonlySet<number>
+  /** The sample whose last press could not be loaded. Transient -- the next press clears it. */
+  failed: string | null
 }
 
 // Deezer's previews are 30 s. Only a fallback: the element reports the real duration on the first
@@ -46,38 +46,29 @@ export default function DownloadPage({ live }: { live: Live }) {
   const [filter, setFilter] = useState<Bucket | 'all'>('all')
   const [retryingAll, setRetryingAll] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
-  // One element for the whole page, and the id it is playing: two rows can sit in `awaiting_review` at
+  // One element for the whole page, and the key it is playing: two rows can sit in `awaiting_review` at
   // once, and starting a sample in one has to stop the one already running in the other.
   const audio = useRef<HTMLAudioElement>(null)
   // What the press says, not what the audio says: the card lights the moment it is pressed, and the clock
   // arrives whenever the element gets round to it.
-  const [playing, setPlaying] = useState<number | null>(null)
-  // Where the clip is, once the element has said so at all. It carries the id because it outlives
-  // `playing` by the length of the ended fade -- a rail belongs to the card it was filling.
+  const [playing, setPlaying] = useState<string | null>(null)
+  // Where the clip is, once the element has said so at all. It carries the key because it outlives
+  // `playing` by the length of the ended fade -- a rail belongs to the control it was filling.
   const [clock, setClock] = useState<PlayerState['clock']>(null)
   // A press whose load came to nothing. Availability is settled before the card is drawn, so this is the
   // transient half: a signed URL that expired, Deezer unreachable at press time. The next press clears it
   // and the button never goes away.
-  const [failed, setFailed] = useState<number | null>(null)
-  // Which candidate the element's `src` points at. The error event carries no id, and the handler's own
+  const [failed, setFailed] = useState<string | null>(null)
+  // Which sample the element's `src` points at. The error event carries no key, and the handler's own
   // `playing` can already have moved on to the next press by the time a failed load reports back -- so
-  // the id the blame belongs to rides in a ref, written at the same moment as the `src`.
-  const source = useRef<number | null>(null)
+  // the key the blame belongs to rides in a ref, written at the same moment as the `src`.
+  const source = useRef<string | null>(null)
   // What History has already shown: a fresh id that lands in a terminal state while the owner is looking
   // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
   const [seenHistoryIds, setSeenHistoryIds] = useState<Set<number>>(new Set())
   const soulseekConnected = live.health?.lossless?.enabled && live.health.lossless.provider?.status === 'ok'
   const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress }
   const bundles = [...live.bundles.values()]
-  // Whether Deezer has a sample is known before anything is drawn: `has_preview` rides along on the
-  // candidate the queue already returns, and a card in here shows no play control at all -- not a dead
-  // one. Two ways to land in it. An explicit `false` is Deezer answering no. A missing `deezer_id` is a
-  // candidate that never went through Deezer enrichment at all, so it reports `has_preview: null` for the
-  // same reason it has no identity to resolve -- and the route 404s on it without so much as a call. What
-  // is left is a genuine unknown: a row older than the column, which keeps its button and behaves exactly
-  // as it always has, because the route may well succeed.
-  const noSample = new Set(bundles.flatMap(b => b.candidates)
-    .filter(c => c.has_preview === false || c.deezer_id == null).map(c => c.id))
   const scoped = bundles.filter(b => view === 'active' ? !isFinished(b)
     : view === 'failed' ? isFailed(b)
     : isFinished(b))
@@ -95,9 +86,10 @@ export default function DownloadPage({ live }: { live: Live }) {
   const counts = bucketCounts(scoped)
   const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
   // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
-  // down to is what "Retry all" retries, and only the rows carrying a retry button can be re-queued at all
-  // -- a rejected or skipped track has nothing for the worker to try again, so it is not in the count.
-  const retryableIds = groups.flatMap(g => g.rows).filter(r => r.action?.kind === 'retry').map(r => r.id)
+  // down to is what "Retry all" retries. `sweepable`, not "has a retry button" -- a track the owner stopped
+  // carries the button and is still left out, so counting the buttons would promise a sweep of seventeen
+  // and move none of them (issue #92). The sentence beside the button says so.
+  const retryableIds = groups.flatMap(g => g.rows).filter(r => r.sweepable).map(r => r.id)
   // Same rows, same filter, so the sentence and the button count the same population.
   const summary = failedSummary(scoped)
   const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
@@ -129,7 +121,7 @@ export default function DownloadPage({ live }: { live: Live }) {
   const stop = () => { const el = audio.current; if (!el) return; el.currentTime = 0; release(el); setPlaying(null); setClock(null) }
   // Pressed, and still nothing to play. Keyed on `playing` as well, so a second press while the first is
   // still resolving starts the four seconds over rather than inheriting them.
-  const waiting = playing != null && clock?.id !== playing
+  const waiting = playing != null && clock?.key !== playing
   const [slow, setSlow] = useState(false)
   useEffect(() => {
     if (!waiting) { setSlow(false); return }
@@ -144,7 +136,7 @@ export default function DownloadPage({ live }: { live: Live }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [playing])
-  const onPlay = (cid: number) => {
+  const onPlay = (key: string, url: string) => {
     const el = audio.current
     if (!el) return
     el.pause()
@@ -152,23 +144,26 @@ export default function DownloadPage({ live }: { live: Live }) {
     setFailed(null)
     // A second press on the one that is playing is a stop, and a stop rewinds: the next press should
     // start the sample over rather than resume its last two seconds.
-    if (playing === cid) { el.currentTime = 0; release(el); setPlaying(null); return }
+    if (playing === key) { el.currentTime = 0; release(el); setPlaying(null); return }
     // Assigning `src` re-runs the element's load, even with the same string -- which is what makes a
     // replay resolve a fresh signature instead of chasing the expired one.
-    source.current = cid
-    el.src = candidatePreviewUrl(cid)
-    setPlaying(cid)
+    source.current = key
+    el.src = url
+    setPlaying(key)
     // Pausing the element -- or repointing its `src` -- rejects a `play()` that has not settled yet, with
     // an AbortError. Switching candidates does both, so this lands for the candidate left behind, one
-    // microtask after the next one has been made the playing id. Clearing `playing` unconditionally there
+    // microtask after the next one has been made the playing key. Clearing `playing` unconditionally there
     // would wipe out the new one: its sample would go on playing with its button back on Play, and no
     // Stop anywhere -- the very state the unmount cleanup exists to prevent.
-    el.play()?.catch(() => setPlaying(p => (p === cid ? null : p)))
+    el.play()?.catch(() => setPlaying(p => (p === key ? null : p)))
   }
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
     else if (kind === 'reveal' && path) run(api.reveal(path))
     else if (kind === 'retry') run(api.retry(id).then(() => live.refresh()))
+    // Filing moves the very file the block above was playing, so the clip has to stop with it -- the row
+    // is about to be redrawn as a finished track with no player on it at all.
+    else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
     else if (kind === 'cancel') run(api.cancel(id))
     else if (kind === 'remove') run(api.removeRequest(id).then(() => live.dropBundle(id)))
   }
@@ -210,7 +205,7 @@ export default function DownloadPage({ live }: { live: Live }) {
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
         {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
-          player={{ playing, clock, slow, failed, noSample }} onPlay={onPlay} />)}
+          player={{ playing, clock, slow, failed }} onPlay={onPlay} />)}
       </div>
       {/* The page's one player. `preload="none"` and no `src` until a play is pressed, because the route
           resolves the sample against Deezer on every request -- and none again the moment it stops.
@@ -219,12 +214,12 @@ export default function DownloadPage({ live }: { live: Live }) {
           leaves its button live. The clock is kept on `ended` and dropped on the next press, so the rail
           finishes full and fades out full rather than draining as it goes. */}
       <audio ref={audio} preload="none"
-        onTimeUpdate={e => { const id = source.current; if (id == null) return
+        onTimeUpdate={e => { const key = source.current; if (key == null) return
           const el = e.currentTarget
-          setClock({ id, at: el.currentTime, of: Number.isFinite(el.duration) && el.duration > 0 ? el.duration : SAMPLE_SECONDS }) }}
+          setClock({ key, at: el.currentTime, of: Number.isFinite(el.duration) && el.duration > 0 ? el.duration : SAMPLE_SECONDS }) }}
         onEnded={() => { const el = audio.current; if (el) release(el); setPlaying(null) }}
-        onError={() => { const id = source.current; if (id == null) return
-          setFailed(id); setPlaying(p => (p === id ? null : p)); setClock(c => (c?.id === id ? null : c)) }} />
+        onError={() => { const key = source.current; if (key == null) return
+          setFailed(key); setPlaying(p => (p === key ? null : p)); setClock(c => (c?.key === key ? null : c)) }} />
     </>
   )
 }

@@ -1,5 +1,5 @@
 import type { Bundle, Candidate, FetchProgress, Playlist, Request, RequestState } from './api'
-import { spectrogramUrl } from './api'
+import { candidatePreviewUrl, referenceAudioUrl, rejectedAudioUrl, spectrogramUrl } from './api'
 
 export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
 /* A rung earns its place if the request can stop on it: Search ends in not_found, Choose waits on the owner
@@ -22,8 +22,22 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove'; path?: string }
-export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept'; path?: string }
+/** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
+ *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
+ *  kinds of audio can be playing and only one of them belongs to a candidate. */
+export interface SampleView { key: string; label: string; url: string }
+/** The two sides of "a different recording", for the rejected row that has to let the owner judge it.
+ *  `found` is the copy that was refused, played off this machine. `reference` is what it was compared
+ *  against -- playable when that was a Deezer preview, and a link to the owner's own video when it was
+ *  not, because nothing here keeps a copy of their video's audio. Either half can be missing: a row whose
+ *  kept file was cleaned up, a request with no stored reference at all. */
+export interface SamplesView { found: SampleView | null; reference: SampleView | null; video: { url: string; at: string } | null }
+export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean
+  /** Null when Deezer has no sample for this record, which is known before the card is drawn -- so the
+   *  card shows no play control at all rather than a dead one. Built here rather than in the page,
+   *  because this is where every other thing a control needs is decided. */
+  sample: SampleView | null }
 export interface RejectionView { reason: string; cutoffKhz: number | null; caption: string; spectrogramUrl: string | null }
 /** Why a row is sitting in a list called "Failed" and whether it can come back. Present on failed rows
  *  only -- the ones the owner is looking at when they ask that question. */
@@ -33,8 +47,13 @@ export interface RowView {
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
+  /** Whether "Retry all" would take this row. Narrower than having a retry button: a track the owner
+   *  stopped has the button and is not swept. The page counts the sweep from this rather than from the
+   *  button, so the count beside "Retry all" is the number of rows it will actually move. */
+  sweepable: boolean
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
+  samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
 export interface ProgressView { pct: number | null; label: string }
@@ -74,22 +93,30 @@ export const bucketOf = (state: RequestState): Bucket => BUCKET_OF[state]
    interesting ones: a thirteenth state then fails the build here instead of quietly classifying itself as
    final and appearing in the Failed list with nothing to say about it.
    - `open`: the pipeline still has it, so the question does not arise.
-   - `retryable`: stopped, but `Worker.retry` takes it back and re-queues it. Exactly `RETRYABLE_STATES` in
-     src/flackey/models.py -- `test_failed_states_match_the_ui` fails if these two lists disagree, because a
-     button offering a retry the worker refuses is the confusion this whole table exists to end.
+   - `retryable`: stopped by the pipeline running out of road, and `Worker.retry` takes it back. "Retry all"
+     sweeps exactly these -- `SWEEPABLE_STATES` in src/flackey/models.py.
+   - `stopped`: the owner stopped it. `Worker.retry` takes it back too, so the row has a Try again button,
+     but a sweep leaves it alone: one deliberate press to undo one deliberate stop (issue #92). Together
+     with `retryable` this is exactly `RETRYABLE_STATES`, and `test_failed_states_match_the_ui` fails if
+     these lists disagree, because a button offering a retry the worker refuses is the confusion this whole
+     table exists to end.
    - `final`: nothing in the app moves it again. `done` and `duplicate` are final because they succeeded;
-     `rejected` and `cancelled` because a verdict was reached, not because the app ran out of ideas. */
-export type Finality = 'open' | 'retryable' | 'final'
+     `rejected` because a file was checked, failed and deleted -- there is no attempt left to repeat, only
+     "Keep it anyway" once the owner has listened to it. */
+export type Finality = 'open' | 'retryable' | 'stopped' | 'final'
 const FINALITY_OF: Record<RequestState, Finality> = {
   queued: 'open', identifying: 'open', awaiting_review: 'open', fetching: 'open', verifying: 'open', filing: 'open',
   done: 'final', duplicate: 'final',
   error: 'retryable', not_found: 'retryable',
-  rejected: 'final', cancelled: 'final',
+  rejected: 'final', cancelled: 'stopped',
 }
 /** The one answer to "can the owner press a button and have this tried again?". Every retry affordance in
  *  the UI asks this rather than carrying its own list of states, which is how the Failed badge and the
  *  "Retry all" button came to count different things. */
-export const canRetry = (state: RequestState): boolean => FINALITY_OF[state] === 'retryable'
+export const canRetry = (state: RequestState): boolean =>
+  FINALITY_OF[state] === 'retryable' || FINALITY_OF[state] === 'stopped'
+/** …and the one answer to "does *Retry all* take it?", which is the narrower question. */
+export const sweptByRetryAll = (state: RequestState): boolean => FINALITY_OF[state] === 'retryable'
 
 /* What the Failed list says about each way of failing. `tally` is the fragment the summary line above the
    list counts with ("20 you stopped"); `note` is the sentence on the row itself, and every one of them ends
@@ -112,7 +139,7 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
   cancelled: {
     tally: 'you stopped',
-    note: 'You stopped this one — nothing went wrong with it. Flackey will not pick it back up on its own; paste the link again to start over.',
+    note: 'You stopped this one — nothing went wrong with it. Try again puts it back in the queue and picks up where it left off. Retry all leaves stopped tracks alone, so this is the only button that starts it.',
   },
 }
 
@@ -257,34 +284,102 @@ function titleOf(b: Bundle): { title: string; version: string | null } {
   return { title: r.raw_text, version: null }
 }
 
-function outcomeOf(state: RequestState): OutcomeView | null {
+/* The words below a failed row. Keyed off the state, except for the one row where the state does not say
+   enough: a rejection whose refused copy was kept is not the dead end `FAILED_COPY.rejected` describes --
+   the file is still here and there is a button that files it. Printing "checked, failed and deleted" over
+   a player would be the row contradicting itself (issue #92). */
+const KEPT_COPY_NOTE = 'The audio is genuine — it just did not match the recording you asked for closely '
+  + 'enough. Listen to both below: if this is the take you wanted after all, Keep it anyway files this '
+  + 'very copy. Nothing is deleted until you remove the row.'
+
+function outcomeOf(b: Bundle): OutcomeView | null {
+  const state = b.request.state
+  if (state === 'rejected' && b.rejection?.kind === 'different_recording' && b.rejection.audio_path) {
+    return { retryable: false, note: KEPT_COPY_NOTE }
+  }
   const copy = FAILED_COPY[state]
   return copy ? { retryable: canRetry(state), note: copy.note } : null
 }
 
+/* `rejected` is one state and two refusals, and the summary must not merge them: telling the owner a track
+   "failed the quality check" while the row under it says the audio is genuine and offers to file it is the
+   same contradiction the row itself stopped making. So the tally is read off the rejection, not off the
+   state, and the two readings sit next to each other in the fixed order below. */
+const DIFFERENT_RECORDING_TALLY = 'turned out to be a different recording'
+const tallyOf = (b: Bundle): string | null =>
+  b.request.state === 'rejected' && b.rejection?.kind === 'different_recording'
+    ? DIFFERENT_RECORDING_TALLY
+    : FAILED_COPY[b.request.state]?.tally ?? null
+const TALLY_ORDER: string[] = (Object.keys(FAILED_COPY) as RequestState[])
+  .flatMap(s => s === 'rejected' ? [FAILED_COPY[s]!.tally, DIFFERENT_RECORDING_TALLY] : [FAILED_COPY[s]!.tally])
+
 /** The sentence beside "Retry all N" that reconciles it with the "Failed N" badge above it. The two numbers
- *  differ whenever a failure is final, and a tab showing both without a word about it is exactly what sent
- *  the owner asking whether failed is a final state. Null when there is nothing to reconcile: every failure
- *  on screen is retryable, the numbers already match, and a line saying "0 of these" would be noise.
+ *  differ for two separate reasons, and the line answers whichever ones are on screen. A failure can be
+ *  final, so no button will ever move it; or it can be a track the owner stopped, which has a Try again on
+ *  its own row but is deliberately left out of the sweep. Either gap, unexplained, is what sent the owner
+ *  asking whether failed is a final state -- and the second one is worse, because "Retry all 0" above
+ *  seventeen live Try again buttons reads as a broken button rather than a decision.
+ *  Null only when there is nothing at all to reconcile: every failure on screen is swept, the numbers
+ *  already match, and a line saying "0 of these" would be noise.
  *  Counted from the same FINALITY_OF the buttons are drawn from, and worded from the same FAILED_COPY the
  *  rows are, so this line cannot claim a breakdown the list below it does not show. */
 export function failedSummary(bundles: Bundle[]): string | null {
   const failed = bundles.filter(b => bucketOf(b.request.state) === 'failed')
   const finals = failed.filter(b => !canRetry(b.request.state))
-  if (finals.length === 0) return null
-  // Fixed key order, not first-seen order: the line must read the same on every refresh, and the map is
-  // rebuilt from scratch each time the list changes.
-  const parts = (Object.keys(FAILED_COPY) as RequestState[])
-    .map(s => ({ n: finals.filter(b => b.request.state === s).length, tally: FAILED_COPY[s]!.tally }))
-    .filter(p => p.n > 0)
-    .map(p => `${p.n} ${p.tally}`)
-  // No count in the head when the whole tab is final: "None of these 5" needs the reader to check the
-  // number against the badge, where "Nothing here" is the answer they came for, and it also keeps the
-  // sentence honest on a tab holding exactly one row.
-  const head = failed.length === finals.length
-    ? 'Nothing here can be tried again'
-    : `${finals.length} of these ${failed.length} cannot be tried again`
-  return `${head} — ${parts.join(', ')}. ${finals.length === 1 ? 'That row says' : 'Each row says'} what to do instead.`
+  const stopped = failed.filter(b => canRetry(b.request.state) && !sweptByRetryAll(b.request.state))
+  if (finals.length === 0 && stopped.length === 0) return null
+  const sentences: string[] = []
+  if (finals.length > 0) {
+    // Fixed order, not first-seen order: the line must read the same on every refresh, and the tallies are
+    // rebuilt from scratch each time the list changes.
+    const parts = TALLY_ORDER
+      .map(tally => ({ n: finals.filter(b => tallyOf(b) === tally).length, tally }))
+      .filter(p => p.n > 0)
+      .map(p => `${p.n} ${p.tally}`)
+    // No count in the head when the whole tab is final: "None of these 5" needs the reader to check the
+    // number against the badge, where "Nothing here" is the answer they came for, and it also keeps the
+    // sentence honest on a tab holding exactly one row.
+    const head = failed.length === finals.length
+      ? 'Nothing here can be tried again'
+      : `${finals.length} of these ${failed.length} cannot be tried again`
+    sentences.push(`${head} — ${parts.join(', ')}. ${finals.length === 1 ? 'That row says' : 'Each row says'} what to do instead.`)
+  }
+  if (stopped.length > 0) {
+    sentences.push(stopped.length === 1
+      ? 'One of these you stopped yourself, so Retry all leaves it out — press Try again on the row to start it again.'
+      : `${stopped.length} of these you stopped yourself, so Retry all leaves them out — press Try again on a row to start that one again.`)
+  }
+  return sentences.join(' ')
+}
+
+/* Two ways to land with no sample, and neither is a failure the page should draw a dead button for. An
+   explicit `false` is Deezer answering that there is none. A missing `deezer_id` is a candidate that never
+   went through Deezer enrichment at all, so there is no identity to resolve and the route 404s without so
+   much as a call. What is left is a genuine unknown -- a row older than the column -- which keeps its
+   button and behaves as it always has, because the route may well succeed. */
+const sampleFor = (c: Candidate): SampleView | null =>
+  c.has_preview === false || c.deezer_id == null ? null
+    : { key: `cand:${c.id}`, label: `${c.artist} – ${c.title} (${versionOf(c)})`, url: candidatePreviewUrl(c.id) }
+
+/** The listen-and-decide block on a rejected row (issue #92). Only for the recording check: a quality
+ *  rejection is a fact about the file, there is nothing to listen for, and nothing was kept to listen to.
+ *  Every half is independently optional, so a row with one side still offers that side rather than
+ *  vanishing -- half an answer beats none when the question is "was that really the wrong take". */
+function samplesFor(b: Bundle): SamplesView | null {
+  const rj = b.rejection
+  if (b.request.state !== 'rejected' || !rj || rj.kind !== 'different_recording') return null
+  const found = rj.audio_path
+    ? { key: `found:${rj.id}`, label: 'the copy Flackey found', url: rejectedAudioUrl(rj.id) } : null
+  const ref = b.reference ?? null
+  const reference = ref?.kind === 'deezer'
+    ? { key: `ref:${b.request.id}`, label: 'the recording you asked for', url: referenceAudioUrl(b.request.id) } : null
+  // The video is the owner's own link and the only copy of that audio, so it opens where they already
+  // play it rather than pretending this app has it. Sent to the second the excerpt was cut from, which is
+  // the passage the fingerprint actually compared.
+  const at = Math.floor(ref?.excerpt_start_s ?? 0)
+  const video = ref?.kind === 'youtube'
+    ? { url: `https://www.youtube.com/watch?v=${ref.ref}${at > 0 ? `&t=${at}` : ''}`, at: mmss(at) } : null
+  return found || reference || video ? { found, reference, video } : null
 }
 
 export function presentRow(b: Bundle, opts: PresentOpts): RowView {
@@ -295,9 +390,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
-    bucket, removable: bucket === 'done' || bucket === 'failed', formatLabel: formatLabelOf(b), checks: checksFor(b),
+    bucket, removable: bucket === 'done' || bucket === 'failed', sweepable: sweptByRetryAll(r.state),
+    formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
-    outcome: outcomeOf(r.state),
+    outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)
   const hasAnySource = opts.telegramAuthorized || opts.soulseekConnected
@@ -363,6 +459,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.candidates = sorted.map(c => ({
         id: c.id, title: `${c.artist} – ${c.title}`, version: versionOf(c), score: c.score, length: mmss(c.duration_s),
         onBeatport: c.catalog_track_id != null, lengthNote: lengthNote(c, r.query_duration_s), chosen: c.id === r.chosen_candidate_id,
+        sample: sampleFor(c),
       }))
       v.action = { label: 'Skip this track', kind: 'cancel' }
       break
@@ -382,7 +479,11 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       break
     case 'rejected': {
       const reason = b.rejection?.reason || r.error_message || 'Failed the quality check'
-      v.status = `${reason.replace(/\.$/, '')}. Deleted, not added to your library.`
+      // A refused file is normally gone by the time this row is drawn. The one that is not is the
+      // different recording the owner may still want (issue #92): its copy was moved aside instead, so
+      // the row must not announce a deletion while a play button for that very file sits under it.
+      const kept = b.rejection?.kind === 'different_recording' && !!b.rejection.audio_path
+      v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
       const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
       // Two different refusals, two different explanations. The upscale line is about the spectral check
@@ -392,7 +493,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.rejection = {
         reason, cutoffKhz: khz,
         caption: b.rejection?.kind === 'different_recording'
-          ? 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
+          ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
+            : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
           : khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
           : 'The file did not pass the quality check.',
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,

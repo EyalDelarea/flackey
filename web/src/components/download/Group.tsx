@@ -5,7 +5,7 @@ import type { PlayerState } from './DownloadPage'
 
 interface Props { g: GroupView; whyOpen: Set<number>; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
   onChoose: (rowId: number, cid: number) => void; onTryNow: (ids: number[]) => void
-  player: PlayerState; onPlay: (cid: number) => void }
+  player: PlayerState; onPlay: (key: string, url: string) => void }
 export default function Group({ g, whyOpen, onAction, onChoose, onTryNow, player, onPlay }: Props) {
   const s = g.summary
   return (

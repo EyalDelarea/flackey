@@ -6,7 +6,7 @@ import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn() } }
+  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn(), accept: vi.fn() } }
 })
 
 function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
@@ -218,8 +218,23 @@ describe('Retry all on the Failed tab', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'rejected'), mk(3, 'cancelled')])} />)
     expect(screen.getByRole('button', { name: /^Failed/ })).toHaveTextContent('Failed 3')
     openFailed()
+    // One rejected row is final; the stopped one has its own Try again and is not swept, so the button
+    // counts one and the sentence has to account for the other two separately (issue #92).
     expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
-    expect(screen.getByText(/2 of these 3 cannot be tried again — 1 failed the quality check, 1 you stopped/))
+    expect(screen.getByText(/1 of these 3 cannot be tried again — 1 failed the quality check/))
+      .toBeInTheDocument()
+    expect(screen.getByText(/One of these you stopped yourself, so Retry all leaves it out/))
+      .toBeInTheDocument()
+  })
+
+  it('does not offer to sweep the tracks the owner stopped', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'cancelled'), mk(2, 'cancelled')])} />)
+    openFailed()
+    // Every row has a Try again; the sweep has nothing to take, and the line under it says why rather
+    // than leaving a disabled button beside two live ones.
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
+    expect(screen.getByText(/2 of these you stopped yourself, so Retry all leaves them out/))
       .toBeInTheDocument()
   })
 
@@ -235,7 +250,8 @@ describe('Retry all on the Failed tab', () => {
     openFailed()
     // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
     expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
-    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(2)
+    expect(screen.getAllByText(/paste the link again/i)).toHaveLength(1)
+    expect(screen.getAllByText(/Retry all leaves stopped tracks alone/)).toHaveLength(1)
   })
 
   it('says so when the call succeeds but nothing was re-queued', async () => {
@@ -521,4 +537,24 @@ it('keeps the second sample playing when the first press aborts its own play pro
     expect(screen.getByRole('button', { name: sample('Stop', 'Extended Mix') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeEnabled()
   } finally { play.mockRestore(); pause.mockRestore() }
+})
+
+it('files the copy the owner listened to, and reloads the row that just changed state', async () => {
+  // Keep it anyway is the one control on this page that turns a failure into a filed track (issue #92), so
+  // the row it leaves behind must be the new one -- a stale rejected row under a press that worked reads
+  // as a button that did nothing.
+  const refresh = vi.fn(async () => undefined)
+  vi.mocked(api.accept).mockResolvedValueOnce({ ...baseRequest, state: 'done' })
+  const rejected: Bundle = {
+    request: { ...baseRequest, state: 'rejected' }, candidates: [], catalog: null, track: null,
+    rejection: { id: 4, request_id: 7, reason: 'a different recording: best score 0.77 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null, created_at: '',
+      kind: 'different_recording', audio_path: '/data/rejected/req7-1.mp3' },
+    reference: { kind: 'deezer', ref: '1109731', excerpt_start_s: 95 },
+  }
+  render(<DownloadPage live={makeLive([rejected], { refresh })} />)
+  fireEvent.click(screen.getByRole('button', { name: 'History' }))
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  await waitFor(() => expect(api.accept).toHaveBeenCalledWith(7))
+  await waitFor(() => expect(refresh).toHaveBeenCalled())
 })
