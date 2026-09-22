@@ -285,3 +285,116 @@ async def test_desktop_window_url_falls_back_to_localhost_for_a_wildcard_bind(tm
     finally:
         handle.stop()
         await asyncio.wait_for(task, 5.0)
+
+
+# ---- the session watcher (issue #91) ------------------------------------
+class FakeLogin:
+    """What the watcher reads: the live client and whether keys are configured at all. `client` is a
+    plain attribute because log_out() and reconfigure() reassign it -- the watcher must re-read it."""
+
+    def __init__(self, connected=False, configured=True):
+        self.client = FakeTelethon(connected)
+        self.configured = configured
+
+
+class FakeTelethon:
+    def __init__(self, connected):
+        self.connected = connected
+
+    def is_connected(self):
+        return self.connected
+
+
+def _probe(*answers):
+    """A probe that answers the given list in order and repeats the last answer after that."""
+    seen = []
+
+    async def probe(client):
+        seen.append(client)
+        return answers[min(len(seen), len(answers)) - 1]
+
+    probe.seen = seen
+    return probe
+
+
+async def _until(predicate, timeout=1.0):
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while not predicate() and loop.time() < deadline:
+        await asyncio.sleep(0.005)
+    return predicate()
+
+
+async def test_a_revoked_session_flips_the_flag_with_no_request_in_flight():
+    """Acceptance criterion 1 of issue #91. Telethon disconnects itself when Telegram revokes the key;
+    with an idle queue nothing calls the source, so nothing else would ever notice."""
+    from flackey.app import watch_telegram_session
+
+    status = {"telegram_authorized": True}
+    login, probe = FakeLogin(connected=False), _probe(False)
+    task = asyncio.create_task(watch_telegram_session(login, status, poll_s=0.01, probe=probe))
+
+    assert await _until(lambda: status["telegram_authorized"] is False)
+    await asyncio.sleep(0.05)
+    assert len(probe.seen) == 1, "the flag is the guard: the watcher must not keep probing after it flips"
+    task.cancel()
+
+
+async def test_a_disconnect_with_a_healthy_or_unknown_session_does_not_sign_the_owner_out():
+    """Closing the app disconnects the client too, and so does a wifi drop. Neither is a revoked
+    session, and reporting one would pause the worker and cover the app in a sign-in banner."""
+    from flackey.app import watch_telegram_session
+
+    for answer in (True, None):
+        status = {"telegram_authorized": True}
+        login = FakeLogin(connected=False)
+        task = asyncio.create_task(
+            watch_telegram_session(login, status, poll_s=0.01, probe=_probe(answer)))
+        await asyncio.sleep(0.08)
+        assert status["telegram_authorized"] is True, f"a probe answering {answer} signed the owner out"
+        task.cancel()
+
+
+async def test_the_watcher_leaves_a_connected_client_alone():
+    from flackey.app import watch_telegram_session
+
+    status = {"telegram_authorized": True}
+    login, probe = FakeLogin(connected=True), _probe(False)
+    task = asyncio.create_task(watch_telegram_session(login, status, poll_s=0.01, probe=probe))
+    await asyncio.sleep(0.08)
+    assert probe.seen == [] and status["telegram_authorized"] is True
+    task.cancel()
+
+
+async def test_the_watcher_says_nothing_about_a_copy_with_no_telegram_keys():
+    """An unconfigured client was never connected and never signed in; calling it would raise rather
+    than answer, which is why status() does not either."""
+    from flackey.app import watch_telegram_session
+
+    status = {"telegram_authorized": False}
+    login, probe = FakeLogin(connected=False, configured=False), _probe(False)
+    task = asyncio.create_task(watch_telegram_session(login, status, poll_s=0.01, probe=probe))
+    await asyncio.sleep(0.05)
+    assert probe.seen == []
+    task.cancel()
+
+
+async def test_a_client_rebuilt_mid_probe_is_not_acted_on():
+    """log_out() and reconfigure() replace login.client. A verdict about the object that was thrown
+    away says nothing about the one that replaced it."""
+    from flackey.app import watch_telegram_session
+
+    status = {"telegram_authorized": True}
+    login = FakeLogin(connected=False)
+    probed = []
+
+    async def probe(client):
+        probed.append(client)
+        login.client = FakeTelethon(connected=True)    # a sign-out landing while we waited
+        return False
+
+    task = asyncio.create_task(watch_telegram_session(login, status, poll_s=0.01, probe=probe))
+    await _until(lambda: probed != [])
+    await asyncio.sleep(0.05)
+    assert status["telegram_authorized"] is True
+    task.cancel()

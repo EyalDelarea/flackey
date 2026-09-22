@@ -4,8 +4,9 @@ import asyncio
 import logging
 import threading
 import webbrowser
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 import uvicorn
@@ -28,7 +29,7 @@ from .source.deezer_bot import DeezerBotSource
 from .source.lossless import LosslessProvider
 from .source.slskd import SlskdClient, SoulseekProvider
 from .store import Store
-from .telegram import TelegramLogin
+from .telegram import TelegramLogin, probe_authorized
 from .tools import resource_dir
 from .web import create_app
 from .worker import Worker
@@ -39,6 +40,11 @@ log = logging.getLogger(__name__)
 # `ui_dir.exists()` in create_app, so the failure mode is a 404 on `/`, never a crash.
 UI_DIR = resource_dir() / "web" / "dist"
 WEB_SERVER_START_TIMEOUT_S = 30
+# How often the session watcher below looks at the Telethon client, and how much longer it waits after
+# a probe that could not reach Telegram at all -- a machine with the wifi off would otherwise be dialling
+# Telegram every few seconds for as long as it stays off.
+SESSION_POLL_S = 5.0
+SESSION_UNREACHABLE_FACTOR = 6
 
 
 @dataclass
@@ -118,6 +124,41 @@ async def supervise_worker(worker, status: dict, poll_s: float = 1.0,
             finally:
                 status["worker_running"] = False
         await asyncio.sleep(poll_s)
+
+
+async def watch_telegram_session(login: TelegramLogin, status: dict, poll_s: float = SESSION_POLL_S,
+                                 probe: Callable[[Any], Awaitable[bool | None]] = probe_authorized) -> None:
+    """Notice a revoked Telegram session while the queue is idle.
+
+    Without this the app only finds out on the next request that fails, and a copy with nothing to do
+    goes on saying "connected" indefinitely (issue #91). Telethon's update loop is what sees the
+    revoke -- it catches the AuthKeyUnregisteredError on its next difference and disconnects the client
+    itself -- so a client that has dropped its socket while the app believes it is signed in is the one
+    thing worth asking Telegram about.
+
+    Asking is the whole subtlety. Closing the app disconnects the client too, so does a wifi drop, and
+    so does a sign-out; only a probe that reaches Telegram and is refused means the session is gone.
+    Setting the flag is what publishes the `status` event (`events.Status.__setitem__`) that moves the
+    banner and pauses the worker, which is why nothing less certain may set it."""
+    while True:
+        await asyncio.sleep(poll_s)
+        # Re-read every time: log_out() and reconfigure() build a new client and reassign login.client,
+        # and a verdict about the object that was thrown away says nothing about its replacement.
+        client = login.client
+        if not login.configured or not status.get("telegram_authorized", True) or client.is_connected():
+            # Nothing to ask about: no keys at all, a session already known to be gone (the flag is what
+            # stops this asking again and again), or a client that is perfectly happy.
+            continue
+        alive = await probe(client)
+        if alive is None:
+            # Telegram could not be reached, so the disconnect is still unexplained. Back off: this is
+            # the state a machine with no network sits in, and a connect() every poll buys nothing.
+            await asyncio.sleep(poll_s * SESSION_UNREACHABLE_FACTOR)
+            continue
+        if alive is False and login.client is client and status.get("telegram_authorized", True):
+            status["telegram_authorized"] = False
+            log.error("Telegram signed this app out; sign in again from the UI. The worker is paused "
+                      "and the queue is kept")
 
 
 async def close_streams_on_exit(server, bus: EventBus, poll_s: float = 0.2) -> None:
@@ -263,6 +304,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
                              run_when=lambda: bool(status.get("telegram_authorized"))
                              or not settings.source_enabled),
             close_streams_on_exit(server, bus),
+            watch_telegram_session(login, status),
             sharing.run_forever())
     finally:
         server.should_exit = True
