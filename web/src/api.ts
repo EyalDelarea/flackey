@@ -7,10 +7,11 @@ export interface Request { id:number; created_at:string; updated_at:string; raw_
   /** Where a run that ended in `error` stopped -- 'search' | 'choose' | 'download' | 'verify'. Stamped by
       `_set_state` from the state the row still held on its way into `error`, because the state itself is
       about to be overwritten and the stage is not recoverable after that. Null on rows written before the
-      column existed, which read as Unknown rather than being guessed at. Required, unlike `reviewed`: the
-      serializer walks `dataclasses.fields`, so the key is always sent and is null only when unset. A
-      backend that stopped sending it would land every failed row in Unknown with nothing on screen saying
-      so, and that has to be a build break rather than a quiet one. */
+      column existed, which read as Unknown rather than being guessed at. Required rather than optional: the serializer walks
+      `dataclasses.fields`, so the key is always sent and is null only when unset, and a backend that
+      stopped sending it would land every failed row in Unknown with nothing on screen saying so. That has
+      to be a build break rather than a quiet one. (`reviewed` below is sent by the very same walk and is
+      optional here anyway -- it predates this and is the weaker pattern, not the one to copy.) */
   failed_stage:string|null
   /** 1 once the request has been parked for the owner to choose; never cleared. The only durable record
       that a choice was ever asked for -- `flag_reason` is wiped when they answer. */

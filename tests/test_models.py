@@ -103,6 +103,13 @@ def test_stage_names_match_the_ui():
 
     ts = _ts_map("STAGE_OF")
     assert ts, "presentation.ts no longer has a STAGE_OF table"
+    # Total over the live states, checked before the values are. Iterating the table alone would let an
+    # entry be dropped and the test go quiet about that state rather than fail -- `STAGE_OF_STATE.get(was,
+    # "unknown")` then files those failures under Unknown and nothing says so. Python has no equivalent of
+    # the TypeScript totality check the other table gets from its `Record`, so this is that check.
+    assert set(STAGE_OF_STATE) == set(RequestState) - TERMINAL_STATES, (
+        "STAGE_OF_STATE must name every state a request can still be failing out of"
+    )
     for state, stage in STAGE_OF_STATE.items():
         assert ts.get(state.value) == stage, (
             f"worker calls {state.value} '{stage}'; presentation.ts calls it {ts.get(state.value)!r}"
