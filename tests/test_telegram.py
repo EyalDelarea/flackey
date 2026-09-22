@@ -3,12 +3,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from telethon.errors import (
+    AuthKeyInvalidError,
+    AuthKeyUnregisteredError,
     PasswordHashInvalidError,
     PhoneCodeInvalidError,
     SessionPasswordNeededError,
 )
 
-from flackey.telegram import LoginError, TelegramLogin, mask_phone
+from flackey.telegram import LoginError, TelegramLogin, mask_phone, probe_authorized
 
 
 class FakeQR:
@@ -43,6 +45,11 @@ class FakeClient:
         return self.authorized
 
     async def get_me(self):
+        # What Telethon answers: the user when the session is alive, None when it is not (get_me
+        # swallows UnauthorizedError). status() reads the session through this now, so a fake that
+        # always produced a user would report a signed-out client as connected.
+        if not self.authorized:
+            return None
         class Me:
             phone = self.phone
         return Me()
@@ -270,6 +277,9 @@ async def test_reconfigure_rebuilds_and_connects_the_client():
         async def is_user_authorized(self):
             return False
 
+        async def get_me(self):
+            return None      # not signed in, which is how Telethon says so
+
     made = []
 
     def make():
@@ -388,3 +398,117 @@ async def test_start_qr_leaves_no_half_started_login_behind_after_a_timeout(monk
     with pytest.raises(LoginError):
         await login.start_qr()
     assert login._qr == {}
+
+
+# ---- the live probe (issue #91) -----------------------------------------
+A_USER = object()      # what Telethon's get_me() answers while the session is alive
+
+
+class ProbeClient:
+    """A client with only what `probe_authorized` touches. `me` is what Telethon's `get_me()` answers:
+    a user when the session is alive, `None` once Telegram has revoked it (get_me swallows
+    UnauthorizedError and returns None -- telethon/client/users.py)."""
+
+    def __init__(self, me=A_USER, connected=True, connect_error=None, get_me_error=None):
+        self.me, self.connected = me, connected
+        self.connect_error, self.get_me_error = connect_error, get_me_error
+        self.connects = 0
+        self.authorized_answers = []   # what a stale is_user_authorized() would have said
+
+    def is_connected(self):
+        return self.connected
+
+    async def connect(self):
+        self.connects += 1
+        if self.connect_error is not None:
+            raise self.connect_error
+        self.connected = True
+
+    async def is_user_authorized(self):
+        return self.authorized_answers.pop(0)
+
+    async def get_me(self):
+        if self.get_me_error is not None:
+            raise self.get_me_error
+        return self.me
+
+
+async def test_probe_reports_a_revoked_session_from_an_empty_get_me():
+    # The revoked case in the wild: Telethon's get_me() catches UnauthorizedError itself and answers
+    # None, so the session being gone is an empty answer rather than an exception.
+    assert await probe_authorized(ProbeClient(me=None)) is False
+
+
+async def test_probe_reports_a_revoked_session_when_the_refusal_reaches_us():
+    # The other half of the same answer: AuthKeyUnregisteredError is an UnauthorizedError (get_me
+    # swallows it today, connect() and a future telethon need not), and AuthKeyInvalidError sits
+    # beside it under AuthKeyError, which nothing swallows.
+    assert await probe_authorized(ProbeClient(get_me_error=AuthKeyUnregisteredError(request=None))) is False
+    assert await probe_authorized(ProbeClient(get_me_error=AuthKeyInvalidError(request=None))) is False
+
+
+async def test_probe_reports_a_live_session():
+    client = ProbeClient()
+    assert await probe_authorized(client) is True
+    assert client.connects == 0        # already connected: nothing to dial
+
+
+async def test_probe_connects_a_disconnected_client_before_asking():
+    # Telethon drops the socket itself when the session dies, so the client this is called on is
+    # usually disconnected; without the connect() the probe could only ever answer "cannot tell".
+    client = ProbeClient(me=None, connected=False)
+    assert await probe_authorized(client) is False
+    assert client.connects == 1
+
+
+async def test_probe_cannot_tell_when_the_network_is_down():
+    # The whole point of the third value: a wifi drop must not be reported as a revoked session.
+    assert await probe_authorized(ProbeClient(connected=False,
+                                              connect_error=ConnectionError("no route"))) is None
+    assert await probe_authorized(ProbeClient(connect_error=OSError("host unreachable"),
+                                              connected=False)) is None
+    assert await probe_authorized(ProbeClient(get_me_error=ConnectionError("disconnected"))) is None
+
+
+async def test_probe_cannot_tell_when_telegram_never_answers(monkeypatch):
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "PROBE_TIMEOUT_S", 0.05)
+
+    class Wedged(ProbeClient):
+        async def get_me(self):
+            await asyncio.sleep(3600)
+
+    assert await probe_authorized(Wedged()) is None
+
+
+async def test_status_asks_telegram_rather_than_the_clients_cached_answer():
+    """The Settings page and the sidebar used to read a revoked session as connected. Telethon caches
+    `_authorized` from sign-in and nothing clears it when Telegram revokes the key underneath the app,
+    so `is_user_authorized()` keeps saying yes for the rest of the run; only a real request knows."""
+    client = ProbeClient(me=None)
+    client.authorized_answers = [True]     # the lie status() used to answer with
+    assert await TelegramLogin(client, True).status() == {
+        "authorized": False, "configured": True, "phone_masked": None}
+    assert client.authorized_answers == [True], "status() asked the cache instead of Telegram"
+
+
+async def test_status_keeps_a_signed_in_session_when_telegram_is_unreachable():
+    """A network blip must not put a "sign in again" screen over a session that is almost certainly
+    fine. The probe cannot tell, so the client's own cached answer decides -- it only ever says True
+    when this run signed in successfully."""
+    client = ProbeClient(connected=False, connect_error=ConnectionError("no route"))
+    client.authorized_answers = [True]
+    assert (await TelegramLogin(client, True).status())["authorized"] is True
+
+
+async def test_status_does_not_invent_a_session_for_a_client_that_never_signed_in():
+    """The other half of the unreachable case: with nothing cached, Telethon's is_user_authorized()
+    makes a real request of its own and that fails on the same dead socket. A client that has never
+    been signed in is not signed in."""
+    class NeverSignedIn(ProbeClient):
+        async def is_user_authorized(self):
+            raise ConnectionError("Cannot send requests while disconnected")
+
+    client = NeverSignedIn(connected=False, connect_error=ConnectionError("no route"))
+    assert (await TelegramLogin(client, True).status())["authorized"] is False
