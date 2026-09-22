@@ -359,3 +359,21 @@ describe('stage chips and the batch bar', () => {
       .toBe('1 found nothing to download1 could not finish the download1 failed the quality check1 you stopped')
   })
 })
+
+/* The bar, the legend dot and the row tag are toned by a modifier class named after the segment. The names
+   are ordinary words, and one of them -- `search` -- was already taken by the Library toolbar's search box,
+   which is `width: 260px`. A bare `.group-seg.search` inherited that width, `min-width` beat `flex-grow`,
+   and the Failed bar drew 12-of-55 as a fifth of its width instead of a fifth: every test passed and the
+   only bar on screen that mattered was wrong. Hence the `tone-` prefix, and hence this test -- it is the
+   cheap half of a class of bug that unit tests otherwise cannot see at all. */
+it('keeps every toned class behind the tone- prefix, where no bare class can collide with it', () => {
+  const { container } = render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
+  fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+  const toned = [...container.querySelectorAll('.group-seg, .legend-dot, .stage-tag')]
+  expect(toned.length).toBeGreaterThan(0)
+  for (const el of toned) {
+    const modifiers = [...el.classList].filter(c => c !== 'group-seg' && c !== 'legend-dot' && c !== 'stage-tag')
+    expect(modifiers.length).toBe(1)
+    expect(modifiers[0]).toMatch(/^tone-/)
+  }
+})

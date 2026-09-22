@@ -52,7 +52,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         <div className="row-text">
           {/* Where it stopped, on the row rather than only in the chips above: the All list mixes every kind
               of failure, and a failed row has no ladder left to read it off. */}
-          <div className="title">{v.bucket === 'failed' && v.stage && <span className={`stage-tag ${v.stage}`}>{v.stage}</span>}{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
+          <div className="title">{v.bucket === 'failed' && v.stage && <span className={`stage-tag tone-${v.stage}`}>{v.stage}</span>}{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}

@@ -49,7 +49,7 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow }
     ])
   // Proportional, never rounded: five rounded percentages do not add up to 100 and the error shows as a
   // sliver of track at the end of a bar that is in fact complete.
-  const bar = segments.map(x => <span key={x.key} className={`group-seg ${x.key}`} style={{ flexGrow: x.n }} />)
+  const bar = segments.map(x => <span key={x.key} className={`group-seg tone-${x.key}`} style={{ flexGrow: x.n }} />)
   return (
     <section className="group-section">
       <div className="group-head"><h2>{g.name}</h2>
@@ -62,7 +62,7 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow }
                aria-label={`${g.name}: ${s.filed} of ${s.total} filed`}>{bar}</div>}
       <ul className="group-legend">
         {segments.map(x => (
-          <li key={x.key} className="legend-item"><span className={`legend-dot ${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
+          <li key={x.key} className="legend-item"><span className={`legend-dot tone-${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
         ))}
       </ul>
       <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose} />)}</div>

@@ -201,7 +201,7 @@ it('tags a failed row with where it stopped, and leaves a running row untagged',
   const { rerender, container } = render(<RequestRow view={{ ...base, bucket: 'failed', stage: 'download', steps: null,
     status: 'Failed — every peer refused the transfer', statusTone: 'red' }} onAction={() => {}} onChoose={() => {}} />)
   expect(container.querySelector('.stage-tag')).toHaveTextContent('download')
-  expect(container.querySelector('.stage-tag')).toHaveClass('download')
+  expect(container.querySelector('.stage-tag')).toHaveClass('tone-download')
   rerender(<RequestRow view={{ ...base, bucket: 'progress', stage: 'download' }} onAction={() => {}} onChoose={() => {}} />)
   // A running row already says where it is -- the ladder is right there. The tag is for the list where
   // the ladder is gone and "where did this stop" is the question being asked.
