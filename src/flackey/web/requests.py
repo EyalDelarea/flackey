@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from ..config import Settings
 from ..deezer import DeezerApi, DeezerError
 from ..inbox import BadLink, Inbox
-from ..models import FAILED_STATES, TERMINAL_STATES, RequestState
+from ..models import FAILED_STATES, SWEEPABLE_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
 from ..worker import Worker
 from . import Bundles, to_dict
@@ -25,16 +25,26 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         except KeyError:
             raise HTTPException(404, "request not found")
 
-    def unlink_spectrogram(rejection) -> None:
-        """Best-effort: a removed row shouldn't leave an orphan PNG behind. Only ever touches a path under
-        settings.spectrogram_dir - never anything else a stray/legacy path might point at."""
-        if rejection and rejection.spectrogram_path:
-            png = Path(rejection.spectrogram_path)
-            if png.is_relative_to(settings.spectrogram_dir):
-                try:
-                    png.unlink()
-                except OSError:
-                    pass
+    def unlink_under(directory: Path, path: str | None) -> None:
+        """Best-effort: a removed row shouldn't leave an orphan file behind. Only ever touches a path under
+        `directory` - never anything else a stray/legacy path might point at."""
+        if not path:
+            return
+        file = Path(path)
+        if file.is_relative_to(directory):
+            try:
+                file.unlink()
+            except OSError:
+                pass
+
+    def unlink_evidence(rejection) -> None:
+        """Both files a rejection can leave behind: the spectrogram PNG, and - on a different-recording
+        verdict - the refused copy itself, which is kept so the owner can listen before deciding. `attempt`
+        rows reach here too and carry only the PNG, so the audio half is read defensively."""
+        if not rejection:
+            return
+        unlink_under(settings.spectrogram_dir, rejection.spectrogram_path)
+        unlink_under(settings.rejected_dir, getattr(rejection, "audio_path", None))
 
     @r.get("/queue")
     async def queue() -> list:
@@ -98,6 +108,34 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             raise HTTPException(404, "no preview for this candidate")
         return RedirectResponse(track.preview_url, status_code=302, headers={"Cache-Control": "no-store"})
 
+    @r.get("/requests/{rid}/reference/audio")
+    async def reference_audio(rid: int):
+        """The audio this request was checked against, when it is something a browser can play.
+
+        A rejected row says the file was "a different recording"; this is the recording it differed from,
+        so the owner can hear both and judge (issue #92). Only the Deezer half is served: that reference is
+        a 30 s preview the CDN still has, resolved and redirected exactly like a candidate's. A YouTube
+        reference is the owner's own video, and nothing local keeps its audio -- the page links to it at
+        the excerpt offset instead, from the `reference` on the bundle."""
+        bundle_or_404(rid)
+        stored = store.get_reference(rid)
+        if stored is None or stored.get("kind") != "deezer":
+            raise HTTPException(404, "no playable reference for this request")
+        try:
+            track = await DeezerApi().track(int(stored["ref"]))
+        except (TypeError, ValueError):
+            raise HTTPException(404, "no playable reference for this request")
+        except DeezerError as e:
+            raise HTTPException(502, f"couldn't reach Deezer: {e}")
+        if not track.preview_url:
+            raise HTTPException(404, "no playable reference for this request")
+        return RedirectResponse(track.preview_url, status_code=302, headers={"Cache-Control": "no-store"})
+
+    @r.post("/requests/{rid}/accept")
+    async def accept(rid: int) -> dict:
+        """"Keep it anyway" on a rejected row: file the copy the recording check refused."""
+        return await act(rid, lambda: worker.accept_rejection(rid))
+
     @r.post("/requests/{rid}/cancel")
     async def cancel(rid: int) -> dict:
         return await act(rid, lambda: worker.cancel(rid))
@@ -109,10 +147,13 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
     @r.post("/requests/retry-failed")
     async def retry_failed(body: dict) -> dict:
         """"Retry all" on the Failed tab: the same `worker.retry` the per-row button calls, once per id,
-        so one place keeps deciding what re-queuing means. The ids come from the rows the owner can see,
-        so the batch honours whatever they have filtered down to. An id the worker refuses -- deleted, or
-        moved on since the page last heard -- lands in `skipped` instead of failing the whole batch, and
-        the caller can tell the owner that nothing was re-queued."""
+        so one place keeps deciding what re-queuing *means*. What the batch may touch is narrower than what
+        the button may, and that is decided here: `SWEEPABLE_STATES` leaves out CANCELLED, so a sweep never
+        restarts tracks the owner stopped on purpose (issue #92) even if a stale page sends their ids. The
+        rest of the ids come from the rows the owner can see, so the batch honours whatever they have
+        filtered down to. An id the worker refuses -- deleted, stopped, or moved on since the page last
+        heard -- lands in `skipped` instead of failing the whole batch, and the caller can tell the owner
+        that nothing was re-queued."""
         ids = body.get("ids")
         if not isinstance(ids, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
             raise HTTPException(400, "ids must be a list of request ids")
@@ -120,6 +161,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         skipped: list[int] = []
         for rid in ids:
             try:
+                if store.get_request(rid).state not in SWEEPABLE_STATES:
+                    raise ValueError("not swept by Retry all")
                 await worker.retry(rid)
             except (KeyError, ValueError):  # gone, or not in a state that can be retried
                 skipped.append(rid)
@@ -138,8 +181,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         rejection = store.get_rejection_for_request(rid)
         attempt = store.get_attempt_for_request(rid)
         store.delete_request(rid)
-        unlink_spectrogram(rejection)
-        unlink_spectrogram(attempt)
+        unlink_evidence(rejection)
+        unlink_evidence(attempt)
         return {"ok": True}
 
     @r.post("/requests/clear-failed")
@@ -149,9 +192,9 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         attempts = [store.get_attempt_for_request(req.id) for req in failed]
         removed = store.delete_requests(FAILED_STATES)
         for rejection in rejections:
-            unlink_spectrogram(rejection)
+            unlink_evidence(rejection)
         for attempt in attempts:
-            unlink_spectrogram(attempt)
+            unlink_evidence(attempt)
         return {"removed": removed}
 
     return r

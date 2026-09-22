@@ -6,6 +6,7 @@ import pytest
 from flackey.models import (
     FAILED_STATES,
     RETRYABLE_STATES,
+    SWEEPABLE_STATES,
     TERMINAL_STATES,
     CatalogTrack,
     Query,
@@ -58,10 +59,16 @@ def test_norm_joins_dotted_acronyms_and_strips_punctuation():
 
 def test_failed_states_are_terminal_and_only_some_of_them_come_back():
     """"Terminal" here means the pipeline has let go of the request, not that the state can never change:
-    two of the four failures are handed straight back to the queue by `Worker.retry`. Conflating the two
-    is what let the Failed badge count 45 while the button under it offered to retry 12."""
+    three of the four failures are handed straight back to the queue by `Worker.retry`. Conflating the two
+    is what let the Failed badge count 45 while the button under it offered to retry 12.
+
+    `SWEEPABLE_STATES` is the third, narrowest ring: what "Retry all" takes. It has to be a strict subset of
+    the retryable ones, because a sweep that moved a row the per-row button refuses would be the same
+    disagreement pointing the other way."""
     assert FAILED_STATES < TERMINAL_STATES
     assert RETRYABLE_STATES < FAILED_STATES
+    assert SWEEPABLE_STATES < RETRYABLE_STATES
+    assert RequestState.CANCELLED not in SWEEPABLE_STATES, "Retry all must not restart tracks you stopped"
     assert TERMINAL_STATES - FAILED_STATES == {RequestState.DONE, RequestState.DUPLICATE}
 
 
@@ -83,7 +90,10 @@ def test_failed_states_match_the_ui():
     assert set(buckets) == every, "BUCKET_OF must classify every state"
     assert set(finality) == every, "FINALITY_OF must classify every state"
     assert {s for s, b in buckets.items() if b == "failed"} == {s.value for s in FAILED_STATES}
-    assert {s for s, f in finality.items() if f == "retryable"} == {s.value for s in RETRYABLE_STATES}
+    assert ({s for s, f in finality.items() if f in ("retryable", "stopped")}
+            == {s.value for s in RETRYABLE_STATES}), "every state with a Try again button, and only those"
+    assert ({s for s, f in finality.items() if f == "retryable"}
+            == {s.value for s in SWEEPABLE_STATES}), "every state Retry all sweeps, and only those"
     # Nothing the pipeline still holds may be advertised as retryable or as finished.
     assert {s for s, f in finality.items() if f == "open"} == every - {s.value for s in TERMINAL_STATES}
 

@@ -583,6 +583,102 @@ async def test_verification_failure_rejects_and_deletes(env):
     assert notifier.sent[-1][0].startswith("Rejected")
 
 
+async def _rejected_as_a_different_recording(env, monkeypatch):
+    """Drive a request to the one rejection the owner is allowed to overrule: the file is genuine audio
+    (the spectral check passes) and the recording check says it is not the track that was asked for."""
+    _settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+
+    async def wrong_recording(path, reference, *, minimum, missing=""):
+        return FingerprintResult("failed", 0.77, None, f"best score 0.77 below {minimum:.2f}",
+                                 None, [4, 5, 6], reference.label if reference else None)
+
+    monkeypatch.setattr(worker_mod, "fingerprint_check", wrong_recording)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.REJECTED
+    return rid, w
+
+
+async def test_a_different_recording_is_kept_so_the_owner_can_hear_it(env, monkeypatch):
+    """Issue #92: below the fingerprint floor is a number, and on older music the number is sometimes
+    wrong. The file is moved aside instead of deleted so the row can play it -- out of `tmp_dir`, which
+    the pass empties behind itself, and into `rejected_dir`, which it does not touch."""
+    settings, store, notifier = env
+    rid, _w = await _rejected_as_a_different_recording(env, monkeypatch)
+
+    rj = store.get_rejection_for_request(rid)
+    assert rj.kind == "different_recording" and rj.reason.startswith("a different recording")
+    kept = Path(rj.audio_path)
+    assert kept.exists() and kept.parent == settings.rejected_dir
+    assert not list(settings.tmp_dir.glob("**/*.mp3"))      # the pass still left tmp_dir empty
+    assert "keep it anyway" in notifier.sent[-1][0]
+
+
+async def test_a_quality_rejection_keeps_nothing(env):
+    """The other verdict is a fact about the file, not a matter of taste: an MP3 wearing a FLAC extension
+    is one whatever it sounds like. Nothing is kept, and the row offers nothing to listen to."""
+    settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    assert (await w.process(rid)).state == RequestState.REJECTED
+
+    assert store.get_rejection_for_request(rid).audio_path is None
+    assert not list(settings.rejected_dir.glob("*")) if settings.rejected_dir.exists() else True
+
+
+async def test_keep_it_anyway_files_the_copy_the_owner_listened_to(env, monkeypatch):
+    """The whole point of keeping the bytes: what gets filed is the copy that was played, not whatever a
+    fresh search would turn up an hour later. And it is filed carrying the failed match, so the library's
+    own record says it was kept on the owner's say-so rather than claiming it passed."""
+    settings, store, notifier = env
+    rid, w = await _rejected_as_a_different_recording(env, monkeypatch)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+
+    r = await w.accept_rejection(rid)
+
+    assert r.state == RequestState.DONE
+    track = store.get_track(r.track_id)
+    assert track.path == settings.library_root / "Astral Projection" / "Astral Projection - Into the Void.mp3"
+    assert track.path.exists()
+    match = next(e for e in store.list_evidence(r.track_id) if e.kind == "recording_match")
+    assert match.value["status"] == "failed" and match.value["score"] == 0.77
+    # The kept copy has moved into the library, so nothing points at it any more and nothing is left behind.
+    assert store.get_rejection_for_request(rid).audio_path is None
+    assert not kept.exists()
+    assert not list(settings.tmp_dir.glob("*"))
+    assert notifier.sent[-1][0].startswith("Done: Astral Projection – Into the Void")
+
+
+async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
+    """One button, one meaning. It files a specific set of bytes; a row that has none -- because it failed
+    the quality check, because the copy was cleaned up, because it never got that far -- must not pretend
+    to have them."""
+    settings, store, _notifier = env
+    rid, w = await _rejected_as_a_different_recording(env, monkeypatch)
+
+    other = store.add_request("q", RequestKind.TEXT)
+    store.set_state(other, RequestState.ERROR, error_message="x")
+    with pytest.raises(ValueError, match="only a rejected track"):
+        await w.accept_rejection(other)
+
+    quality = store.add_request("q2", RequestKind.TEXT)
+    store.add_rejection(quality, "bitrate too low", 128, 15000, None)
+    store.set_state(quality, RequestState.REJECTED)
+    with pytest.raises(ValueError, match="no copy of it to keep"):
+        await w.accept_rejection(quality)
+
+    # The row still says there is a copy, and there is not: the promise is withdrawn rather than repeated.
+    rj = store.get_rejection_for_request(rid)
+    Path(rj.audio_path).unlink()
+    with pytest.raises(ValueError, match="no longer on disk"):
+        await w.accept_rejection(rid)
+    assert store.get_rejection_for_request(rid).audio_path is None
+    assert settings.rejected_dir.exists()
+
+
 async def test_playlist_membership(env):
     settings, store, _notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
@@ -665,6 +761,40 @@ async def test_retry_clears_backoff_and_requeues_errors(env):
     store.set_state(rid, RequestState.NOT_FOUND, error_message="Deezer was switched off")
     r = await w.retry(rid)
     assert r.state == RequestState.QUEUED and r.error_message is None and r.lossless_retry == 1
+
+
+async def test_retry_restarts_a_track_the_owner_stopped(env):
+    """Issue #92: a stopped track is the owner's decision, so the owner may undo it. The state that used
+    to be a dead end now comes straight back to the queue, keeping the version they had already chosen --
+    changing your mind about stopping is not a reason to be asked to pick again."""
+    settings, store, notifier = env
+    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request("q", RequestKind.TEXT)
+    cid = store.add_candidates(rid, [good_cand()])[0].id
+    store.update_request(rid, chosen_candidate_id=cid, attempts=2,
+                         flag_reason="Beatport unreachable, will retry")
+    await w.cancel(rid)
+    assert store.get_request(rid).state == RequestState.CANCELLED
+
+    r = await w.retry(rid)
+
+    assert r.state == RequestState.QUEUED
+    assert r.chosen_candidate_id == cid
+    # The row said "will retry" when it was stopped and the Failed tab refused to print that promise;
+    # coming back is what makes the promise true again, so the stale flag goes rather than being shown.
+    assert r.flag_reason is None and r.attempts == 0
+    assert [q.id for q in store.due_queued()] == [rid]
+
+
+async def test_retry_still_refuses_a_rejected_track(env):
+    """The one failure with no attempt left to repeat: the file was checked, failed and deleted. Widening
+    retry to CANCELLED must not widen it to this -- `accept_rejection` is the way back here."""
+    settings, store, notifier = env
+    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_state(rid, RequestState.REJECTED)
+    with pytest.raises(ValueError, match="nothing to retry"):
+        await w.retry(rid)
 
 
 async def test_retry_takes_back_exactly_the_retryable_states(env):

@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, stageOf, stepIndex } from './presentation'
+import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -128,8 +128,8 @@ describe('presentRow', () => {
     expect(v.status).toBe('Needs your choice — best match is a Extended Mix; no version was requested. Pick the version you want.')
     expect(v.washed).toBe(true); expect(v.steps?.[1]).toEqual({ name: 'Choose', state: 'current' })
     expect(v.candidates).toEqual([
-      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true },
-      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false },
+      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true, sample: null },
+      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false, sample: null },
     ])
     expect(v.action).toEqual({ label: 'Skip this track', kind: 'cancel' })
   })
@@ -155,6 +155,57 @@ describe('presentRow', () => {
       caption: 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.' })
     // Nothing failed a cutoff, so no cutoff is claimed either way round.
     expect(v.checks).toEqual([])
+  })
+  // Issue #92: the owner's answer to "is this really a different take?" is their ears, so the refused copy
+  // is kept and played against the reference. Everything the row says about it has to agree with the fact
+  // that the file is still there and a button files it.
+  it('a different-recording row whose copy was kept offers both samples and does not claim a deletion', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording: best score 0.77 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null, created_at: '', kind: 'different_recording',
+      audio_path: '/data/rejected/req1-1.mp3' }
+    const reference = { kind: 'deezer' as const, ref: '1109731', excerpt_start_s: 95 }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference }), opts)
+    expect(v.status).toBe('a different recording: best score 0.77 below 0.79. Kept aside for you to hear, not added to your library.')
+    expect(v.rejection?.caption).toMatch(/still here, so you can hear it/)
+    expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('Keep it anyway files this very copy') })
+    expect(v.samples).toEqual({
+      found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
+      reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
+      video: null })
+  })
+  it('a YouTube reference is a link into the owner\'s own video, at the second the excerpt came from', () => {
+    // Nothing local holds that audio, so there is nothing to serve -- but the passage the fingerprint
+    // compared is knowable, and sending them to it beats sending them to 0:00 of a ten-minute set.
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' },
+      { rejection, reference: { kind: 'youtube' as const, ref: 'dQw4w9WgXcQ', excerpt_start_s: 95 } }), opts)
+    expect(v.samples?.reference).toBeNull()
+    expect(v.samples?.video).toEqual({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=95', at: '1:35' })
+  })
+  it('a quality rejection has nothing to listen to, because nothing was kept', () => {
+    // The spectral check is a fact about the file, not a judgement call -- there is no second opinion to
+    // have, so the row must not grow a player that implies there is.
+    const rejection = { id: 7, request_id: 1, reason: 'Sounds like a 128 kbps upscale', bitrate_kbps: 320,
+      cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
+    expect(v.samples).toBeNull()
+    expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }
+    const v = presentRow(bundle({ state: 'rejected' },
+      { rejection, reference: { kind: 'deezer' as const, ref: '1109731', excerpt_start_s: null } }), opts)
+    expect(v.samples?.found).toBeNull()
+    expect(v.samples?.reference?.url).toBe('/api/requests/1/reference/audio')
+    // And with no copy there is nothing to keep, so the row falls back to the plain refusal wording.
+    expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a different-recording row with neither side to play draws no block at all', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }
+    expect(presentRow(bundle({ state: 'rejected' }, { rejection }), opts).samples).toBeNull()
   })
   it('a rejected row does not borrow the Soulseek attempt\'s fingerprint: it refused a different file', () => {
     const attempt = { id: 8, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
@@ -330,13 +381,29 @@ describe('failed states say why they are failed and whether they can come back',
       expect(v.outcome!.retryable, s).toBe(canRetry(s))
       expect(v.action?.kind === 'retry', s).toBe(canRetry(s))
     }
-    expect(FAILED_STATES.filter(canRetry)).toEqual(['not_found', 'error'])
+    expect(FAILED_STATES.filter(canRetry)).toEqual(['not_found', 'error', 'cancelled'])
+  })
+
+  it('separates the rows Retry all sweeps from the ones only their own button moves', () => {
+    // A track the owner stopped has a Try again and is still left out of the sweep (issue #92). Two
+    // different questions, so two different predicates, and the row carries the narrower answer.
+    for (const s of FAILED_STATES) {
+      expect(presentRow(bundle({ state: s }), opts).sweepable, s).toBe(sweptByRetryAll(s))
+    }
+    expect(FAILED_STATES.filter(sweptByRetryAll)).toEqual(['not_found', 'error'])
+    expect(sweptByRetryAll('cancelled')).toBe(false)
+    expect(canRetry('cancelled')).toBe(true)
   })
 
   it('points a final row at the one thing that does work: submitting the link again', () => {
-    for (const s of ['rejected', 'cancelled'] as const) {
-      expect(presentRow(bundle({ state: s }), opts).outcome!.note).toMatch(/paste the link again/i)
-    }
+    expect(presentRow(bundle({ state: 'rejected' }), opts).outcome!.note).toMatch(/paste the link again/i)
+  })
+
+  it('tells a stopped row its Try again works and that Retry all will not press it', () => {
+    const note = presentRow(bundle({ state: 'cancelled' }), opts).outcome!.note
+    expect(note).toMatch(/Try again/)
+    expect(note).toMatch(/Retry all leaves stopped tracks alone/)
+    expect(note).not.toMatch(/paste the link again/i)
   })
 
   it('does not repeat a stale retry promise on a row it has just called final', () => {
@@ -356,13 +423,36 @@ describe('failedSummary', () => {
                           failed(4, 'cancelled'), failed(5, 'cancelled')]))
       // Ordered by FAILED_COPY, not by what the list happens to hold first, so the sentence does not
       // reshuffle itself under the owner every time a row is retried or removed.
-      .toBe('3 of these 5 cannot be tried again — 1 failed the quality check, 2 you stopped. '
-            + 'Each row says what to do instead.')
+      .toBe('1 of these 5 cannot be tried again — 1 failed the quality check. That row says what to do '
+            + 'instead. 2 of these you stopped yourself, so Retry all leaves them out — press Try again '
+            + 'on a row to start that one again.')
+  })
+
+  it('explains a Retry all of nothing even when no row is final', () => {
+    // The worst version of the gap: seventeen live Try again buttons under a disabled "Retry all 0".
+    // Nothing here is final, so the old summary returned null and the owner was left with two numbers.
+    expect(failedSummary([failed(1, 'error'), failed(2, 'cancelled'), failed(3, 'cancelled')]))
+      .toBe('2 of these you stopped yourself, so Retry all leaves them out — press Try again on a row '
+            + 'to start that one again.')
+    expect(failedSummary([failed(1, 'cancelled')]))
+      .toBe('One of these you stopped yourself, so Retry all leaves it out — press Try again on the row '
+            + 'to start it again.')
   })
 
   it('says so plainly when the button is disabled because nothing here can move', () => {
     expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected')]))
       .toBe('Nothing here can be tried again — 2 failed the quality check. Each row says what to do instead.')
+  })
+
+  it('counts the two refusals apart, because only one of them is about quality', () => {
+    // One `rejected` state, two entirely different things to have happened. Saying "3 failed the quality
+    // check" over a row that offers to file the file would be the summary contradicting the row (#92).
+    const different = bundle({ id: 3, state: 'rejected' }, { rejection: { id: 3, request_id: 3,
+      reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null,
+      created_at: '', kind: 'different_recording' } })
+    expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected'), different]))
+      .toBe('Nothing here can be tried again — 2 failed the quality check, 1 turned out to be a different '
+            + 'recording. Each row says what to do instead.')
   })
 
   it('stays silent when there is no gap to explain', () => {
@@ -372,8 +462,8 @@ describe('failedSummary', () => {
   })
 
   it('counts only failures, so a History tab full of finished tracks does not inflate it', () => {
-    expect(failedSummary([failed(1, 'done'), failed(2, 'duplicate'), failed(3, 'cancelled')]))
-      .toBe('Nothing here can be tried again — 1 you stopped. That row says what to do instead.')
+    expect(failedSummary([failed(1, 'done'), failed(2, 'duplicate'), failed(3, 'rejected')]))
+      .toBe('Nothing here can be tried again — 1 failed the quality check. That row says what to do instead.')
   })
 })
 

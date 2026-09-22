@@ -429,12 +429,15 @@ class Worker:
     async def retry(self, request_id: int) -> Request:
         """"Try now" on a backoff, "Try again" on a failure.
 
-        Only the two states in `RETRYABLE_STATES` come back. Both are the pipeline running out of road, and
-        another pass really can end differently. The other two failures are decisions rather than dead ends:
-        REJECTED means a file was checked, failed and thrown away, CANCELLED means the owner stopped the
-        track. Reviving either would overturn a verdict rather than repeat an attempt, so retry refuses them
-        and the way back is to submit the link again -- which starts a fresh request and leaves the decided
-        one as the record of what happened.
+        Only the three states in `RETRYABLE_STATES` come back. ERROR and NOT_FOUND are the pipeline running
+        out of road, and another pass really can end differently. CANCELLED is the owner's own decision, and
+        it comes back for exactly that reason (issue #92): pressing Try again on a track you stopped is you
+        changing your mind, not the app overturning a verdict. It is kept out of "Retry all" instead -- see
+        `SWEEPABLE_STATES` -- so an afternoon of deliberate stops cannot be undone by one press.
+
+        REJECTED is the one failure that stays out. A file was checked, failed and thrown away, so there is
+        no attempt to repeat: the way back is `accept_rejection` when the owner has listened and decided the
+        recording is fine after all, or submitting the link again for a fresh search.
         """
         req = self.store.get_request(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:
@@ -453,6 +456,66 @@ class Worker:
                             error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
         else:
             raise ValueError(f"request {request_id} is {req.state.value}; nothing to retry")
+        return self.store.get_request(request_id)
+
+    async def accept_rejection(self, request_id: int) -> Request:
+        """"Keep it anyway" on a track the recording check refused (issue #92).
+
+        The one rejection an ear can overturn. `fingerprint_check` answers "is this the same recording as
+        the reference" with a number, and a number needs a floor; below it the pipeline must refuse, because
+        the alternative is filing whatever a search happened to return. But on older music the floor is
+        genuinely wrong sometimes -- a remaster, a re-press, a different mix of the same take -- and the
+        only instrument that can tell is the owner's ear. So the refused file is kept (see `_keep_rejected`),
+        the row plays it, and this files those same bytes: not a fresh search that might land on a different
+        copy, but the copy they listened to.
+
+        The check is re-run rather than skipped. It will fail again -- these are the same bytes against the
+        same reference -- and that is the point: the track is filed carrying a `recording_match` row saying
+        `failed` and at what score, so the library's own record says this one was kept on the owner's say-so
+        rather than claiming it passed.
+
+        The rejection row itself stays. It is what happened, it is the handle `unlink_spectrogram` deletes
+        the PNG by, and with the request now DONE no page draws it. Only `audio_path` is cleared, because
+        the file it pointed at has moved into the library."""
+        req = self.store.get_request(request_id)
+        if req.state != RequestState.REJECTED:
+            raise ValueError(f"request {request_id} is {req.state.value}; only a rejected track can be kept anyway")
+        rejection = self.store.get_rejection_for_request(request_id)
+        if rejection is None or rejection.kind != "different_recording" or not rejection.audio_path:
+            raise ValueError("this track failed the quality check, not the recording check; there is no "
+                             "copy of it to keep")
+        kept = Path(rejection.audio_path)
+        if not kept.exists():
+            self.store.clear_rejection_audio(rejection.id)
+            raise ValueError("the copy of this track is no longer on disk")
+        cand = (self.store.get_candidate(req.chosen_candidate_id) if req.chosen_candidate_id
+                else query_candidate(req.query(), req.id))
+        catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
+        # Into tmp_dir first: `write_tags` and `file_track` both work on the file in place, and the kept
+        # copy must not be the thing that is tagged and moved -- a duplicate or a failure part-way would
+        # otherwise leave the row pointing at a file that has been edited or is gone.
+        self.settings.tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.settings.tmp_dir / f"req{req.id}-accepted{kept.suffix}"
+        shutil.copy2(kept, tmp)
+        try:
+            async with self._cpu:
+                verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
+                                                  f"req{req.id}-accepted")
+            if not verdict.passed:
+                # It passed the spectral check the first time round, so this is a file that has changed
+                # under us. Filing it would put a copy in the library that no check ever vouched for.
+                raise ValueError(f"the kept copy no longer passes the quality check: {verdict.reason}")
+            stored = self.store.get_reference(req.id)
+            fp = None
+            if stored is not None:
+                async with self._cpu:
+                    fp = await fingerprint_check(tmp, AcousticReference.from_dict(stored),
+                                                 minimum=self.settings.lossless_fingerprint_min)
+            await self._file_track(req, cand, catalog, tmp, verdict, fp, None, self.source.name, None)
+        finally:
+            tmp.unlink(missing_ok=True)   # gone already when file_track moved it; garbage otherwise
+        self.store.clear_rejection_audio(rejection.id)
+        kept.unlink(missing_ok=True)
         return self.store.get_request(request_id)
 
     # ---- pipeline -------------------------------------------------------
@@ -863,6 +926,14 @@ class Worker:
             log.info("req#%d lossy copy fingerprint: %s %s", req.id, fp.status, fp.reason)
             if fp.status == "failed":
                 reason = f"a different recording: {fp.reason}"
+                # Kept, not deleted -- the one verdict an ear can overturn (issue #92). The check says this
+                # audio is genuine and is not the recording that was asked for, and on older music that can
+                # be true and still be the copy the owner wants: a remaster, a re-press, a different mix of
+                # the same take all score below the floor. So the file is moved out of `tmp` before the
+                # `finally` that deletes it, the row plays it, and "Keep it anyway" files these very bytes.
+                # A quality rejection is not kept: "this is an MP3 wearing a FLAC extension" is a fact
+                # about the file, not a matter of taste, and there is nothing to listen for.
+                kept = self._keep_rejected(req, tmp)
                 # No cutoff on this one. This branch is only reached with `verdict.passed` already true, so
                 # `verdict.cutoff_hz` here is a *healthy* number -- and the page turns any cutoff it is given
                 # into "it stops at N kHz, it was blown up from a smaller file", which would tell the owner a
@@ -871,9 +942,11 @@ class Worker:
                 # evidence it did not fail on. The spectrogram stays: it is a true picture of the audio, and
                 # the rejection row is the only handle `unlink_spectrogram` has for deleting the PNG later.
                 self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, None,
-                                         verdict.spectrogram_path, kind="different_recording")
+                                         verdict.spectrogram_path, kind="different_recording",
+                                         audio_path=kept)
                 self._set_state(req, RequestState.REJECTED)
-                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}")
+                tail = "\nYou can listen to it in the app and keep it anyway." if kept else ""
+                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}{tail}")
                 return
             if fp.status == "skipped":
                 # Nothing to check against, so nothing to file on, and nothing a retry would change on its
@@ -888,7 +961,33 @@ class Worker:
             fp = hit.fingerprint
         source = hit.provider if hit else self.source.name
         source_fmt = hit.source_fmt if hit else None
+        await self._file_track(req, cand, catalog, tmp, verdict, fp, hit, source, source_fmt)
 
+    def _keep_rejected(self, req: Request, tmp: Path) -> Path | None:
+        """Move the refused file out of `tmp_dir` before the pass that produced it cleans up, and answer
+        with where it went. Best effort: a copy that cannot be kept costs the owner the listen, not the
+        rejection, so a full disk leaves a row that explains itself and offers no player."""
+        try:
+            self.settings.rejected_dir.mkdir(parents=True, exist_ok=True)
+            kept = self.settings.rejected_dir / f"req{req.id}-{int(time.time())}{tmp.suffix}"
+            shutil.move(str(tmp), str(kept))
+        except OSError as e:
+            log.warning("req#%d: could not keep the refused copy: %s", req.id, e)
+            return None
+        log.info("req#%d kept the refused copy at %s", req.id, kept.name)
+        return kept
+
+    async def _file_track(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
+                          verdict: Verdict, fp: FingerprintResult | None, hit: LosslessHit | None,
+                          source: str, source_fmt: str | None) -> None:
+        """Tag the file, move it into the library and write the row -- everything after a file has been
+        judged fit to keep.
+
+        Its own method because there are now two ways to reach it. The pipeline gets here by passing every
+        check; `accept_rejection` gets here because the owner listened to a file the fingerprint refused and
+        said keep it anyway (issue #92). One tail, so a track filed by hand is tagged, named, counted,
+        added to its playlist and announced exactly like every other track -- the alternative was a second
+        copy of this drifting away from the first."""
         self._set_state(req, RequestState.FILING)
         if catalog is None:
             catalog = _fallback_catalog(cand)
@@ -910,7 +1009,11 @@ class Worker:
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
-        self._record_evidence(track_id, fp, hit)
+        # None only when the check could not be run at all at accept time -- no stored reference, no fpcalc.
+        # A track with no recording_match row says "not checked", which is true; a fabricated passing one
+        # would not be.
+        if fp is not None:
+            self._record_evidence(track_id, fp, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)

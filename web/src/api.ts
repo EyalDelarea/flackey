@@ -35,8 +35,16 @@ export interface Attempt { id:number; request_id:number; provider:string; create
 /** `kind` says which check the file failed -- 'quality' (the spectral check) or 'different_recording'
     (genuine audio, wrong track). Optional so a fixture or a row written before the column existed still
     type-checks; absent reads as 'quality', which is all there was then. */
-export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string; kind?:string }
-export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null }
+export interface Rejection { id:number; request_id:number; reason:string; bitrate_kbps:number|null; cutoff_hz:number|null; spectrogram_path:string|null; created_at:string; kind?:string
+  /** Set only on a different-recording rejection whose file was kept, and cleared the moment that file is
+      filed or deleted. The page reads it as "is there something to play", never as a path. */
+  audio_path?:string|null }
+/** Which audio the request was fingerprinted against, so a row saying "a different recording" can say
+    different from what. `deezer` is playable through `referenceAudioUrl`; `youtube` is the owner's own
+    video, which only they have, so the page links to it at `excerpt_start_s`. */
+export interface Reference { kind:'youtube'|'deezer'; ref:string; excerpt_start_s:number|null }
+export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null
+  reference?:Reference|null }
 export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; track_positions?:number[]; file:string }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
@@ -119,6 +127,7 @@ export const api = {
   choose: (rid: number, cid: number) => post<Request>(`/api/requests/${rid}/choose/${cid}`),
   cancel: (rid: number) => post<Request>(`/api/requests/${rid}/cancel`),
   retry: (rid: number) => post<Request>(`/api/requests/${rid}/retry`),
+  accept: (rid: number) => post<Request>(`/api/requests/${rid}/accept`),
   retryFailed: (ids: number[]) => post<{ retried: number[]; skipped: number[] }>('/api/requests/retry-failed', { ids }),
   removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
   clearFailed: () => post<{ removed: number[] }>('/api/requests/clear-failed'),
@@ -185,3 +194,8 @@ export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${reject
 // resolves the signed sample URL upstream on every request, so this is built at the moment play is
 // pressed -- never set on an element that is only sitting there.
 export const candidatePreviewUrl = (candidateId: number) => `/api/candidates/${candidateId}/preview`
+// The refused copy, served off this machine rather than resolved upstream -- so unlike the two above it is
+// a stable URL, and replaying it while comparing does not go back to the network.
+export const rejectedAudioUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/audio`
+// The Deezer half of the reference, resolved at play time for the same signature reason as a candidate's.
+export const referenceAudioUrl = (requestId: number) => `/api/requests/${requestId}/reference/audio`

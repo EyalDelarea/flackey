@@ -1,18 +1,18 @@
 import { act, render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
-import type { RowView } from '../../presentation'
+import type { CandidateView, RowView } from '../../presentation'
 import type { PlayerState } from './DownloadPage'
 
 // Every row needs the page's player state; only the sample tests care what is in it.
-const idle: PlayerState = { playing: null, clock: null, slow: false, failed: null, noSample: new Set<number>() }
+const idle: PlayerState = { playing: null, clock: null, slow: false, failed: null }
 const preview = { player: idle, onPlay: () => {} }
 
 const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted',
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null }
+  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
   // The note is the only thing on a final row that says what is left to do -- there is no button beside
@@ -71,7 +71,7 @@ it('says a six-hour wait in hours, and counts it down once a minute rather than 
 it('fires the row action and candidate choice', () => {
   const onAction = vi.fn(); const onChoose = vi.fn()
   const view: RowView = { ...base, dimmed: false, washed: true, action: { label: 'Skip this track', kind: 'cancel' },
-    candidates: [{ id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true }] }
+    candidates: [{ id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true, sample: null }] }
   render(<RequestRow view={view} onAction={onAction} onChoose={onChoose} {...preview} />)
   fireEvent.click(screen.getByText('Use this'))
   expect(onChoose).toHaveBeenCalledWith(1, 5)
@@ -191,24 +191,29 @@ it('sweeps without claiming a queue when the transfer has started but the size i
   expect(screen.getByLabelText('Downloading from someone')).toHaveClass('waiting')
 })
 
-const threeVersions: RowView['candidates'] = [
-  { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: '', chosen: false },
-  { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false },
-  { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false }]
+// The third has no sample: `sample` is null wherever Deezer has nothing to play, and the card draws no
+// control at all for it.
+const sampleOf = (id: number, version: string): CandidateView['sample'] =>
+  ({ key: `cand:${id}`, label: `Vini Vici – The Tribe (${version})`, url: `/api/candidates/${id}/preview` })
+
+const threeVersions: CandidateView[] = [
+  { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: '', chosen: false, sample: sampleOf(5, 'Extended Mix') },
+  { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false, sample: sampleOf(6, 'Radio Edit') },
+  { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false, sample: null }]
 
 it('spreads the page\'s player state over its candidate cards', () => {
-  // The row holds no player of its own: it turns "which id is playing" and "which Deezer has no sample
-  // for" into one card\'s Stop, one card\'s Play and one card with nothing to press at all.
+  // The row holds no player of its own: it turns "which key is playing" into one card\'s Stop, one card\'s
+  // Play and -- where the view handed it no sample at all -- one card with nothing to press.
   const onPlay = vi.fn()
   const { container } = render(<RequestRow view={{ ...base, candidates: threeVersions }} onAction={() => {}} onChoose={() => {}}
-    player={{ ...idle, playing: 5, noSample: new Set([7]) }} onPlay={onPlay} />)
+    player={{ ...idle, playing: 'cand:5' }} onPlay={onPlay} />)
   expect(screen.getByRole('button', { name: 'Stop a sample of Vini Vici – The Tribe (Extended Mix)' })).toBeInTheDocument()
   // No control at all on the one with no sample -- not a disabled one, which is a thing to try that never
   // works and which drops out of tab order under the keyboard user who just reached it.
   expect(screen.queryByRole('button', { name: /sample of Vini Vici – The Tribe \(Live\)/ })).toBeNull()
   expect([...container.querySelectorAll('.candidate')][2].querySelectorAll('button')).toHaveLength(1)
   fireEvent.click(screen.getByRole('button', { name: 'Play a sample of Vini Vici – The Tribe (Radio Edit)' }))
-  expect(onPlay).toHaveBeenCalledWith(6)
+  expect(onPlay).toHaveBeenCalledWith('cand:6', '/api/candidates/6/preview')
 })
 
 it('names the playing version inline on the title line, without adding a line to the row', () => {
@@ -218,7 +223,7 @@ it('names the playing version inline on the title line, without adding a line to
   const { container, rerender } = render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
   const lines = container.querySelector('.row-text')!.children.length
   expect(container.querySelector('.now-playing')).toBeNull()
-  rerender(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} player={{ ...idle, playing: 6 }} onPlay={() => {}} />)
+  rerender(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} player={{ ...idle, playing: 'cand:6' }} onPlay={() => {}} />)
   expect(container.querySelector('.title .now-playing')).toHaveTextContent('Radio Edit')
   expect(container.querySelector('.row-text')!.children.length).toBe(lines)
 })
@@ -249,4 +254,34 @@ it('tags a failed row with where it stopped, and leaves a running row untagged',
   // A running row already says where it is -- the ladder is right there. The tag is for the list where
   // the ladder is gone and "where did this stop" is the question being asked.
   expect(container.querySelector('.stage-tag')).toBeNull()
+})
+
+const kept: RowView['samples'] = {
+  found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
+  reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
+  video: null }
+
+it('lets a refused copy be heard against the reference, and filed anyway', () => {
+  // Issue #92: the fingerprint says these are different recordings, and on old music mixed twice it can be
+  // right about the bytes and wrong about what the owner wanted. The row hands the decision back.
+  const onAction = vi.fn(); const onPlay = vi.fn()
+  render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true, samples: kept }}
+    onAction={onAction} onChoose={() => {}} player={idle} onPlay={onPlay} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the recording you asked for' }))
+  expect(onPlay).toHaveBeenCalledWith('ref:1', '/api/requests/1/reference/audio')
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the copy Flackey found' }))
+  expect(onPlay).toHaveBeenLastCalledWith('found:7', '/api/rejections/7/audio')
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  expect(onAction).toHaveBeenCalledWith('accept', 1, undefined)
+})
+
+it('offers the video instead when the reference is one, and never Keep it anyway with nothing to keep', () => {
+  // Half the comparison is still worth having: the block says what is missing rather than vanishing and
+  // leaving the row with no explanation of why there is nothing to listen to.
+  render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true,
+    samples: { found: null, reference: null, video: { url: 'https://www.youtube.com/watch?v=abc&t=95', at: '1:35' } } }}
+    onAction={() => {}} onChoose={() => {}} player={idle} onPlay={() => {}} />)
+  expect(screen.getByRole('link', { name: 'Open your video at 1:35' })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=abc&t=95')
+  expect(screen.getByText('The copy is no longer here')).toBeInTheDocument()
+  expect(screen.queryByText('Keep it anyway')).toBeNull()
 })

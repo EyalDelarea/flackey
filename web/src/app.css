@@ -334,6 +334,38 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   .candidate::before, .sample-rail { transition: none; }
   .sample-rail.waiting .sample-rail-fill { animation: none; }
 }
+/* ---- Listen to both, then decide (issue #92) ----
+   The A/B block under a row refused as a different recording. It reuses the candidate card's player parts
+   wholesale -- same button, same tint, same position rail -- because it is the same act: press, hear a
+   clip, decide. Only the shape differs. A card is a column because it carries four facts; these carry one
+   each, so they are rows, and the two labels line up in a column so the eye can drop straight from "what
+   you asked for" to "what Flackey found" without re-reading either. */
+/* Held to a reading width rather than the row's: the block is two short lines and a button, and stretched
+   across the whole window it is mostly empty box with a control marooned at the left edge. */
+.compare { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px 60px; max-width: 520px; }
+.compare-head { font-size: 11px; font-weight: 500; color: var(--secondary); }
+/* Same edge, radius and wash as `.candidate`, and `position: relative` + `overflow: hidden` for the same
+   two reasons: the rail anchors to the padding box, and a 2px bar must not overhang the 8px corner. */
+.compare-side { position: relative; overflow: hidden; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 8px; background: var(--group); box-shadow: inset 0 0 0 .5px var(--group-border);
+  font-size: 12px; }
+/* Fixed width so the two players align under each other rather than sitting where their labels happen to
+   end -- the pair is meant to be pressed one after the other, and a button that moves between presses is
+   a button you have to look for twice. */
+.compare-label { flex: none; width: 128px; color: var(--secondary); }
+.compare-side .play { width: 26px; padding: 0; color: var(--secondary); }
+.compare-side .play.on { background: var(--accent-fill); border-color: transparent; color: var(--accent-text); }
+.compare-side::before { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--sample-tint);
+  opacity: 0; transition: opacity 200ms ease; pointer-events: none; }
+.compare-side.lit::before { opacity: 1; }
+.compare-side.lit .sample-rail { opacity: 1; }
+.compare-side .muted { font-size: 12px; }
+/* The one control on a failed row that changes anything, so it is the one thing drawn as a commitment --
+   and the sentence beside it says exactly what it commits to, because "anyway" alone does not. */
+.compare-act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.compare-act .btn-primary { gap: 5px; }
+.compare-act .muted { font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .compare-side::before { transition: none; } }
 .skip { padding: 0 12px 12px 60px; }
 .well { margin: 0 12px 12px 60px; padding: 12px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); }
 .well img { display: block; width: 100%; height: 84px; object-fit: cover; border-radius: 5px; }

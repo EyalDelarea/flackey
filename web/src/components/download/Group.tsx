@@ -33,7 +33,7 @@ interface Props {
   onTryNow: (ids: number[]) => void
   /** Passed straight through to the rows: the page owns the one audio element, the group only
    *  hands it down. */
-  player: PlayerState; onPlay: (cid: number) => void
+  player: PlayerState; onPlay: (key: string, url: string) => void
 }
 export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, player, onPlay }: Props) {
   const s = g.summary
