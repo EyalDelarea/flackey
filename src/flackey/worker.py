@@ -74,6 +74,17 @@ REVIEW_BUTTONS = 5
 CANCELLABLE = {RequestState.QUEUED, RequestState.IDENTIFYING, RequestState.FETCHING,
                RequestState.AWAITING_REVIEW, RequestState.ERROR}
 LOGIN_REQUIRED = "Telegram login required"
+# Which rung of the ladder a request is on, for the one failure state that does not say so by its own name
+# (issue #60). Written on the row when it turns to `error`, and read by the Failed tab to split one
+# undifferentiated lump into Search / Download / Verify. Filing sits under "verify" because it is the back
+# half of the same rung on screen: the file has been checked and is being put away. The terminal states
+# are deliberately absent -- a request never fails *out of* one -- and so is `error` itself.
+STAGE_OF_STATE = {
+    RequestState.QUEUED: "search", RequestState.IDENTIFYING: "search",
+    RequestState.AWAITING_REVIEW: "choose",
+    RequestState.FETCHING: "download",
+    RequestState.VERIFYING: "verify", RequestState.FILING: "verify",
+}
 # spec §5: only these let a request try again on its own. "queued" belongs with them because it is a wait,
 # not an answer -- the peers had the file and simply had not reached us in their queue, so the next pass is
 # asking a question that has genuinely changed. Everything else is a verdict the next pass would only repeat.
@@ -261,6 +272,18 @@ class Worker:
             # forget to. Nothing clears it: the ladder's Choose rung is the fact that this track once
             # waited on a person, which stays true after they have answered.
             kw.setdefault("reviewed", 1)
+        if state == RequestState.ERROR:
+            # The row still holds the stage this request is failing out of; once `update_request` runs it
+            # does not. Derived here rather than passed by each caller so no terminal path can be mute --
+            # including ones that do not exist yet, and including `process`'s last-resort `except`, which
+            # has no idea where it came from. Read from the *store*: `req` is a snapshot the transitions
+            # above it do not refresh, so on the fetch path it still says `queued` while the row says
+            # `fetching`. `setdefault`, so a caller that does know better keeps the last word.
+            try:
+                was = self.store.get_request(req.id).state
+            except KeyError:
+                was = req.state   # removed mid-flight; the snapshot is all that is left to ask
+            kw.setdefault("failed_stage", STAGE_OF_STATE.get(was, "unknown"))
         self.store.update_request(req.id, state=state, **kw)
 
     # ---- lifecycle ------------------------------------------------------
@@ -430,7 +453,7 @@ class Worker:
             # price of the button meaning what it says -- peers come and go, so the same search an hour
             # later is not the same file list, and the alternative is a dead end the owner cannot leave.
             self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
-                            error_message=None, flag_reason=None, lossless_retry=1)
+                            error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
         else:
             raise ValueError(f"request {request_id} is {req.state.value}; nothing to retry")
         return self.store.get_request(request_id)

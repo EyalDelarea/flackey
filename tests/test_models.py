@@ -96,3 +96,38 @@ def test_failed_states_match_the_ui():
             == {s.value for s in SWEEPABLE_STATES}), "every state Retry all sweeps, and only those"
     # Nothing the pipeline still holds may be advertised as retryable or as finished.
     assert {s for s, f in finality.items() if f == "open"} == every - {s.value for s in TERMINAL_STATES}
+
+
+def test_stage_names_match_the_ui():
+    """`failed_stage` is a free-text column: the worker writes a word and the browser looks it up. That is
+    two copies of one vocabulary either side of an HTTP boundary, with nothing but this test between them --
+    rename a stage on one side and the Failed tab silently files those rows under Unknown, which is exactly
+    the drift `test_failed_states_match_the_ui` above exists to catch for the states.
+
+    Only the intersection is assertable, and deliberately so. The worker's table answers "which rung was the
+    row on when it turned to error", so it holds the six live states and nothing else; the browser's also
+    reads a stage off the four failure states by name, which the worker never writes. And `_ts_map` cannot
+    see `done`/`duplicate` at all -- their value is a bare `null`, not a quoted word -- so this must not
+    assert on the table's length or on equality of the key sets."""
+    from flackey.worker import STAGE_OF_STATE
+
+    ts = _ts_map("STAGE_OF")
+    assert ts, "presentation.ts no longer has a STAGE_OF table"
+    # Total over the live states, checked before the values are. Iterating the table alone would let an
+    # entry be dropped and the test go quiet about that state rather than fail -- `STAGE_OF_STATE.get(was,
+    # "unknown")` then files those failures under Unknown and nothing says so. Python has no equivalent of
+    # the TypeScript totality check the other table gets from its `Record`, so this is that check.
+    assert set(STAGE_OF_STATE) == set(RequestState) - TERMINAL_STATES, (
+        "STAGE_OF_STATE must name every state a request can still be failing out of"
+    )
+    for state, stage in STAGE_OF_STATE.items():
+        assert ts.get(state.value) == stage, (
+            f"worker calls {state.value} '{stage}'; presentation.ts calls it {ts.get(state.value)!r}"
+        )
+    # Every word either side writes has to be one the browser's Stage union admits, or the chip it belongs
+    # to is never drawn. `unknown` is in the union but in neither table's values: it is the fallback both
+    # sides reach for, so it is spelled out here rather than derived.
+    union = set(re.findall(r"'(\w+)'", re.search(r"export type Stage = ([^\n]+)", (
+        Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()).group(1)))
+    assert set(STAGE_OF_STATE.values()) <= union
+    assert "unknown" in union

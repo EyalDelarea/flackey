@@ -236,7 +236,7 @@ def test_ensure_column_adds_once_and_survives_reopen(tmp_path: Path):
     s1 = Store(db)
     cols = {r[1] for r in s1.conn.execute("PRAGMA table_info(tracks)")}
     assert {"source", "source_fmt", "bit_depth", "sample_rate"} <= cols
-    assert "fetch_source" in {r[1] for r in s1.conn.execute("PRAGMA table_info(requests)")}
+    assert {"fetch_source", "failed_stage"} <= {r[1] for r in s1.conn.execute("PRAGMA table_info(requests)")}
     s1.conn.close()
     s2 = Store(db)  # second open must not fail on ALTER TABLE
     assert s2.conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0

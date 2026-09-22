@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { bucketCounts, bucketOf, failedSummary, groupRows } from '../../presentation'
-import type { Bucket, RowAction } from '../../presentation'
+import { bucketCounts, bucketOf, failedSummary, groupRows, matchesFilter } from '../../presentation'
+import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import Banner from '../Banner'
 import FilterBar from './FilterBar'
+import { selectionKeys } from './selectionKeys'
 import Group from './Group'
 import PasteBar from './PasteBar'
 
@@ -43,7 +44,10 @@ export default function DownloadPage({ live }: { live: Live }) {
   const now = useNow(1000)
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<Bucket | 'all'>('all')
+  // One axis or the other, never both: `Bucket` and `Stage` share no value, so a single predicate picks
+  // whichever the pressed chip named. Stage is a filter here and nothing more -- the list still groups by
+  // playlist, because each group owns a bar and a summary that nesting would break.
+  const [filter, setFilter] = useState<Filter>('all')
   const [retryingAll, setRetryingAll] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
   // One element for the whole page, and the key it is playing: two rows can sit in `awaiting_review` at
@@ -84,14 +88,20 @@ export default function DownloadPage({ live }: { live: Live }) {
   const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)
-  const groups = groupRows(scoped, live.playlists, opts, filter).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
+  // Two populations, deliberately. The chips count what the tab is showing (`scoped`); the batch bar above
+  // each group counts the whole playlist (`bundles`), because a Downloads tab that has already dropped every
+  // finished row would otherwise draw a bar reading "0 filed" on a batch that is half filed.
+  const groups = groupRows(scoped, live.playlists, opts, filter, bundles).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
   // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
   // down to is what "Retry all" retries. `sweepable`, not "has a retry button" -- a track the owner stopped
   // carries the button and is still left out, so counting the buttons would promise a sweep of seventeen
   // and move none of them (issue #92). The sentence beside the button says so.
   const retryableIds = groups.flatMap(g => g.rows).filter(r => r.sweepable).map(r => r.id)
-  // Same rows, same filter, so the sentence and the button count the same population.
-  const summary = failedSummary(scoped)
+  // The rows on screen, narrowed by the same exported predicate `groupRows` filters with -- not a second
+  // spelling of it, which is how the sentence came to describe all 55 failures beside a button offering to
+  // retry the 12 the chip had left. One predicate, so the two cannot drift apart again.
+  const visible = scoped.filter(b => matchesFilter(b.request, filter))
+  const summary = failedSummary(visible)
   const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
   const retryAll = () => {
@@ -175,11 +185,18 @@ export default function DownloadPage({ live }: { live: Live }) {
         return submission.summary
       }} />
       {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
-      <div className="download-views" role="group" aria-label="Download view">
-        <button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button>
-        <button className="chip" aria-pressed={view === 'history'} onClick={openHistory}>History{newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}</button>
-        {view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('failed') }}>Failed <span className="count red">{bundles.filter(isFailed).length}</span></button>}
+      <div className="download-views" role="tablist" aria-label="Download view" onKeyDown={selectionKeys}>
+        {(['active', 'history', 'failed'] as const).map(v => (
+          <button key={v} className="download-tab" role="tab" id={`download-tab-${v}`} aria-controls="download-panel"
+            aria-selected={view === v} tabIndex={view === v ? 0 : -1}
+            onClick={() => { if (v === 'history') openHistory(); else { setView(v); setFilter('all') } }}>
+            {v === 'active' ? 'Downloads' : v === 'history' ? 'History' : 'Failed'}
+            {v === 'history' && newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}
+            {v === 'failed' && <span className="count red"> {bundles.filter(isFailed).length}</span>}
+          </button>
+        ))}
       </div>
+      <div className="download-panel" role="tabpanel" id="download-panel" aria-labelledby={`download-tab-${view}`} tabIndex={0}>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
@@ -191,21 +208,25 @@ export default function DownloadPage({ live }: { live: Live }) {
           a filtered-down tab explains the tab the owner is actually looking at. `.filterbar` is 38px of
           single-line chrome elsewhere; the wide modifier lets this one grow to hold a sentence. */}
       {view === 'failed' && scoped.length > 0 && (
-        <div className="filterbar wide">
+        <div className="filterbar wide stacked">
+          <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view="failed" bare />
+          <div className="filterbar-row">
           {summary && <p className="failed-summary">{summary}</p>}
           <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
             {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
           </button>
+          </div>
         </div>
       )}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
-        {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
+        {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
-        {groups.map(g => <Group key={g.key} g={g} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
+        {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
           player={{ playing, clock, slow, failed }} onPlay={onPlay} />)}
+      </div>
       </div>
       {/* The page's one player. `preload="none"` and no `src` until a play is pressed, because the route
           resolves the sample against Deezer on every request -- and none again the moment it stops.

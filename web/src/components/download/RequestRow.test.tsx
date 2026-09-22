@@ -11,7 +11,7 @@ const preview = { player: idle, onPlay: () => {} }
 const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null, status: 'Starting…', statusTone: 'muted',
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
-  candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', removable: false,
+  candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
   formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
@@ -43,9 +43,9 @@ it('shows the retry timer separately and counts it down', () => {
       statusTone: 'amber', retryInSeconds: 61 }
     render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
     expect(screen.getByText('Previous attempt: No Soulseek match; alternate source unavailable')).toBeInTheDocument()
-    expect(screen.getByText('Retry in 1m 1s')).toBeInTheDocument()
+    expect(screen.getByText('Waiting · 1m 1s')).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(1000) })
-    expect(screen.getByText('Retry in 1m 0s')).toBeInTheDocument()
+    expect(screen.getByText('Waiting · 1m 0s')).toBeInTheDocument()
   } finally {
     vi.useRealTimers()
   }
@@ -58,11 +58,11 @@ it('says a six-hour wait in hours, and counts it down once a minute rather than 
   try {
     render(<RequestRow view={{ ...base, status: 'Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h',
       statusTone: 'amber', retryInSeconds: 21600 }} onAction={() => {}} onChoose={() => {}} {...preview} />)
-    expect(screen.getByText('Retry in 6h 0m')).toBeInTheDocument()
+    expect(screen.getByText('Waiting · 6h 0m')).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(1000) })
-    expect(screen.getByText('Retry in 6h 0m')).toBeInTheDocument()   // a second is not a tick up here
+    expect(screen.getByText('Waiting · 6h 0m')).toBeInTheDocument()   // a second is not a tick up here
     act(() => { vi.advanceTimersByTime(59000) })
-    expect(screen.getByText('Retry in 5h 59m')).toBeInTheDocument()
+    expect(screen.getByText('Waiting · 5h 59m')).toBeInTheDocument()
   } finally {
     vi.useRealTimers()
   }
@@ -232,6 +232,28 @@ it('puts the sample button before Use this, so the row reads listen-then-choose'
   const { container } = render(<RequestRow view={{ ...base, candidates: [threeVersions[0]] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
   const labels = [...container.querySelectorAll('.candidate .actions button')].map(b => b.getAttribute('aria-label') ?? b.textContent)
   expect(labels).toEqual(['Play a sample of Vini Vici – The Tribe (Extended Mix)', 'Use this'])
+})
+
+/* Issue #60: a parked row must not look like one that never started. */
+it('reads a parked row as waiting -- a pill on the rail and a wash, not four grey rungs', () => {
+  const { container } = render(<RequestRow view={{ ...base, stage: 'waiting', retryInSeconds: 870, dimmed: false,
+    status: 'No Soulseek match; alternate source unavailable', statusTone: 'amber' }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(container.querySelector('.row')).toHaveClass('parked')
+  const pill = screen.getByText('Waiting · 14m 30s')
+  expect(pill).toHaveClass('waiting-pill')
+  // On the right rail, where the row's other standing facts are -- not on a line of its own under the status.
+  expect(pill.closest('.row-right')).not.toBeNull()
+})
+
+it('tags a failed row with where it stopped, and leaves a running row untagged', () => {
+  const { rerender, container } = render(<RequestRow view={{ ...base, bucket: 'failed', stage: 'download', steps: null,
+    status: 'Failed — every peer refused the transfer', statusTone: 'red' }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(container.querySelector('.stage-tag')).toHaveTextContent('download')
+  expect(container.querySelector('.stage-tag')).toHaveClass('tone-download')
+  rerender(<RequestRow view={{ ...base, bucket: 'progress', stage: 'download' }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  // A running row already says where it is -- the ladder is right there. The tag is for the list where
+  // the ladder is gone and "where did this stop" is the question being asked.
+  expect(container.querySelector('.stage-tag')).toBeNull()
 })
 
 const kept: RowView['samples'] = {

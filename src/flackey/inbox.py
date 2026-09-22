@@ -72,7 +72,7 @@ class Inbox:
             return None
         self.store.update_request(previous.id, state=RequestState.QUEUED, playlist_position=position,
                                   attempts=0, retry_after=None, error_message=None, flag_reason=None,
-                                  lossless_retry=1)
+                                  failed_stage=None, lossless_retry=1)
         return previous.id
 
     @staticmethod

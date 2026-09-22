@@ -121,6 +121,20 @@ async def test_reimport_retries_a_failed_playlist_request_instead_of_duplicating
     assert again.already_queued == 1
 
 
+async def test_reimport_clears_the_stage_the_failed_run_stopped_at(inbox):
+    """The re-imported row starts again from the top, so the stage its last run stopped at (issue #60) is
+    no longer a fact about it -- cleared beside the attempts, the backoff and the error message."""
+    ib, store = inbox
+    first = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    failed_id = first.request_ids[0]
+    store.set_state(failed_id, RequestState.ERROR, error_message="the peers all refused")
+    store.update_request(failed_id, failed_stage="download")
+
+    await ib.submit("https://www.youtube.com/playlist?list=PL1")
+
+    assert store.get_request(failed_id).failed_stage is None
+
+
 async def test_spotify_playlist_link_queues_each_entry_and_skips_library_hits(inbox):
     ib, store = inbox
     store.add_track(path=Path("/x.mp3"), fmt="mp3", bitrate_kbps=320, cutoff_hz=20000, file_size=1,

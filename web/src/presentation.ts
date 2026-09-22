@@ -15,7 +15,10 @@ export const STEP_TIPS: Record<string, string> = {
   Verify: 'Reading the spectrogram to make sure the file is really lossless. An MP3 re-wrapped as FLAC has a hard cutoff around 16 kHz that real music never has.',
   Done: 'Tagged with artist, title, remix and artwork, and filed under the artist\'s folder. No BPM or key — Rekordbox works those out on import.',
 }
-export type Dot = 'done' | 'current' | 'pending'
+/** `paused` is the parked row's rung: a hollow ring where `current` is a filled pulsing dot. Without it a
+ *  row waiting out a backoff draws four identical grey rungs -- the same picture as a track that has not
+ *  started -- which is how the largest category on screen came to have no name at all. */
+export type Dot = 'done' | 'current' | 'pending' | 'paused'
 /** One rung of the ladder: the name and the state are rendered together, never as two separate widgets. */
 export interface StepView { name: string; state: Dot }
 /** Evidence that the file is what it claims to be - the fingerprint match and the spectrogram cutoff. */
@@ -47,6 +50,9 @@ export interface RowView {
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
+  /** Where this row is, or where it stopped. One field, not two: `stageOf` has already folded the
+   *  `failed_stage` column in, so nothing downstream has to know the column exists. */
+  stage: Stage | null
   /** Whether "Retry all" would take this row. Narrower than having a retry button: a track the owner
    *  stopped has the button and is not swept. The page counts the sweep from this rather than from the
    *  button, so the count beside "Retry all" is the number of rows it will actually move. */
@@ -59,7 +65,14 @@ export interface RowView {
 export interface ProgressView { pct: number | null; label: string }
 /** This track is on the lossy Deezer copy and why, so a miss is visible rather than silent. */
 export interface FallbackView { label: string; reason: string }
-export interface GroupSummary { filed: number; total: number; needsChoice: number; rejected: number; inFlight: number; pct: number }
+/** What the batch bar above a group draws. `inFlight` is working *right now*: a row parked on a backoff is
+ *  `queued`, so it sits in the `progress` bucket while doing nothing, and counting it as in progress is the
+ *  exact claim the segmented bar exists to correct. It gets its own `waiting` count instead.
+ *  `filed + inFlight + needsChoice + waiting + failed === total`, which is what lets the bar fill the width
+ *  without an unexplained gap. `failedStages` splits the failures by where they stopped, for the Failed
+ *  tab's own bar. */
+export interface GroupSummary { filed: number; total: number; needsChoice: number; rejected: number; inFlight: number
+  waiting: number; failed: number; pct: number; failedStages: Record<Stage, number> }
 export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[]; beatportDown: { seconds: number; requestIds: number[] } | null }
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
@@ -88,6 +101,46 @@ const BUCKET_OF: Record<RequestState, Bucket> = {
   rejected: 'failed', not_found: 'failed', error: 'failed', cancelled: 'failed',
 }
 export const bucketOf = (state: RequestState): Bucket => BUCKET_OF[state]
+
+/* Where a request is in the pipeline and, once it has stopped, where it stopped. One vocabulary for both
+   questions: they are the same axis read at two points in time, and a second set of names would drift from
+   the ladder the rows already draw. The names are the STEPS ladder lowercased, plus the two answers that
+   are not rungs -- `waiting` (parked on a backoff, doing nothing) and `stopped` (the owner did it). */
+export type Stage = 'search' | 'choose' | 'download' | 'verify' | 'waiting' | 'stopped' | 'unknown'
+/* A total Record, not a Partial: a thirteenth state must fail the build here rather than fall through to
+   `undefined` and reach the chips as a filter that counts nothing. `null` means "finished, no stage" --
+   BUCKET_OF and FINALITY_OF are total for the same reason. Three of the four failure states say where they
+   stopped by their own name -- `not_found` only ever comes from identify, `rejected` only from verify,
+   `cancelled` is always the owner -- so only `error` needs the column below. */
+const STAGE_OF: Record<RequestState, Stage | null> = {
+  queued: 'search', identifying: 'search',
+  awaiting_review: 'choose',
+  fetching: 'download',
+  verifying: 'verify', filing: 'verify',
+  done: null, duplicate: null,
+  not_found: 'search', rejected: 'verify', cancelled: 'stopped',
+  error: 'unknown',          // the failed_stage column overrides this whenever it has an answer
+}
+const STAGES: readonly Stage[] = ['search', 'choose', 'download', 'verify', 'waiting', 'stopped', 'unknown']
+/** Checked rather than cast: `failed_stage` is a free-text column, and a value this vocabulary does not
+ *  know would otherwise reach the UI as a filter no chip offers and a bar segment nothing draws. */
+const isStage = (s: string | null | undefined): s is Stage => s != null && (STAGES as readonly string[]).includes(s)
+/** The one answer to "where is this track". Both tabs and all three widgets ask it here.
+ *  A freshly queued request is about to search; a re-queued one is parked, and calling that "searching" is
+ *  the claim this whole axis exists to correct -- both the quick RETRY_BACKOFF_S ladder and the 6 h
+ *  `_wait_for_soulseek` park land in `waiting`, because neither is doing anything. */
+export const stageOf = (r: Request): Stage | null =>
+  r.state === 'error' ? (isStage(r.failed_stage) ? r.failed_stage : 'unknown')
+    : r.state === 'queued' && r.retry_after ? 'waiting'
+      : STAGE_OF[r.state]
+
+/** What the list is narrowed to. `Bucket` and `Stage` share no value, so one predicate picks the right
+ *  axis with no branching and no second state to keep in step. */
+export type Filter = Bucket | Stage | 'all'
+/** The one row predicate. Exported because the Failed tab's sentence has to count the same population the
+ *  rows and the "Retry all" button do, and two spellings of one predicate is how they came to disagree. */
+export const matchesFilter = (r: Request, filter: Filter): boolean =>
+  filter === 'all' || bucketOf(r.state) === filter || stageOf(r) === filter
 
 /* Whether anything can still move a request out of the state it is in. A plain `Record`, not a Set of the
    interesting ones: a thirteenth state then fails the build here instead of quietly classifying itself as
@@ -230,8 +283,13 @@ function stepsFor(r: Request): StepView[] | null {
   if (i == null) return null
   // Built against the full ladder, then thinned: the indices in STEP_OF are positions in STEPS, and a rung
   // dropped first would shift every one after it.
+  // A parked row resumes at Search: the worker re-queues it and starts the run again, whatever stage it
+  // backed off from, so the ring goes on the rung it will actually pick up at.
+  const parked = stageOf(r) === 'waiting'
   const dot = (n: number): Dot =>
-    COMPLETE.includes(state) ? 'done' : state === 'queued' ? 'pending' : n < i ? 'done' : n === i ? 'current' : 'pending'
+    COMPLETE.includes(state) ? 'done'
+      : state === 'queued' ? (parked && n === 0 ? 'paused' : 'pending')
+        : n < i ? 'done' : n === i ? 'current' : 'pending'
   const rungs = STEPS.map((name, n) => ({ name, state: dot(n) }))
   return skipsChoice(r) ? rungs.filter(s => s.name !== 'Choose') : rungs
 }
@@ -390,7 +448,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
-    bucket, removable: bucket === 'done' || bucket === 'failed', sweepable: sweptByRetryAll(r.state),
+    bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed', sweepable: sweptByRetryAll(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
@@ -520,52 +578,85 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   return v
 }
 
+const noStages = (): Record<Stage, number> =>
+  ({ search: 0, choose: 0, download: 0, verify: 0, waiting: 0, stopped: 0, unknown: 0 })
+
 function summaryOf(list: Bundle[]): GroupSummary {
   const total = list.length
   const filed = list.filter(b => COMPLETE.includes(b.request.state)).length
+  const failedStages = noStages()
+  for (const b of list) {
+    if (bucketOf(b.request.state) !== 'failed') continue
+    const s = stageOf(b.request)
+    if (s) failedStages[s]++
+  }
   return {
     filed, total,
     needsChoice: list.filter(b => b.request.state === 'awaiting_review').length,
     rejected: list.filter(b => b.request.state === 'rejected').length,
-    inFlight: list.filter(b => bucketOf(b.request.state) === 'progress').length,
+    // Working right now, which is not the same as "in the progress bucket": the parked rows are queued.
+    inFlight: list.filter(b => bucketOf(b.request.state) === 'progress' && stageOf(b.request) !== 'waiting').length,
+    waiting: list.filter(b => stageOf(b.request) === 'waiting').length,
+    failed: list.filter(b => bucketOf(b.request.state) === 'failed').length,
     pct: total ? Math.round((filed / total) * 100) : 0,
+    failedStages,
   }
 }
 
 const BEATPORT_DOWN = /^Beatport unreachable/
-export function groupRows(bundles: Bundle[], playlists: Playlist[], opts: PresentOpts, filter: Bucket | 'all' = 'all'): GroupView[] {
-  const byPlaylist = new Map<number | null, Bundle[]>()
+const byPlaylistId = (bundles: Bundle[]): Map<number | null, Bundle[]> => {
+  const m = new Map<number | null, Bundle[]>()
   for (const b of bundles) {
     const k = b.request.playlist_id
-    if (!byPlaylist.has(k)) byPlaylist.set(k, [])
-    byPlaylist.get(k)!.push(b)
+    if (!m.has(k)) m.set(k, [])
+    m.get(k)!.push(b)
   }
+  return m
+}
+
+/** `bundles` are the rows the tab is showing; `all` is every request in the batch, which defaults to the
+ *  same list. They differ because the batch bar is about the batch, not about the tab: the Downloads tab
+ *  has already dropped every finished row, so a summary built from it reads "0 filed" on a playlist that
+ *  is in fact half filed. The rows stay scoped and filtered; only `summary` reads `all`. */
+export function groupRows(bundles: Bundle[], playlists: Playlist[], opts: PresentOpts, filter: Filter = 'all', all: Bundle[] = bundles): GroupView[] {
+  const byPlaylist = byPlaylistId(bundles)
+  const whole = byPlaylistId(all)
   const names = new Map(playlists.map(p => [p.id, p.name]))
   const groups: GroupView[] = []
   const keys = [...byPlaylist.keys()].filter((k): k is number => k != null)
     .sort((a, c) => Math.max(...byPlaylist.get(c)!.map(b => b.request.id)) - Math.max(...byPlaylist.get(a)!.map(b => b.request.id)))
-  const build = (key: string, name: string, list: Bundle[]): GroupView => {
+  const build = (key: string, name: string, list: Bundle[], playlistKey: number | null): GroupView => {
     const sorted = [...list].sort((a, c) =>
       filter === 'all'
         ? c.request.created_at.localeCompare(a.request.created_at) || c.request.id - a.request.id
         : a.request.id - c.request.id
     )
-    const rows = sorted.map(b => presentRow(b, opts)).filter(r => filter === 'all' || r.bucket === filter)
+    const rows = sorted.filter(b => matchesFilter(b.request, filter)).map(b => presentRow(b, opts))
     const down = sorted.filter(b => b.request.state === 'queued' && b.request.retry_after && BEATPORT_DOWN.test(b.request.flag_reason || ''))
     const seconds = down.length ? Math.max(0, ...down.map(b => Math.round((new Date(b.request.retry_after!).getTime() - opts.now.getTime()) / 1000))) : 0
     return {
       key, name, rows,
-      summary: summaryOf(sorted),
+      summary: summaryOf(whole.get(playlistKey) ?? sorted),
+      // Built from the rows on screen, not from `all`: the banner's "Try now" acts on the ids beside it,
+      // and a Failed tab is no place for a banner about rows it is not showing.
       beatportDown: down.length ? { seconds, requestIds: down.map(b => b.request.id) } : null,
     }
   }
-  for (const k of keys) groups.push(build(`pl-${k}`, names.get(k) ?? 'Playlist', byPlaylist.get(k)!))
-  if (byPlaylist.has(null)) groups.push(build('single', 'Single tracks', byPlaylist.get(null)!))
+  for (const k of keys) groups.push(build(`pl-${k}`, names.get(k) ?? 'Playlist', byPlaylist.get(k)!, k))
+  if (byPlaylist.has(null)) groups.push(build('single', 'Single tracks', byPlaylist.get(null)!, null))
   return groups.filter(g => g.rows.length > 0)
 }
 
-export function bucketCounts(bundles: Bundle[]): Record<Bucket | 'all', number> {
-  const counts: Record<Bucket | 'all', number> = { all: bundles.length, progress: 0, needs: 0, done: 0, failed: 0 }
-  for (const b of bundles) counts[bucketOf(b.request.state)]++
+/** Both axes in one walk over the bundles, because the chips draw them side by side and a second pass over
+ *  a 120-row batch to count the same rows again is work for nothing. */
+export function bucketCounts(bundles: Bundle[]): Record<Filter, number> {
+  const counts: Record<Filter, number> = { all: bundles.length, progress: 0, needs: 0, done: 0, failed: 0, ...noStages() }
+  for (const b of bundles) {
+    counts[bucketOf(b.request.state)]++
+    // `stageOf` is null on a finished request, and a null key would quietly accumulate junk beside the
+    // real ones and reach the chips as a count of nothing.
+    const s = stageOf(b.request)
+    if (s) counts[s]++
+  }
   return counts
 }

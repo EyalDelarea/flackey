@@ -135,6 +135,10 @@ class Store:
         self._ensure_column("rejections", "audio_path", "TEXT")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
+        # Where a request was when it failed. Only `error` needs it: the other three failure states say
+        # where they stopped by their own name. Rows written before the column keep NULL -- the stage is
+        # genuinely not recorded for them and a guess reads worse than an honest gap.
+        self._ensure_column("requests", "failed_stage", "TEXT")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung

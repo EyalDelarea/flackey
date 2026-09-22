@@ -223,6 +223,11 @@ class Request:
     retry_after: str | None = None  # ISO timestamp; `due_queued` skips the request until then (backoff)
     track_id: int | None = None
     fetch_source: str | None = None         # "soulseek" or "deezer" while FETCHING; cleared after
+    # Which stage the request was in when it landed in `error`, stamped by `Worker._set_state` and
+    # cleared by every path that puts the row back on the queue. `error` is the only failure state that
+    # needs it: not_found, rejected and cancelled each name their own stage. None on a row that has never
+    # failed, and on every row written before the column existed.
+    failed_stage: str | None = None
     # One manual pass at the lossless providers, granted by `Worker.retry` on a failed request and spent by
     # the next fetch. Spec §5 bars the *worker* from going back after a definitive miss; this is the owner
     # asking, which `_lossless_miss_line` tells them to do.
