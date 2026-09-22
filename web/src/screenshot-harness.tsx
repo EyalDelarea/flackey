@@ -118,13 +118,40 @@ const choices: Bundle[] = [
   ]),
 ]
 
+/* The queue a moment after Telegram revoked the session out from under a running app (issue #91). Every
+   row is still `queued`, flagged `Telegram login required`, with `attempts` untouched at 0 -- which is the
+   whole point: before the fix a revoked key surfaced as a plain ConnectionError and each of these was
+   burned into `error` instead, one per pass, under a sidebar that still read "Connected". */
+const pausedOnLogin: Bundle[] = [
+  failure(32, 'queued', { query_artist: 'Astral Projection', query_title: 'Mahadeva', flag_reason: 'Telegram login required' }),
+  failure(33, 'queued', { query_artist: 'Shpongle', query_title: 'Divine Moments of Truth', flag_reason: 'Telegram login required' }),
+  failure(34, 'queued', { query_artist: 'Hallucinogen', query_title: 'LSD', flag_reason: 'Telegram login required' }),
+]
+
+/* The same three tracks as issue #91 reported them: a revoked key reached the worker as a bare
+   ConnectionError, so each pass burned one more request into `error` while `telegram_authorized` was
+   never touched and the footer stayed green. Kept beside the scenario above as the picture of what the
+   fix must not produce again -- the two render from the same harness, so the only thing that differs
+   between them is the state the backend put the queue in. */
+const burnedOnRevoke: Bundle[] = [
+  failure(32, 'error', { query_artist: 'Astral Projection', query_title: 'Mahadeva', attempts: 3,
+    error_message: 'Cannot send requests while disconnected' }),
+  failure(33, 'error', { query_artist: 'Shpongle', query_title: 'Divine Moments of Truth', attempts: 3,
+    error_message: 'Cannot send requests while disconnected' }),
+  failure(34, 'error', { query_artist: 'Hallucinogen', query_title: 'LSD', attempts: 3,
+    error_message: 'Cannot send requests while disconnected' }),
+]
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : [])
   vi_spy(api, 'stats', async () => stats)
-  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : scenario === 'choose' ? choices : [] as Bundle[])
+  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures
+    : scenario === 'choose' ? choices
+    : scenario === 'telegram-revoked' ? pausedOnLogin
+    : scenario === 'telegram-revoked-before' ? burnedOnRevoke : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -166,6 +193,22 @@ function scenarioSetup() {
         published_at: null, published_date: null, prerelease: false }))
       break
     }
+    /* Telegram revoked mid-run, on a copy with no Soulseek to fall back on -- which is the only
+       arrangement where the loss actually stops the digging, and so the one worth a picture. The sidebar
+       footer reads from both sources at once, so leaving Soulseek connected here would keep it green and
+       hide exactly the thing this scenario exists to show. */
+    case 'telegram-revoked':
+      vi_spy(api, 'health', async () => health({ telegram_authorized: false, worker_running: false,
+        lossless: { enabled: false, provider: null, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
+      vi_spy(api, 'library', async () => [])
+      break
+    /* The bug, not a state the app can still reach: `telegram_authorized` stays true because nothing
+       ever flipped it, which is what left the footer green while the queue emptied into the Failed tab. */
+    case 'telegram-revoked-before':
+      vi_spy(api, 'health', async () => health({ telegram_authorized: true, worker_running: true,
+        lossless: { enabled: false, provider: null, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
+      vi_spy(api, 'library', async () => [])
+      break
     case 'setup':
       vi_spy(api, 'health', async () => health({ setup_done: false, telegram_authorized: false }))
       vi_spy(api, 'pickFolderAvailable', async () => ({ available: false }))

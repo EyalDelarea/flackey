@@ -12,7 +12,8 @@ from telethon.tl.custom import Message
 
 from ..deezer import DeezerApi, DeezerError
 from ..models import Candidate, Query
-from .base import SourceNotFound, SourceTimeout, SourceUnauthorized
+from ..telegram import probe_authorized
+from .base import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
 
 _TRACK_RE = re.compile(r"^dz_track:(\d+):send$")
 _LABEL_RE = re.compile(r"^\d+\.\s*(.*)$")
@@ -91,6 +92,23 @@ class DeezerBotSource:
         # see the new one on the next call rather than keep a reference to the one that was just killed.
         return self.get_client() if self.get_client is not None else self._client
 
+    async def _lost_connection(self, e: ConnectionError) -> SourceError:
+        """What a `ConnectionError` from a call to Telegram really means.
+
+        Telethon's update loop catches the revoke itself -- `AuthKeyUnregisteredError` on its next
+        difference -- and disconnects the client before anything here ever sees the error, so from this
+        side a revoked session is a plain builtin `ConnectionError("Cannot send requests while
+        disconnected")`. So is a wifi drop, a socket reset and a Telegram that cannot be reached, which
+        is why this cannot simply be mapped to SourceUnauthorized: that would pause the worker and put
+        a "sign in again" banner over the app every time the network hiccupped (issue #91). Only
+        Telegram can tell the two apart, so ask it, and treat "cannot tell" the way a blip is treated.
+
+        Returns the exception to raise rather than raising it, so the call sites keep the original
+        `ConnectionError` as the cause."""
+        if await probe_authorized(self.client) is False:
+            return SourceUnauthorized(f"Telegram session rejected ({e})")
+        return SourceTimeout(f"lost the connection to Telegram ({e})")
+
     async def _enrich(self, c: Candidate) -> Candidate:
         try:
             t = await self.deezer.track(c.deezer_id)
@@ -135,7 +153,11 @@ class DeezerBotSource:
                     msg = (await edited).message
                     menu = parse_result_menu(_buttons(msg))
         except UnauthorizedError as e:
+            # The race the revoke path leaves behind: the call itself can still be the one Telegram
+            # refuses, before the update loop has torn the socket down.
             raise SourceUnauthorized(f"Telegram session rejected ({e.__class__.__name__})") from e
+        except ConnectionError as e:
+            raise await self._lost_connection(e) from e
         except TimeoutError as e:
             raise SourceTimeout("source bot did not answer the search") from e
         if not menu.candidates:
@@ -186,6 +208,12 @@ class DeezerBotSource:
             await asyncio.wait_for(self.client.download_media(msg, file=str(dest)), timeout=self.fetch_timeout)
         except UnauthorizedError as e:
             raise SourceUnauthorized(f"Telegram session rejected ({e.__class__.__name__})") from e
+        except ConnectionError as e:
+            # Covers the click inside `_ask_for_file` as well as the download: both run in this try.
+            # `ConnectionError` and not `OSError`, even though one is the other's subclass -- the
+            # download writes to disk, and a full disk is an OSError that has nothing to do with the
+            # session.
+            raise await self._lost_connection(e) from e
         except TimeoutError as e:
             raise SourceTimeout("source bot did not send the file") from e
         return dest
