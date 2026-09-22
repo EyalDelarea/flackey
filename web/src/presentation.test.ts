@@ -251,6 +251,25 @@ describe('groupRows', () => {
     expect(s.filed + s.inFlight + s.needsChoice + s.waiting + s.failed).toBe(s.total)
   })
 
+  it('gives each batch its own totals, not the whole app\'s', () => {
+    /* The summary reads the unfiltered list, and the obvious way to wire that up -- hand `summaryOf` the
+       whole of `all` -- is indistinguishable from the right one until a second playlist exists. Then every
+       bar on screen draws the same shape and each one is wrong. Two batches here, deliberately different
+       sizes, so that mistake cannot pass. */
+    const all = [
+      bundle({ id: 1, playlist_id: 7, state: 'done' }), bundle({ id: 2, playlist_id: 7, state: 'done' }),
+      bundle({ id: 3, playlist_id: 7, state: 'fetching' }),
+      bundle({ id: 4, playlist_id: 8, state: 'done' }), bundle({ id: 5, playlist_id: 8, state: 'error' }),
+      bundle({ id: 6, playlist_id: 8, state: 'error' }), bundle({ id: 7, playlist_id: 8, state: 'fetching' }),
+    ]
+    const two = [...playlists, { id: 8, source_url: 'u', name: 'Goa Trance Classics', created_at: '', updated_at: '', track_ids: [], file: '' }]
+    const active = all.filter(b => b.request.state === 'fetching')
+    const g = groupRows(active, two, opts, 'all', all)
+    const by = new Map(g.map(x => [x.name, x.summary]))
+    expect(by.get('Progressive Psy Set 2026')).toMatchObject({ filed: 2, total: 3, failed: 0 })
+    expect(by.get('Goa Trance Classics')).toMatchObject({ filed: 1, total: 4, failed: 2 })
+  })
+
   it('filters on the stage axis as readily as the bucket axis, still grouping by playlist only', () => {
     const bundles = [
       bundle({ id: 1, playlist_id: 7, state: 'identifying' }),
