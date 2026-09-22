@@ -1,10 +1,10 @@
-import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, mmss, presentRow, stepIndex } from './presentation'
+import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, stageOf, stepIndex } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
   playlist_id: null, playlist_position: null, source_url: null, query_artist: 'Ace Ventura', query_title: 'Rezonate', query_version: null,
   query_duration_s: 521, chosen_candidate_id: null, catalog_track_id: null, fetch_source: null, confidence: null, flag_reason: null, error_message: null,
-  attempts: 0, retry_after: null, track_id: null }
+  attempts: 0, retry_after: null, track_id: null, failed_stage: null }
 const opts = { libraryRoot: '/Users/me/Music/DJ Library', telegramAuthorized: true, now: new Date('2026-09-06T10:00:00Z'), whyOpen: false }
 const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
   ({ request: { ...base, ...r }, candidates: [], catalog: null, track: null, rejection: null, ...rest })
@@ -206,7 +206,10 @@ describe('groupRows', () => {
       bundle({ id: 2, created_at: '2026-09-06T07:00:00Z' }),
     ], playlists, opts)
     expect(g.map(x => x.name)).toEqual(['Progressive Psy Set 2026', 'Single tracks'])
-    expect(g[0].summary).toEqual({ filed: 1, total: 4, needsChoice: 1, rejected: 1, inFlight: 1, pct: 25 })
+    // Row 6 is queued with a retry_after -- parked on a backoff, doing nothing. It used to be counted as
+    // in progress, which is the claim the segmented bar exists to correct, so it is `waiting` now.
+    expect(g[0].summary).toEqual({ filed: 1, total: 4, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 1,
+      failed: 1, pct: 25, failedStages: { search: 0, choose: 0, download: 0, verify: 1, waiting: 0, stopped: 0, unknown: 0 } })
     expect(g[0].rows.map(r => r.id)).toEqual([6, 5, 4, 3])          // newest first with 'all' filter
     expect(g[0].beatportDown).toEqual({ seconds: 30, requestIds: [6] })
     expect(g[1].rows.map(r => r.id)).toEqual([2]); expect(g[1].beatportDown).toBeNull()
@@ -221,13 +224,44 @@ describe('groupRows', () => {
     const failedOnly = groupRows(bundles, playlists, opts, 'failed')
     expect(failedOnly.map(g => g.name)).toEqual(['Progressive Psy Set 2026'])   // Single tracks group is empty, dropped
     expect(failedOnly[0].rows.map(r => r.id)).toEqual([5])
-    expect(failedOnly[0].summary).toEqual({ filed: 1, total: 3, needsChoice: 1, rejected: 1, inFlight: 0, pct: 33 })  // summary unaffected by the filter
+    expect(failedOnly[0].summary).toEqual({ filed: 1, total: 3, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 0,
+      failed: 1, pct: 33, failedStages: { search: 0, choose: 0, download: 0, verify: 1, waiting: 0, stopped: 0, unknown: 0 } })  // summary unaffected by the filter
 
     const progressOnly = groupRows(bundles, playlists, opts, 'progress')
     expect(progressOnly.map(g => g.name)).toEqual(['Single tracks'])
     expect(progressOnly[0].rows.map(r => r.id)).toEqual([2])
 
     expect(groupRows(bundles, playlists, opts, 'all')).toHaveLength(2)
+  })
+
+  it('counts the whole batch in the summary even when the tab is showing a slice of it', () => {
+    // The Downloads tab drops every finished row before it gets here, so a summary built from the rows
+    // reads "0 filed" on a playlist that is in fact half filed. The bar is about the batch, not the tab.
+    const all = [
+      bundle({ id: 1, playlist_id: 7, state: 'done' }), bundle({ id: 2, playlist_id: 7, state: 'done' }),
+      bundle({ id: 3, playlist_id: 7, state: 'rejected' }), bundle({ id: 4, playlist_id: 7, state: 'fetching' }),
+      bundle({ id: 5, playlist_id: 7, state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' }),
+    ]
+    const active = all.filter(b => b.request.state === 'fetching' || b.request.state === 'queued')
+    const g = groupRows(active, playlists, opts, 'all', all)
+    expect(g[0].rows.map(r => r.id)).toEqual([5, 4])
+    expect(g[0].summary).toMatchObject({ filed: 2, total: 5, inFlight: 1, waiting: 1, failed: 1, pct: 40 })
+    // Every segment of the bar accounted for: nothing falls into an unexplained gap at the end.
+    const s = g[0].summary
+    expect(s.filed + s.inFlight + s.needsChoice + s.waiting + s.failed).toBe(s.total)
+  })
+
+  it('filters on the stage axis as readily as the bucket axis, still grouping by playlist only', () => {
+    const bundles = [
+      bundle({ id: 1, playlist_id: 7, state: 'identifying' }),
+      bundle({ id: 2, playlist_id: 7, state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' }),
+      bundle({ id: 3, playlist_id: 7, state: 'error', failed_stage: 'download' }),
+      bundle({ id: 4, state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' }),
+    ]
+    expect(groupRows(bundles, playlists, opts, 'waiting').map(g => [g.name, g.rows.map(r => r.id)]))
+      .toEqual([['Progressive Psy Set 2026', [2]], ['Single tracks', [4]]])
+    expect(groupRows(bundles, playlists, opts, 'download')[0].rows.map(r => r.id)).toEqual([3])
+    expect(groupRows(bundles, playlists, opts, 'search')[0].rows.map(r => r.id)).toEqual([1])
   })
 
   it("sorts newest-first when filter is 'all', oldest-first otherwise", () => {
@@ -330,7 +364,8 @@ describe('bucketCounts', () => {
       bundle({ id: 1, state: 'queued' }), bundle({ id: 2, state: 'fetching' }), bundle({ id: 3, state: 'awaiting_review' }),
       bundle({ id: 4, state: 'done' }), bundle({ id: 5, state: 'duplicate' }), bundle({ id: 6, state: 'rejected' }),
     ])
-    expect(counts).toEqual({ all: 6, progress: 2, needs: 1, done: 2, failed: 1 })
+    expect(counts).toEqual({ all: 6, progress: 2, needs: 1, done: 2, failed: 1,
+      search: 1, choose: 1, download: 1, verify: 1, waiting: 0, stopped: 0, unknown: 0 })
   })
 })
 
@@ -454,5 +489,89 @@ describe('stopping a track that is already running', () => {
     for (const state of ['verifying', 'filing'] as const) {
       expect(presentRow(bundle({ state }), opts).action).toBeNull()
     }
+  })
+})
+
+/* Issue #60: one vocabulary for "where is it" and "where did it stop". The chips, the segmented bar and
+   the stage tag on a failed row all read from `stageOf`, so it is pinned here per state rather than at
+   each of the three places that draw it. */
+describe('stageOf', () => {
+  const req = (over: Partial<Request>) => bundle(over).request
+
+  it('names the rung a live request is standing on', () => {
+    expect(stageOf(req({ state: 'queued' }))).toBe('search')
+    expect(stageOf(req({ state: 'identifying' }))).toBe('search')
+    expect(stageOf(req({ state: 'awaiting_review' }))).toBe('choose')
+    expect(stageOf(req({ state: 'fetching' }))).toBe('download')
+    expect(stageOf(req({ state: 'verifying' }))).toBe('verify')
+    expect(stageOf(req({ state: 'filing' }))).toBe('verify')
+  })
+
+  it('calls a re-queued request parked, not searching', () => {
+    // The 41 rows the issue was opened about: `queued` with a `retry_after`, which the chips counted as
+    // in progress while they sat on a Soulseek backoff doing nothing.
+    expect(stageOf(req({ state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' }))).toBe('waiting')
+  })
+
+  it('reads where a failed run stopped off the column, and admits it when there is none', () => {
+    expect(stageOf(req({ state: 'error', failed_stage: 'download' }))).toBe('download')
+    expect(stageOf(req({ state: 'error', failed_stage: 'verify' }))).toBe('verify')
+    // Rows written before the column existed, and anything the backend might one day write that this
+    // vocabulary does not know: an honest gap, never a chip that counts nothing.
+    expect(stageOf(req({ state: 'error', failed_stage: null }))).toBe('unknown')
+    expect(stageOf(req({ state: 'error' }))).toBe('unknown')
+    expect(stageOf(req({ state: 'error', failed_stage: 'teleporting' }))).toBe('unknown')
+  })
+
+  it('says where the three self-describing failures stopped without needing a column', () => {
+    expect(stageOf(req({ state: 'not_found' }))).toBe('search')
+    expect(stageOf(req({ state: 'rejected' }))).toBe('verify')
+    expect(stageOf(req({ state: 'cancelled' }))).toBe('stopped')
+  })
+
+  it('has nothing to say about a request that finished', () => {
+    expect(stageOf(req({ state: 'done' }))).toBeNull()
+    expect(stageOf(req({ state: 'duplicate' }))).toBeNull()
+  })
+})
+
+describe('matchesFilter', () => {
+  const req = (over: Partial<Request>) => bundle(over).request
+
+  it('matches on either axis, because the two unions share no value', () => {
+    const parked = req({ state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' })
+    expect(matchesFilter(parked, 'all')).toBe(true)
+    expect(matchesFilter(parked, 'progress')).toBe(true)     // bucket axis
+    expect(matchesFilter(parked, 'waiting')).toBe(true)      // stage axis
+    expect(matchesFilter(parked, 'search')).toBe(false)      // parked is not searching
+    expect(matchesFilter(req({ state: 'identifying' }), 'search')).toBe(true)
+    expect(matchesFilter(req({ state: 'error', failed_stage: 'download' }), 'download')).toBe(true)
+    expect(matchesFilter(req({ state: 'error', failed_stage: 'download' }), 'failed')).toBe(true)
+    expect(matchesFilter(req({ state: 'error', failed_stage: 'download' }), 'verify')).toBe(false)
+  })
+})
+
+describe('bucketCounts with stages', () => {
+  it('counts buckets and stages in one walk, and drops the null stage of a finished row', () => {
+    const counts = bucketCounts([
+      bundle({ id: 1, state: 'identifying' }), bundle({ id: 2, state: 'fetching' }),
+      bundle({ id: 3, state: 'awaiting_review' }), bundle({ id: 4, state: 'done' }),
+      bundle({ id: 5, state: 'queued', retry_after: '2026-09-06T10:15:00+00:00' }),
+      bundle({ id: 6, state: 'error', failed_stage: 'download' }), bundle({ id: 7, state: 'error' }),
+      bundle({ id: 8, state: 'cancelled' }),
+    ])
+    expect(counts).toEqual({
+      all: 8, progress: 3, needs: 1, done: 1, failed: 3,
+      search: 1, choose: 1, download: 2, verify: 0, waiting: 1, stopped: 1, unknown: 1,
+    })
+  })
+})
+
+describe('a parked row says where it picks up', () => {
+  it('rings the rung a re-queued request resumes at, where a fresh one is all pending', () => {
+    const parked = presentRow(bundle({ state: 'queued', retry_after: '2026-09-06T10:15:00+00:00', attempts: 2 }), opts)
+    expect(parked.steps!.map(s => s.state)).toEqual(['paused', 'pending', 'pending', 'pending'])
+    expect(presentRow(bundle({ state: 'queued' }), opts).steps!.map(s => s.state))
+      .toEqual(['pending', 'pending', 'pending', 'pending'])
   })
 })

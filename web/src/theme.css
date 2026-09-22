@@ -20,6 +20,12 @@
   --platter-ink: #FFFFFF; --platter-track: rgba(0,0,0,.13);
   --orange: #FF9500; --green: #34C759; --red: #FF3B30;
   --orange-wash: rgba(255,149,0,.08); --red-wash: rgba(255,59,48,.07);
+  /* Half the amber wash. A run of parked rows should read as a band the eye can skip past, not compete
+     with `.washed`, which marks the rows actually asking the owner for something. */
+  --orange-wash-soft: rgba(255,149,0,.04);
+  /* The fourth failure colour. Amber, red and grey were already spoken for by "found nothing", "could not
+     download" and "you stopped", and the quality check needed a hue of its own rather than a second red. */
+  --purple: #AF52DE; --purple-text: #7B2CA8; --purple-wash: rgba(175,82,222,.09);
   /* --orange/--green read fine as small dots and icons, but at ~2.2:1 they fail WCAG AA for actual text
      on a light background -- the dot stays vivid, the word beside it needs to be darker to be read. */
   --orange-text: #B45309; --green-text: #157A32;
@@ -46,9 +52,11 @@
     --platter-ink: rgba(255,255,255,.92); --platter-track: rgba(255,255,255,.16);
     --orange: #FF9F0A; --green: #30D158; --red: #FF453A;
     --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
+    --orange-wash-soft: rgba(255,159,10,.035);
+    --purple: #BF5AF2; --purple-wash: rgba(191,90,242,.11);
     /* Dark mode's vivid orange/green already clear 4.5:1 against the dark window -- the light-mode
        override above exists because white, not the window colour, is what they sit on there. */
-    --orange-text: var(--orange); --green-text: var(--green);
+    --orange-text: var(--orange); --green-text: var(--green); --purple-text: var(--purple);
   }
 }
 * { box-sizing: border-box; }

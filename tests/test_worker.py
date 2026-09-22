@@ -546,6 +546,9 @@ async def test_source_not_found(env):
     assert r.error_message == ("could not identify this track: the Deezer bot found nothing (source bot "
                                "replied without results: Nothing) and no Beatport match; no artist and "
                                "title could be read from the request, so there is nothing to search for")
+    # Three of the four failure states say where they stopped by their own name (issue #60), so only
+    # `error` carries a stage: a not-found only ever comes out of identify.
+    assert r.failed_stage is None
 
 
 async def test_source_timeout_retries_then_errors(env):
@@ -681,6 +684,90 @@ async def test_retry_takes_back_exactly_the_retryable_states(env):
         else:
             with pytest.raises(ValueError, match="nothing to retry"):
                 await w.retry(rid)
+
+
+# ---- where a failure stopped (issue #60) -------------------------------------------------------------
+# `error` is a catch-all across five call sites spanning three stages, and by the time a row is in it the
+# state it failed out of has been overwritten. `_set_state` stamps `failed_stage` from the row as it stands
+# at the moment of the transition, so the Failed tab can say Search / Download / Verify instead of one
+# undifferentiated lump. It reads the *store*, never the `req` snapshot the caller is holding: in every
+# test below that snapshot still says `queued`, an answer that would file the commonest failures under
+# Search. Each of these therefore fails outright if the derivation is moved to `req.state`.
+
+
+async def test_a_failure_while_identifying_is_stamped_search(env):
+    """The quick ladder spent while the row is still `identifying`: nothing was downloaded and nothing was
+    checked, the track was never pinned down to begin with."""
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource(error=SourceTimeout("slow")), FakeCatalog([CT]))
+    rid = store.add_request("q", RequestKind.TEXT)
+    for _ in range(worker_mod.MAX_ATTEMPTS - 1):
+        assert (await w.process(rid)).state == RequestState.QUEUED
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.failed_stage == "search"
+
+
+async def test_a_failure_while_fetching_is_stamped_download(env):
+    """The stale-snapshot case in full: `_fetch_verify_file` moves the row to `fetching` and goes on using
+    the same `req` object, which still reads `queued`. The peers refusing to send a file is the single
+    biggest real population on the Failed tab, and it is exactly the one a `req.state` reading would
+    mislabel."""
+    _settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("slow")), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    for _ in range(worker_mod.MAX_ATTEMPTS - 1):
+        assert (await w.process(rid)).state == RequestState.QUEUED
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.failed_stage == "download"
+
+
+async def test_a_failure_while_verifying_is_stamped_verify(env, monkeypatch):
+    """A file did arrive; nothing could vouch for it being this recording. That is a different question
+    from whether anything could be found, and the row now says which one it was."""
+    _settings, store, _notifier = env
+
+    async def unverifiable(path, reference, *, minimum, missing=""):
+        return FingerprintResult("skipped", None, None, "video: yt-dlp timed out")
+
+    monkeypatch.setattr(worker_mod, "fingerprint_check", unverifiable)
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and "could not be checked acoustically" in r.error_message
+    assert r.failed_stage == "verify"
+
+
+async def test_the_last_resort_except_stamps_the_stage_the_row_was_in(env, monkeypatch):
+    """`process`'s `except Exception` is the one terminal that knows nothing about where it came from --
+    under a design where each call site passed its own stage it is the one that could only ever say
+    "unknown". The row knows, so it gets a real answer: this one falls over while `filing`, the stage no
+    other test here reaches."""
+    _settings, store, _notifier = env
+
+    def boom(*args, **kw):
+        raise RuntimeError("the tagger fell over")
+
+    monkeypatch.setattr(worker_mod, "write_tags", boom)
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.ERROR and r.error_message == "the tagger fell over"
+    assert r.failed_stage == "verify"      # filing is the back half of verify on the ladder, not "unknown"
+
+
+async def test_retry_clears_the_stage_the_last_run_stopped_at(env):
+    """Cosmetic rather than load-bearing -- the browser only reads the column on a row that is in `error`,
+    and this row is queued again -- but a row that keeps it is carrying a fact about a run that has been
+    thrown away."""
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource(), FakeCatalog())
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_state(rid, RequestState.ERROR, error_message="peers refused")
+    store.update_request(rid, attempts=3, failed_stage="download")
+    assert (await w.retry(rid)).failed_stage is None
 
 
 def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():

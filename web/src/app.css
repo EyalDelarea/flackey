@@ -98,11 +98,22 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .chip[aria-pressed="true"] { background: var(--selection); color: var(--text); font-weight: 500; }
 .chip .count { font-size: 12px; color: var(--secondary); }
 .chip .count.amber { color: var(--orange-text); } .chip .count.red { color: var(--red); }
+/* The quality check's colour, so the Verify chip, its segment of the bar and the tag on its rows all read
+   as one thing. */
+.chip .count.purple { color: var(--purple-text); }
 .filterbar .btn-secondary { margin-left: auto; }
 /* The Failed tab's bar carries a sentence, not chips, so it cannot keep the fixed 38px the others use --
    the line wraps on a narrow window and a fixed height would clip it. min-height keeps it flush with the
    chip bars when the sentence happens to fit on one line. */
 .filterbar.wide { height: auto; min-height: 38px; padding-top: 7px; padding-bottom: 7px; }
+/* The Failed tab's one bar, holding two lines: the stage chips with "Clear failed", and the sentence with
+   "Retry all". Two separate filter bars stacked on one tab is what the chips were added to avoid. */
+.filterbar.wide.stacked { flex-direction: column; align-items: stretch; gap: 7px; }
+.filterbar-row { display: flex; align-items: center; gap: 6px; }
+.filterbar-row .btn-secondary { margin-left: auto; }
+/* Waiting is not a rung of the pipeline, it is "not working right now", so it reads behind a rule instead
+   of in line with the stages it would otherwise look like a continuation of. */
+.chip-divider { width: 1px; height: 14px; margin: 0 5px; background: var(--sep); flex: none; }
 /* Sits at 12px rather than the rows' 11px: it answers the count in the tab above it, so it is read once
    before the list, not skimmed alongside every row. `max-width` stops it running out to meet the button on
    a wide window, where a full-bleed line of small text reads as chrome rather than as an answer. */
@@ -115,16 +126,34 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row { display: flex; flex-direction: column; border-top: .5px solid var(--sep); }
 .row:first-child { border-top: 0; }
 .row.washed { background: var(--orange-wash); } .row.dimmed { opacity: .6; }
+/* After `.washed` on purpose: a row cannot be both, and if the rules ever overlap the louder wash wins. */
+.row.parked { background: var(--orange-wash-soft); }
 .row-main { display: grid; grid-template-columns: 36px minmax(260px, 1fr) minmax(240px, 340px) 112px;
   align-items: center; gap: 12px; min-height: 54px; padding: 8px 12px; }
 .row-text { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .row-steps { grid-column: 3; min-width: 0; display: flex; justify-content: center; }
 .row-steps .stepper { width: 100%; justify-content: center; margin-top: 0; }
 .row .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Where a failed row stopped, said in one word before the title. The Failed list mixes every kind of
+   failure and a stopped row has no ladder left to read it off, so the tag is what makes an unfiltered list
+   scannable. Toned to match its segment of the bar above, so the two are one picture. */
+.stage-tag { display: inline-block; margin-right: 8px; padding: 1px 6px; border-radius: 5px; vertical-align: 1px;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.stage-tag.search { color: var(--orange-text); background: var(--orange-wash); }
+.stage-tag.download { color: var(--red); background: var(--red-wash); }
+.stage-tag.verify { color: var(--purple-text); background: var(--purple-wash); }
+.stage-tag.choose, .stage-tag.waiting { color: var(--orange-text); background: var(--orange-wash); }
+.stage-tag.stopped, .stage-tag.unknown { color: var(--secondary); background: var(--selection); }
 .row .title .version { font-weight: 400; color: var(--secondary); }
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.amber { color: var(--orange-text); } .status.red { color: var(--red); } .status.green { color: var(--green-text); }
-.row .retry-countdown { color: var(--orange-text); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The wait, as a pill on the right rail rather than a line under the status. A parked row's defining fact
+   is that it is parked; under the status it read as a footnote to a row that otherwise looked idle for no
+   reason at all. The ring repeats the hollow rung on the ladder beside it. */
+.waiting-pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 9px; border-radius: 10px;
+  background: var(--orange-wash); color: var(--orange-text); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; flex: none; }
+.waiting-ring { width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 50%; flex: none; }
 /* Wraps, where `.status` above it is one ellipsized line. A status is a fact that survives being cut off
    mid-sentence; this is an instruction ("paste the link again to start over") that does not, and it is the
    only thing on a final row telling the owner what is left to do. Tertiary, not secondary: it must stay
@@ -150,6 +179,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .step-mark { width: 6px; height: 6px; border-radius: 50%; background: var(--tertiary); flex: none; }
 .step.done { color: var(--secondary); } .step.done .step-mark { background: var(--green); }
 .step.current { color: var(--orange-text); font-weight: 600; }
+/* Parked: a hollow ring where `current` is a filled pulsing dot, on the rung the row resumes at. Same
+   amber, because it is the same "not finished" -- what differs is that nothing is happening right now. */
+.step.paused { color: var(--orange-text); }
+.step.paused .step-mark { background: none; border: 1.5px solid var(--orange); }
 .step.current .step-mark { background: var(--orange); animation: pulse 1.2s infinite; }
 /* A help tag the app draws itself, because the native window's WKWebView draws none. Placed in viewport
    coordinates from the rung's own rect: the ladder sits inside a scrolling pane that would clip it. The
@@ -171,9 +204,36 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .check svg { color: var(--green); }
 .check b { font-weight: 600; color: var(--text); }
 .check.bad { color: var(--red); } .check.bad svg { color: var(--red); } .check.bad b { color: var(--red); }
-.group-bar { position: relative; height: 3px; margin: 6px 2px 0; border-radius: 2px; background: var(--selection); overflow: hidden; }
-.group-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); border-radius: 2px; transition: width 240ms ease; }
-.group-bar-bad { position: absolute; right: 0; top: 0; bottom: 0; background: var(--red); opacity: .7; }
+/* The batch bar. Four or five segments rather than a fill plus a sliver, because "how far along" was never
+   the question a bulk import raises -- "how much of this is working, and how much is parked" is. Every row
+   in the batch lands in exactly one segment, so the bar always fills its width: a gap at the end would be
+   a count nothing on screen explains. Segments are flex-grown by their count rather than given rounded
+   percentages, which never quite add up to 100. */
+.group-bar { display: flex; align-items: stretch; gap: 1px; height: 4px; margin: 7px 2px 0; border-radius: 2px; background: var(--selection); overflow: hidden; }
+.group-seg { flex-basis: 0; min-width: 2px; transition: flex-grow 240ms ease; }
+/* The legend is the bar's words. It carries the counts that used to sit in the heading above it, where
+   "41 in progress" was printed an inch over the amber band drawn to correct exactly that. */
+.group-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 6px 2px 0; padding: 0;
+  list-style: none; font-size: 11.5px; color: var(--secondary); }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.legend-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+/* One table of colours for both widgets, so a segment and the dot explaining it cannot drift apart.
+   Downloads: filed, working, needs you, waiting, failed. */
+.group-seg.filed, .legend-dot.filed { background: var(--green); }
+.group-seg.working, .legend-dot.working { background: var(--accent); }
+.group-seg.needs, .legend-dot.needs { background: var(--orange); }
+/* Parked and needs-you are both amber -- neither is working -- and they sit next to each other, so waiting
+   is the lighter of the two. It is also the larger by far, and the softer fill keeps a 41-row band from
+   shouting louder than the 8 rows that are actually moving. */
+.group-seg.waiting, .legend-dot.waiting { background: color-mix(in srgb, var(--orange) 70%, var(--content)); }
+.group-seg.failed, .legend-dot.failed { background: var(--red); }
+/* Failed: the same bar asking where a run stopped. `search` and `download` keep the tone their chips have. */
+.group-seg.search, .legend-dot.search { background: var(--orange); }
+.group-seg.choose, .legend-dot.choose { background: color-mix(in srgb, var(--orange) 70%, var(--content)); }
+.group-seg.download, .legend-dot.download { background: var(--red); }
+.group-seg.verify, .legend-dot.verify { background: var(--purple); }
+.group-seg.stopped, .legend-dot.stopped { background: var(--tertiary); }
+.group-seg.unknown, .legend-dot.unknown { background: color-mix(in srgb, var(--tertiary) 60%, var(--content)); }
 
 @media (max-width: 980px) {
   .row-main { grid-template-columns: 36px minmax(0, 1fr) 112px; }

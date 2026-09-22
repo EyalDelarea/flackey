@@ -26,6 +26,7 @@ const baseRequest: Request = {
   playlist_id: null, playlist_position: null, source_url: null, query_artist: 'Artist', query_title: 'Title',
   query_version: null, query_duration_s: null, chosen_candidate_id: null, catalog_track_id: null, fetch_source: null,
   confidence: null, flag_reason: null, error_message: 'network blip', attempts: 1, retry_after: null, track_id: null,
+  failed_stage: null,
 }
 const bundle: Bundle = { request: baseRequest, candidates: [], catalog: null, track: null, rejection: null }
 const mk = (id: number, state: Request['state']): Bundle => ({
@@ -171,7 +172,10 @@ describe('Retry all on the Failed tab', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected')], { refresh })} />)
     openFailed()
     fireEvent.click(screen.getByRole('button', { name: 'Retry all 2' }))
-    await waitFor(() => expect(api.retryFailed).toHaveBeenCalledWith([1, 2]))
+    // Newest first, because the Failed tab lands on the All chip now rather than pinning a bucket into a
+    // bar of stage chips -- so it sorts the way every other tab on All does. The set is what matters.
+    await waitFor(() => expect(api.retryFailed).toHaveBeenCalled())
+    expect([...vi.mocked(api.retryFailed).mock.calls[0][0]].sort()).toEqual([1, 2])
     await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
 
@@ -244,5 +248,114 @@ describe('Retry all on the Failed tab', () => {
     openFailed()
     fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
     expect(await screen.findByText('Nothing could be retried — this list may be out of date.')).toBeInTheDocument()
+  })
+})
+
+/* Issue #60: the list split by pipeline stage. "In progress 49" was one undifferentiated lump of which 41
+   rows were parked on a Soulseek backoff doing nothing, so the chips, the batch bar and the Failed tab all
+   read from one stage axis now. */
+describe('stage chips and the batch bar', () => {
+  const openFailed = () => fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+  const playlists = [{ id: 7, source_url: 'u', name: 'Goa Trance Classics', created_at: '', updated_at: '',
+    track_ids: [], file: '/lib/Playlists/Goa.m3u8' }]
+  const inPlaylist = (id: number, state: Request['state'], over: Partial<Request> = {}): Bundle => ({
+    request: { ...baseRequest, id, state, playlist_id: 7, query_title: `Track ${id}`,
+      error_message: state === 'error' ? 'network blip' : null, ...over },
+    candidates: [], catalog: null, track: null, rejection: null,
+  })
+  const parked = (id: number) => inPlaylist(id, 'queued', { retry_after: '2099-01-01T00:00:00+00:00', attempts: 2 })
+
+  it('splits the one In progress chip into the stages it was hiding, Waiting last', () => {
+    render(<DownloadPage live={makeLive([
+      inPlaylist(1, 'identifying'), inPlaylist(2, 'awaiting_review'), inPlaylist(3, 'fetching'),
+      inPlaylist(4, 'verifying'), parked(5), parked(6),
+    ], { playlists })} />)
+    const chips = [...document.querySelector('.filterbar')!.querySelectorAll('.chip')].map(b => b.textContent)
+    expect(chips).toEqual(['All 6', 'Searching 1', 'Needs you 1', 'Downloading 1', 'Verifying 1', 'Waiting 2'])
+    // Waiting is not a rung of the pipeline, so it reads behind a rule rather than in line with them.
+    expect(document.querySelector('.filterbar')!.querySelector('.chip-divider')!.nextElementSibling!.textContent)
+      .toBe('Waiting 2')
+  })
+
+  it('narrows the list on the stage axis, so the parked rows can be looked at on their own', () => {
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'identifying'), parked(5), parked(6)], { playlists })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Waiting 2' }))
+    expect(screen.getByRole('button', { name: 'Waiting 2' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('Artist – Track 1')).not.toBeInTheDocument()
+    expect(screen.getByText('Artist – Track 5')).toBeInTheDocument()
+  })
+
+  it('lands the Failed tab on a chip that reads as pressed', () => {
+    // `setFilter('failed')` pinned a Bucket into a bar of Stage chips: nothing read as pressed while the
+    // rows happened to be right, because every row on that tab is in the failed bucket anyway.
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'error', { failed_stage: 'download' })], { playlists })} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'All 1' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('splits the Failed tab by where the track stopped, hiding Unknown until something lands there', () => {
+    render(<DownloadPage live={makeLive([
+      inPlaylist(1, 'not_found'), inPlaylist(2, 'error', { failed_stage: 'download' }),
+      inPlaylist(3, 'rejected'), inPlaylist(4, 'cancelled'),
+    ], { playlists })} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Search 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Verify 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stopped 1' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Unknown/ })).not.toBeInTheDocument()
+  })
+
+  it('offers Unknown once a run stopped somewhere it could not name', () => {
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'error', { failed_stage: null })], { playlists })} />)
+    openFailed()
+    expect(screen.getByRole('button', { name: 'Unknown 1' })).toBeInTheDocument()
+  })
+
+  it('keeps the sentence and Retry all counting the same rows once a chip narrows the tab', () => {
+    // `failedSummary` read the whole tab while `Retry all` read the filtered rows. They agreed only
+    // because the filter never moved off `failed` here -- and the comment above them said they could not
+    // disagree. Pick Verify and the two must still be about the same five rows.
+    render(<DownloadPage live={makeLive([
+      inPlaylist(1, 'error', { failed_stage: 'download' }), inPlaylist(2, 'error', { failed_stage: 'download' }),
+      inPlaylist(3, 'error', { failed_stage: 'download' }), inPlaylist(4, 'rejected'), inPlaylist(5, 'rejected'),
+    ], { playlists })} />)
+    openFailed()
+    expect(screen.getByText(/2 of these 5 cannot be tried again/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Verify 2' }))
+    expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
+    expect(screen.getByText(/^Nothing here can be tried again — 2 failed the quality check/)).toBeInTheDocument()
+  })
+
+  it('draws one filter bar on the Failed tab, not two stacked on each other', () => {
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'rejected')], { playlists })} />)
+    openFailed()
+    expect(document.querySelectorAll('.filterbar')).toHaveLength(1)
+    expect(document.querySelector('.filterbar')!.className).toContain('wide')
+  })
+
+  it('counts the whole batch in the bar, not the slice the tab is showing', () => {
+    // The Downloads tab drops every finished row, so a bar built from what it shows reads "0 filed" on a
+    // playlist that is in fact half filed. The bar is about the batch; the chips are about the tab.
+    render(<DownloadPage live={makeLive([
+      inPlaylist(1, 'done'), inPlaylist(2, 'done'), inPlaylist(3, 'rejected'),
+      inPlaylist(4, 'fetching'), parked(5),
+    ], { playlists })} />)
+    expect(screen.getByText('5 tracks')).toBeInTheDocument()
+    const legend = document.querySelector('.group-legend')!.textContent
+    expect(legend).toBe('2 filed1 working1 waiting to retry1 failed')
+    // Trap 3: the header used to say "1 in progress" an inch above a bar drawn to correct exactly that.
+    expect(screen.queryByText(/in progress/)).not.toBeInTheDocument()
+  })
+
+  it('splits the Failed tab bar by where the tracks stopped', () => {
+    render(<DownloadPage live={makeLive([
+      inPlaylist(1, 'done'), inPlaylist(2, 'not_found'),
+      inPlaylist(3, 'error', { failed_stage: 'download' }), inPlaylist(4, 'rejected'), inPlaylist(5, 'cancelled'),
+    ], { playlists })} />)
+    openFailed()
+    expect(screen.getByText('4 of 5 stopped')).toBeInTheDocument()
+    expect(document.querySelector('.group-legend')!.textContent)
+      .toBe('1 found nothing to download1 could not finish the download1 failed the quality check1 you stopped')
   })
 })

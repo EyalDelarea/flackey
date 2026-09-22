@@ -42,3 +42,11 @@ it('drops below a rung that has no room above it, rather than off the top of the
   fireEvent.mouseEnter(container.querySelectorAll('.step')[1])
   expect(screen.getByRole('tooltip')).toHaveClass('below')
 })
+
+it('draws a hollow ring on the rung a parked row will resume at, not a fourth grey dot', () => {
+  // A row parked on a backoff used to draw four identical grey rungs -- the same picture as a track that
+  // has not started. The ring says where it picks up when the wait is over.
+  const { container } = render(<Stepper steps={[{ name: 'Search', state: 'paused' }, { name: 'Download', state: 'pending' }]} />)
+  expect(container.querySelectorAll('.step')[0]).toHaveClass('paused')
+  expect(container.querySelectorAll('.step')[0].getAttribute('aria-current')).toBeNull()
+})

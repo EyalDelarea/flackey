@@ -5,12 +5,13 @@ import './theme.css'
 import { api } from './api'
 import type { AppSettings, Health, Stats, Track, Bundle, Playlist, Request, RequestState } from './api'
 
+const sources: FakeEventSource[] = []
 class FakeEventSource {
   onopen: (() => void) | null = null
   handlers: Record<string, (e: { data: string }) => void> = {}
   addEventListener(name: string, fn: (e: { data: string }) => void) { this.handlers[name] = fn }
   close() { /* no-op */ }
-  constructor(_url: string) { /* no-op */ }
+  constructor(_url: string) { sources.push(this) }
 }
 ;(window as any).EventSource = FakeEventSource
 
@@ -60,7 +61,7 @@ const failure = (id: number, state: RequestState, over: Partial<Request> = {}): 
     raw_text: 'https://youtu.be/x', playlist_id: null, playlist_position: null, source_url: null,
     query_artist: 'Astral Projection', query_title: 'Into the Void', query_version: null, query_duration_s: 442,
     chosen_candidate_id: null, catalog_track_id: null, confidence: null, flag_reason: null, error_message: null,
-    attempts: 0, retry_after: null, track_id: null, fetch_source: null, ...over,
+    attempts: 0, retry_after: null, track_id: null, fetch_source: null, failed_stage: null, ...over,
   },
   candidates: [], catalog: null, track: null, rejection: null,
 })
@@ -76,13 +77,104 @@ const failures: Bundle[] = [
     flag_reason: 'Beatport unreachable, will retry' }),
 ]
 
+/* ---- issue #60: the download list split by pipeline stage --------------------------------------
+   The scale is the point. This issue was opened against a 120-track import where "In progress 49" was one
+   undifferentiated lump and 41 of those 49 were parked on a Soulseek backoff, doing nothing. A tidy
+   three-row fixture would render the chips and the segmented bar perfectly and prove none of it, so this
+   one is that import: 16 filed, 8 working (6 searching, 1 downloading, 1 verifying), 41 waiting and 55
+   failed, which is where the design's numbers come from. Both tabs read from this one list -- the Failed
+   tab needs its chip pressed, exactly as the `failed` scenario above does. */
+const goaPlaylist: Playlist = { id: 7, source_url: 'https://open.spotify.com/playlist/goatrance', name: 'Goa Trance Classics',
+  created_at: '', updated_at: '', track_ids: [], track_positions: [], file: '/lib/Playlists/Goa Trance Classics.m3u8' }
+
+/* Filler for the rows below the fold. The named rows above them are the ones the screenshots are of; these
+   only have to make the list as long as the counts claim it is. */
+const GOA: [string, string][] = [
+  ['Transwave', 'Hypnotic'], ['Cosmosis', 'Cannabis'], ['Electric Universe', 'Solar Energy'],
+  ['X-Dream', 'Radio'], ['Koxbox', 'Forever After'], ['Doof', 'Let’s Turn On'],
+  ['Green Nuns Of The Revolution', 'Klunk'], ['The Infinity Project', 'Mystical Experience'],
+  ['Prana', 'Scarab'], ['MFG', 'Communication'], ['Chi-AD', 'Enlightenment'],
+  ['Psysex', 'Dimensional Gate'], ['GMS', 'Juice'], ['Talamasca', 'Psychedelic Trance'],
+  ['Yahel', 'Devotion'], ['Absolum', 'Kabalah'], ['Sandman', 'Witchcraft'],
+  ['Astrix', 'Coolio'], ['Killerwatts', 'Psychedelic Jungle'], ['Space Tribe', 'Ultrasonic Heartbeat'],
+  ['Deedrah', 'Reset'], ['Hux Flux', 'Cryogenics'], ['Logic Bomb', 'Headware'],
+  ['Quirk', 'Bug Powder'], ['Slinky Wizard', 'Sheep'], ['Tandu', 'Alien Pump'],
+  ['Union Jack', 'Two Full Moons And A Trout'], ['Wizzy Noise', 'Signals'], ['Ticon', 'Alpha Beta'],
+  ['Shakta', 'Lepton Head'],
+]
+
+let goaAt = 0
+const nextGoa = (): [string, string] => GOA[goaAt++ % GOA.length]
+
+/* Every row carries the same `created_at` so the list's sort falls through to the id, which lets the named
+   rows be put at the top of each tab simply by building them first. */
+let stageId = 1000
+const STAGE_AT = '2026-09-22T09:00:00Z'
+const stageRow = (artist: string, title: string, state: RequestState, over: Partial<Request> = {}): Bundle => ({
+  request: {
+    id: stageId--, created_at: STAGE_AT, updated_at: STAGE_AT, kind: 'yt_track', state,
+    raw_text: 'https://youtu.be/x', playlist_id: goaPlaylist.id, playlist_position: null, source_url: null,
+    query_artist: artist, query_title: title, query_version: null, query_duration_s: 442,
+    chosen_candidate_id: null, catalog_track_id: null, confidence: null, flag_reason: null, error_message: null,
+    attempts: 0, retry_after: null, track_id: null, fetch_source: null, failed_stage: null, ...over,
+  },
+  candidates: [], catalog: null, track: null, rejection: null,
+})
+
+const inSeconds = (s: number) => new Date(Date.now() + s * 1000).toISOString()
+const NO_MATCH = 'no way to fetch this track: nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on, will retry'
+
+function stageBundles(): Bundle[] {
+  const rows: Bundle[] = []
+  // Working: the one row actually moving bytes, the one being checked, and four looking themselves up.
+  rows.push(stageRow('Raja Ram, Riktam, Space Cat', 'Snorkel Blaster', 'fetching', { fetch_source: 'soulseek' }))
+  rows.push(stageRow('Astral Projection', 'Mahadeva', 'verifying'))
+  rows.push(stageRow('Oforia', 'No Refund', 'identifying'))
+  rows.push(stageRow('Etnica', 'The Italian EP [1995] Spirit Zone Recordings', 'identifying'))
+  // Waiting: the category the issue exists to name. Two on the quick ladder, one on the 6 h Soulseek park.
+  rows.push(stageRow('Hallucinogen', 'Jiggle Of The Sphinx', 'queued', { attempts: 2, retry_after: inSeconds(870), flag_reason: NO_MATCH }))
+  rows.push(stageRow('California Sunshine', 'Rain', 'queued', { attempts: 2, retry_after: inSeconds(885), flag_reason: NO_MATCH }))
+  rows.push(stageRow('Infected Mushroom', 'Bust A Move', 'queued', { attempts: 1, retry_after: inSeconds(20880),
+    flag_reason: 'waiting for Soulseek — nobody sharing it came online; 3 of 4 looks left' }))
+  // Failed, one of each way of stopping -- the rows the Failed tab's chips and stage tags are read from.
+  rows.push(stageRow('Man With No Name', 'Teleport', 'not_found', {
+    error_message: 'no copy turned up on Beatport, Deezer or Soulseek' }))
+  rows.push(stageRow('Juno Reactor', 'Guardian Angel', 'error', { attempts: 7, failed_stage: 'download',
+    error_message: 'gave up after 7 tries — every peer refused the transfer' }))
+  rows.push(stageRow('Shpongle', 'Divine Moments Of Truth', 'error', { attempts: 4, failed_stage: 'download',
+    error_message: 'looked 4 times over 24 h — nobody sharing it came online' }))
+  rows.push(stageRow('Total Eclipse', 'Aliens', 'rejected'))
+  rows.push(stageRow('Pleiadians', 'Maia', 'cancelled'))
+  // The rest of the batch, to the counts above: 2 more searching, 38 more waiting, 16 filed, and the
+  // remaining 50 failures split the way the design's Failed bar is (Search 12, Download 38, Verify 4).
+  const fill = (n: number, make: (artist: string, title: string) => Bundle) => {
+    for (let i = 0; i < n; i++) { const [a, t] = nextGoa(); rows.push(make(a, t)) }
+  }
+  fill(4, (a, t) => stageRow(a, t, 'queued'))
+  fill(38, (a, t) => stageRow(a, t, 'queued', { attempts: 2, retry_after: inSeconds(600 + goaAt * 7), flag_reason: NO_MATCH }))
+  fill(16, (a, t) => stageRow(a, t, 'done'))
+  fill(11, (a, t) => stageRow(a, t, 'not_found', { error_message: 'no copy turned up on Beatport, Deezer or Soulseek' }))
+  fill(36, (a, t) => stageRow(a, t, 'error', { attempts: 5, failed_stage: 'download',
+    error_message: 'gave up after 5 tries — every peer refused the transfer' }))
+  fill(3, (a, t) => stageRow(a, t, 'rejected'))
+  return rows
+}
+
+/* The platter on the one downloading row. `live` only ever learns a transfer's position from the SSE
+   `status` event, so the harness has to send one -- without it that row draws an empty platter and the
+   screenshot shows a batch with nothing visibly moving in it. */
+const stageProgress = (requestId: number) => ({
+  request_id: requestId, bytes: 18_400_000, size: 42_100_000, peer: 'goadealer', pct: 43,
+  speed_bps: 1_200_000, pick: 1, state: 'InProgress',
+})
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
-  vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : [])
+  vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : scenario === 'stages' ? [goaPlaylist] : [])
   vi_spy(api, 'stats', async () => stats)
-  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : [] as Bundle[])
+  vi_spy(api, 'queue', async () => scenario === 'failed' ? failures : scenario === 'stages' ? staged : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -134,6 +226,13 @@ function scenarioSetup() {
       vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))
       vi_spy(api, 'tools', async () => ({ ffmpeg: true, ffprobe: true, yt_dlp: true }))
       break
+    /* Both issue #60 tabs come from one queue, so there is one scenario for them: the Downloads tab is
+       what it lands on, and the Failed tab is one chip press away -- the same division of labour the
+       `failed` scenario below already uses. */
+    case 'stages':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      break
     case 'failed':
       // The Failed tab is not the landing view, so a screenshot of it needs the chip pressed once the
       // queue has arrived. Left to the operator (or the screenshot script) rather than faked here: a
@@ -154,6 +253,16 @@ function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K])
   ;(obj as any)[key] = impl
 }
 
+const staged = scenario === 'stages' ? stageBundles() : []
+
 scenarioSetup()
+
+/* One `status` frame, after the first render has subscribed. `live` learns a transfer's position from the
+   SSE stream and from nothing else, so without this the one downloading row draws an empty platter. */
+if (scenario === 'stages') {
+  const fetching = staged.find(b => b.request.state === 'fetching')!
+  setTimeout(() => sources.forEach(es =>
+    es.handlers['status']?.({ data: JSON.stringify({ fetch_progress: [stageProgress(fetching.request.id)] }) })), 200)
+}
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

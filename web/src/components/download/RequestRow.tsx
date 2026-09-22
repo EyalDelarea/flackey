@@ -8,6 +8,9 @@ import Platter from './Platter'
 import Icon from '../Icon'
 import type { RowAction, RowView } from '../../presentation'
 
+/** The wait, on the right rail as a pill. It says what the row is doing -- waiting -- and not only when
+ *  that ends, because "Retry in 14m" under a status line read as a footnote to a row that looked idle for
+ *  no reason. The three scales and the coarse tick above an hour are unchanged (#74). */
 function RetryCountdown({ seconds }: { seconds: number }) {
   const [remaining, setRemaining] = useState(seconds)
   useEffect(() => { setRemaining(seconds) }, [seconds])
@@ -26,17 +29,20 @@ function RetryCountdown({ seconds }: { seconds: number }) {
   // after a Soulseek queue, and 6 h while the request waits for the people online to change. A bare
   // `360m 0s` would read as a stuck row.
   const label = remaining <= 0 ? 'Retrying now' : remaining >= 3600
-    ? `Retry in ${Math.floor(remaining / 3600)}h ${Math.floor((remaining % 3600) / 60)}m`
+    ? `Waiting · ${Math.floor(remaining / 3600)}h ${Math.floor((remaining % 3600) / 60)}m`
     : remaining >= 60
-      ? `Retry in ${Math.floor(remaining / 60)}m ${remaining % 60}s`
-      : `Retry in ${remaining}s`
-  return <div className="retry-countdown" aria-live="off">{label}</div>
+      ? `Waiting · ${Math.floor(remaining / 60)}m ${remaining % 60}s`
+      : `Waiting · ${remaining}s`
+  return <span className="waiting-pill" aria-live="off"><span className="waiting-ring" aria-hidden="true" />{label}</span>
 }
 
 interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, candidateId: number) => void }
 
 export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Props) {
-  const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected'].filter(Boolean).join(' ')
+  // `parked` washes a run of waiting rows into a band the eye can skip, at about half `washed` so it does
+  // not compete with the rows that are actually asking for something.
+  const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected',
+    v.stage === 'waiting' && 'parked'].filter(Boolean).join(' ')
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
   return (
@@ -44,9 +50,10 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
       <div className="row-main">
         <Artwork url={v.artworkUrl} rejected={v.rejected} />
         <div className="row-text">
-          <div className="title">{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
+          {/* Where it stopped, on the row rather than only in the chips above: the All list mixes every kind
+              of failure, and a failed row has no ladder left to read it off. */}
+          <div className="title">{v.bucket === 'failed' && v.stage && <span className={`stage-tag ${v.stage}`}>{v.stage}</span>}{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
-          {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}
@@ -59,6 +66,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         </div>
         {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}
         <div className="row-right">
+          {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
