@@ -133,18 +133,26 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row-text { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .row-steps { grid-column: 3; min-width: 0; display: flex; justify-content: center; }
 .row-steps .stepper { width: 100%; justify-content: center; margin-top: 0; }
-.row .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A flex line rather than one run of text, so the now-playing mark and the stage tag keep their places
+   while the title itself is the thing that ellipsizes. */
+.row .title { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 500; }
+.row .title .what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .title .version { font-weight: 400; color: var(--secondary); }
+/* Which of this row's candidates is playing, for the case where the card is not the one being looked at.
+   Inline on the title, never on a line of its own: a third line on every press would push the whole
+   candidate grid down while the owner is comparing. */
+.row .title .now-playing { flex: none; font-size: 11px; font-weight: 400; color: var(--accent); }
 /* Where a failed row stopped, said in one word before the title. The Failed list mixes every kind of
    failure and a stopped row has no ladder left to read it off, so the tag is what makes an unfiltered list
-   scannable. Toned to match its segment of the bar above, so the two are one picture. */
-.stage-tag { display: inline-block; margin-right: 8px; padding: 1px 6px; border-radius: 5px; vertical-align: 1px;
+   scannable. Toned to match its segment of the bar above, so the two are one picture. A flex item beside
+   the title now, so it is never what gets ellipsized and needs no margin of its own. */
+.stage-tag { flex: none; padding: 1px 6px; border-radius: 5px;
   font-size: 9.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 .stage-tag.tone-search { color: var(--orange-text); background: var(--orange-wash); }
 .stage-tag.tone-download { color: var(--red); background: var(--red-wash); }
 .stage-tag.tone-verify { color: var(--purple-text); background: var(--purple-wash); }
 .stage-tag.tone-choose, .stage-tag.tone-waiting { color: var(--orange-text); background: var(--orange-wash); }
 .stage-tag.tone-stopped, .stage-tag.tone-unknown { color: var(--secondary); background: var(--selection); }
-.row .title .version { font-weight: 400; color: var(--secondary); }
 .row .status { font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.amber { color: var(--orange-text); } .status.red { color: var(--red); } .status.green { color: var(--green-text); }
 /* The wait, as a pill on the right rail rather than a line under the status. A parked row's defining fact
@@ -264,12 +272,68 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .artwork.sm { width: 28px; height: 28px; }
 .artwork.rejected { display: grid; place-items: center; color: var(--red); background: var(--red-wash); font-size: 16px; }
 .candidates { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 12px 12px 60px; }
-.candidate { flex: 1 1 260px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--group); border: .5px solid var(--group-border); }
-.candidate.chosen { border: 1.5px solid var(--accent); padding: 9px 11px; }
+/* The edge is an inset ring rather than a border, in both states. A border would put the padding box
+   inside it -- which is where an absolutely positioned child is anchored -- so the position rail below
+   would stop short of the card's real edge by however wide the edge happened to be, and by a different
+   amount once chosen made it thicker. Chromium rounds a .5px border up to a whole pixel and Safari does
+   not, so there is no single offset that corrects for it either. With no border at all the padding box is
+   the border box by construction, in every engine and every state, and the rail is inset to nothing.
+   Dropping `.chosen`'s padding override goes with it: the text no longer shifts a pixel on being chosen.
+   `overflow: hidden` is what keeps the rail inside the 8px corner: a 2px bar running the full width of a
+   rounded card otherwise overhangs the curve at each end, as a burr on the wash below. Nothing in a
+   candidate card is meant to escape it -- the one popover on this screen belongs to `Stepper`. */
+.candidate { position: relative; overflow: hidden; flex: 1 1 260px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--group); box-shadow: inset 0 0 0 .5px var(--group-border); }
+.candidate.chosen { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .candidate .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 500; }
 .candidate .head .version { font-weight: 400; color: var(--secondary); }
 .candidate .score { font-size: 12px; font-weight: 500; color: var(--secondary); white-space: nowrap; }
 .candidate .meta { font-size: 12px; color: var(--secondary); }
+/* The meta line does double duty while a sample is resolving or has just failed, so those two readings
+   are coloured as the temporary things they are rather than as facts about the track. */
+.candidate .meta.note { color: var(--orange-text); }
+/* On the lit (playing) card the note sits on --sample-tint instead of plain --group, which drops
+   --orange-text below 4.5:1 -- see --orange-text-lit in theme.css. Scoped to this one spot so the
+   ordinary --orange-text used elsewhere on --group is untouched. */
+.candidate.lit .meta.note { color: var(--orange-text-lit); }
+/* The sample button sits to the LEFT of "Use this": the task reads listen-then-choose, and the eye used
+   to land on the commitment first. The player is square because its whole content is a glyph, and it
+   keeps the 22px height of every other secondary button on the card; 26px wide, up from 22, so a solid
+   glyph is not cramped. */
+.candidate .actions { display: flex; align-items: center; gap: 6px; }
+.candidate .play { width: 26px; padding: 0; color: var(--secondary); }
+/* At rest the control must not compete with "Use this". While a clip is running there is exactly one of
+   these on the whole screen, so at that moment it is allowed to out-weigh everything around it -- a
+   singleton cannot create ambiguity. --accent-fill, not --accent, because the glyph on it is white. */
+.candidate .play.on { background: var(--accent-fill); border-color: transparent; color: var(--accent-text); }
+/* Mono and tabular so the number does not change width as it counts, which reads as the row shifting. */
+.candidate .elapsed { margin-left: auto; color: var(--secondary); font-variant-numeric: tabular-nums; }
+/* ---- The playing candidate (issue #53) ----
+   The card itself is the player: no new widget, and no border, because `.chosen` already owns that axis.
+   The tint is a pseudo-element rather than a background layer so it can fade in and out on its own. */
+.candidate::before { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--sample-tint);
+  opacity: 0; transition: opacity 200ms ease; pointer-events: none; }
+.candidate.lit::before { opacity: 1; }
+/* Flush to the card's edge, which is the border box, because the card carries no border -- see above.
+   Always rendered, at zero opacity, because a rail that unmounts when the clip ends has nothing to fade. */
+.sample-rail { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 1px;
+  overflow: hidden; background: var(--tertiary); opacity: 0; transition: opacity 200ms ease; pointer-events: none; }
+.candidate.lit .sample-rail { opacity: 1; }
+/* linear, and a shade longer than the 250ms between `timeupdate`s, so the position glides rather than
+   stepping four times a second. */
+.sample-rail-fill { display: block; width: 100%; height: 100%; background: var(--accent); border-radius: inherit;
+  transform: scaleX(0); transform-origin: left; transition: transform 260ms linear; }
+/* Pressed, with nothing to play yet. There is no position to draw, so a sliver sweeps instead: the card
+   is already the playing card, it just has no position yet. Past four seconds the sweep stops and the
+   meta line says so -- a sliver that sweeps for ever is a promise the app cannot keep. */
+.sample-rail.waiting .sample-rail-fill { width: 30%; transform: none; transition: none;
+  animation: sample-sweep 1.1s ease-in-out infinite alternate; }
+.sample-rail.stalled .sample-rail-fill { animation: none; }
+@keyframes sample-sweep { from { transform: translateX(0); } to { transform: translateX(233%); } }
+/* The rail is information, so it keeps tracking position. The sweep and the fades are decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .candidate::before, .sample-rail { transition: none; }
+  .sample-rail.waiting .sample-rail-fill { animation: none; }
+}
 .skip { padding: 0 12px 12px 60px; }
 .well { margin: 0 12px 12px 60px; padding: 12px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); }
 .well img { display: block; width: 100%; height: 84px; object-fit: cover; border-radius: 5px; }

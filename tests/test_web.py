@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import flackey.web.update
 from flackey import __version__
 from flackey.config import Settings
+from flackey.deezer import DeezerApi
 from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
 from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
@@ -495,6 +496,25 @@ def test_queue_bundles(client, tmp_path):
     assert c.get("/api/requests/999").status_code == 404
 
 
+def test_candidate_json_says_whether_deezer_has_a_sample(client):
+    """The page decides whether to draw a play control before anyone presses anything, so the answer has
+    to ride the bundle. Three values, and `null` is not `false`: nobody ever asked about that candidate."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [
+        Candidate(source="s", source_ref="a", artist="A", title="T", rank=1, has_preview=True),
+        Candidate(source="s", source_ref="b", artist="A", title="T", rank=2, has_preview=False),
+        Candidate(source="s", source_ref="c", artist="A", title="T", rank=3),
+    ])
+    # Both surfaces the page reads: the detail bundle and the list it renders the play buttons in.
+    for cands in (c.get(f"/api/requests/{rid}").json()["candidates"],
+                  c.get("/api/queue").json()[0]["candidates"]):
+        # `is`, not `==`: JSON `1` would satisfy `== True` and break every `=== null` check in the page.
+        assert cands[0]["has_preview"] is True
+        assert cands[1]["has_preview"] is False
+        assert cands[2]["has_preview"] is None
+
+
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
     c, store, _ = client
     rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,
@@ -560,6 +580,74 @@ def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
     assert store.get_request(errored).state == RequestState.QUEUED
     assert store.get_request(not_found).state == RequestState.QUEUED
     assert store.get_request(rejected).state == RequestState.REJECTED
+
+
+# ---- candidate previews ---------------------------------------------------
+# The preview URL Deezer signs expires about fifteen minutes out, so the route resolves it at play time
+# from `candidates.deezer_id` and 302s the browser at the CDN. These fake payloads carry the fields
+# `parse_track_json` actually reads; `preview` is the one that varies per test.
+PREVIEW_URL = ("https://cdnt-preview.dzcdn.net/api/1/1/a/b/c.mp3"
+               "?hdnea=exp=1758999999~acl=/api/1/1/a/b/c.mp3*~hmac=deadbeef")
+
+
+def deezer_track_json(**extra) -> dict:
+    return {"id": 3135556, "title": "Harder Better Faster Stronger", "artist": {"name": "Daft Punk"},
+            "album": {"title": "Discovery"}, "duration": 224, **extra}
+
+
+def candidate_with(store, **kw) -> int:
+    rid = store.add_request("q", RequestKind.TEXT)
+    return store.add_candidates(rid, [Candidate(source="s", source_ref="r", artist="A", title="T",
+                                                rank=1, **kw)])[0].id
+
+
+def test_preview_404s_for_a_candidate_that_does_not_exist(client):
+    c, _, _ = client
+    r = c.get("/api/candidates/999/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "candidate not found"
+
+
+def test_preview_404s_when_the_candidate_has_no_deezer_id(client):
+    # Soulseek results arrive without one, and there is nothing to resolve.
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=None)
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "no preview for this candidate"
+
+
+@respx.mock
+def test_preview_404s_when_deezer_has_no_sample_for_the_track(client):
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json()))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 404 and r.json()["detail"] == "no preview for this candidate"
+
+
+@respx.mock
+def test_preview_redirects_to_the_signed_deezer_sample(client):
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(
+        return_value=httpx.Response(200, json=deezer_track_json(preview=PREVIEW_URL)))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 302
+    # Verbatim, query string and all: the hmac is part of the URL, and a mangled one plays nothing.
+    assert r.headers["location"] == PREVIEW_URL
+    # Without `no-store` the browser caches the redirect and a replay later chases an expired signature.
+    assert r.headers["cache-control"] == "no-store"
+
+
+@respx.mock
+def test_preview_502s_when_deezer_is_unreachable(client):
+    # Upstream being down is not the caller's fault, so it is a gateway error rather than a 404.
+    c, store, _ = client
+    cid = candidate_with(store, deezer_id=3135556)
+    respx.get(f"{DeezerApi.BASE}/track/3135556").mock(return_value=httpx.Response(500))
+    r = c.get(f"/api/candidates/{cid}/preview", follow_redirects=False)
+    assert r.status_code == 502 and "Deezer" in r.json()["detail"]
+
 
 
 def test_retry_failed_retries_only_the_ids_it_is_given(client):
@@ -798,18 +886,57 @@ def test_settings_get_and_put(client, tmp_path: Path):
     assert c.get("/api/settings").json()["auto_update_check"] is False
 
 
-def test_reveal_is_confined_to_app_folders(tmp_path: Path):
+def test_reveal_only_opens_places_the_app_itself_named(tmp_path: Path):
+    """The opener is only ever handed a path flackey built: the library folder, the data folder, the log,
+    a playlist export, or a filed track's own row. A name that arrives in the request is compared as a
+    string and then thrown away, so a real file that was never filed -- and a traversal out of the
+    library -- are both simply not on the list."""
     opened = []
-    app, _, settings = make(tmp_path, opener=lambda p: opened.append(p))
+    app, store, settings = make(tmp_path, opener=lambda p: opened.append(p))
     c = TestClient(app)
-    f = settings.library_root / "A" / "x.mp3"
-    f.parent.mkdir(parents=True)
-    f.write_bytes(b"x")
-    assert c.post("/api/reveal", json={"path": str(f)}).json() == {"ok": True} and opened == [f]
+    filed = settings.library_root / "A" / "x.mp3"
+    filed.parent.mkdir(parents=True)
+    filed.write_bytes(b"x")
+    store.add_track(path=filed, fmt="mp3", bitrate_kbps=320, cutoff_hz=19800, file_size=1,
+                    artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
+                    catalog_track_id=None, request_id=None)
+    log_path = settings.data_dir / "flackey.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("")
+    stray = settings.library_root / "A" / "never-filed.mp3"
+    stray.write_bytes(b"x")
+
+    assert c.post("/api/reveal", json={"path": str(filed)}).json() == {"ok": True} and opened == [filed]
     assert c.post("/api/reveal", json={"path": str(settings.library_root)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(settings.data_dir)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(log_path)}).status_code == 200
+    assert c.post("/api/reveal", json={"path": str(stray)}).status_code == 400
     assert c.post("/api/reveal", json={"path": str(tmp_path / "outside.mp3")}).status_code == 400
-    assert c.post("/api/reveal", json={"path": str(settings.library_root / "missing.mp3")}).status_code == 404
     assert c.post("/api/reveal", json={"path": str(settings.library_root / ".." / "outside.mp3")}).status_code == 400
+    assert c.post("/api/reveal", json={"path": "/etc/passwd"}).status_code == 400
+    assert opened == [filed, settings.library_root, settings.data_dir, log_path]
+
+    filed.unlink()
+    assert c.post("/api/reveal", json={"path": str(filed)}).status_code == 404
+
+
+def test_reveal_shows_a_playlist_export_by_its_exported_name(tmp_path: Path):
+    """The playlists page hands back the .m3u8 path it computed; /reveal has to recognise that same path
+    without trusting it, so the name is rebuilt from the playlist rows rather than taken from the body."""
+    opened = []
+    app, store, _ = make(tmp_path, opener=lambda p: opened.append(p))
+    c = TestClient(app)
+    # Two playlists that sanitize to the same stem: the second gets a " (id)" suffix, and /reveal has to
+    # recognise that suffixed name too -- which it does by calling the same playlist_names() the route does.
+    store.upsert_playlist("https://example.test/p", "Late Night")
+    store.upsert_playlist("https://example.test/q", "Late Night")
+    exports = [pl["file"] for pl in c.get("/api/playlists").json()]
+    assert len({Path(e).name for e in exports}) == 2
+    for e in exports:
+        Path(e).parent.mkdir(parents=True, exist_ok=True)
+        Path(e).write_text("#EXTM3U\n")
+        assert c.post("/api/reveal", json={"path": e}).status_code == 200
+    assert opened == [Path(e) for e in exports]
 
 
 def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
@@ -1315,9 +1442,11 @@ def test_uploads_endpoint_is_calm_when_soulseek_is_off_or_the_sidecar_is_down(cl
         "enabled": False, "provider": None, "uploads": [],
         "summary": {"total": 0, "active": 0, "completed": 0, "peers": 0, "bytes": 0}, "error": None}
 
-    worker.providers = [_Uploader(error=LosslessUnavailable("slskd unreachable: ConnectError"))]
+    worker.providers = [_Uploader(error=LosslessUnavailable("slskd unreachable at http://slskd.test: ConnectError"))]
     down = c.get("/api/lossless/uploads").json()
     assert down["enabled"] is True and down["uploads"] == [] and "unreachable" in down["error"]
+    # The sidecar's own words (its URL, the transport error) stay in the log; the page gets a plain sentence.
+    assert "slskd.test" not in down["error"] and "ConnectError" not in down["error"]
     assert down["summary"]["total"] == 0
 
 

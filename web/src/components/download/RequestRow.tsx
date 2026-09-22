@@ -7,6 +7,7 @@ import Stepper from './Stepper'
 import Platter from './Platter'
 import Icon from '../Icon'
 import type { RowAction, RowView } from '../../presentation'
+import type { PlayerState } from './DownloadPage'
 
 /** The wait, on the right rail as a pill. It says what the row is doing -- waiting -- and not only when
  *  that ends, because "Retry in 14m" under a status line read as a footnote to a row that looked idle for
@@ -36,13 +37,21 @@ function RetryCountdown({ seconds }: { seconds: number }) {
   return <span className="waiting-pill" aria-live="off"><span className="waiting-ring" aria-hidden="true" />{label}</span>
 }
 
-interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void; onChoose: (rowId: number, candidateId: number) => void }
+interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
+  onChoose: (rowId: number, candidateId: number) => void
+  /** Everything the page's single audio element knows. It lives on the page because the element does; the
+   *  row only spreads it over its cards, and reads one thing off it for its own title line. */
+  player: PlayerState; onPlay: (candidateId: number) => void }
 
-export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Props) {
+export default function RequestRow({ view: v, whyOpen, onAction, onChoose, player, onPlay }: Props) {
   // `parked` washes a run of waiting rows into a band the eye can skip, at about half `washed` so it does
   // not compete with the rows that are actually asking for something.
   const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected',
     v.stage === 'waiting' && 'parked'].filter(Boolean).join(' ')
+  // Which of this row's own candidates is playing, named by the version -- the candidates of a Choose row
+  // share a title and differ only there. It goes inline on the title line and never on a line of its own:
+  // a third line appearing on a press would push the whole candidate grid down every time.
+  const nowPlaying = v.candidates?.find(c => c.id === player.playing)?.version ?? null
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
   return (
@@ -51,8 +60,11 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         <Artwork url={v.artworkUrl} rejected={v.rejected} />
         <div className="row-text">
           {/* Where it stopped, on the row rather than only in the chips above: the All list mixes every kind
-              of failure, and a failed row has no ladder left to read it off. */}
-          <div className="title">{v.bucket === 'failed' && v.stage && <span className={`stage-tag tone-${v.stage}`}>{v.stage}</span>}{v.title}{v.version && <span className="version"> ({v.version})</span>}</div>
+              of failure, and a failed row has no ladder left to read it off. A sibling of the title rather
+              than part of it, so the title is still the only thing the flex line ellipsizes. */}
+          <div className="title">{v.bucket === 'failed' && v.stage && <span className={`stage-tag tone-${v.stage}`}>{v.stage}</span>}
+            <span className="what">{v.title}{v.version && <span className="version"> ({v.version})</span>}</span>
+            {nowPlaying && <span className="now-playing">♪ {nowPlaying}</span>}</div>
           {v.status && <div className={`status ${v.statusTone}`}>{v.status}</div>}
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}
@@ -79,7 +91,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose }: Pro
         </div>
       </div>
       {v.candidates && (<>
-        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)} />)}</div>
+        <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)}
+          player={player} onPlay={() => onPlay(c.id)} />)}</div>
         {v.action?.kind === 'cancel' && <div className="skip"><button className="btn-link" onClick={() => onAction('cancel', v.id, undefined)}>{v.action.label}</button></div>}
       </>)}
       {v.rejection && whyOpen && <SpectrogramWell r={v.rejection} />}

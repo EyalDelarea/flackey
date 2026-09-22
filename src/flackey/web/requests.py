@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import RedirectResponse
 
 from ..config import Settings
+from ..deezer import DeezerApi, DeezerError
 from ..inbox import BadLink, Inbox
 from ..models import FAILED_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
@@ -70,6 +72,31 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         except KeyError:
             raise HTTPException(404, "candidate not found")
         return await act(rid, lambda: worker.choose(rid, cid))
+
+    @r.get("/candidates/{cid}/preview")
+    async def preview(cid: int):
+        """Send the browser to Deezer's 30-second sample for this candidate.
+
+        Resolved here, at play time, rather than stored: the preview URL Deezer hands back is signed and
+        expires about fifteen minutes out, so a column would hold a dead link by the time anyone pressed
+        play. Only `candidates.deezer_id` is durable, and that is what this route turns into a URL.
+
+        A redirect rather than a proxy -- the `<audio>` element follows the 302 to the CDN itself, so
+        nothing streams through this process. `no-store` is load-bearing: cache the redirect and a replay
+        twenty minutes later chases a signature that has since expired."""
+        try:
+            candidate = store.get_candidate(cid)
+        except KeyError:
+            raise HTTPException(404, "candidate not found")
+        if candidate.deezer_id is None:
+            raise HTTPException(404, "no preview for this candidate")
+        try:
+            track = await DeezerApi().track(candidate.deezer_id)
+        except DeezerError as e:
+            raise HTTPException(502, f"couldn't reach Deezer: {e}")
+        if not track.preview_url:
+            raise HTTPException(404, "no preview for this candidate")
+        return RedirectResponse(track.preview_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     @r.post("/requests/{rid}/cancel")
     async def cancel(rid: int) -> dict:

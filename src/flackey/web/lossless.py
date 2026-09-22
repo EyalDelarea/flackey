@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from statistics import median
 
 from fastapi import APIRouter, HTTPException
@@ -7,6 +8,8 @@ from fastapi import APIRouter, HTTPException
 from ..models import ATTEMPT_OUTCOMES, MISS_REASON
 from ..source.lossless import LosslessError
 from ..store import Store
+
+log = logging.getLogger(__name__)
 
 
 def _row(a) -> dict:
@@ -53,7 +56,11 @@ def router(store: Store, worker=None) -> APIRouter:
         try:
             rows = await p.uploads()
         except LosslessError as e:
-            return {"enabled": True, "provider": p.name, "uploads": [], "summary": _summary([]), "error": str(e)}
+            # The sidecar's own words go to the log, not into the response: they can carry its URL, a
+            # filesystem path or a transport detail, and the page only has to say that it is unreachable.
+            log.warning("uploads could not be read from %s: %s", p.name, e)
+            return {"enabled": True, "provider": p.name, "uploads": [], "summary": _summary([]),
+                    "error": "Soulseek is unreachable right now."}
         return {"enabled": True, "provider": p.name, "uploads": rows, "summary": _summary(rows), "error": None}
 
     @r.get("/upgradable")

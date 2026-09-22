@@ -114,6 +114,13 @@ class Candidate:
     rank: int = 0
     score: int | None = None
     catalog_track_id: int | None = None
+    # Whether Deezer has a 30 s sample for this record, remembered from the enrichment call that fetched it
+    # anyway. Three states, not two: True = there is one, False = Deezer offers none, None = never resolved
+    # (a row written before the column existed, a candidate from a source that has no Deezer record, or one
+    # whose enrichment call failed). The page draws no play control for False and must not treat None as
+    # False -- unknown is not "no sample". Never a substitute for the preview route's own check: the signed
+    # URL is resolved at play time and can still 404.
+    has_preview: bool | None = None
     id: int | None = None
     request_id: int | None = None
 

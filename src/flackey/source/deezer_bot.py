@@ -95,8 +95,12 @@ class DeezerBotSource:
         try:
             t = await self.deezer.track(c.deezer_id)
         except (DeezerError, ValueError):  # ValueError: a non-JSON 200 (e.g. JSONDecodeError); enrichment is optional
-            return c
+            return c  # has_preview stays None: a lookup that failed knows nothing, which is not "no sample"
         c.isrc, c.duration_s = t.isrc, t.duration_s
+        # Free: this response was already fetched for the metadata above, and the page needs the answer at
+        # render time to decide whether to offer a play control at all. The URL itself is not kept -- it is
+        # signed and expires -- only whether one exists; `/api/candidates/{cid}/preview` resolves it afresh.
+        c.has_preview = bool(t.preview_url)
         if t.artist:
             c.artist = t.artist
         if t.title:

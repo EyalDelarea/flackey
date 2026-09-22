@@ -26,9 +26,22 @@
   /* The fourth failure colour. Amber, red and grey were already spoken for by "found nothing", "could not
      download" and "you stopped", and the quality check needed a hue of its own rather than a second red. */
   --purple: #AF52DE; --purple-text: #7B2CA8; --purple-wash: rgba(175,82,222,.09);
+  /* The tint that lights the candidate whose sample is playing, laid over --group. It sits among white
+     cards on the amber "needs your choice" wash, where blue is the largest hue gap the palette has -- but
+     on white, .07 measured as a tint you had to go looking for: cover the control and the numeral and the
+     card gave no answer to "which one is playing". .16 is the depth the card needs to answer that on its
+     own; title holds 13.7:1 on it and meta/version 4.51:1, both against --group white -- except
+     --orange-text's "Still loading…" note, which drops to 4.08:1 against this deeper fill. --orange-text-lit
+     below covers just that spot. */
+  --sample-tint: rgba(0,122,255,.16);
+
   /* --orange/--green read fine as small dots and icons, but at ~2.2:1 they fail WCAG AA for actual text
      on a light background -- the dot stays vivid, the word beside it needs to be darker to be read. */
   --orange-text: #B45309; --green-text: #157A32;
+  /* Same hue and saturation as --orange-text, just darker (L 37% -> 32%), so the "Still loading…" note
+     still clears 4.5:1 (5.13:1 measured) once it is sitting on --sample-tint instead of plain --group.
+     Scoped to that one spot rather than replacing --orange-text everywhere, which already passes elsewhere. */
+  --orange-text-lit: #9B4808;
   /* The house blue is ~4:1 as white-on-fill, just under the 4.5:1 normal text needs. Buttons, the selected
      table row and the setup step's current disc put white text directly on this, so those three get a
      value that clears the bar; --accent itself is untouched everywhere it is used as text/border/focus. */
@@ -54,9 +67,15 @@
     --orange-wash: rgba(255,159,10,.07); --red-wash: rgba(255,69,58,.09);
     --orange-wash-soft: rgba(255,159,10,.035);
     --purple: #BF5AF2; --purple-wash: rgba(191,90,242,.11);
+    /* Set independently of the light value above, not derived from it: this already reads clearly against
+       the dark --group and is left as measured, rather than chasing whatever the light side becomes. */
+    --sample-tint: rgba(10,132,255,.14);
     /* Dark mode's vivid orange/green already clear 4.5:1 against the dark window -- the light-mode
        override above exists because white, not the window colour, is what they sit on there. */
     --orange-text: var(--orange); --green-text: var(--green); --purple-text: var(--purple);
+    /* The "Still loading…" note on the dark lit card measures 5.96:1 -- already comfortably past 4.5:1 --
+       so this just tracks --orange-text rather than needing its own darkened value. */
+    --orange-text-lit: var(--orange-text);
   }
 }
 * { box-sizing: border-box; }

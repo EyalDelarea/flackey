@@ -1,6 +1,7 @@
 import Banner from '../Banner'
 import RequestRow from './RequestRow'
 import type { GroupView, RowAction, Stage } from '../../presentation'
+import type { PlayerState } from './DownloadPage'
 
 /** One segment of the batch bar: a count, the class that tones it and the words beside its dot. The two
  *  tabs draw the same widget over different questions -- "where is this batch" and "where did it stop" --
@@ -30,8 +31,11 @@ interface Props {
   onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
   onChoose: (rowId: number, cid: number) => void
   onTryNow: (ids: number[]) => void
+  /** Passed straight through to the rows: the page owns the one audio element, the group only
+   *  hands it down. */
+  player: PlayerState; onPlay: (cid: number) => void
 }
-export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow }: Props) {
+export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, player, onPlay }: Props) {
   const s = g.summary
   const failedView = view === 'failed'
   /* Every row in the batch lands in exactly one segment, so the bar fills its width and nothing goes
@@ -65,7 +69,8 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow }
           <li key={x.key} className="legend-item"><span className={`legend-dot tone-${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
         ))}
       </ul>
-      <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose} />)}</div>
+      <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
+        player={player} onPlay={onPlay} />)}</div>
       {g.beatportDown && <Banner tone="red" text={`Beatport is unreachable. Matching is paused — trying again in ${g.beatportDown.seconds} seconds. Nothing is lost.`} action={{ label: 'Try now', onClick: () => onTryNow(g.beatportDown!.requestIds) }} />}
     </section>
   )
