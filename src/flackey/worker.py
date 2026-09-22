@@ -868,7 +868,19 @@ class Worker:
             fp = hit.fingerprint
         source = hit.provider if hit else self.source.name
         source_fmt = hit.source_fmt if hit else None
+        await self._file_track(req, cand, catalog, tmp, verdict, fp, hit, source, source_fmt)
 
+    async def _file_track(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
+                          verdict: Verdict, fp: FingerprintResult | None, hit: LosslessHit | None,
+                          source: str, source_fmt: str | None) -> None:
+        """Tag the file, move it into the library and write the row -- everything after a file has been
+        judged fit to keep.
+
+        Its own method because there are now two ways to reach it. The pipeline gets here by passing every
+        check; `accept_rejection` gets here because the owner listened to a file the fingerprint refused and
+        said keep it anyway (issue #92). One tail, so a track filed by hand is tagged, named, counted,
+        added to its playlist and announced exactly like every other track -- the alternative was a second
+        copy of this drifting away from the first."""
         self._set_state(req, RequestState.FILING)
         if catalog is None:
             catalog = _fallback_catalog(cand)
@@ -890,7 +902,11 @@ class Worker:
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
-        self._record_evidence(track_id, fp, hit)
+        # None only when the check could not be run at all at accept time -- no stored reference, no fpcalc.
+        # A track with no recording_match row says "not checked", which is true; a fabricated passing one
+        # would not be.
+        if fp is not None:
+            self._record_evidence(track_id, fp, hit)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
