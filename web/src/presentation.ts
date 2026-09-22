@@ -1,5 +1,5 @@
 import type { Bundle, Candidate, FetchProgress, Playlist, Request, RequestState } from './api'
-import { spectrogramUrl } from './api'
+import { candidatePreviewUrl, referenceAudioUrl, rejectedAudioUrl, spectrogramUrl } from './api'
 
 export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
 /* A rung earns its place if the request can stop on it: Search ends in not_found, Choose waits on the owner
@@ -22,8 +22,22 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove'; path?: string }
-export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept'; path?: string }
+/** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
+ *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
+ *  kinds of audio can be playing and only one of them belongs to a candidate. */
+export interface SampleView { key: string; label: string; url: string }
+/** The two sides of "a different recording", for the rejected row that has to let the owner judge it.
+ *  `found` is the copy that was refused, played off this machine. `reference` is what it was compared
+ *  against -- playable when that was a Deezer preview, and a link to the owner's own video when it was
+ *  not, because nothing here keeps a copy of their video's audio. Either half can be missing: a row whose
+ *  kept file was cleaned up, a request with no stored reference at all. */
+export interface SamplesView { found: SampleView | null; reference: SampleView | null; video: { url: string; at: string } | null }
+export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean
+  /** Null when Deezer has no sample for this record, which is known before the card is drawn -- so the
+   *  card shows no play control at all rather than a dead one. Built here rather than in the page,
+   *  because this is where every other thing a control needs is decided. */
+  sample: SampleView | null }
 export interface RejectionView { reason: string; cutoffKhz: number | null; caption: string; spectrogramUrl: string | null }
 /** Why a row is sitting in a list called "Failed" and whether it can come back. Present on failed rows
  *  only -- the ones the owner is looking at when they ask that question. */
@@ -39,6 +53,7 @@ export interface RowView {
   sweepable: boolean
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
+  samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
 export interface ProgressView { pct: number | null; label: string }
@@ -269,7 +284,19 @@ function titleOf(b: Bundle): { title: string; version: string | null } {
   return { title: r.raw_text, version: null }
 }
 
-function outcomeOf(state: RequestState): OutcomeView | null {
+/* The words below a failed row. Keyed off the state, except for the one row where the state does not say
+   enough: a rejection whose refused copy was kept is not the dead end `FAILED_COPY.rejected` describes --
+   the file is still here and there is a button that files it. Printing "checked, failed and deleted" over
+   a player would be the row contradicting itself (issue #92). */
+const KEPT_COPY_NOTE = 'The audio is genuine — it just did not match the recording you asked for closely '
+  + 'enough. Listen to both below: if this is the take you wanted after all, Keep it anyway files this '
+  + 'very copy. Nothing is deleted until you remove the row.'
+
+function outcomeOf(b: Bundle): OutcomeView | null {
+  const state = b.request.state
+  if (state === 'rejected' && b.rejection?.kind === 'different_recording' && b.rejection.audio_path) {
+    return { retryable: false, note: KEPT_COPY_NOTE }
+  }
   const copy = FAILED_COPY[state]
   return copy ? { retryable: canRetry(state), note: copy.note } : null
 }
@@ -313,6 +340,36 @@ export function failedSummary(bundles: Bundle[]): string | null {
   return sentences.join(' ')
 }
 
+/* Two ways to land with no sample, and neither is a failure the page should draw a dead button for. An
+   explicit `false` is Deezer answering that there is none. A missing `deezer_id` is a candidate that never
+   went through Deezer enrichment at all, so there is no identity to resolve and the route 404s without so
+   much as a call. What is left is a genuine unknown -- a row older than the column -- which keeps its
+   button and behaves as it always has, because the route may well succeed. */
+const sampleFor = (c: Candidate): SampleView | null =>
+  c.has_preview === false || c.deezer_id == null ? null
+    : { key: `cand:${c.id}`, label: `${c.artist} – ${c.title} (${versionOf(c)})`, url: candidatePreviewUrl(c.id) }
+
+/** The listen-and-decide block on a rejected row (issue #92). Only for the recording check: a quality
+ *  rejection is a fact about the file, there is nothing to listen for, and nothing was kept to listen to.
+ *  Every half is independently optional, so a row with one side still offers that side rather than
+ *  vanishing -- half an answer beats none when the question is "was that really the wrong take". */
+function samplesFor(b: Bundle): SamplesView | null {
+  const rj = b.rejection
+  if (b.request.state !== 'rejected' || !rj || rj.kind !== 'different_recording') return null
+  const found = rj.audio_path
+    ? { key: `found:${rj.id}`, label: 'the copy Flackey found', url: rejectedAudioUrl(rj.id) } : null
+  const ref = b.reference ?? null
+  const reference = ref?.kind === 'deezer'
+    ? { key: `ref:${b.request.id}`, label: 'the recording you asked for', url: referenceAudioUrl(b.request.id) } : null
+  // The video is the owner's own link and the only copy of that audio, so it opens where they already
+  // play it rather than pretending this app has it. Sent to the second the excerpt was cut from, which is
+  // the passage the fingerprint actually compared.
+  const at = Math.floor(ref?.excerpt_start_s ?? 0)
+  const video = ref?.kind === 'youtube'
+    ? { url: `https://www.youtube.com/watch?v=${ref.ref}${at > 0 ? `&t=${at}` : ''}`, at: mmss(at) } : null
+  return found || reference || video ? { found, reference, video } : null
+}
+
 export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const r = b.request
   const { title, version } = titleOf(b)
@@ -324,7 +381,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     bucket, removable: bucket === 'done' || bucket === 'failed', sweepable: sweptByRetryAll(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
-    outcome: outcomeOf(r.state),
+    outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)
   const hasAnySource = opts.telegramAuthorized || opts.soulseekConnected
@@ -390,6 +447,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.candidates = sorted.map(c => ({
         id: c.id, title: `${c.artist} – ${c.title}`, version: versionOf(c), score: c.score, length: mmss(c.duration_s),
         onBeatport: c.catalog_track_id != null, lengthNote: lengthNote(c, r.query_duration_s), chosen: c.id === r.chosen_candidate_id,
+        sample: sampleFor(c),
       }))
       v.action = { label: 'Skip this track', kind: 'cancel' }
       break
@@ -409,7 +467,11 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       break
     case 'rejected': {
       const reason = b.rejection?.reason || r.error_message || 'Failed the quality check'
-      v.status = `${reason.replace(/\.$/, '')}. Deleted, not added to your library.`
+      // A refused file is normally gone by the time this row is drawn. The one that is not is the
+      // different recording the owner may still want (issue #92): its copy was moved aside instead, so
+      // the row must not announce a deletion while a play button for that very file sits under it.
+      const kept = b.rejection?.kind === 'different_recording' && !!b.rejection.audio_path
+      v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
       const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
       // Two different refusals, two different explanations. The upscale line is about the spectral check
@@ -419,7 +481,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.rejection = {
         reason, cutoffKhz: khz,
         caption: b.rejection?.kind === 'different_recording'
-          ? 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
+          ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
+            : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
           : khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
           : 'The file did not pass the quality check.',
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,

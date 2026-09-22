@@ -128,8 +128,8 @@ describe('presentRow', () => {
     expect(v.status).toBe('Needs your choice — best match is a Extended Mix; no version was requested. Pick the version you want.')
     expect(v.washed).toBe(true); expect(v.steps?.[1]).toEqual({ name: 'Choose', state: 'current' })
     expect(v.candidates).toEqual([
-      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true },
-      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false },
+      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true, sample: null },
+      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false, sample: null },
     ])
     expect(v.action).toEqual({ label: 'Skip this track', kind: 'cancel' })
   })
@@ -155,6 +155,57 @@ describe('presentRow', () => {
       caption: 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.' })
     // Nothing failed a cutoff, so no cutoff is claimed either way round.
     expect(v.checks).toEqual([])
+  })
+  // Issue #92: the owner's answer to "is this really a different take?" is their ears, so the refused copy
+  // is kept and played against the reference. Everything the row says about it has to agree with the fact
+  // that the file is still there and a button files it.
+  it('a different-recording row whose copy was kept offers both samples and does not claim a deletion', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording: best score 0.77 below 0.79',
+      bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null, created_at: '', kind: 'different_recording',
+      audio_path: '/data/rejected/req1-1.mp3' }
+    const reference = { kind: 'deezer' as const, ref: '1109731', excerpt_start_s: 95 }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference }), opts)
+    expect(v.status).toBe('a different recording: best score 0.77 below 0.79. Kept aside for you to hear, not added to your library.')
+    expect(v.rejection?.caption).toMatch(/still here, so you can hear it/)
+    expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('Keep it anyway files this very copy') })
+    expect(v.samples).toEqual({
+      found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
+      reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
+      video: null })
+  })
+  it('a YouTube reference is a link into the owner\'s own video, at the second the excerpt came from', () => {
+    // Nothing local holds that audio, so there is nothing to serve -- but the passage the fingerprint
+    // compared is knowable, and sending them to it beats sending them to 0:00 of a ten-minute set.
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' },
+      { rejection, reference: { kind: 'youtube' as const, ref: 'dQw4w9WgXcQ', excerpt_start_s: 95 } }), opts)
+    expect(v.samples?.reference).toBeNull()
+    expect(v.samples?.video).toEqual({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=95', at: '1:35' })
+  })
+  it('a quality rejection has nothing to listen to, because nothing was kept', () => {
+    // The spectral check is a fact about the file, not a judgement call -- there is no second opinion to
+    // have, so the row must not grow a player that implies there is.
+    const rejection = { id: 7, request_id: 1, reason: 'Sounds like a 128 kbps upscale', bitrate_kbps: 320,
+      cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
+    expect(v.samples).toBeNull()
+    expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }
+    const v = presentRow(bundle({ state: 'rejected' },
+      { rejection, reference: { kind: 'deezer' as const, ref: '1109731', excerpt_start_s: null } }), opts)
+    expect(v.samples?.found).toBeNull()
+    expect(v.samples?.reference?.url).toBe('/api/requests/1/reference/audio')
+    // And with no copy there is nothing to keep, so the row falls back to the plain refusal wording.
+    expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a different-recording row with neither side to play draws no block at all', () => {
+    const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
+      spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }
+    expect(presentRow(bundle({ state: 'rejected' }, { rejection }), opts).samples).toBeNull()
   })
   it('a rejected row does not borrow the Soulseek attempt\'s fingerprint: it refused a different file', () => {
     const attempt = { id: 8, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',

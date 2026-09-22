@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Artwork from './Artwork'
 import CandidateCard from './CandidateCard'
 import Checks from './Checks'
+import Compare from './Compare'
 import SpectrogramWell from './SpectrogramWell'
 import Stepper from './Stepper'
 import Platter from './Platter'
@@ -38,14 +39,14 @@ interface Props { view: RowView; whyOpen?: boolean; onAction: (kind: RowAction['
   onChoose: (rowId: number, candidateId: number) => void
   /** Everything the page's single audio element knows. It lives on the page because the element does; the
    *  row only spreads it over its cards, and reads one thing off it for its own title line. */
-  player: PlayerState; onPlay: (candidateId: number) => void }
+  player: PlayerState; onPlay: (key: string, url: string) => void }
 
 export default function RequestRow({ view: v, whyOpen, onAction, onChoose, player, onPlay }: Props) {
   const cls = ['row', v.dimmed && 'dimmed', v.washed && 'washed', v.rejected && 'rejected'].filter(Boolean).join(' ')
   // Which of this row's own candidates is playing, named by the version -- the candidates of a Choose row
   // share a title and differ only there. It goes inline on the title line and never on a line of its own:
   // a third line appearing on a press would push the whole candidate grid down every time.
-  const nowPlaying = v.candidates?.find(c => c.id === player.playing)?.version ?? null
+  const nowPlaying = v.candidates?.find(c => c.sample?.key === player.playing)?.version ?? null
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
   return (
@@ -80,9 +81,14 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.removable && <button className="btn-link muted" onClick={() => onAction('remove', v.id, undefined)}>Remove</button>}
         </div>
       </div>
+      {/* Above the spectrogram, not below it: the picture explains the verdict, and this is what to do
+          about it. It is always open on a row that has something to play -- "See why" hides a diagram,
+          and hiding the way out of a dead end behind a second press is what the row did wrong to begin
+          with (issue #92). */}
+      {v.samples && <Compare s={v.samples} player={player} onPlay={onPlay} onAccept={() => onAction('accept', v.id, undefined)} />}
       {v.candidates && (<>
         <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)}
-          player={player} onPlay={() => onPlay(c.id)} />)}</div>
+          player={player} onPlay={onPlay} />)}</div>
         {v.action?.kind === 'cancel' && <div className="skip"><button className="btn-link" onClick={() => onAction('cancel', v.id, undefined)}>{v.action.label}</button></div>}
       </>)}
       {v.rejection && whyOpen && <SpectrogramWell r={v.rejection} />}
