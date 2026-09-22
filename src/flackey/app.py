@@ -175,8 +175,8 @@ def make_on_authorized(settings: Settings, status: dict) -> Callable[[], None]:
 
 
 async def _run(settings: Settings, handle: ServerHandle) -> None:
-    for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.library_root,
-              settings.lossless_raw_dir):
+    for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.rejected_dir,
+              settings.library_root, settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)
     repair_share(settings)
     log_startup_banner(settings, __version__)

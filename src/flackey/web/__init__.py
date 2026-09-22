@@ -64,7 +64,22 @@ class Bundles:
         return {"request": to_dict(r), "candidates": to_dict(self.store.get_candidates(rid)),
                 "catalog": to_dict(catalog), "track": track,
                 "rejection": to_dict(self.store.get_rejection_for_request(rid)),
-                "attempt": to_dict(self.store.get_attempt_for_request(rid))}
+                "attempt": to_dict(self.store.get_attempt_for_request(rid)),
+                "reference": self.reference(rid)}
+
+    def reference(self, rid: int) -> dict | None:
+        """What this request was fingerprinted against, as the page needs it: which audio, and where in it
+        the excerpt was taken from. Not the fingerprints themselves -- those are tens of kilobytes of
+        integers per request, and no page has anything to do with them.
+
+        It is here because a rejected row now has to say what "a different recording" was different *from*
+        (issue #92). A Deezer preview it can play; a YouTube video it links to, at the second the excerpt
+        started, because that audio is the owner's own link and nothing local holds a copy of it."""
+        stored = self.store.get_reference(rid)
+        if stored is None:
+            return None
+        return {"kind": stored["kind"], "ref": str(stored["ref"]),
+                "excerpt_start_s": stored.get("excerpt_start_s")}
 
     def track(self, tid: int) -> dict:
         t = self.store.get_track(tid)

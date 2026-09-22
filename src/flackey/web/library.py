@@ -35,6 +35,11 @@ from . import SETUP_DONE_KEY, Bundles, to_dict
 log = logging.getLogger(__name__)
 
 LIBRARY_LIMIT = 10_000
+# What a browser can be handed and actually play. Every extension the Deezer source can land (see
+# `EXT_BY_MIME` in source/deezer_bot.py) is here, which is the set `rejected_audio` ever sees; anything
+# else is refused rather than served under a guessed type.
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".wav": "audio/wav",
+               ".m4a": "audio/mp4", ".aiff": "audio/aiff", ".aif": "audio/aiff", ".ogg": "audio/ogg"}
 
 
 def reveal_in_finder(path: Path) -> None:
@@ -114,6 +119,31 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         if not rj.spectrogram_path or not Path(rj.spectrogram_path).exists():
             raise HTTPException(404, "no spectrogram")
         return FileResponse(rj.spectrogram_path, media_type="image/png")
+
+    @r.get("/rejections/{rjid}/audio")
+    async def rejected_audio(rjid: int):
+        """The refused copy itself, so the owner can hear what the fingerprint would not accept (issue #92).
+
+        Kept only for a 'different_recording' verdict and served only from `rejected_dir` -- `is_relative_to`
+        is the same containment check `unlink_spectrogram` makes, and it is what stops a row whose path
+        column was written by an older build (or by hand) from turning this into a read of any file on the
+        disk. The media type comes off the extension the source gave the file; an unknown one is refused
+        rather than guessed, because a wrong type is a player that fails silently."""
+        try:
+            rj = store.get_rejection(rjid)
+        except KeyError:
+            raise HTTPException(404, "not found")
+        if not rj.audio_path:
+            raise HTTPException(404, "no copy of this track was kept")
+        path = Path(rj.audio_path)
+        if not path.is_relative_to(settings.rejected_dir) or not path.exists():
+            raise HTTPException(404, "no copy of this track was kept")
+        media_type = AUDIO_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            raise HTTPException(415, f"cannot play a {path.suffix.lstrip('.') or 'file'} here")
+        # No `no-store`: unlike the Deezer preview this is a local file with a stable URL, and a replay
+        # while the owner compares it against the reference should not re-read it from disk.
+        return FileResponse(path, media_type=media_type)
 
     @r.get("/library")
     async def library(q: str | None = None, playlist_id: int | None = None) -> list:

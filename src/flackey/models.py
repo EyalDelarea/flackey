@@ -267,6 +267,9 @@ class Rejection:
     # Defaulted so a row written before the column existed still loads, and reads as the only kind there
     # was then.
     kind: str = "quality"
+    # The refused file, kept so the owner can hear it before deciding (issue #92). Only ever set on a
+    # 'different_recording' rejection, and cleared the moment the file leaves -- filed or deleted.
+    audio_path: str | None = None
 
 
 @dataclass

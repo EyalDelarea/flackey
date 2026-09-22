@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     def tmp_dir(self) -> Path:
         return self.data_dir / "tmp"
 
+    @property
+    def rejected_dir(self) -> Path:
+        """Files a fingerprint refused but the owner may still want (issue #92). Not under `tmp_dir`: that
+        one is emptied on every pass by design, and these have to survive until the owner has listened."""
+        return self.data_dir / "rejected"
+
 
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 
