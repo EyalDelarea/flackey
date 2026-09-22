@@ -95,7 +95,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .filterbar { display: flex; align-items: center; gap: 6px; flex: none; height: 38px; padding: 0 20px; border-bottom: .5px solid var(--sep); }
 .chip { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px; border: 0; border-radius: 11px; background: none; color: var(--secondary); font-size: 12px; transition: background 120ms; }
 .chip:hover { background: color-mix(in srgb, var(--selection) 50%, transparent); }
-.chip[aria-pressed="true"] { background: var(--selection); color: var(--text); font-weight: 500; }
+.chip[aria-checked="true"], .chip[aria-pressed="true"] { background: var(--selection); color: var(--text); font-weight: 500; }
 .chip .count { font-size: 12px; color: var(--secondary); }
 .chip .count.amber { color: var(--orange-text); } .chip .count.red { color: var(--red); }
 /* The quality check's colour, so the Verify chip, its segment of the bar and the tag on its rows all read
@@ -624,3 +624,16 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   .format-options { grid-template-columns: minmax(0, 1fr); }
   .format-choice { min-height: 0; }
 }
+
+/* View navigation sits above the smaller, scoped stage filters. */
+.download-tab { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--secondary); font-size: 13px; }
+.download-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.download-tab:hover { color: var(--text); }
+.chip:focus-visible, .download-tab:focus-visible, .download-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.download-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.stage-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.filter-scope { color: var(--secondary); font-size: 11px; white-space: nowrap; margin-right: 6px; }
+.download-panel .filterbar, .download-panel .filterbar-row { flex-wrap: wrap; height: auto; min-height: 38px; padding-top: 6px; padding-bottom: 6px; }
+.group-scope { font-size: 11px; color: var(--secondary); margin: 12px 2px 6px; }
+
+.stage-option { display: inline-flex; align-items: center; flex: none; }

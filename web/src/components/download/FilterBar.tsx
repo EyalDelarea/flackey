@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { selectionKeys } from './selectionKeys'
 import type { Filter } from '../../presentation'
 
 type View = 'active' | 'history' | 'failed'
@@ -44,21 +44,24 @@ interface Props {
 }
 
 export default function FilterBar({ filter, counts, onFilter, onClearFailed, view, bare }: Props) {
-  const chips = CHIPS.filter(c => c.views.includes(view) && !(c.hideAtZero && counts[c.key] === 0))
+  const chips = CHIPS.filter(c => c.views.includes(view) && !(c.hideAtZero && counts[c.key] === 0 && filter !== c.key))
   return (
     <div className={bare ? 'filterbar-row' : 'filterbar'}>
+      <span className="filter-scope">{view === 'active' ? 'Downloads' : view === 'failed' ? 'Failed' : 'History'} · {counts.all} tracks</span>
+      <div className="stage-filters" role="radiogroup" aria-label={`Filter ${view === 'active' ? 'downloads' : view}${view === 'history' ? ' by outcome' : ' by stage'}`} onKeyDown={selectionKeys}>
       {chips.map(c => {
         const count = counts[c.key]
         const toned = c.tone && count > 0 ? ` ${c.tone}` : ''
         return (
-          <Fragment key={c.label}>
+          <span className="stage-option" key={c.label}>
             {c.divided && <span className="chip-divider" aria-hidden="true" />}
-            <button className="chip" aria-pressed={filter === c.key} onClick={() => onFilter(c.key)}>
+            <button className="chip" role="radio" aria-checked={filter === c.key} tabIndex={filter === c.key ? 0 : -1} onClick={() => onFilter(c.key)}>
               {c.label} <span className={`count${toned}`}>{count}</span>
             </button>
-          </Fragment>
+          </span>
         )
       })}
+      </div>
       {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>}
     </div>
   )

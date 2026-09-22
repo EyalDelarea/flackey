@@ -6,6 +6,7 @@ import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import Banner from '../Banner'
 import FilterBar from './FilterBar'
+import { selectionKeys } from './selectionKeys'
 import Group from './Group'
 import PasteBar from './PasteBar'
 
@@ -189,11 +190,18 @@ export default function DownloadPage({ live }: { live: Live }) {
         return submission.summary
       }} />
       {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
-      <div className="download-views" role="group" aria-label="Download view">
-        <button className="chip" aria-pressed={view === 'active'} onClick={() => { setView('active'); setFilter('all') }}>Downloads</button>
-        <button className="chip" aria-pressed={view === 'history'} onClick={openHistory}>History{newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}</button>
-        {view !== 'history' && <button className="chip" aria-pressed={view === 'failed'} onClick={() => { setView('failed'); setFilter('all') }}>Failed <span className="count red">{bundles.filter(isFailed).length}</span></button>}
+      <div className="download-views" role="tablist" aria-label="Download view" onKeyDown={selectionKeys}>
+        {(['active', 'history', 'failed'] as const).map(v => (
+          <button key={v} className="download-tab" role="tab" id={`download-tab-${v}`} aria-controls="download-panel"
+            aria-selected={view === v} tabIndex={view === v ? 0 : -1}
+            onClick={() => { if (v === 'history') openHistory(); else { setView(v); setFilter('all') } }}>
+            {v === 'active' ? 'Downloads' : v === 'history' ? 'History' : 'Failed'}
+            {v === 'history' && newInHistory > 0 && <span className="count amber" aria-hidden="true">{newInHistory}</span>}
+            {v === 'failed' && <span className="count red"> {bundles.filter(isFailed).length}</span>}
+          </button>
+        ))}
       </div>
+      <div className="download-panel" role="tabpanel" id="download-panel" aria-labelledby={`download-tab-${view}`} tabIndex={0}>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
       {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
@@ -218,11 +226,12 @@ export default function DownloadPage({ live }: { live: Live }) {
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
         {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
-        {groups.length === 0 && bundles.length > 0 && <div className="empty">{view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
+        {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
         {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
           player={{ playing, clock, slow, failed, noSample }} onPlay={onPlay} />)}
+      </div>
       </div>
       {/* The page's one player. `preload="none"` and no `src` until a play is pressed, because the route
           resolves the sample against Deezer on every request -- and none again the moment it stops.

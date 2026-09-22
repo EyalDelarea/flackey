@@ -37,7 +37,7 @@ const mk = (id: number, state: Request['state']): Bundle => ({
 it('shows a red banner with a dismiss action when a row action fails', async () => {
   vi.mocked(api.retry).mockRejectedValueOnce(new ApiError(409, 'That track is already being fetched.'))
   render(<DownloadPage live={makeLive([bundle])} />)
-  fireEvent.click(screen.getByRole('button', { name: 'History' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
   fireEvent.click(screen.getByText('Try again'))
   await waitFor(() => expect(screen.getByText('That track is already being fetched.')).toBeInTheDocument())
   fireEvent.click(screen.getByText('Dismiss'))
@@ -71,18 +71,18 @@ describe('filter bar, remove and clear failed', () => {
   it('clicking Failed leaves only failed rows and hides the rest', async () => {
     render(<DownloadPage live={makeLive(mixed)} />)
     expect(screen.getByText('Artist – Track 1')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
-    fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
     await waitFor(() => expect(screen.queryByText('Artist – Track 1')).not.toBeInTheDocument())
     expect(screen.getByText('Artist – Track 4')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Failed/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('tab', { name: /^Failed/ })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('refreshes Downloads after retrying a failed request', async () => {
     vi.mocked(api.retry).mockResolvedValueOnce({ ...baseRequest, state: 'queued' } as any)
     const refresh = vi.fn(async () => undefined)
     render(<DownloadPage live={makeLive([mk(4, 'error')], { refresh })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     fireEvent.click(screen.getByText('Try again'))
     await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
@@ -91,7 +91,7 @@ describe('filter bar, remove and clear failed', () => {
     vi.mocked(api.removeRequest).mockResolvedValueOnce({ ok: true })
     const dropBundle = vi.fn()
     render(<DownloadPage live={makeLive([mk(4, 'error')], { dropBundle })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     fireEvent.click(screen.getByText('Remove'))
     expect(api.removeRequest).toHaveBeenCalledWith(4)
     await waitFor(() => expect(dropBundle).toHaveBeenCalledWith(4))
@@ -101,7 +101,7 @@ describe('filter bar, remove and clear failed', () => {
     vi.mocked(api.removeRequest).mockRejectedValueOnce(new ApiError(409, 'That track is still being worked on. Skip it first.'))
     const dropBundle = vi.fn()
     render(<DownloadPage live={makeLive([mk(4, 'error')], { dropBundle })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => expect(screen.getByText('That track is still being worked on. Skip it first.')).toBeInTheDocument())
     expect(dropBundle).not.toHaveBeenCalled()
@@ -110,7 +110,7 @@ describe('filter bar, remove and clear failed', () => {
   it('Clear failed calls api.clearFailed', async () => {
     vi.mocked(api.clearFailed).mockResolvedValueOnce({ removed: [4] })
     render(<DownloadPage live={makeLive(mixed)} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     const clearBtn = screen.getByRole('button', { name: 'Clear failed' })
     expect(clearBtn).not.toBeDisabled()
     fireEvent.click(clearBtn)
@@ -119,29 +119,29 @@ describe('filter bar, remove and clear failed', () => {
 
   it('Clear failed is disabled when there are no failed rows', () => {
     render(<DownloadPage live={makeLive([mk(1, 'done')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     expect(screen.getByRole('button', { name: 'Clear failed' })).toBeDisabled()
   })
 
   it('badges History when a request finishes while the owner is watching Downloads, and clears on open', () => {
     const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'fetching')])} />)
-    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
 
     rerender(<DownloadPage live={makeLive([mk(1, 'done')])} />)
-    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).toHaveTextContent('1')
+    expect(screen.getByRole('tab', { name: 'History' }).querySelector('.count')).toHaveTextContent('1')
 
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
-    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    expect(screen.getByRole('tab', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
   })
 
   it('does not badge History for completions that were already there on the first load', () => {
     render(<DownloadPage live={makeLive([mk(1, 'done'), mk(2, 'not_found')])} />)
-    expect(screen.getByRole('button', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'History' }).querySelector('.count')).not.toBeInTheDocument()
   })
 
   it('shows "Nothing here." when a filter hides every row', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     expect(screen.getByText('No completed downloads yet.')).toBeInTheDocument()
   })
 
@@ -152,13 +152,13 @@ describe('filter bar, remove and clear failed', () => {
 
   it('hides the filter bar entirely when there are no requests at all', () => {
     render(<DownloadPage live={makeLive([])} />)
-    expect(screen.queryByRole('button', { name: /^All/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: /^All/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Clear failed' })).not.toBeInTheDocument()
   })
 })
 
 describe('Retry all on the Failed tab', () => {
-  const openFailed = () => fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+  const openFailed = () => fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
 
   it('counts only the failed rows that can actually be re-queued', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
@@ -194,7 +194,7 @@ describe('Retry all on the Failed tab', () => {
   it('is not offered on the other tabs', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error')])} />)
     expect(screen.queryByRole('button', { name: /^Retry all/ })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     expect(screen.queryByRole('button', { name: /^Retry all/ })).not.toBeInTheDocument()
   })
 
@@ -220,7 +220,7 @@ describe('Retry all on the Failed tab', () => {
 
   it('explains the gap between the Failed badge and its own count, rather than leaving two numbers', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'rejected'), mk(3, 'cancelled')])} />)
-    expect(screen.getByRole('button', { name: /^Failed/ })).toHaveTextContent('Failed 3')
+    expect(screen.getByRole('tab', { name: /^Failed/ })).toHaveTextContent('Failed 3')
     openFailed()
     expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
     expect(screen.getByText(/2 of these 3 cannot be tried again — 1 failed the quality check, 1 you stopped/))
@@ -255,7 +255,7 @@ describe('Retry all on the Failed tab', () => {
    rows were parked on a Soulseek backoff doing nothing, so the chips, the batch bar and the Failed tab all
    read from one stage axis now. */
 describe('stage chips and the batch bar', () => {
-  const openFailed = () => fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+  const openFailed = () => fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
   const playlists = [{ id: 7, source_url: 'u', name: 'Goa Trance Classics', created_at: '', updated_at: '',
     track_ids: [], file: '/lib/Playlists/Goa.m3u8' }]
   const inPlaylist = (id: number, state: Request['state'], over: Partial<Request> = {}): Bundle => ({
@@ -279,8 +279,8 @@ describe('stage chips and the batch bar', () => {
 
   it('narrows the list on the stage axis, so the parked rows can be looked at on their own', () => {
     render(<DownloadPage live={makeLive([inPlaylist(1, 'identifying'), parked(5), parked(6)], { playlists })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Waiting 2' }))
-    expect(screen.getByRole('button', { name: 'Waiting 2' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('radio', { name: 'Waiting 2' }))
+    expect(screen.getByRole('radio', { name: 'Waiting 2' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.queryByText('Artist – Track 1')).not.toBeInTheDocument()
     expect(screen.getByText('Artist – Track 5')).toBeInTheDocument()
   })
@@ -290,7 +290,7 @@ describe('stage chips and the batch bar', () => {
     // rows happened to be right, because every row on that tab is in the failed bucket anyway.
     render(<DownloadPage live={makeLive([inPlaylist(1, 'error', { failed_stage: 'download' })], { playlists })} />)
     openFailed()
-    expect(screen.getByRole('button', { name: 'All 1' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'All 1' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('splits the Failed tab by where the track stopped, hiding Unknown until something lands there', () => {
@@ -299,17 +299,17 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(3, 'rejected'), inPlaylist(4, 'cancelled'),
     ], { playlists })} />)
     openFailed()
-    expect(screen.getByRole('button', { name: 'Search 1' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Download 1' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Verify 1' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Stopped 1' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Unknown/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Search 1' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Download 1' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Verify 1' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Stopped 1' })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: /^Unknown/ })).not.toBeInTheDocument()
   })
 
   it('offers Unknown once a run stopped somewhere it could not name', () => {
     render(<DownloadPage live={makeLive([inPlaylist(1, 'error', { failed_stage: null })], { playlists })} />)
     openFailed()
-    expect(screen.getByRole('button', { name: 'Unknown 1' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Unknown 1' })).toBeInTheDocument()
   })
 
   it('keeps the sentence and Retry all counting the same rows once a chip narrows the tab', () => {
@@ -322,7 +322,7 @@ describe('stage chips and the batch bar', () => {
     ], { playlists })} />)
     openFailed()
     expect(screen.getByText(/2 of these 5 cannot be tried again/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Verify 2' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Verify 2' }))
     expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
     expect(screen.getByText(/^Nothing here can be tried again — 2 failed the quality check/)).toBeInTheDocument()
   })
@@ -341,9 +341,9 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(1, 'done'), inPlaylist(2, 'done'), inPlaylist(3, 'rejected'),
       inPlaylist(4, 'fetching'), parked(5),
     ], { playlists })} />)
-    expect(screen.getByText('5 tracks')).toBeInTheDocument()
+    expect(screen.getByText('Whole batch · 5 tracks')).toBeInTheDocument()
     const legend = document.querySelector('.group-legend')!.textContent
-    expect(legend).toBe('2 filed1 working1 waiting to retry1 failed')
+    expect(legend).toBe('2 filed1 searching / downloading / verifying1 waiting to retry1 failed')
     // Trap 3: the header used to say "1 in progress" an inch above a bar drawn to correct exactly that.
     expect(screen.queryByText(/in progress/)).not.toBeInTheDocument()
   })
@@ -354,7 +354,7 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(3, 'error', { failed_stage: 'download' }), inPlaylist(4, 'rejected'), inPlaylist(5, 'cancelled'),
     ], { playlists })} />)
     openFailed()
-    expect(screen.getByText('4 of 5 stopped')).toBeInTheDocument()
+    expect(screen.getByText('Whole batch · 4 of 5 stopped')).toBeInTheDocument()
     expect(document.querySelector('.group-legend')!.textContent)
       .toBe('1 found nothing to download1 could not finish the download1 failed the quality check1 you stopped')
   })
@@ -368,7 +368,7 @@ describe('stage chips and the batch bar', () => {
    cheap half of a class of bug that unit tests otherwise cannot see at all. */
 it('keeps every toned class behind the tone- prefix, where no bare class can collide with it', () => {
   const { container } = render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
-  fireEvent.click(screen.getByRole('button', { name: /^Failed/ }))
+  fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
   const toned = [...container.querySelectorAll('.group-seg, .legend-dot, .stage-tag')]
   expect(toned.length).toBeGreaterThan(0)
   for (const el of toned) {
@@ -652,4 +652,58 @@ it('keeps the second sample playing when the first press aborts its own play pro
     expect(screen.getByRole('button', { name: sample('Stop', 'Extended Mix') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: sample('Play', 'Original Mix') })).toBeEnabled()
   } finally { play.mockRestore(); pause.mockRestore() }
+})
+
+
+it('keeps all three tabs available and supports wrapping arrow and Home/End navigation', () => {
+  render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'error')])} />)
+  const downloads = screen.getByRole('tab', { name: 'Downloads' })
+  downloads.focus()
+  fireEvent.keyDown(downloads, { key: 'ArrowRight' })
+  const history = screen.getByRole('tab', { name: 'History' })
+  expect(history).toHaveFocus()
+  expect(history).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getAllByRole('tab')).toHaveLength(3)
+  fireEvent.keyDown(history, { key: 'End' })
+  const failed = screen.getByRole('tab', { name: /^Failed/ })
+  expect(failed).toHaveFocus()
+  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', failed.id)
+  fireEvent.keyDown(failed, { key: 'ArrowRight' })
+  expect(downloads).toHaveFocus()
+  expect(downloads).toHaveAttribute('aria-selected', 'true')
+  fireEvent.keyDown(downloads, { key: 'End' })
+  fireEvent.keyDown(failed, { key: 'Home' })
+  expect(downloads).toHaveFocus()
+})
+
+it('selects and focuses one stage filter with arrow keys and resets it on a tab change', () => {
+  render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'fetching')])} />)
+  const all = screen.getByRole('radio', { name: 'All 2' })
+  all.focus()
+  fireEvent.keyDown(all, { key: 'ArrowRight' })
+  expect(screen.getByRole('radio', { name: 'Searching 1' })).toHaveFocus()
+  expect(screen.getAllByRole('radio', { checked: true })).toHaveLength(1)
+  expect(screen.queryByText('Artist – Track 2')).not.toBeInTheDocument()
+  fireEvent.keyDown(screen.getByRole('radio', { checked: true }), { key: 'End' })
+  expect(screen.getByRole('radio', { name: 'Waiting 0' })).toHaveFocus()
+  fireEvent.keyDown(screen.getByRole('radio', { checked: true }), { key: 'ArrowRight' })
+  expect(all).toHaveFocus()
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Downloads' }))
+  expect(screen.getByRole('radio', { name: 'All 2' })).toHaveAttribute('aria-checked', 'true')
+})
+
+
+it('retains a selected optional filter when live counts reach zero', () => {
+  const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found')])} />)
+  fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Unknown 1' }))
+  rerender(<DownloadPage live={makeLive([mk(2, 'not_found')])} />)
+  const unknown = screen.getByRole('radio', { name: 'Unknown 0' })
+  expect(unknown).toHaveAttribute('aria-checked', 'true')
+  expect(unknown).toHaveAttribute('tabindex', '0')
+  expect(screen.getByText('No tracks match this filter.')).toBeInTheDocument()
+  fireEvent.keyDown(unknown, { key: 'Home' })
+  expect(screen.getByRole('radio', { name: 'All 1' })).toHaveFocus()
+  expect(screen.queryByRole('radio', { name: 'Unknown 0' })).not.toBeInTheDocument()
 })

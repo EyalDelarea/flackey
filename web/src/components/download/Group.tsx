@@ -46,7 +46,7 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, 
     ? shown(FAILED_ORDER.map(st => ({ key: st, n: s.failedStages[st], label: FAILED_LEGEND[st] })))
     : shown([
       { key: 'filed', n: s.filed, label: 'filed' },
-      { key: 'working', n: s.inFlight, label: 'working' },
+      { key: 'working', n: s.inFlight, label: 'searching / downloading / verifying' },
       { key: 'needs', n: s.needsChoice, label: 'needs you' },
       { key: 'waiting', n: s.waiting, label: 'waiting to retry' },
       { key: 'failed', n: s.failed, label: 'failed' },
@@ -59,7 +59,7 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, 
       <div className="group-head"><h2>{g.name}</h2>
         {/* The counts live under the bar now, beside the colour that carries them. What belongs up here is
             the size of the batch -- and, on the Failed tab, how much of it stopped. */}
-        <span className="summary">{failedView ? `${s.failed} of ${s.total} stopped` : `${s.total} tracks`}</span></div>
+        <span className="summary">{failedView ? `Whole batch · ${s.failed} of ${s.total} stopped` : `Whole batch · ${s.total} tracks`}</span></div>
       {failedView
         ? <div className="group-bar" role="img" aria-label={`${g.name}: ${segments.map(x => `${x.n} ${x.label}`).join(', ')}`}>{bar}</div>
         : <div className="group-bar" role="progressbar" aria-valuenow={s.pct} aria-valuemin={0} aria-valuemax={100}
@@ -69,6 +69,7 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, 
           <li key={x.key} className="legend-item"><span className={`legend-dot tone-${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
         ))}
       </ul>
+      <p className="group-scope">Showing {g.rows.length} {view === 'active' ? 'downloads' : view === 'failed' ? 'failed tracks' : 'history tracks'} matching this filter</p>
       <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
         player={player} onPlay={onPlay} />)}</div>
       {g.beatportDown && <Banner tone="red" text={`Beatport is unreachable. Matching is paused — trying again in ${g.beatportDown.seconds} seconds. Nothing is lost.`} action={{ label: 'Try now', onClick: () => onTryNow(g.beatportDown!.requestIds) }} />}
