@@ -197,22 +197,24 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with partial.open("wb") as fh:
-                async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-                    async with client.stream("GET", url) as res:
-                        res.raise_for_status()
-                        shown = -1
-                        async for chunk in res.aiter_bytes():
-                            received += len(chunk)
-                            # Anything past the declared size is not the download.
-                            if total and received > total:
-                                raise ShortDownload(f"body ran past the {total} bytes the release declared")
-                            fh.write(chunk)
-                            percent = int(received * 100 / total) if total else 0
-                            # Only on a whole-number move: per-chunk is thousands of SSE frames.
-                            if percent != shown:
-                                shown = percent
-                                publish(state="downloading", percent=percent, received=received,
-                                        total=total, version=version, seamless=seamless)
+                async with (
+                    httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client,
+                    client.stream("GET", url) as res,
+                ):
+                    res.raise_for_status()
+                    shown = -1
+                    async for chunk in res.aiter_bytes():
+                        received += len(chunk)
+                        # Anything past the declared size is not the download.
+                        if total and received > total:
+                            raise ShortDownload(f"body ran past the {total} bytes the release declared")
+                        fh.write(chunk)
+                        percent = int(received * 100 / total) if total else 0
+                        # Only on a whole-number move: per-chunk is thousands of SSE frames.
+                        if percent != shown:
+                            shown = percent
+                            publish(state="downloading", percent=percent, received=received,
+                                    total=total, version=version, seamless=seamless)
             # A connection closed cleanly partway is not an HTTP error, so counting is what catches it.
             if total and received != total:
                 raise ShortDownload(f"got {received} of {total} bytes")
