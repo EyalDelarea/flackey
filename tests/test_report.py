@@ -243,3 +243,28 @@ def test_reveal_shows_the_newest_report_or_says_it_is_gone(app):
     assert client.post("/api/bug-report/reveal").status_code == 403
     assert client.post("/api/bug-report/reveal", headers=APP).json() == {"ok": True}
     assert revealed == [settings.data_dir / "bug-reports" / out["file"]]
+
+
+def test_prefixed_keys_auth_schemes_and_quoted_values_are_redacted_whole():
+    r = Redactor([], home=HOME)
+    out = r("telegram_api_hash=abc123 SLSKD_API_KEY=k1 access_token: t2 Authorization: Basic dXNlcjpwYXNz "
+            "password='a b c' \"password\": \"p 4\"")
+    for leaked in ("abc123", "k1", "t2", "dXNlcjpwYXNz", "a b c", "p 4"):
+        assert leaked not in out
+    assert "password='<redacted>'" in out
+
+
+def test_addresses_at_a_sentence_end_and_short_ipv6_are_caught():
+    r = Redactor([], home=HOME)
+    assert r("connected to 84.12.3.4.") == "connected to <ip>."
+    assert r("peer 2001::1 up") == "peer <ip> up"
+    assert r("build 1.2.3.4.5 at 12:00:00") == "build 1.2.3.4.5 at 12:00:00"
+
+
+def test_the_url_stays_short_even_for_text_that_encodes_large(tmp_path: Path):
+    rep = build_report(settings_for(tmp_path), {}, ClientContext())
+    hebrew = "החלון מהבהב כשאני גורר אותו למסך השני 🎧 " * 60
+    url = issue_url(rep, hebrew, hebrew, "flackey-bug-report-1.zip", Redactor([], home=HOME))
+    assert len(url) <= report.URL_MAX
+    q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+    assert q["happened"].startswith("החלון") and q["happened"].endswith("…")

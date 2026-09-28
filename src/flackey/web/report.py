@@ -51,8 +51,10 @@ LOG_NAMES = (LOG_FILE, f"{LOG_FILE}.1", UPDATE_HELPER_LOG)
 # full 2 MB. Two of those in a `<pre>` is already a lot to ask of the preview.
 LOG_TAIL_CHARS = 1_000_000
 # What the reporter typed goes into the URL, which GitHub stops accepting somewhere past 8 KB. The full
-# text is always in report.txt inside the zip, so a cut here loses nothing.
+# text is always in report.txt inside the zip, so a cut here loses nothing. The cap is on the *encoded*
+# URL, not on characters: a Hebrew letter or an emoji is six to twelve bytes once percent-encoded.
 URL_TEXT_CHARS = 1500
+URL_MAX = 7000
 TITLE_CHARS = 80
 SCREENS = {"download": "Download", "library": "Library", "uploads": "Uploads", "settings": "Settings"}
 # Shorter known values are skipped rather than redacted: a four-character Soulseek name like "beat"
@@ -63,13 +65,18 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # A leading `+` is required: a bare run of digits is a Deezer track id or a timestamp far more often than
 # it is a phone number. The second form is what `telegram.mask_phone` prints.
 _PHONE = re.compile(r"\+\d[\d ().-]{6,}\d|\+\d{1,3} •+ •*\d{2}")
-_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+# A trailing `.` is allowed when no digit follows it, so an address that ends a sentence is still one.
+_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
 # Three colons at least, so a log timestamp's `12:00:00` is never one; `::` shortening is allowed, and the
-# loopback `::1` has too few colons to match.
-_IPV6 = re.compile(r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){3,7}(?![\w:])")
+# loopback `::1` has too few colons to match. The second form is a short `2001::1`, which needs its `::`.
+_IPV6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){3,7}|[0-9A-Fa-f]{1,4}::[0-9A-Fa-f]{1,4})"
+                   r"(?![\w:])")
 _KEEP_IPS = {"127.0.0.1", "0.0.0.0"}
-_KEY_VALUE = re.compile(r"(?i)\b(api[_-]?hash|api[_-]?key|password|passwd|token|secret|authorization)"
-                        r"([\"']?\s*[:=]\s*[\"']?)(?:bearer\s+)?[^\s\"',;}]+")
+# Any name that *ends* in one of these, so `telegram_api_hash=` and `access_token:` count too. The value is
+# a whole quoted string when it is quoted, and an auth scheme word takes the credential after it along.
+_KEY_VALUE = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:api[_-]?hash|api[_-]?key|password|passwd|token|secret|"
+                        r"authorization))([\"']?\s*[:=]\s*)(\"[^\"\n]*\"|'[^'\n]*'|"
+                        r"(?:(?:bearer|basic|digest|token)\s+)?[^\s\"',;}]+)")
 _OTHER_HOME = re.compile(r"/Users/[^/\s]+")
 
 
@@ -100,12 +107,18 @@ class Redactor:
             text = pattern.sub("<redacted>", text)
         if self._user is not None:
             text = self._user.sub("<user>", text)
-        text = _KEY_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", text)
+        text = _KEY_VALUE.sub(_redact_value, text)
         text = _EMAIL.sub("<email>", text)
         text = _PHONE.sub("<phone>", text)
         text = _IPV4.sub(lambda m: m.group(0) if m.group(0) in _KEEP_IPS else "<ip>", text)
         text = _IPV6.sub("<ip>", text)
         return text
+
+
+def _redact_value(m: re.Match) -> str:
+    value = m.group(3)
+    quote = value[0] if value[:1] in "\"'" else ""
+    return f"{m.group(1)}{m.group(2)}{quote}<redacted>{quote}"
 
 
 def known_secrets(settings: Settings) -> list[str | None]:
@@ -257,13 +270,19 @@ def issue_url(report: Report, description: str, steps: str, zip_name: str, redac
     details = "\n".join(f"- **{k}:** {v}" for k, v in report.summary)
     details += (f"\n\n**Diagnostics:** drag `{zip_name}` here — Flackey just showed it in Finder. It holds the "
                 "app log with personal details removed.")
-    params = {"template": ISSUE_TEMPLATE,
-              "title": "[Bug]: " + cap(redact(first), TITLE_CHARS),
-              "happened": cap(redact(description), URL_TEXT_CHARS),
-              "steps": cap(redact(steps), URL_TEXT_CHARS),
-              "version": __version__,
-              "details": details}
-    return f"{ISSUE_URL}?{urlencode(params)}"
+    # Shrink the reporter's text until the encoded URL fits; the whole of it is in report.txt regardless.
+    limit = URL_TEXT_CHARS
+    while True:
+        params = {"template": ISSUE_TEMPLATE,
+                  "title": "[Bug]: " + cap(redact(first), min(TITLE_CHARS, max(limit, 20))),
+                  "happened": cap(redact(description), limit),
+                  "steps": cap(redact(steps), limit),
+                  "version": __version__,
+                  "details": details}
+        url = f"{ISSUE_URL}?{urlencode(params)}"
+        if len(url) <= URL_MAX or limit <= 50:
+            return url
+        limit //= 2
 
 
 def write_zip(report: Report, folder: Path, now: datetime | None = None) -> Path:

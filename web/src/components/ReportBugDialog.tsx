@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, type BugContext, type BugPreview, type BugSent } from '../api'
 import CopyButton from './CopyButton'
 import Icon from './Icon'
@@ -32,11 +32,28 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
     return () => { live = false }
     // Once per opening: the details are what was true when the owner pressed the button.
   }, [])
+  const dialog = useRef<HTMLDivElement>(null)
+  // Escape is Cancel, the way it is on a Mac sheet -- but not while there are words in the boxes that one
+  // stray key would throw away. Tab stays inside the dialog, and focus goes back where it came from.
+  const typed = !sent && !!(description.trim() || steps.trim())
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !typed) { onClose(); return }
+      if (e.key !== 'Tab' || !dialog.current) return
+      const stops = [...dialog.current.querySelectorAll<HTMLElement>('button:not(:disabled), textarea, [href]')]
+      if (!stops.length) return
+      const first = stops[0], last = stops[stops.length - 1]
+      const inside = dialog.current.contains(document.activeElement)
+      if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, typed])
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    return () => opener?.focus?.()
+  }, [])
 
   const send = () => {
     setBusy(true); setError(null)
@@ -55,7 +72,7 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
 
   return (
     <div className="modal-backdrop">
-      <div className="modal report-bug" role="dialog" aria-modal="true" aria-labelledby="report-bug-title">
+      <div ref={dialog} className="modal report-bug" role="dialog" aria-modal="true" aria-labelledby="report-bug-title">
         <div className="modal-head">
           <h2 id="report-bug-title">{sent ? 'Almost done' : 'Report a problem'}</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close"><Icon name="x" size={14} /></button>

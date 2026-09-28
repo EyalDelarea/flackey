@@ -61,6 +61,16 @@ it('still lets the owner send when the details could not be gathered', async () 
   expect(screen.getByRole('button', { name: 'Continue on GitHub' })).toBeEnabled()
 })
 
+it('keeps typed words on Escape; only the close button throws them away', () => {
+  const onClose = vi.fn()
+  render(<ReportBugDialog screen="download" onClose={onClose} />)
+  fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'half a sentence' } })
+  fireEvent.keyDown(window, { key: 'Escape' })
+  expect(onClose).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  expect(onClose).toHaveBeenCalledTimes(1)
+})
+
 it('closes on Escape and on the close button', () => {
   const onClose = vi.fn()
   render(<ReportBugDialog screen="download" onClose={onClose} />)
