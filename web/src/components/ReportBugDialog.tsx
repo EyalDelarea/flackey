@@ -78,11 +78,11 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
         ) : (
           <div className="modal-body">
             <p className="muted">Tell us what went wrong. Flackey adds the technical details, so we won't have to ask you for them later.</p>
-            <label className="report-field">What went wrong?
+            <label className="report-field"><span>What went wrong?</span>
               <textarea className="input" rows={4} autoFocus value={description} onChange={e => setDescription(e.target.value)}
                 placeholder="I pressed Download and the window went blank…" />
             </label>
-            <label className="report-field">What were you doing just before? <span className="faint">(optional)</span>
+            <label className="report-field"><span>What were you doing just before? <span className="faint">(optional)</span></span>
               <textarea className="input" rows={2} value={steps} onChange={e => setSteps(e.target.value)} />
             </label>
             <div className="report-included">

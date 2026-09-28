@@ -89,7 +89,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .report-included li svg { color: var(--green-text); }
 .report-included .btn-link { align-self: flex-start; }
 .report-details { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
-.report-details table { border-collapse: collapse; font-size: 11px; }
+.report-details table { align-self: flex-start; border-collapse: collapse; font-size: 11px; }
 .report-details th { padding: 1px 12px 1px 0; font-weight: 500; color: var(--secondary); text-align: left; white-space: nowrap; vertical-align: top; }
 .report-details td { padding: 1px 0; overflow-wrap: anywhere; }
 .report-file { margin-bottom: 3px; color: var(--secondary); }
