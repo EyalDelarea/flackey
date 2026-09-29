@@ -1,11 +1,8 @@
 """Report a bug from inside the app (issue #33).
 
-Everything a report needs already exists on the reporter's machine -- the log, the version, the macOS
-release, the displays -- and the two bugs that prompted this both stalled on getting it to us. So this
-gathers it, redacts it, packs it into a zip, and opens an email to the developer with the report already
-written, next to the zip in Finder for the reporter to drag in. There is no token and no server of ours in
-the path, and no account to make: the reporter's own email (Gmail in the browser, or their mail app) is the
-transport, and they press its Send button themselves.
+Gathers the log, version, macOS release and displays, redacts them into a zip, and opens an email to
+the developer with the report already written, next to the zip in Finder for the reporter to drag in.
+No token, no server of ours, no account: the reporter's own email is the transport, and they press Send.
 
 The repository is public, so `Redactor` is the security boundary. The preview the page shows and the
 zip that gets written are built by the same `build_report`, so what the reporter reviews is the bytes
@@ -49,13 +46,11 @@ UPDATE_HELPER_LOG = "flackey-update-helper.log"
 # The current log, the one before it (a rotation can land a minute before the bug), and the update
 # helper's own log, which is where a failed seamless update leaves its only trace.
 LOG_NAMES = (LOG_FILE, f"{LOG_FILE}.1", UPDATE_HELPER_LOG)
-# Per file, from the end: the newest lines are the ones a report is about, and a rotated log can be the
-# full 2 MB. Two of those in a `<pre>` is already a lot to ask of the preview.
+# Per file, from the end: the newest lines are the ones a report is about, and a rotated log can be 2 MB.
 LOG_TAIL_CHARS = 1_000_000
-# What the reporter typed goes into the URL. Browsers and mail apps stop somewhere past 8 KB, and a
-# browser that hands mailto: to Gmail wraps the whole link in another URL, doubling it -- so 4 KB. The full
-# text is always in report.txt inside the zip, so a cut here loses nothing. The cap is on the *encoded*
-# URL, not on characters: a Hebrew letter or an emoji is six to twelve bytes once percent-encoded.
+# Browsers stop somewhere past 8 KB, and one that hands mailto: to Gmail wraps the link in another URL,
+# doubling it. The cap is on the *encoded* URL: a Hebrew letter or an emoji is 6-12 bytes encoded. The full
+# text is in report.txt inside the zip, so a cut loses nothing.
 URL_TEXT_CHARS = 1500
 URL_MAX = 4000
 SUBJECT_CHARS = 80
@@ -269,6 +264,14 @@ class Email:
     url: str
 
 
+def _compose_url(via: str, subject: str, body: str) -> str:
+    # `quote`, not urlencode's default `quote_plus`: a mail app shows a `+` in a mailto: body as a `+`.
+    if via == "mail":
+        return f"mailto:{REPORT_TO}?" + urlencode({"subject": subject, "body": body}, quote_via=quote)
+    return GMAIL_COMPOSE + "?" + urlencode({"view": "cm", "fs": "1", "to": REPORT_TO, "su": subject, "body": body},
+                                           quote_via=quote)
+
+
 def compose_email(report: Report, description: str, steps: str, zip_name: str, redact: Redactor,
                   via: str = "gmail") -> Email:
     """The email to the developer, written out, and the link that opens it: Gmail's compose page or a
@@ -292,12 +295,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
                   f"Attached: {zip_name} (the app log, with personal details removed).",
                   "If it's not attached yet, drag it in from the Finder window Flackey opened."]
         body = "\n".join(parts)
-        # `quote`, not urlencode's default `quote_plus`: a mail app shows a `+` in a mailto: body as a `+`.
-        if via == "mail":
-            url = f"mailto:{REPORT_TO}?" + urlencode({"subject": subject, "body": body}, quote_via=quote)
-        else:
-            url = GMAIL_COMPOSE + "?" + urlencode({"view": "cm", "fs": "1", "to": REPORT_TO,
-                                                  "su": subject, "body": body}, quote_via=quote)
+        url = _compose_url(via, subject, body)
         if len(url) <= URL_MAX or limit <= 50:
             return Email(subject=subject, body=body, url=url)
         limit //= 2
@@ -338,8 +336,7 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
 
     @r.post("/preview")
     async def preview(body: dict) -> dict:
-        """Read-only: what would be sent, for the summary and its drill-down. A POST only because the
-        page's context is a body, not because anything changes."""
+        """Read-only: what would be sent. A POST only because the page's context is a body."""
         report, _, _, _ = await asyncio.to_thread(build, body)
         return {"summary": [[k, v] for k, v in report.summary],
                 "files": [{"name": n, "text": t} for n, t in report.files.items()],
@@ -358,7 +355,6 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
             raise HTTPException(500, "Could not save the report file. Try again.")
         via = body.get("via") if body.get("via") in VIA else "gmail"
         email = compose_email(report, description, steps, path.name, redact, via)
-        url = email.url
         log.info("bug report written: %s", path.name)
         # Both best effort: the response carries the address, the message and the file name, so a machine
         # where either cannot open (the browser build, a Linux box) can still send it by hand.
@@ -367,10 +363,10 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
         except Exception:
             log.warning("could not show the bug report in Finder", exc_info=True)
         try:
-            open_url(url)
+            open_url(email.url)
         except Exception:
             log.warning("could not open an email for the bug report", exc_info=True)
-        return {"ok": True, "url": url, "file": path.name, "to": REPORT_TO,
+        return {"ok": True, "file": path.name, "to": REPORT_TO,
                 "subject": email.subject, "body": email.body}
 
     @r.post("/reveal")

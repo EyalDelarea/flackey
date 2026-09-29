@@ -222,14 +222,16 @@ def test_preview_shows_exactly_what_the_zip_will_hold(app):
     assert "0123456789abcdef" not in "".join(zipped.values())
 
 
-def test_sending_writes_the_zip_reveals_it_and_opens_the_email(app):
+@pytest.mark.parametrize(("via", "opens"), [(None, "https://mail.google.com/mail/?view=cm"),
+                                           ("mail", f"mailto:{report.REPORT_TO}?")])
+def test_sending_writes_the_zip_reveals_it_and_opens_the_email(app, via, opens):
     client, settings, revealed, opened = app
-    res = client.post("/api/bug-report", json={"description": "Window flickers", "screen": "library"}, headers=APP)
+    res = client.post("/api/bug-report", json={"description": "Window flickers", "screen": "library", "via": via},
+                      headers=APP)
     assert res.status_code == 200
     out = res.json()
     zip_path = settings.data_dir / "bug-reports" / out["file"]
-    assert revealed == [zip_path] and opened == [out["url"]]
-    assert out["url"].startswith("https://mail.google.com/mail/?view=cm")
+    assert revealed == [zip_path] and len(opened) == 1 and opened[0].startswith(opens)
     assert out["to"] == report.REPORT_TO and out["subject"] == "Flackey bug: Window flickers"
     assert "Was on: Library" in out["body"]
     with zipfile.ZipFile(io.BytesIO(zip_path.read_bytes())) as zf:
@@ -244,20 +246,14 @@ def test_sending_needs_the_app_header_and_a_description(app):
     assert revealed == [] and opened == []
 
 
-def test_a_browser_that_will_not_open_still_returns_the_link(app, monkeypatch):
+def test_an_email_that_will_not_open_still_returns_the_message(app, monkeypatch):
     client, _, _, _ = app
 
     def refuse(url):
         raise OSError("no browser")
     monkeypatch.setattr(report, "open_url", refuse)
     res = client.post("/api/bug-report", json={"description": "x"}, headers=APP)
-    assert res.status_code == 200 and res.json()["url"].startswith("https://mail.google.com/")
-
-
-def test_the_mail_app_route_opens_a_mailto_link(app):
-    client, _, _, opened = app
-    out = client.post("/api/bug-report", json={"description": "x", "via": "mail"}, headers=APP).json()
-    assert opened == [out["url"]] and out["url"].startswith(f"mailto:{report.REPORT_TO}?")
+    assert res.status_code == 200 and res.json()["to"] == report.REPORT_TO and res.json()["body"].startswith("x")
 
 
 def test_reveal_shows_the_newest_report_or_says_it_is_gone(app):

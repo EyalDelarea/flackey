@@ -122,12 +122,12 @@ const appPost = <T,>(path: string, body?: unknown) =>
     body: body === undefined ? undefined : JSON.stringify(body) })
 
 /** What only the page knows about where the bug happened. The server checks every field before it goes
-    anywhere near an issue, so this is a hint, not a claim. */
+    into the email or the zip, so this is a hint, not a claim. */
 export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number }
 /** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
     shows the bytes that leave rather than a description of them. */
 export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number }
-export interface BugSent { ok: boolean; url: string; file: string; to: string; subject: string; body: string }
+export interface BugSent { file: string; to: string; subject: string; body: string }
 
 export const api = {
   health: () => call<Health>('/api/health'),

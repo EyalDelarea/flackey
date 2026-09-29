@@ -27,7 +27,7 @@ it('says in plain words what goes along, and shows the exact files on request', 
 })
 
 it('sends only once something is written, then explains the two steps left', async () => {
-  vi.spyOn(api, 'sendBugReport').mockResolvedValue({ ok: true, url: 'https://mail.google.com/mail/?view=cm',
+  vi.spyOn(api, 'sendBugReport').mockResolvedValue({
     file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 'Flackey bug: x', body: 'x' })
   vi.spyOn(api, 'revealBugReport').mockResolvedValue({ ok: true })
   render(<ReportBugDialog screen="download" onClose={() => {}} />)

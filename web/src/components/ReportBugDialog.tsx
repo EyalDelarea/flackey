@@ -8,8 +8,7 @@ const getErrorMessage = (e: unknown, fallback: string): string => e instanceof A
 /** Report a bug from inside the app (issue #33). Written for someone who has never filed an issue: what
  *  goes along is said in a few plain lines, and the exact files are one click further for whoever wants
  *  to check. Nothing leaves until they press Send in their own email -- this only writes the email to the
- *  developer and puts the file where they can drag it in. Gmail first: most people use it in a browser and
- *  never set up the Mail app, where a mailto: link would land on its account setup.
+ *  developer and puts the file where they can drag it in.
  *
  *  A plain `div role="dialog"` rather than `<dialog>.showModal()`, which jsdom does not implement. */
 export default function ReportBugDialog({ screen, onClose }: { screen: string; onClose: () => void }) {
@@ -73,7 +72,7 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
 
   return (
     <div className="modal-backdrop">
-      <div ref={dialog} className="modal report-bug" role="dialog" aria-modal="true" aria-labelledby="report-bug-title">
+      <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-labelledby="report-bug-title">
         <div className="modal-head">
           <h2 id="report-bug-title">{sent ? 'Almost done' : 'Report a problem'}</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close"><Icon name="x" size={14} /></button>
