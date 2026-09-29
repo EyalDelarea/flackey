@@ -162,6 +162,34 @@ def test_screen_size_is_none_off_macos(monkeypatch):
     assert desktop.screen_size() is None
 
 
+def test_window_origin_centres_the_window_in_the_work_area():
+    from flackey import desktop
+
+    # The VM: a 1024 x 768 screen with a 48 px taskbar, and a window already cut down to fit it.
+    assert desktop.window_origin((1024, 720), work=(0, 0, 1024, 720)) == (0, 0)
+    assert desktop.window_origin((800, 600), work=(0, 0, 1920, 1032)) == (560, 216)
+    # A taskbar docked at the top or left moves the work area's corner, and the window with it.
+    assert desktop.window_origin((800, 600), work=(62, 40, 1858, 1040)) == (62 + 529, 40 + 220)
+    # Never off the top-left even if the window is bigger than the work area (the MIN_SIZE floor).
+    assert desktop.window_origin((600, 500), work=(0, 0, 500, 400)) == (0, 0)
+
+
+def test_window_origin_is_left_to_the_system_off_windows(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop.window_origin((1100, 720)) is None
+
+
+def test_run_in_window_places_the_window_where_window_origin_says(monkeypatch, tmp_path):
+    from flackey import desktop
+
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "window_origin", lambda size: (12, 34))
+    desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
+    assert (windows["window"].kwargs["x"], windows["window"].kwargs["y"]) == (12, 34)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="reads the real Windows work area")
 def test_screen_size_on_windows_is_the_work_area():
     """The window must not open wider or taller than the screen: 1100 x 720 overhung a 1024 x 768 one."""
@@ -240,8 +268,8 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "set_app_name", lambda: True)
     monkeypatch.setattr(desktop, "relaunch_bundled", lambda settings: False)
     monkeypatch.setattr(desktop, "screen_size", lambda: HUGE)  # never the machine the suite runs on
-    # The real one holds a process-wide mutex on Windows, so a second test in the same run would read as
-    # a second copy of the app.
+    monkeypatch.setattr(desktop, "window_origin", lambda size: None)
+    # The real one would take the app's own mutex on a Windows test runner.
     monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
     return windows, started, handle
 

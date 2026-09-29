@@ -202,11 +202,11 @@ def screen_size() -> tuple[int, int] | None:
 _SPI_GETWORKAREA = 0x0030
 
 
-def _windows_work_area() -> tuple[int, int] | None:
-    """The primary display's work area in the logical pixels pywebview sizes windows in. A DPI-aware
-    process is told physical pixels, so they are scaled back by the system DPI; an unaware one is told
-    logical pixels and a DPI of 96 alike, so the division changes nothing there. Seen in the Windows VM:
-    without this the 1100 x 720 first window overhung a 1024 x 768 screen."""
+def _windows_work_area_rect() -> tuple[int, int, int, int] | None:
+    """The primary display's work area -- left, top, width, height -- in the logical pixels pywebview
+    sizes and places windows in. A DPI-aware process is told physical pixels, so they are scaled back by
+    the system DPI; an unaware one is told logical pixels and a DPI of 96 alike, so the division changes
+    nothing there."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -219,7 +219,30 @@ def _windows_work_area() -> tuple[int, int] | None:
         log.debug("could not read the work area", exc_info=True)
         return None
     scale = dpi / 96
-    return int((rect.right - rect.left) / scale), int((rect.bottom - rect.top) / scale)
+    return (int(rect.left / scale), int(rect.top / scale),
+            int((rect.right - rect.left) / scale), int((rect.bottom - rect.top) / scale))
+
+
+def _windows_work_area() -> tuple[int, int] | None:
+    """Seen in the Windows VM: without this the 1100 x 720 first window overhung a 1024 x 768 screen."""
+    rect = _windows_work_area_rect()
+    return rect[2:] if rect else None
+
+
+def window_origin(size: tuple[int, int],
+                  work: tuple[int, int, int, int] | None = None) -> tuple[int, int] | None:
+    """Where the window's top-left corner goes: centred in the Windows work area, or None to leave it to
+    the system. Windows only, because there the window otherwise opened at (52, 52) in the VM -- the
+    default cascade, not pywebview's centring -- so a window as wide as the screen hid its close button
+    past the right-hand edge. AppKit already places the Mac window sensibly."""
+    if work is None:
+        if sys.platform != "win32":
+            return None
+        work = _windows_work_area_rect()
+        if work is None:
+            return None
+    left, top, width, height = work
+    return left + max(0, (width - size[0]) // 2), top + max(0, (height - size[1]) // 2)
 
 
 def startup_size(settings: Settings, limit: tuple[int, int] | None = None) -> tuple[int, int]:
@@ -506,9 +529,10 @@ def run_in_window(settings: Settings) -> None:
     url = wait_for_server(handle)
     inset = sys.platform == "darwin"
     size = startup_size(settings)
+    x, y = window_origin(size) or (None, None)
     window = webview.create_window(
         "Flackey", url + (INSET_FLAG if inset else ""),
-        width=size[0], height=size[1], min_size=MIN_SIZE,
+        width=size[0], height=size[1], x=x, y=y, min_size=MIN_SIZE,
         # Opaque on purpose: this is what the window shows until `inset_titlebar` turns the background
         # clear on `shown`, and it is what stops a white/black flash before the page paints. Passing
         # pywebview's own transparent=True instead would zero this colour's alpha at creation *and*
