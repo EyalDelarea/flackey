@@ -148,10 +148,6 @@ jobs:
     needs: [python, web]
     # Unlike the mac job, pull requests too: see the header.
     runs-on: windows-latest
-    env:
-      # Same gating as the mac job: keys only on a tagged release, never on a push or PR artifact.
-      FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
-      FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
     defaults:
       run:
         shell: pwsh
@@ -160,6 +156,18 @@ jobs:
         # Otherwise check_version.sh arrives with CRLF endings and bash stops at the first carriage return.
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history so the tag can be checked against main below.
+          fetch-depth: 0
+      - name: Tagged commit is on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error title=Tag not on main::$GITHUB_SHA is not an ancestor of origin/main; refusing to build a release from it."
+            exit 1
+          }
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
@@ -191,8 +199,16 @@ jobs:
           path: packaging/build/helpers
           key: helpers-windows-${{ hashFiles('packaging/fetch_helpers_windows.ps1') }}
       - name: Build
+        # Same gating as the mac job, and on this step only so npm, uv and choco never see them: keys
+        # only on a tagged release, never on a push or PR artifact. Never printed.
+        env:
+          FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
+          FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
         run: ./packaging/build_windows.ps1
       - name: Smoke-launch
+        # Whether the build above baked keys in, without handing the smoke test the keys themselves.
+        env:
+          SMOKE_EXPECT_KEYS: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: ./packaging/smoke_windows.ps1 packaging/build/dist/Flackey/Flackey.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

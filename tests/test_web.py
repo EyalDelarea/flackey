@@ -669,9 +669,11 @@ def test_a_library_folder_that_would_share_home_or_flackeys_data_is_refused(clie
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what Path.home() reads on Windows
     link = tmp_path / "link"
     link.symlink_to(home)
-    folder = {"home": home, "above-home": tmp_path, "root": Path("/"), "data-dir": settings.data_dir,
+    # The top of the drive the test runs on: `/` on a Mac, `C:\` on Windows (where `/` is not absolute).
+    folder = {"home": home, "above-home": tmp_path, "root": Path(tmp_path.anchor), "data-dir": settings.data_dir,
               "symlink-to-home": link}[where]
 
     r = c.put("/api/settings", json={"library_root": str(folder)})

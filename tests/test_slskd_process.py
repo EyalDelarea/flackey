@@ -79,7 +79,9 @@ async def test_wait_healthy_returns_false_on_timeout_without_real_sleep(tmp_path
     wall_elapsed = time.perf_counter() - wall_start
 
     assert result is False
-    assert wall_elapsed < 1.0  # never performed a real wait
+    # Never performed a real wait: well under the 5s timeout. Not tighter, because each probe builds an
+    # httpx client and that alone took 3.3s over the 26 probes on a Windows CI runner.
+    assert wall_elapsed < 4.5
     assert clock.t >= 5  # but the injected clock did advance past the timeout
 
 

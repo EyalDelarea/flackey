@@ -141,6 +141,17 @@ def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
     assert desktop.app_icon() is None
 
 
+def test_app_icon_is_none_on_windows_so_the_exe_s_own_icon_is_used(monkeypatch):
+    """pywebview's WinForms backend loads `icon` with `System.Drawing.Icon`, which reads only .ico
+    files: a PNG throws on its GUI thread and the process dies with no window. With None it takes the
+    icon embedded in `sys.executable` -- Flackey.exe, built with Flackey.ico."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.APP_ICON.is_file()
+    assert desktop.app_icon() is None
+
+
 def test_screen_size_is_none_off_macos(monkeypatch):
     """`startup_size` then applies no ceiling at all, which is right: there is no NSScreen to ask, and a
     size the owner chose is a better guess than one this could not measure."""
@@ -726,6 +737,7 @@ def _fake_venv(monkeypatch, tmp_path):
     return venv, base
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a macOS .app bundle: exec bits and a venv symlink")
 def test_build_bundle_lays_out_an_app_around_a_copy_of_the_interpreter(monkeypatch, tmp_path):
     from flackey import desktop
 
@@ -760,6 +772,7 @@ def test_build_bundle_is_none_outside_a_venv(monkeypatch, tmp_path):
     assert desktop.build_bundle(types.SimpleNamespace(data_dir=tmp_path / "data")) is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a macOS .app bundle: exec bits and a venv symlink")
 def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
     from flackey import desktop
 

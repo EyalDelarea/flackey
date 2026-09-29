@@ -7,6 +7,7 @@ console, so the log file in the data dir is the only place a traceback can go.
 
 from __future__ import annotations
 
+import io
 import logging
 import multiprocessing
 import os
@@ -14,6 +15,16 @@ import sys
 
 from flackey.config import load_settings
 from flackey.logsetup import configure_logging
+
+
+class _NullStream(io.TextIOWrapper):
+    """The null device as a text stream that says it is not a terminal. Windows reports `nul` as a
+    character device, so a plain `open(os.devnull)` answers True to `isatty()` there, and uvicorn would
+    take that as a console to colour. A real file underneath, so `fileno()` still works for anything
+    that asks."""
+
+    def isatty(self) -> bool:
+        return False
 
 
 def ensure_std_streams() -> None:
@@ -31,7 +42,8 @@ def ensure_std_streams() -> None:
     is constructed. A no-op everywhere a stream exists, which is every Mac launch and every terminal."""
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
-            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115 - lives as long as the process
+            # Lives as long as the process, so never closed.
+            setattr(sys, name, _NullStream(open(os.devnull, "wb"), encoding="utf-8"))  # noqa: SIM115
 
 
 def main() -> None:

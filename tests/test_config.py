@@ -328,6 +328,7 @@ def test_build_defaults_never_land_in_settings_json(tmp_path: Path):
     assert json.loads(s.settings_path.read_text()) == {"library_root": str(tmp_path / "lib")}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits; %APPDATA% is already per-user by ACL")
 def test_the_data_folder_and_telegram_session_are_owner_only(tmp_path: Path):
     """The session file is the Telegram login; Telethon would create it with the umask's 0644."""
     s = Settings(_env_file=None, data_dir=tmp_path / "data")

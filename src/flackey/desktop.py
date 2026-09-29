@@ -106,7 +106,14 @@ def relaunch_bundled(settings: Settings) -> bool:
 
 
 def app_icon() -> str | None:
-    """Path of the Dock icon, or None when the asset is missing (pywebview then keeps the default)."""
+    """Path of the Dock icon, or None when the asset is missing (pywebview then keeps the default).
+
+    Always None on Windows: pywebview's WinForms backend hands this path to `System.Drawing.Icon`,
+    which reads only .ico files, and a PNG throws on the GUI thread and takes the process down before
+    any window appears. Given None it extracts the icon from `sys.executable` instead, which for the
+    packaged app is Flackey.exe with Flackey.ico built in."""
+    if sys.platform == "win32":
+        return None
     return str(APP_ICON) if APP_ICON.is_file() else None
 
 

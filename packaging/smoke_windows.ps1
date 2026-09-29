@@ -78,7 +78,9 @@ try {
         Where-Object { $_.ParentProcessId -eq $proc.Id }).Count
     Write-Host "smoke: $webviews WebView2 process(es) started by the app"
 
-    $wantKeys = [bool]($env:FLACKEY_TELEGRAM_API_ID -and $env:FLACKEY_TELEGRAM_API_HASH)
+    # CI says whether the build baked keys in (a tag build does) rather than handing this step the keys
+    # themselves; by hand, with neither set, the build had none either.
+    $wantKeys = $env:SMOKE_EXPECT_KEYS -eq 'true'
     $problems = @()
     if ($h.ok -ne $true) { $problems += 'ok is not true' }
     if ($h.platform -ne 'windows') { $problems += "platform is '$($h.platform)', expected 'windows'" }

@@ -23,9 +23,10 @@ def test_build_m3u8_keeps_playlist_order_and_skips_unknown_tracks():
         "#EXTM3U",
         "#PLAYLIST:Goa Set",
         "#EXTINF:-1,B - U",
-        "/lib/Goa/L/B - U (Remix).mp3",
+        # The path as this system writes it: backslashes on Windows, which is what Rekordbox there reads.
+        str(Path("/lib/Goa/L/B - U (Remix).mp3")),
         "#EXTINF:442,A - T",
-        "/lib/Psy-Trance/L/A - T.mp3",
+        str(Path("/lib/Psy-Trance/L/A - T.mp3")),
     ]
 
 
@@ -78,4 +79,4 @@ def test_build_m3u8_keeps_names_that_carry_line_breaks_on_one_line():
     tracks = {1: _track(1, "/lib/A/A - T.mp3", "A\n/Users/x/secret.mp3", "T\r\n#EXTINF")}
     out = build_m3u8(_playlist(1, "Set\n/etc/passwd", [1]), tracks)
     assert out.splitlines() == ["#EXTM3U", "#PLAYLIST:Set /etc/passwd",
-                                "#EXTINF:442,A /Users/x/secret.mp3 - T #EXTINF", "/lib/A/A - T.mp3"]
+                                "#EXTINF:442,A /Users/x/secret.mp3 - T #EXTINF", str(Path("/lib/A/A - T.mp3"))]
