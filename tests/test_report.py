@@ -22,7 +22,7 @@ from flackey.web.report import (
     ClientContext,
     Redactor,
     build_report,
-    issue_url,
+    compose_email,
     write_zip,
 )
 from flackey.worker import Worker
@@ -135,20 +135,37 @@ def test_a_long_log_is_cut_from_the_front_on_a_line_boundary(tmp_path: Path, mon
     assert text.startswith("[… earlier lines left out …]\nline 017\n") and text.endswith("line 019\n")
 
 
-def test_the_issue_url_fills_the_form_by_field_id_and_stays_short(tmp_path: Path):
+def test_the_gmail_link_opens_a_written_email_to_the_developer(tmp_path: Path):
     settings = settings_for(tmp_path)
     rep = build_report(settings, {}, ClientContext(screen="Download"))
-    url = issue_url(rep, "\n  QR never shows\n" + "x" * 5000, "Opened setup", "flackey-bug-report-1.zip",
-                    Redactor([], home=HOME))
-    parts = urlsplit(url)
-    assert parts.netloc == "github.com" and parts.path == "/EyalDelarea/flackey/issues/new"
+    email = compose_email(rep, "\n  QR never shows\n" + "x" * 5000, "Opened setup", "flackey-bug-report-1.zip",
+                          Redactor([], home=HOME))
+    parts = urlsplit(email.url)
+    assert parts.netloc == "mail.google.com" and parts.path == "/mail/"
     q = {k: v[0] for k, v in parse_qs(parts.query).items()}
-    assert q["template"] == "bug-report.yml"
-    assert q["title"] == "[Bug]: QR never shows"
-    assert len(q["happened"]) == URL_TEXT_CHARS and q["happened"].endswith("…")
-    assert q["steps"] == "Opened setup" and q["version"] == __version__
-    assert "flackey-bug-report-1.zip" in q["details"] and "**Was on:** Download" in q["details"]
-    assert len(url) < 8000
+    assert q["view"] == "cm" and q["to"] == report.REPORT_TO
+    assert q["su"] == email.subject == "Flackey bug: QR never shows"
+    assert q["body"] == email.body
+    assert "x" * (URL_TEXT_CHARS - 20) in email.body and "x" * URL_TEXT_CHARS not in email.body
+    assert "What I was doing just before:\nOpened setup" in email.body
+    assert "Was on: Download" in email.body and "flackey-bug-report-1.zip" in email.body
+    assert len(email.url) <= report.URL_MAX
+
+
+def test_the_mailto_link_uses_percent_twenty_not_plus(tmp_path: Path):
+    rep = build_report(settings_for(tmp_path), {}, ClientContext())
+    email = compose_email(rep, "Window goes blank", "", "flackey-bug-report-1.zip", Redactor([], home=HOME),
+                          via="mail")
+    assert email.url.startswith(f"mailto:{report.REPORT_TO}?subject=Flackey%20bug%3A%20Window%20goes%20blank&body=")
+    assert "+" not in email.url
+    assert "What I was doing" not in email.body
+
+
+def test_the_developer_address_survives_the_redaction_of_emails(tmp_path: Path):
+    rep = build_report(settings_for(tmp_path), {}, ClientContext())
+    email = compose_email(rep, "mail me at me@example.com", "", "z.zip", Redactor([], home=HOME))
+    assert "me@example.com" not in email.url
+    assert parse_qs(urlsplit(email.url).query)["to"] == [report.REPORT_TO]
 
 
 def test_old_report_zips_are_pruned(tmp_path: Path):
@@ -205,14 +222,16 @@ def test_preview_shows_exactly_what_the_zip_will_hold(app):
     assert "0123456789abcdef" not in "".join(zipped.values())
 
 
-def test_sending_writes_the_zip_reveals_it_and_opens_github(app):
+def test_sending_writes_the_zip_reveals_it_and_opens_the_email(app):
     client, settings, revealed, opened = app
     res = client.post("/api/bug-report", json={"description": "Window flickers", "screen": "library"}, headers=APP)
     assert res.status_code == 200
     out = res.json()
     zip_path = settings.data_dir / "bug-reports" / out["file"]
     assert revealed == [zip_path] and opened == [out["url"]]
-    assert out["url"].startswith("https://github.com/EyalDelarea/flackey/issues/new?template=bug-report.yml")
+    assert out["url"].startswith("https://mail.google.com/mail/?view=cm")
+    assert out["to"] == report.REPORT_TO and out["subject"] == "Flackey bug: Window flickers"
+    assert "Was on: Library" in out["body"]
     with zipfile.ZipFile(io.BytesIO(zip_path.read_bytes())) as zf:
         assert "Window flickers" in zf.read("report.txt").decode()
 
@@ -232,7 +251,13 @@ def test_a_browser_that_will_not_open_still_returns_the_link(app, monkeypatch):
         raise OSError("no browser")
     monkeypatch.setattr(report, "open_url", refuse)
     res = client.post("/api/bug-report", json={"description": "x"}, headers=APP)
-    assert res.status_code == 200 and res.json()["url"].startswith("https://github.com/")
+    assert res.status_code == 200 and res.json()["url"].startswith("https://mail.google.com/")
+
+
+def test_the_mail_app_route_opens_a_mailto_link(app):
+    client, _, _, opened = app
+    out = client.post("/api/bug-report", json={"description": "x", "via": "mail"}, headers=APP).json()
+    assert opened == [out["url"]] and out["url"].startswith(f"mailto:{report.REPORT_TO}?")
 
 
 def test_reveal_shows_the_newest_report_or_says_it_is_gone(app):
@@ -261,10 +286,10 @@ def test_addresses_at_a_sentence_end_and_short_ipv6_are_caught():
     assert r("build 1.2.3.4.5 at 12:00:00") == "build 1.2.3.4.5 at 12:00:00"
 
 
-def test_the_url_stays_short_even_for_text_that_encodes_large(tmp_path: Path):
+@pytest.mark.parametrize("via", ["gmail", "mail"])
+def test_the_url_stays_short_even_for_text_that_encodes_large(tmp_path: Path, via: str):
     rep = build_report(settings_for(tmp_path), {}, ClientContext())
     hebrew = "החלון מהבהב כשאני גורר אותו למסך השני 🎧 " * 60
-    url = issue_url(rep, hebrew, hebrew, "flackey-bug-report-1.zip", Redactor([], home=HOME))
-    assert len(url) <= report.URL_MAX
-    q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
-    assert q["happened"].startswith("החלון") and q["happened"].endswith("…")
+    email = compose_email(rep, hebrew, hebrew, "flackey-bug-report-1.zip", Redactor([], home=HOME), via)
+    assert len(email.url) <= report.URL_MAX
+    assert email.body.startswith("החלון") and "…" in email.body

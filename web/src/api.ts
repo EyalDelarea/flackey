@@ -127,7 +127,7 @@ export interface BugContext { screen: string; window: [number, number]; display:
 /** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
     shows the bytes that leave rather than a description of them. */
 export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number }
-export interface BugSent { ok: boolean; url: string; file: string }
+export interface BugSent { ok: boolean; url: string; file: string; to: string; subject: string; body: string }
 
 export const api = {
   health: () => call<Health>('/api/health'),
@@ -164,7 +164,7 @@ export const api = {
   restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
   bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
   // `appPost`: both write a file and open Finder or a browser, which no other site should be able to do.
-  sendBugReport: (body: BugContext & { description: string; steps: string }) => appPost<BugSent>('/api/bug-report', body),
+  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => appPost<BugSent>('/api/bug-report', body),
   revealBugReport: () => appPost<{ ok: boolean }>('/api/bug-report/reveal'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),

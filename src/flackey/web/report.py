@@ -2,9 +2,10 @@
 
 Everything a report needs already exists on the reporter's machine -- the log, the version, the macOS
 release, the displays -- and the two bugs that prompted this both stalled on getting it to us. So this
-gathers it, redacts it, packs it into a zip the reporter drags into a prefilled GitHub issue, and opens
-both. There is no token and no server of ours in the path: GitHub's own new-issue page is the transport,
-and the reporter presses its Submit button themselves.
+gathers it, redacts it, packs it into a zip, and opens an email to the developer with the report already
+written, next to the zip in Finder for the reporter to drag in. There is no token and no server of ours in
+the path, and no account to make: the reporter's own email (Gmail in the browser, or their mail app) is the
+transport, and they press its Send button themselves.
 
 The repository is public, so `Redactor` is the security boundary. The preview the page shows and the
 zip that gets written are built by the same `build_report`, so what the reporter reviews is the bytes
@@ -22,7 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -36,10 +37,11 @@ from .update import from_the_app, open_url
 
 log = logging.getLogger(__name__)
 
-ISSUE_URL = "https://github.com/EyalDelarea/flackey/issues/new"
-# The issue form in .github/ISSUE_TEMPLATE. Its field ids are what the query string fills in -- the repo
-# turns blank issues off, so a bare `?body=` would bounce to the template chooser and lose everything.
-ISSUE_TEMPLATE = "bug-report.yml"
+REPORT_TO = "eyaldelarea@gmail.com"
+# Gmail's own compose page: most reporters live in Gmail in a browser and never set up Mail, where a
+# mailto: link would land on Mail's account setup instead of an email.
+GMAIL_COMPOSE = "https://mail.google.com/mail/"
+VIA = ("gmail", "mail")
 REPORT_DIR = "bug-reports"
 REPORT_PREFIX = "flackey-bug-report-"
 KEEP_REPORTS = 3
@@ -50,12 +52,13 @@ LOG_NAMES = (LOG_FILE, f"{LOG_FILE}.1", UPDATE_HELPER_LOG)
 # Per file, from the end: the newest lines are the ones a report is about, and a rotated log can be the
 # full 2 MB. Two of those in a `<pre>` is already a lot to ask of the preview.
 LOG_TAIL_CHARS = 1_000_000
-# What the reporter typed goes into the URL, which GitHub stops accepting somewhere past 8 KB. The full
+# What the reporter typed goes into the URL. Browsers and mail apps stop somewhere past 8 KB, and a
+# browser that hands mailto: to Gmail wraps the whole link in another URL, doubling it -- so 4 KB. The full
 # text is always in report.txt inside the zip, so a cut here loses nothing. The cap is on the *encoded*
 # URL, not on characters: a Hebrew letter or an emoji is six to twelve bytes once percent-encoded.
 URL_TEXT_CHARS = 1500
-URL_MAX = 7000
-TITLE_CHARS = 80
+URL_MAX = 4000
+SUBJECT_CHARS = 80
 SCREENS = {"download": "Download", "library": "Library", "uploads": "Uploads", "settings": "Settings"}
 # Shorter known values are skipped rather than redacted: a four-character Soulseek name like "beat"
 # would take every "beat" in every track title with it, and a secret that short is not one worth hiding.
@@ -164,7 +167,7 @@ def os_summary() -> str:
 
 @dataclass
 class ClientContext:
-    """What only the page knows. Every field is checked on the way in: it ends up in a public issue, so
+    """What only the page knows. Every field is checked on the way in: it ends up in an email and a zip, so
     a value that is not the shape it should be is dropped rather than passed along."""
     screen: str | None = None
     window: str | None = None
@@ -259,29 +262,44 @@ def build_report(settings: Settings, status, client: ClientContext, description:
     return Report(summary=summary, files=files)
 
 
-def issue_url(report: Report, description: str, steps: str, zip_name: str, redact: Redactor) -> str:
-    """The new-issue page with the form filled in. Only the summary and the reporter's own words go in
-    the URL; the log goes in the zip, which the reporter attaches by dragging."""
+@dataclass
+class Email:
+    subject: str
+    body: str
+    url: str
+
+
+def compose_email(report: Report, description: str, steps: str, zip_name: str, redact: Redactor,
+                  via: str = "gmail") -> Email:
+    """The email to the developer, written out, and the link that opens it: Gmail's compose page or a
+    mailto: for whatever mail app the Mac uses. Only the summary and the reporter's own words go in; the
+    log goes in the zip, which the reporter attaches by dragging. Each piece is redacted on its own rather
+    than the finished body, whose email redaction would take the To address with it."""
     def cap(text: str, n: int) -> str:
         text = text.strip()
         return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
     first = next((ln for ln in description.strip().splitlines() if ln.strip()), "Something went wrong")
-    details = "\n".join(f"- **{k}:** {v}" for k, v in report.summary)
-    details += (f"\n\n**Diagnostics:** drag `{zip_name}` here — Flackey just showed it in Finder. It holds the "
-                "app log with personal details removed.")
+    details = "\n".join(f"{k}: {v}" for k, v in report.summary)
     # Shrink the reporter's text until the encoded URL fits; the whole of it is in report.txt regardless.
     limit = URL_TEXT_CHARS
     while True:
-        params = {"template": ISSUE_TEMPLATE,
-                  "title": "[Bug]: " + cap(redact(first), min(TITLE_CHARS, max(limit, 20))),
-                  "happened": cap(redact(description), limit),
-                  "steps": cap(redact(steps), limit),
-                  "version": __version__,
-                  "details": details}
-        url = f"{ISSUE_URL}?{urlencode(params)}"
+        subject = "Flackey bug: " + cap(redact(first), min(SUBJECT_CHARS, max(limit, 20)))
+        parts = [cap(redact(description), limit)]
+        if steps.strip():
+            parts += ["", "What I was doing just before:", cap(redact(steps), limit)]
+        parts += ["", "-- Details from Flackey --", details, "",
+                  f"Attached: {zip_name} (the app log, with personal details removed).",
+                  "If it's not attached yet, drag it in from the Finder window Flackey opened."]
+        body = "\n".join(parts)
+        # `quote`, not urlencode's default `quote_plus`: a mail app shows a `+` in a mailto: body as a `+`.
+        if via == "mail":
+            url = f"mailto:{REPORT_TO}?" + urlencode({"subject": subject, "body": body}, quote_via=quote)
+        else:
+            url = GMAIL_COMPOSE + "?" + urlencode({"view": "cm", "fs": "1", "to": REPORT_TO,
+                                                  "su": subject, "body": body}, quote_via=quote)
         if len(url) <= URL_MAX or limit <= 50:
-            return url
+            return Email(subject=subject, body=body, url=url)
         limit //= 2
 
 
@@ -338,10 +356,12 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
         except OSError as e:
             log.warning("could not write the bug report: %s", e)
             raise HTTPException(500, "Could not save the report file. Try again.")
-        url = issue_url(report, description, steps, path.name, redact)
+        via = body.get("via") if body.get("via") in VIA else "gmail"
+        email = compose_email(report, description, steps, path.name, redact, via)
+        url = email.url
         log.info("bug report written: %s", path.name)
-        # Both best effort: the response carries the URL and the file name, so a machine where either
-        # cannot open (the browser build, a Linux box) still gets a link and a name on the page.
+        # Both best effort: the response carries the address, the message and the file name, so a machine
+        # where either cannot open (the browser build, a Linux box) can still send it by hand.
         try:
             opener(path)
         except Exception:
@@ -349,8 +369,9 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
         try:
             open_url(url)
         except Exception:
-            log.warning("could not open the browser for the bug report", exc_info=True)
-        return {"ok": True, "url": url, "file": path.name}
+            log.warning("could not open an email for the bug report", exc_info=True)
+        return {"ok": True, "url": url, "file": path.name, "to": REPORT_TO,
+                "subject": email.subject, "body": email.body}
 
     @r.post("/reveal")
     async def reveal(request: Request) -> dict:

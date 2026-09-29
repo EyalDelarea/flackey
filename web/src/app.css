@@ -96,7 +96,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .report-details pre { max-height: 220px; margin: 0; padding: 8px; overflow: auto; border-radius: 6px; background: var(--well); border: .5px solid var(--well-border); white-space: pre; font-size: 10.5px; line-height: 1.45; }
 .report-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
 .report-steps .mono { font-size: 12px; overflow-wrap: anywhere; }
-.report-fallback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.report-fallback { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.report-fallback-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--window); }
 /* With the inset title bar the top 28px of the window still belong to the native title bar, so this
    keeps the toolbar out from under it. A spacer and nothing more -- moving the window is AppKit's job,

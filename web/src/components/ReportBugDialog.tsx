@@ -7,8 +7,9 @@ const getErrorMessage = (e: unknown, fallback: string): string => e instanceof A
 
 /** Report a bug from inside the app (issue #33). Written for someone who has never filed an issue: what
  *  goes along is said in a few plain lines, and the exact files are one click further for whoever wants
- *  to check. Nothing leaves until they press Continue, and even then GitHub's own Create button is the
- *  last word -- this only fills the page in and puts the file where they can drag it.
+ *  to check. Nothing leaves until they press Send in their own email -- this only writes the email to the
+ *  developer and puts the file where they can drag it in. Gmail first: most people use it in a browser and
+ *  never set up the Mail app, where a mailto: link would land on its account setup.
  *
  *  A plain `div role="dialog"` rather than `<dialog>.showModal()`, which jsdom does not implement. */
 export default function ReportBugDialog({ screen, onClose }: { screen: string; onClose: () => void }) {
@@ -55,9 +56,9 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
     return () => opener?.focus?.()
   }, [])
 
-  const send = () => {
+  const send = (via: 'gmail' | 'mail') => {
     setBusy(true); setError(null)
-    api.sendBugReport({ ...ctx(), description, steps })
+    api.sendBugReport({ ...ctx(), description, steps, via })
       .then(setSent)
       .catch(e => setError(getErrorMessage(e, "Couldn't prepare the report. Try again.")))
       .finally(() => setBusy(false))
@@ -80,14 +81,17 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
         {sent ? (
           <div className="modal-body">
             <ol className="report-steps">
-              <li>Your browser opened GitHub with your report already filled in.</li>
-              <li>Drag <strong className="mono">{sent.file}</strong> from the Finder window onto the GitHub page.</li>
-              <li>Press <strong>Create</strong> on GitHub. That's it — thank you!</li>
+              <li>An email to the Flackey developer opened with your report already written.</li>
+              <li>Drag <strong className="mono">{sent.file}</strong> from the Finder window into the email.</li>
+              <li>Press <strong>Send</strong>. That's it — thank you!</li>
             </ol>
             <div className="report-fallback">
-              <span className="muted">Browser didn't open?</span>
-              <CopyButton value={sent.url} label="Copy link" />
-              <button className="btn-secondary" onClick={revealAgain}>Show the file again</button>
+              <span className="muted">Email didn't open? Send it yourself to <strong>{sent.to}</strong></span>
+              <div className="report-fallback-actions">
+                <CopyButton value={sent.to} label="Copy address" />
+                <CopyButton value={`${sent.subject}\n\n${sent.body}`} label="Copy message" />
+                <button className="btn-secondary" onClick={revealAgain}>Show the file again</button>
+              </div>
             </div>
             {revealError && <div className="err">{revealError}</div>}
             <div className="modal-actions"><button className="btn-primary" onClick={onClose}>Done</button></div>
@@ -110,7 +114,7 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
                 <li><Icon name="check" size={12} stroke={2.4} />Flackey's recent activity log ({preview.log_lines.toLocaleString()} lines)</li>
               </ul>) : previewError ? <div className="err">{previewError}</div>
                 : <div className="muted">Gathering details…</div>}
-              <p className="faint">Your phone number, email, passwords and Mac user name are taken out first.</p>
+              <p className="faint">Your phone number, email addresses, passwords and Mac user name are taken out of these first.</p>
               {preview && <button className="btn-link" aria-expanded={details} onClick={() => setDetails(d => !d)}>
                 {details ? 'Hide details' : "Show everything that's included"}</button>}
               {preview && details && <div className="report-details">
@@ -120,10 +124,12 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
             </div>
             {error && <div className="err">{error}</div>}
             <div className="modal-actions">
-              <span className="faint">Opens GitHub in your browser. You'll need a free GitHub account.</span>
+              <span className="faint">Opens an email to the developer, ready to send.</span>
               <button className="btn-secondary" onClick={onClose}>Cancel</button>
-              <button className="btn-primary" onClick={send} disabled={busy || !description.trim()}>
-                {busy ? 'Preparing…' : 'Continue on GitHub'}</button>
+              <button className="btn-secondary" onClick={() => send('mail')} disabled={busy || !description.trim()}>
+                Other email app</button>
+              <button className="btn-primary" onClick={() => send('gmail')} disabled={busy || !description.trim()}>
+                {busy ? 'Preparing…' : 'Email with Gmail'}</button>
             </div>
           </div>
         )}

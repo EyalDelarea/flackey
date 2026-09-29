@@ -27,19 +27,22 @@ it('says in plain words what goes along, and shows the exact files on request', 
 })
 
 it('sends only once something is written, then explains the two steps left', async () => {
-  vi.spyOn(api, 'sendBugReport').mockResolvedValue({ ok: true, url: 'https://github.com/x', file: 'flackey-bug-report-1.zip' })
+  vi.spyOn(api, 'sendBugReport').mockResolvedValue({ ok: true, url: 'https://mail.google.com/mail/?view=cm',
+    file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 'Flackey bug: x', body: 'x' })
   vi.spyOn(api, 'revealBugReport').mockResolvedValue({ ok: true })
   render(<ReportBugDialog screen="download" onClose={() => {}} />)
-  const go = screen.getByRole('button', { name: 'Continue on GitHub' })
+  const go = screen.getByRole('button', { name: 'Email with Gmail' })
   expect(go).toBeDisabled()
   fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'The QR code never shows' } })
   fireEvent.change(screen.getByLabelText(/What were you doing/), { target: { value: 'Setting up' } })
   fireEvent.click(go)
   await waitFor(() => expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining(
-    { description: 'The QR code never shows', steps: 'Setting up', screen: 'download' })))
+    { description: 'The QR code never shows', steps: 'Setting up', screen: 'download', via: 'gmail' })))
   expect(await screen.findByRole('heading', { name: 'Almost done' })).toBeInTheDocument()
   expect(screen.getByText('flackey-bug-report-1.zip')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Copy link' })).toBeInTheDocument()
+  expect(screen.getByText('dev@example.com')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Copy address' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Show the file again' }))
   expect(api.revealBugReport).toHaveBeenCalled()
 })
@@ -48,9 +51,10 @@ it('keeps what was typed and says so when the report could not be prepared', asy
   vi.spyOn(api, 'sendBugReport').mockRejectedValue(new ApiError(500, 'Could not save the report file. Try again.'))
   render(<ReportBugDialog screen="settings" onClose={() => {}} />)
   fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'Broken' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Continue on GitHub' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Other email app' }))
   expect(await screen.findByText('Could not save the report file. Try again.')).toBeInTheDocument()
   expect(screen.getByLabelText('What went wrong?')).toHaveValue('Broken')
+  expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining({ via: 'mail' }))
 })
 
 it('still lets the owner send when the details could not be gathered', async () => {
@@ -58,7 +62,7 @@ it('still lets the owner send when the details could not be gathered', async () 
   render(<ReportBugDialog screen="settings" onClose={() => {}} />)
   expect(await screen.findByText(/Couldn't gather the details/)).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'x' } })
-  expect(screen.getByRole('button', { name: 'Continue on GitHub' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Email with Gmail' })).toBeEnabled()
 })
 
 it('keeps typed words on Escape; only the close button throws them away', () => {
