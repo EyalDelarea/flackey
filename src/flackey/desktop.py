@@ -137,6 +137,88 @@ def set_app_name(name: str = APP_NAME) -> bool:
     return True
 
 
+SINGLE_INSTANCE_MUTEX = "FlackeySingleInstance"  # per logon session: Windows' default namespace for a name
+_ERROR_ALREADY_EXISTS = 183
+_SW_RESTORE = 9
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_instance_mutex: int | None = None  # held for the life of the process; Windows lets go of it at exit
+
+
+def claim_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> bool:
+    """True when this is the only Flackey running for this user, and from now on it is the one.
+
+    macOS never starts an app twice, so this is Windows only. There each double-click on the shortcut is a
+    new process, and on a slow first launch -- no window for ten seconds or more on an Arm PC emulating
+    x64 -- people click again. The copies then open the same database and port at once: one dies on
+    "database is locked" in an error box, another on the port. A named mutex is how Windows programs
+    tell: the first process creates it, later ones find it already there. True as well when the mutex
+    cannot be made at all, since starting is better than refusing to start."""
+    global _instance_mutex
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.CreateMutexW(None, False, name)
+    if not handle:
+        return True
+    if ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        return False
+    _instance_mutex = handle
+    return True
+
+
+def focus_running_window(title: str = APP_NAME) -> bool:
+    """Bring the running Flackey's window to the front, restoring it if minimized. Matched on the title
+    *and* on the program behind it, so a File Explorer window open on a folder called Flackey is left
+    alone. False when there is no window yet (the other copy is still starting, and will show one) or
+    off Windows."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32")
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    ours = os.path.normcase(os.path.abspath(sys.executable))
+    found: list[int] = []
+
+    def image_of(hwnd: int) -> str:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        process = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not process:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            ok = kernel32.QueryFullProcessImageNameW(process, 0, buf, ctypes.byref(size))
+            return os.path.normcase(buf.value) if ok else ""
+        finally:
+            kernel32.CloseHandle(process)
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _lparam):
+        text = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, text, len(text))
+        if text.value == title and user32.IsWindowVisible(hwnd) and image_of(hwnd) == ours:
+            found.append(hwnd)
+            return False  # stop enumerating
+        return True
+
+    user32.EnumWindows(visit, 0)
+    if not found:
+        return False
+    hwnd = wintypes.HWND(found[0])
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, _SW_RESTORE)  # only when minimized: on a maximized one it would un-maximize
+    return bool(user32.SetForegroundWindow(hwnd))
+
+
 _WINDOWS_THEME_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
 
@@ -467,6 +549,10 @@ def folder_picker(window, dialog_type):
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
+    if not claim_single_instance():
+        shown = focus_running_window()
+        log.info("Flackey is already running: %s", "brought its window forward" if shown else "it is still starting")
+        return
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()

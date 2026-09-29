@@ -3,6 +3,7 @@ import inspect
 import sys
 import threading
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -230,7 +231,55 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "set_app_name", lambda: True)
     monkeypatch.setattr(desktop, "relaunch_bundled", lambda settings: False)
     monkeypatch.setattr(desktop, "screen_size", lambda: HUGE)  # never the machine the suite runs on
+    # The real one holds a process-wide mutex on Windows, so a second test in the same run would read as
+    # a second copy of the app.
+    monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
     return windows, started, handle
+
+
+def test_run_in_window_hands_over_to_the_copy_already_running(monkeypatch, tmp_path):
+    """A second launch on Windows must not reach the database or the port: it brings the first copy's
+    window forward and ends, instead of dying in an error box."""
+    from flackey import desktop
+
+    windows, started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    focused = []
+    monkeypatch.setattr(desktop, "claim_single_instance", lambda: False)
+    monkeypatch.setattr(desktop, "focus_running_window", lambda: focused.append(True) or True)
+
+    def no_server(settings):
+        raise AssertionError("a second copy must not start a server")
+
+    monkeypatch.setattr(desktop, "start_server_thread", no_server)
+    desktop.run_in_window(settings=object())
+    assert focused == [True]
+    assert windows == {} and started == {}
+
+
+def test_single_instance_is_left_to_macos(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop.claim_single_instance() is True
+    assert desktop.claim_single_instance() is True
+    assert desktop.focus_running_window() is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows named mutex")
+def test_single_instance_second_claim_is_refused_on_windows(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(desktop, "_instance_mutex", None)
+    name = f"FlackeyTest-{uuid.uuid4()}"
+    assert desktop.claim_single_instance(name) is True
+    assert desktop.claim_single_instance(name) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows window enumeration")
+def test_focus_running_window_without_a_window_is_false():
+    from flackey import desktop
+
+    assert desktop.focus_running_window(f"no such window {uuid.uuid4()}") is False
 
 
 def test_run_in_window_hands_the_dock_icon_to_pywebview(monkeypatch, tmp_path):
