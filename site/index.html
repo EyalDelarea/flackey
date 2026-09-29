@@ -7,7 +7,7 @@
     <title>Flackey — From link to FLAC.</title>
     <meta
       name="description"
-      content="Paste a YouTube or YouTube Music link. Flackey finds and verifies the best-quality download available, with lossless FLAC whenever possible."
+      content="Paste a YouTube, YouTube Music or Spotify link. Flackey finds and verifies the best-quality download available, with lossless FLAC whenever possible."
     />
     <link rel="icon" href="img/logo.svg" type="image/svg+xml" />
     <link rel="preload" as="image" href="img/silver-vinyl-branded.png" />
@@ -32,9 +32,6 @@
     </header>
     <main>
       <section class="hero" id="overview" aria-labelledby="title">
-        <div class="eq-curve" aria-hidden="true">
-          <svg id="eq-curve-svg" viewBox="0 0 1000 340" preserveAspectRatio="none"></svg>
-        </div>
         <div class="hero-inner wrap">
           <div class="intro">
             <h1 id="title">From link<br />to FLAC.</h1>
@@ -96,13 +93,16 @@
           </div>
         </div>
       </section>
+      <div class="track-wave wrap" aria-hidden="true">
+        <canvas id="track-wave"></canvas>
+      </div>
       <section class="preview wrap" id="preview" aria-label="App showcase">
         <div class="preview-card">
           <p class="eyebrow">See it in action</p>
           <h3>Paste a link. Get the FLAC.</h3>
           <!-- A live recreation of the app's own download row rather than a screen
                recording: it animates at the display's refresh rate, stays sharp at
-               any size, and is driven by the same rAF loop style as the hero curve.
+               any size, and is driven by the same rAF loop style as the hero waveform.
                Hidden from assistive tech in full: it is an animation of an app,
                not content, and nothing in it is read in a useful order. -->
           <div class="app-demo" id="app-demo" aria-hidden="true">
@@ -294,6 +294,44 @@
               </div>
             </div>
           </div>
+          <h3 class="preview-sub">Several versions? Hear each one before you choose.</h3>
+          <!-- The Choose step (issue #53): play a version, switch to another, keep the first. -->
+          <div class="app-demo ch-demo" id="choose-demo" aria-hidden="true">
+            <div class="ad-body">
+              <div class="ch-row">
+                <div class="ch-head">
+                  <div class="ch-art"></div>
+                  <div class="ad-text">
+                    <div class="ad-title">Vibrasphere – Landmark</div>
+                    <div class="ch-status">Needs your choice. Three versions matched.</div>
+                  </div>
+                  <ul class="ch-steps">
+                    <li class="ok">Search</li><li class="now choose">Choose</li><li class="download">Download</li><li>Verify</li><li>Done</li>
+                  </ul>
+                </div>
+                <div class="ch-cards">
+                  <div class="ch-card">
+                    <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Original Mix)</span></span><span class="score">91% match</span></div>
+                    <div class="meta">6:52 · On Beatport · 1:17 shorter than the video</div>
+                    <div class="actions"><span class="ch-btn play"></span><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
+                    <span class="ch-rail"><i></i></span>
+                  </div>
+                  <div class="ch-card">
+                    <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Extended Mix)</span></span><span class="score">88% match</span></div>
+                    <div class="meta">8:07 · On Beatport · same length as the video</div>
+                    <div class="actions"><span class="ch-btn play"></span><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
+                    <span class="ch-rail"><i></i></span>
+                  </div>
+                  <div class="ch-card">
+                    <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Ticon Remix)</span></span><span class="score">74% match</span></div>
+                    <div class="meta">7:34 · Not on Beatport · 0:35 shorter than the video</div>
+                    <div class="actions"><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
+                    
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
       <section
@@ -310,7 +348,7 @@
             <span>01</span>
             <div>
               <h3>Paste a link.</h3>
-              <p>Add a YouTube or YouTube Music track or playlist.</p>
+              <p>Add a YouTube, YouTube Music or Spotify track or playlist.</p>
             </div>
           </li>
           <li>
@@ -359,9 +397,9 @@
             <div>
               <h3>Confirm the recording.</h3>
               <p>
-                When a Deezer preview is available, Chromaprint compares its
-                audio fingerprint with the downloaded file to make sure it’s the
-                same track and version.
+                Chromaprint compares the fingerprint of your link’s own audio
+                (or a 30-second preview of the matched record) with the
+                downloaded file to make sure it’s the same track and version.
               </p>
             </div>
           </li>
@@ -380,8 +418,9 @@
             <div>
               <h3>Enforce the quality floor.</h3>
               <p>
-                Fake lossless files and MP3s below 320 kbps are rejected. You
-                get the best verified source Flackey can find.
+                Fake lossless files, MP3s below 320 kbps and 320 kbps MP3s
+                upscaled from a lower bitrate are rejected. You get the best
+                verified source Flackey can find.
               </p>
             </div>
           </li>
@@ -461,7 +500,9 @@
           </h2>
           <p class="section-intro">
             You don’t need to be a developer. Choose what you want to share and
-            GitHub will guide you through a short form.
+            GitHub will guide you through a short form. Or use Report a bug
+            inside the app: it writes the email and saves a diagnostics file
+            for you to drag in. Nothing is sent until you press Send.
           </p>
         </div>
         <div class="help-actions">
@@ -499,8 +540,8 @@
         <p class="eyebrow">Release notes</p>
         <h2 id="release-notes-title">What shipped, and when.</h2>
         <p class="section-intro">
-          Generated straight from merged pull requests — the full history is
-          on
+          The latest release, straight from its GitHub notes. The full history
+          is on
           <a href="https://github.com/EyalDelarea/flackey/releases" target="_blank" rel="noreferrer"
             >GitHub</a
           >.
@@ -519,7 +560,7 @@
           <h2 id="download-title">
             Get the best quality available.<br /><span>Share it back.</span>
           </h2>
-          <p>Apple Silicon Mac · macOS 12 or newer · Beta</p>
+          <p>Apple Silicon Mac · macOS 12 or newer</p>
           <a class="button unavailable" id="download-link" aria-disabled="true"
             >Installer coming soon</a
           >

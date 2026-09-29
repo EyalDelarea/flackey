@@ -108,7 +108,7 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       const version = String(data.tag_name || "").replace(/^v/, "");
       const size = `${(asset.size / 1e6).toFixed(1)} MB`;
       const status = data.prerelease ? "Beta" : "Stable";
-      release.textContent = `Version ${version}v · ${status} installer · ${size} · ${formatReleaseDate(data.published_at)}`;
+      release.textContent = `Version ${version} · ${status} installer · ${size} · ${formatReleaseDate(data.published_at)}`;
     }
 
     if (notesList) {
@@ -332,8 +332,7 @@ if (appDemo) {
       render(((now - start) / 1000) % T.loop);
       frame = requestAnimationFrame(tick);
     };
-    // The hero curve already runs a permanent rAF loop; this one only runs while
-    // the demo is actually on screen.
+    // Like the hero waveform, this loop only runs while the demo is on screen.
     new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting === running) return;
@@ -577,6 +576,56 @@ if (plDemo) {
   }
 }
 
+// The Choose demo: play the Original Mix, switch to the Extended Mix, keep the
+// Original. Silent on purpose - the site has no rights to Deezer's clips.
+const chooseDemo = document.querySelector("#choose-demo");
+if (chooseDemo) {
+  const cards = [...chooseDemo.querySelectorAll(".ch-card")];
+  const status = chooseDemo.querySelector(".ch-status");
+  const LOOP = 12;
+  const clip = (s) => `0:0${Math.min(9, Math.floor(Math.max(0, s)))}`;
+  const press = (btn, on) => btn && btn.classList.toggle("press", on);
+
+  const render = (t) => {
+    const playing = t >= 1.2 && t < 4.6 ? 0 : t >= 4.6 && t < 8.2 ? 1 : -1;
+    const chose = t >= 8.4;
+    cards.forEach((c, i) => {
+      c.classList.toggle("lit", i === playing);
+      c.classList.toggle("chosen", chose && i === 0);
+      const start = i === 0 ? 1.2 : 4.6;
+      c.querySelector(".elapsed").textContent = clip(t - start);
+      const rail = c.querySelector(".ch-rail i");
+      if (rail) rail.style.transform = `scaleX(${i === playing ? Math.min(1, (t - start) / 30) : 0})`;
+    });
+    press(cards[0].querySelector(".play"), t >= 1.0 && t < 1.2);
+    press(cards[1].querySelector(".play"), t >= 4.4 && t < 4.6);
+    press(cards[0].querySelector(".use"), t >= 8.2 && t < 8.4);
+    chooseDemo.classList.toggle("chose", chose);
+    status.textContent = chose
+      ? "Downloading the Original Mix"
+      : "Needs your choice. Three versions matched.";
+  };
+
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    render(3);
+  } else {
+    let running = false;
+    let start = null;
+    const tick = (now) => {
+      if (!running) return;
+      if (start === null) start = now;
+      render(((now - start) / 1000) % LOOP);
+      requestAnimationFrame(tick);
+    };
+    new IntersectionObserver(([e]) => {
+      if (e.isIntersecting === running) return;
+      running = e.isIntersecting;
+      start = null;
+      if (running) requestAnimationFrame(tick);
+    }).observe(chooseDemo);
+  }
+}
+
 // The spectrogram comparison in the verification section. Both panels are drawn
 // from one synthetic spectrum, so the only difference between them is the thing
 // the check actually looks for: the lossy panel discards everything above its
@@ -778,7 +827,7 @@ if (spectra) {
   }
 }
 
-// Ambient sound-wave motifs: a breathing EQ curve behind the hero title, and a small
+// Ambient sound-wave motifs: a track waveform under the hero, and a small
 // pulsing EQ meter next to "How we verify audio". Purely decorative (aria-hidden).
 const eqBars = document.querySelector("#eq-bars");
 if (eqBars) {
@@ -793,113 +842,85 @@ if (eqBars) {
   eqBars.appendChild(frag);
 }
 
-const eqCurveSvg = document.querySelector("#eq-curve-svg");
-if (eqCurveSvg) {
+const trackWave = document.querySelector("#track-wave");
+if (trackWave) {
   const reduceMotion = window.matchMedia(
     "(prefers-reduced-motion: reduce)",
   ).matches;
-  const width = 1000;
-  const height = 340;
-  const baselineY = height * 0.84;
-  const ns = "http://www.w3.org/2000/svg";
-  const bands = [
-    {
-      peakX: 0.5,
-      sigma: 0.24,
-      baseAmp: 150,
-      ampVariance: reduceMotion ? 0 : 26,
-      speed: 0.35,
-      phase: 0,
-      driftAmt: 0.03,
-      wiggle: reduceMotion ? 0 : 0.09,
-      fillClass: "eq-fill-a",
-      strokeClass: "eq-stroke-a",
-    },
-    {
-      peakX: 0.28,
-      sigma: 0.28,
-      baseAmp: 70,
-      ampVariance: reduceMotion ? 0 : 16,
-      speed: 0.27,
-      phase: 1.4,
-      driftAmt: 0.04,
-      wiggle: reduceMotion ? 0 : 0.12,
-      fillClass: "eq-fill-b",
-      strokeClass: "eq-stroke-b",
-    },
-  ];
+  const ctx = trackWave.getContext("2d");
+  const wave = getComputedStyle(document.documentElement)
+    .getPropertyValue("--wave")
+    .trim();
+  const sweepSeconds = 40;
+  let width = 0;
+  let height = 0;
+  let heights = [];
 
-  for (let g = 1; g < 4; g++) {
-    const line = document.createElementNS(ns, "line");
-    line.setAttribute("class", "eq-grid-line");
-    const x = (width / 4) * g;
-    line.setAttribute("x1", x);
-    line.setAttribute("x2", x);
-    line.setAttribute("y1", 0);
-    line.setAttribute("y2", height);
-    eqCurveSvg.appendChild(line);
-  }
-  const baseline = document.createElementNS(ns, "line");
-  baseline.setAttribute("class", "eq-baseline");
-  baseline.setAttribute("x1", 0);
-  baseline.setAttribute("x2", width);
-  baseline.setAttribute("y1", baselineY);
-  baseline.setAttribute("y2", baselineY);
-  eqCurveSvg.appendChild(baseline);
+  // A fixed "track" loudness profile: quiet intro, a build, the body, a short
+  // outro. Bar count follows the width so bars keep the same spacing on phones.
+  const profile = (count) =>
+    Array.from({ length: count }, (_, i) => {
+      const u = i / count;
+      const outro = u > 0.88 ? (1 - u) * 8 : 1;
+      const shape = 0.25 + 0.75 * Math.min(1, u * 4) * outro;
+      const noise = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
+      return Math.max(0.08, shape * (0.45 + 0.55 * noise));
+    });
 
-  const built = bands.map((band) => {
-    const fillPath = document.createElementNS(ns, "path");
-    fillPath.setAttribute("class", band.fillClass);
-    const strokePath = document.createElementNS(ns, "path");
-    strokePath.setAttribute("class", band.strokeClass);
-    eqCurveSvg.appendChild(fillPath);
-    eqCurveSvg.appendChild(strokePath);
-    return { band, fillPath, strokePath };
-  });
-
-  const hillPoints = (peakXFrac, sigmaFrac, ampPx, wiggle, t) => {
-    const steps = 90;
-    const pts = [];
-    for (let i = 0; i <= steps; i++) {
-      const xFrac = i / steps;
-      const x = xFrac * width;
-      const d = (xFrac - peakXFrac) / sigmaFrac;
-      const bump = Math.exp(-(d * d));
-      const ripple = 1 + wiggle * Math.sin(xFrac * 14 + t * 1.8) * bump;
-      pts.push([x, baselineY - ampPx * bump * ripple]);
-    }
-    return pts;
+  const resize = () => {
+    const dpr = window.devicePixelRatio || 1;
+    width = trackWave.clientWidth;
+    height = trackWave.clientHeight;
+    trackWave.width = width * dpr;
+    trackWave.height = height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    heights = profile(Math.max(40, Math.round(width / 6.5)));
   };
 
-  const render = (tMs) => {
-    const t = tMs / 1000;
-    for (const b of built) {
-      const { band } = b;
-      const wobble =
-        Math.sin(t * band.speed + band.phase) * 0.55 +
-        Math.sin(t * band.speed * 2.6 + band.phase * 1.8) * 0.3 +
-        Math.sin(t * band.speed * 5.7 + band.phase * 0.6) * 0.15;
-      const amp = band.baseAmp + band.ampVariance * wobble;
-      const peakDrift =
-        band.peakX +
-        band.driftAmt * Math.sin(t * band.speed * 0.4 + band.phase);
-      const pts = hillPoints(peakDrift, band.sigma, amp, band.wiggle, t);
-      const coords = pts.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`);
-      b.fillPath.setAttribute(
-        "d",
-        `M0 ${baselineY.toFixed(1)} L${coords.join(" L")} L${width} ${baselineY.toFixed(1)} Z`,
+  const render = (playhead) => {
+    ctx.clearRect(0, 0, width, height);
+    const gap = width / heights.length;
+    const barWidth = Math.max(1.5, gap * 0.5);
+    heights.forEach((v, i) => {
+      const barHeight = v * height;
+      ctx.fillStyle =
+        i / heights.length < playhead
+          ? `rgba(${wave}, 0.7)`
+          : "rgba(16, 17, 22, 0.12)";
+      ctx.beginPath();
+      ctx.roundRect(
+        i * gap,
+        (height - barHeight) / 2,
+        barWidth,
+        barHeight,
+        barWidth / 2,
       );
-      b.strokePath.setAttribute("d", `M${coords.join(" L")}`);
-    }
+      ctx.fill();
+    });
   };
 
-  if (reduceMotion) {
-    render(0);
-  } else {
-    const loop = (t) => {
-      render(t);
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
+  let running = false;
+  let playhead = 0.38;
+  let last = null;
+  const tick = (now) => {
+    if (!running) return;
+    if (last !== null) playhead = (playhead + (now - last) / 1000 / sweepSeconds) % 1;
+    last = now;
+    render(playhead);
+    requestAnimationFrame(tick);
+  };
+
+  new ResizeObserver(() => {
+    resize();
+    render(playhead);
+  }).observe(trackWave);
+
+  if (!reduceMotion) {
+    new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting === running) return;
+      running = entry.isIntersecting;
+      last = null;
+      if (running) requestAnimationFrame(tick);
+    }).observe(trackWave);
   }
 }
