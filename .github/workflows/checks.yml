@@ -122,7 +122,6 @@ jobs:
     needs: mac
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: write
     steps:
