@@ -813,6 +813,92 @@ h2 {
 .section-intro {
   margin-top: 25px;
 }
+/* ---- Choose demo ----
+   The Choose window from the app (issue #53): a sample plays on the lit card, the
+   version with no sample has no play control, and "Use this" moves the row on. */
+.ch-demo .ad-body { min-height: 0; }
+.ch-row {
+  background: var(--ad-orange-wash);
+  border: 0.5px solid var(--ad-sep);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+.ch-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+.ch-art {
+  width: 36px; height: 36px; border-radius: 4px;
+  background: linear-gradient(135deg, #47608a, #1c2536);
+}
+.ch-status { font-size: 11px; color: #c46a00; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-demo.chose .ch-status { color: var(--ad-secondary); }
+.ch-steps { display: flex; gap: 10px; list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--ad-secondary); }
+.ch-steps li { display: flex; align-items: center; gap: 5px; }
+.ch-steps li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ad-tertiary); }
+.ch-steps .ok::before { background: var(--ad-green); }
+.ch-steps .now { color: #c46a00; font-weight: 600; }
+.ch-steps .now::before { background: var(--ad-orange); }
+.ch-demo.chose .ch-steps .choose { color: var(--ad-secondary); font-weight: 400; }
+.ch-demo.chose .ch-steps .choose::before { background: var(--ad-green); }
+.ch-demo.chose .ch-steps .download { color: var(--ad-accent); font-weight: 600; }
+.ch-demo.chose .ch-steps .download::before { background: var(--ad-accent); }
+.ch-cards { display: flex; gap: 10px; padding-left: 48px; }
+.ch-card {
+  position: relative;
+  overflow: hidden;
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 0.5px solid var(--ad-sep);
+  border-radius: 8px;
+  font-size: 13px;
+  transition: background 220ms ease, box-shadow 220ms ease, opacity 300ms ease;
+}
+.ch-card.lit { background: #d8e8fd; box-shadow: inset 0 0 0 1.5px var(--ad-accent); }
+.ch-card.chosen { box-shadow: inset 0 0 0 1.5px var(--ad-accent); }
+.ch-demo.chose .ch-card:not(.chosen) { opacity: 0.45; }
+.ch-card .hd { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
+.ch-card .hd span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-card .ver { font-weight: 400; color: var(--ad-secondary); }
+.ch-card .score { flex: none; font-size: 12px; color: var(--ad-secondary); }
+.ch-card .meta { font-size: 12px; color: var(--ad-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-card .actions { display: flex; align-items: center; gap: 6px; margin-top: 5px; min-height: 24px; }
+.ch-btn {
+  display: inline-grid; place-items: center;
+  height: 22px; padding: 0 10px;
+  border-radius: 5px;
+  border: 0.5px solid var(--ad-well-border);
+  background: #fff;
+  font-size: 12px;
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1), background 160ms ease, color 160ms ease;
+}
+.ch-btn.play { width: 26px; padding: 0; color: var(--ad-secondary); }
+.ch-btn.play::before { content: ""; border-left: 7px solid currentColor; border-block: 4.5px solid transparent; margin-left: 2px; }
+.ch-card.lit .ch-btn.play { background: var(--ad-accent); border-color: transparent; color: #fff; }
+.ch-card.lit .ch-btn.play::before { border: 0; width: 7px; height: 7px; background: currentColor; margin: 0; border-radius: 1px; }
+.ch-card.chosen .ch-btn.use { background: var(--ad-accent); border-color: transparent; color: #fff; }
+.ch-btn.press { transform: scale(0.9); }
+.ch-card .elapsed { margin-left: auto; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ad-secondary); opacity: 0; }
+.ch-card.lit .elapsed { opacity: 1; }
+.ch-rail { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; opacity: 0; transition: opacity 300ms ease; }
+.ch-card.lit .ch-rail { opacity: 1; }
+.ch-rail i { display: block; height: 100%; background: var(--ad-accent); transform-origin: 0 0; transform: scaleX(0); }
+@container (max-width: 640px) {
+  .ch-cards { padding-left: 0; flex-direction: column; }
+  .ch-card { flex: none; }
+  .ch-card:nth-child(3) { display: none; }
+  .ch-steps { display: none; }
+}
+
 /* ---- Spectrogram comparison ----
    Spans the section's two columns, so it reads as the evidence for the claim
    above rather than as a third item beside it. */
@@ -1396,54 +1482,15 @@ footer > a:last-child {
 }
 
 /* ambient sound-wave motifs */
-.eq-curve {
-  position: absolute;
-  inset: 0;
-  width: 54%;
-  opacity: 0.35;
+.track-wave {
+  height: 56px;
+  margin-block: 8px;
   pointer-events: none;
-  z-index: 0;
-  mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
-  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 96%);
 }
-.eq-curve svg {
+.track-wave canvas {
+  display: block;
   width: 100%;
   height: 100%;
-  display: block;
-}
-.eq-curve .eq-grid-line {
-  stroke: rgb(var(--wave));
-  stroke-opacity: 0.18;
-  stroke-width: 1;
-}
-.eq-curve .eq-baseline {
-  stroke: rgb(var(--wave));
-  stroke-opacity: 0.35;
-  stroke-width: 1;
-}
-.eq-curve .eq-fill-a {
-  fill: rgb(var(--wave));
-  fill-opacity: 0.16;
-}
-.eq-curve .eq-fill-b {
-  fill: rgb(var(--wave));
-  fill-opacity: 0.09;
-}
-.eq-curve .eq-stroke-a {
-  fill: none;
-  stroke: rgb(var(--wave));
-  stroke-opacity: 0.55;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.eq-curve .eq-stroke-b {
-  fill: none;
-  stroke: rgb(var(--wave));
-  stroke-opacity: 0.3;
-  stroke-width: 1.3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .eyebrow-row {
@@ -1530,8 +1577,8 @@ footer > a:last-child {
   }
 }
 @media (max-width: 800px) {
-  .eq-curve {
-    width: 100%;
+  .track-wave {
+    height: 40px;
   }
   .eyebrow-row {
     flex-wrap: wrap;
