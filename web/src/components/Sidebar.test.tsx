@@ -44,3 +44,12 @@ it('shows red when both sources are turned off', () => {
   expect(screen.getByText('Not connected')).toBeInTheDocument()
   expect(container.querySelector('.sidebar-footer .status-dot')).toHaveClass('red')
 })
+
+it('offers Report a bug in the footer whenever a handler is given', () => {
+  const onReport = vi.fn()
+  const { rerender } = render(<Sidebar tab="download" onTab={vi.fn()} telegramAuthorized lossless={lossless()} inset={false} onReport={onReport} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }))
+  expect(onReport).toHaveBeenCalled()
+  rerender(<Sidebar tab="download" onTab={vi.fn()} telegramAuthorized lossless={lossless()} inset={false} />)
+  expect(screen.queryByRole('button', { name: 'Report a bug' })).not.toBeInTheDocument()
+})

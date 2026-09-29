@@ -117,8 +117,17 @@ const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
    make the browser POST to loopback, and CORS hides only the reply -- but it cannot invent a header
    without turning the request into a preflighted one, and that preflight is refused. The header's value
    carries nothing; that it is there at all is the whole signal. */
-const appPost = <T,>(path: string) =>
-  call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-flackey-app': '1' } })
+const appPost = <T,>(path: string, body?: unknown) =>
+  call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-flackey-app': '1' },
+    body: body === undefined ? undefined : JSON.stringify(body) })
+
+/** What only the page knows about where the bug happened. The server checks every field before it goes
+    into the email or the zip, so this is a hint, not a claim. */
+export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number }
+/** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
+    shows the bytes that leave rather than a description of them. */
+export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number }
+export interface BugSent { file: string; to: string; subject: string; body: string }
 
 export const api = {
   health: () => call<Health>('/api/health'),
@@ -153,6 +162,10 @@ export const api = {
   openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
   // `appPost`: an app that quits itself at a stranger's choosing is not an improvement.
   restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
+  bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
+  // `appPost`: both write a file and open Finder or a browser, which no other site should be able to do.
+  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => appPost<BugSent>('/api/bug-report', body),
+  revealBugReport: () => appPost<{ ok: boolean }>('/api/bug-report/reveal'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

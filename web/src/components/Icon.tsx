@@ -1,4 +1,4 @@
-export type IconName = 'download' | 'library' | 'settings' | 'playlist' | 'search' | 'folder' | 'check' | 'x' | 'chevron' | 'phone' | 'upload' | 'play' | 'stop'
+export type IconName = 'download' | 'library' | 'settings' | 'playlist' | 'search' | 'folder' | 'check' | 'x' | 'chevron' | 'phone' | 'upload' | 'play' | 'stop' | 'flag'
 const PATHS: Record<IconName, string> = {
   download: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 7v9M8.5 12.5 12 16l3.5-3.5',
   library: 'M4 6h10M4 12h10M4 18h6M19.5 16V7l3-1M14.5 16a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0',
@@ -13,6 +13,7 @@ const PATHS: Record<IconName, string> = {
   phone: 'M7 2.5h10v19H7zM11 18h2',
   play: 'M8.5 5.5v13l11-6.5z',
   stop: 'M7 7h10v10H7z',
+  flag: 'M5.5 21V4M5.5 4.5h11.5l-2.5 4 2.5 4H5.5',
 }
 /* `filled` paints the path as well as stroking it, with the round join rounding the corners of the solid
    shape. It exists for the two transport glyphs: a hollow 12px square is an empty checkbox, and a hairline

@@ -37,7 +37,7 @@ function deezerBotLine(authorized: boolean, enabled: boolean): { dot: string; te
   return { dot: '', text: 'On — Flackey can search and fetch through Telegram' }
 }
 
-export default function SettingsPage({ live, onReconnect, focusUpdate }: { live: Live; onReconnect: () => void; focusUpdate?: number }) {
+export default function SettingsPage({ live, onReconnect, focusUpdate, onReport }: { live: Live; onReconnect: () => void; focusUpdate?: number; onReport?: () => void }) {
   const s = live.settings; const authorized = live.health?.telegram_authorized ?? true
   const [editing, setEditing] = useState(false); const [path, setPath] = useState(''); const [err, setErr] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
@@ -419,6 +419,9 @@ export default function SettingsPage({ live, onReconnect, focusUpdate }: { live:
             {autoUpdateBusy ? 'Saving…' : autoUpdateOn ? 'Turn off' : 'Turn on'}</button></div></div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
           <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
+        {onReport && <div className="srow"><div className="srow-body"><div className="k">Report a problem</div>
+          <div className="v">Something not working? Send a report with the details we need to fix it.</div></div>
+          <div className="actions"><button className="btn-secondary" onClick={onReport}>Report a bug…</button></div></div>}
       </div>
       <div className="group">
         <div className="srow"><div className="srow-body"><div className="k">Setup</div>

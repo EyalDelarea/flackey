@@ -16,7 +16,7 @@ function footer(telegramAuthorized: boolean, lossless?: LosslessHealth, sourceEn
 const ITEMS: { tab: Tab; label: string; icon: IconName }[] = [
   { tab: 'download', label: 'Download', icon: 'download' }, { tab: 'library', label: 'Library', icon: 'library' },
   { tab: 'uploads', label: 'Uploads', icon: 'upload' }, { tab: 'settings', label: 'Settings', icon: 'settings' }]
-export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inset, extra, sourceEnabled = true, updateWaiting = false }: { tab: Tab; onTab: (t: Tab) => void; telegramAuthorized: boolean; lossless?: LosslessHealth; inset: boolean; extra?: ReactNode; sourceEnabled?: boolean; updateWaiting?: boolean }) {
+export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inset, extra, sourceEnabled = true, updateWaiting = false, onReport }: { tab: Tab; onTab: (t: Tab) => void; telegramAuthorized: boolean; lossless?: LosslessHealth; inset: boolean; extra?: ReactNode; sourceEnabled?: boolean; updateWaiting?: boolean; onReport?: () => void }) {
   const status = footer(telegramAuthorized, lossless, sourceEnabled)
   return (
     <nav className={`sidebar${inset ? ' inset' : ''}`}>
@@ -27,6 +27,8 @@ export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, inse
         {i.tab === 'settings' && updateWaiting && <span className="nav-badge" title="An update is available" />}</button>)}</div>
       {extra}
       <SidebarMark />
+      {/* Always here, not only after something visibly fails: the flicker in #31 never showed an error. */}
+      {onReport && <button className="sidebar-report" onClick={onReport}><Icon name="flag" size={13} />Report a bug</button>}
       {status.connected
         ? <div className="sidebar-footer"><div className="status-line"><span className="status-dot" />{status.text}</div></div>
         : <button className="sidebar-footer bad" onClick={() => onTab('settings')}

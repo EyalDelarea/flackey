@@ -685,3 +685,10 @@ describe('using your own Telegram API keys', () => {
     expect(screen.getByRole('button', { name: 'Save keys' })).not.toBeDisabled()
   })
 })
+
+it('offers Report a bug beside the logs', () => {
+  const onReport = vi.fn()
+  render(<SettingsPage live={live} onReconnect={() => {}} onReport={onReport} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Report a bug…' }))
+  expect(onReport).toHaveBeenCalled()
+})

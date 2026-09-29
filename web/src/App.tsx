@@ -10,6 +10,7 @@ import DownloadPage from './components/download/DownloadPage'
 import LibraryPage from './components/library/LibraryPage'
 import UploadsPage from './components/uploads/UploadsPage'
 import PlaylistNav from './components/library/PlaylistNav'
+import ReportBugDialog from './components/ReportBugDialog'
 import FormatStep from './components/setup/FormatStep'
 import FolderStep from './components/setup/FolderStep'
 import ReadyStep from './components/setup/ReadyStep'
@@ -28,6 +29,7 @@ export default function App() {
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [updateDismissed, setUpdateDismissed] = useState(false)
+  const [reporting, setReporting] = useState(false)
   // A counter, not a boolean: pressing the banner twice should scroll twice, and the second
   // press of a boolean already set to true would change nothing.
   const [focusUpdate, setFocusUpdate] = useState(0)
@@ -131,12 +133,13 @@ export default function App() {
   const banner = banners.length ? banners : undefined
   return (
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
-      updateWaiting={!!update?.available}
+      updateWaiting={!!update?.available} onReport={() => setReporting(true)}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
       {tab === 'download' && <DownloadPage live={live} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}
       {tab === 'uploads' && <UploadsPage />}
-      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} />}
+      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} onReport={() => setReporting(true)} />}
+      {reporting && <ReportBugDialog screen={tab} onClose={() => setReporting(false)} />}
     </Shell>
   )
 }
