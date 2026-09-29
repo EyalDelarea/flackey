@@ -14,7 +14,7 @@ from telethon import TelegramClient
 
 from . import __version__
 from .catalog import BeatportCatalog
-from .config import Settings, save_settings
+from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
 from .events import EventBus, Status
 from .inbox import Inbox
@@ -233,6 +233,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # telethon/client/telegrambaseclient.py. Placeholder non-empty values satisfy that check; they are
     # never used to talk to Telegram because `client.connect()` is skipped below when unconfigured.
     def make_client() -> TelegramClient:
+        secure_private_files(settings)  # a sign-out deletes the session; the next one must start private too
         return TelegramClient(str(settings.session_path), settings.telegram_api_id or 1,
                               settings.telegram_api_hash or "unconfigured")
 

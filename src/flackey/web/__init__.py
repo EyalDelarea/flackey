@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,9 +20,9 @@ from ..models import Verdict
 from ..store import Store
 from ..telegram import TelegramLogin
 from ..worker import Worker, format_line
+from .guard import GuardMiddleware
 
 log = logging.getLogger(__name__)
-DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # Vite dev server
 SETUP_DONE_KEY = "setup_done"
 NO_UI = ("<h1>flackey</h1><p>The UI is not built. Run <code>npm --prefix web install &amp;&amp; "
          "npm --prefix web run build</code>, then reload. API at <a href='/api/health'>/api/health</a>.</p>")
@@ -119,7 +118,9 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     store.listeners.append(on_change)
 
     app = FastAPI(title="flackey", version=__version__)
-    app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+    # No CORS middleware on purpose: the UI is served from this origin, and the Vite dev server proxies
+    # `/api`, so no other origin has a reason to read or drive the API.
+    app.add_middleware(GuardMiddleware, allowed_hosts=settings.allowed_hosts)
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:

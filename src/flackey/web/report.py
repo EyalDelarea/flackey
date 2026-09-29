@@ -29,8 +29,9 @@ from ..config import Settings
 from ..logsetup import LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
 from ..tools import missing_helpers
+from .guard import from_the_app
 from .library import reveal_in_finder
-from .update import from_the_app, open_url
+from .update import open_url
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,12 @@ _KEEP_IPS = {"127.0.0.1", "0.0.0.0"}
 _KEY_VALUE = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:api[_-]?hash|api[_-]?key|password|passwd|token|secret|"
                         r"authorization))([\"']?\s*[:=]\s*)(\"[^\"\n]*\"|'[^'\n]*'|"
                         r"(?:(?:bearer|basic|digest|token)\s+)?[^\s\"',;}]+)")
+# A password is the one value that may hold spaces unquoted (`password: my pass phrase`), so after one of
+# these names the rest of the clause goes, not just its first word.
+_PASSWORD_REST = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:password|passwd|passphrase))([\"']?\s*[:=]\s*)"
+                            r"(?![\"'])([^\n,;}]+)")
+# `scheme://user:pass@host`: the whole userinfo goes, before `_EMAIL` would take only `pass@host`.
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
 _OTHER_HOME = re.compile(r"/Users/[^/\s]+")
 
 
@@ -105,6 +112,8 @@ class Redactor:
             text = pattern.sub("<redacted>", text)
         if self._user is not None:
             text = self._user.sub("<user>", text)
+        text = _URL_USERINFO.sub(r"\1<redacted>@", text)
+        text = _PASSWORD_REST.sub(_redact_value, text)
         text = _KEY_VALUE.sub(_redact_value, text)
         text = _EMAIL.sub("<email>", text)
         text = _PHONE.sub("<phone>", text)

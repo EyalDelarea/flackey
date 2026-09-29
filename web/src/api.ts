@@ -105,21 +105,20 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
+/* Sent on every call. Another site's page can make the browser POST to loopback, and CORS hides only the
+   reply -- but it cannot invent a header without turning the request into a preflighted one, and that
+   preflight is refused. The server demands it on every state-changing request and on the routes that
+   read a secret; its value carries nothing, that it is there at all is the whole signal. */
+const APP_HEADERS = { 'content-type': 'application/json', 'x-flackey-app': '1' }
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...init })
+  const res = await fetch(path, { ...init, headers: { ...APP_HEADERS, ...(init?.headers as Record<string, string> | undefined) } })
   const body = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(res.status, (body && body.detail) || res.statusText)
   return body as T
 }
 const post = <T,>(path: string, body?: unknown) => call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
 const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
-/* For the handful of presses that act on the machine rather than on the library. Another site's page can
-   make the browser POST to loopback, and CORS hides only the reply -- but it cannot invent a header
-   without turning the request into a preflighted one, and that preflight is refused. The header's value
-   carries nothing; that it is there at all is the whole signal. */
-const appPost = <T,>(path: string, body?: unknown) =>
-  call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-flackey-app': '1' },
-    body: body === undefined ? undefined : JSON.stringify(body) })
 
 /** What only the page knows about where the bug happened. The server checks every field before it goes
     into the email or the zip, so this is a hint, not a claim. */
@@ -155,17 +154,14 @@ export const api = {
   settings: () => call<AppSettings>('/api/settings'),
   update: () => call<UpdateStatus>('/api/update'),
   // No URL is passed: the server looks the release up again for itself, so a page left open on a stale
-  // check cannot name what gets downloaded and opened. These two go through `appPost` because they are
-  // wanted for their side effect, which CORS does not hide -- see `from_the_app` on the server.
-  installUpdate: () => appPost<UpdateDownload>('/api/update/install'),
+  // check cannot name what gets downloaded and opened.
+  installUpdate: () => post<UpdateDownload>('/api/update/install'),
   updateProgress: () => call<UpdateDownload>('/api/update/progress'),
-  openRelease: () => appPost<{ ok: boolean; url: string }>('/api/update/release'),
-  // `appPost`: an app that quits itself at a stranger's choosing is not an improvement.
-  restartForUpdate: () => appPost<UpdateDownload>('/api/update/restart'),
+  openRelease: () => post<{ ok: boolean; url: string }>('/api/update/release'),
+  restartForUpdate: () => post<UpdateDownload>('/api/update/restart'),
   bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
-  // `appPost`: both write a file and open Finder or a browser, which no other site should be able to do.
-  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => appPost<BugSent>('/api/bug-report', body),
-  revealBugReport: () => appPost<{ ok: boolean }>('/api/bug-report/reveal'),
+  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => post<BugSent>('/api/bug-report', body),
+  revealBugReport: () => post<{ ok: boolean }>('/api/bug-report/reveal'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),

@@ -1,5 +1,5 @@
 # Secrets are not baked in (.dockerignore drops .env). Run with:
-#   docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 8765:8765 flackey
+#   docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 127.0.0.1:8765:8765 flackey
 # and log in once beforehand with `docker run --env-file .env -it -v flackey-data:/data flackey uv run flackey login`.
 FROM node:26-slim AS ui
 WORKDIR /web

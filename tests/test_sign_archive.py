@@ -74,13 +74,27 @@ def test_an_archive_that_names_no_version_is_refused_without_writing(sign_archiv
     assert list(tmp_path.glob("*.sig")) == []
 
 
-def test_an_unset_key_publishes_the_zip_unsigned_rather_than_failing(sign_archive, archive,
-                                                                     monkeypatch):
-    """A release from before the key existed still has to publish its installer."""
+def test_an_unset_key_fails_rather_than_publishing_unsigned(sign_archive, archive, monkeypatch):
+    """Installed copies refuse an unsigned update, so a release without the key would strand them."""
     monkeypatch.delenv(sign_archive.ENV_VAR, raising=False)
 
-    assert sign_archive.main(["sign_archive.py", str(archive)]) == 0
+    assert sign_archive.main(["sign_archive.py", str(archive)]) == 1
     assert list(archive.parent.glob("*.sig")) == []
+
+
+def test_the_installer_is_signed_under_its_own_domain(sign_archive, tmp_path, keypair, monkeypatch):
+    private, public = keypair
+    monkeypatch.setenv(sign_archive.ENV_VAR, private.private_bytes_raw().hex())
+    pkg = tmp_path / "Flackey.pkg"
+    pkg.write_bytes(b"xar!installer")
+
+    assert sign_archive.main(["sign_archive.py", str(pkg), "v1.2.3"]) == 0
+
+    sig = signature.decode_signature((tmp_path / "Flackey.pkg.sig").read_bytes())
+    assert signature.verify_archive("1.2.3", pkg.read_bytes(), sig, public,
+                                    domain=signature.INSTALLER_DOMAIN) is True
+    # ...and is no use as an update archive's signature over the same bytes.
+    assert signature.verify_archive("1.2.3", pkg.read_bytes(), sig, public) is False
 
 
 def test_a_key_that_is_not_a_key_fails_the_release(sign_archive, archive, monkeypatch):

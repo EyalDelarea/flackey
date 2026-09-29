@@ -1,5 +1,8 @@
 """Ed25519 over `b"flackey-update-v1\n" + version + b"\n" + sha256(zip)`. Pure, nothing here raises.
 
+The installer (`Flackey.pkg`) is signed the same way under its own domain, `flackey-installer-v1`, so a
+signature made for one of the two can never be passed off as the other's.
+
 The version is inside the signed message so a validly signed older archive cannot be re-published
 under a newer tag: the app asks for the version it was offered, and that signature is for another.
 """
@@ -18,12 +21,13 @@ from .key import PUBLIC_KEY_HEX
 PUBLIC_KEY_BYTES = 32
 SIGNATURE_BYTES = 64
 DOMAIN = b"flackey-update-v1"
+INSTALLER_DOMAIN = b"flackey-installer-v1"
 
 
-def signing_message(version: str, archive: bytes) -> bytes:
+def signing_message(version: str, archive: bytes, domain: bytes = DOMAIN) -> bytes:
     """What the release signs and the app checks: defined once so the two cannot drift apart."""
     digest = hashlib.sha256(archive).digest()
-    return DOMAIN + b"\n" + normalise_version(version).encode() + b"\n" + digest
+    return domain + b"\n" + normalise_version(version).encode() + b"\n" + digest
 
 
 def normalise_version(version: str) -> str:
@@ -65,13 +69,13 @@ def decode_signature(asset: bytes) -> bytes | None:
 
 
 def verify_archive(version: str, archive: bytes, sig: bytes,
-                   public_key: bytes | None = None) -> bool:
+                   public_key: bytes | None = None, domain: bytes = DOMAIN) -> bool:
     """False for every kind of no: wrong version, wrong signature, wrong key, no key at all."""
     key = public_key if public_key is not None else baked_public_key()
     if key is None or len(key) != PUBLIC_KEY_BYTES or len(sig) != SIGNATURE_BYTES:
         return False
     try:
-        Ed25519PublicKey.from_public_bytes(key).verify(sig, signing_message(version, archive))
+        Ed25519PublicKey.from_public_bytes(key).verify(sig, signing_message(version, archive, domain))
     except (InvalidSignature, ValueError):
         return False
     return True

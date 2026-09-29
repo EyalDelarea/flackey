@@ -25,6 +25,7 @@ from flackey.store import Store
 from flackey.web import create_app
 from flackey.web.update import RELEASES_URL
 from flackey.worker import Worker
+from tests.appclient import AppClient
 
 from .test_web import DummyCatalog, DummySource, _settle, fake_youtube
 
@@ -32,9 +33,11 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="staging shells
 
 FROM_APP = {"x-flackey-app": "1"}
 VERSION = "9.9.9"
-ARCHIVE_URL = "https://example.test/Flackey-9.9.9.zip"
-SIGNATURE_URL = "https://example.test/Flackey-9.9.9.zip.sig"
-INSTALLER_URL = "https://example.test/Flackey.pkg"
+ARCHIVE_URL = "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey-9.9.9.zip"
+SIGNATURE_URL = "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey-9.9.9.zip.sig"
+INSTALLER_URL = "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"
+INSTALLER_SIG_URL = INSTALLER_URL + ".sig"
+PKG = b"12345678"
 
 
 class EndlessStream(httpx.AsyncByteStream):
@@ -118,26 +121,34 @@ def app(tmp_path, applications, private_key, monkeypatch):
     quits = Quit()
     api = create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, status=status,
                      quit_app=quits)
-    return TestClient(api), settings, status, quits
+    return AppClient(api), settings, status, quits
 
 
-def feed(*, archive: int | None = 1024, sig: bool = True, installer: int | None = 8) -> list[dict]:
+def feed(*, archive: int | None = 1024, sig: bool = True, installer: int | None = 8,
+         installer_sig: bool = False) -> list[dict]:
     assets = []
     if installer is not None:
         assets.append({"name": "Flackey.pkg", "size": installer, "browser_download_url": INSTALLER_URL})
+    if installer_sig:
+        assets.append({"name": "Flackey.pkg.sig", "size": 129, "browser_download_url": INSTALLER_SIG_URL})
     if archive is not None:
         assets.append({"name": "Flackey-9.9.9.zip", "size": archive, "browser_download_url": ARCHIVE_URL})
     if sig:
         assets.append({"name": "Flackey-9.9.9.zip.sig", "size": 129,
                        "browser_download_url": SIGNATURE_URL})
     return [{"draft": False, "prerelease": False, "tag_name": "v9.9.9",
-             "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+             "published_at": "2026-09-15T10:00:00Z", "html_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
              "assets": assets}]
 
 
 def sign(private: Ed25519PrivateKey, payload: bytes, version: str = VERSION) -> bytes:
     """What the release publishes: the signature binds the version as well as the bytes."""
     return private.sign(signature.signing_message(version, payload))
+
+
+def sign_pkg(private: Ed25519PrivateKey, payload: bytes, version: str = VERSION) -> bytes:
+    """The installer's `.sig` asset, as `packaging/sign_archive.py` writes it."""
+    return private.sign(signature.signing_message(version, payload, signature.INSTALLER_DOMAIN)).hex().encode()
 
 
 def serve(payload: bytes, sig: bytes | None, *, archive_size: int | None = None) -> None:
@@ -208,19 +219,71 @@ def test_an_older_archive_republished_under_a_newer_tag_is_refused(app, archive_
 
 
 @respx.mock
-def test_a_release_with_no_signature_asset_never_reaches_the_seamless_path(app, archive_bytes,
+def test_a_release_with_no_signature_asset_never_reaches_the_seamless_path(app, archive_bytes, private_key,
                                                                         applications, monkeypatch):
     c, _, _, _ = app
     opened: list = []
     monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
-    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(sig=False)))
-    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"12345678"))
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(sig=False, installer_sig=True)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=PKG))
+    respx.get(INSTALLER_SIG_URL).mock(return_value=httpx.Response(200, content=sign_pkg(private_key, PKG)))
 
     state = press(c, "ready")
 
     assert state["seamless"] is False
     assert [p.name for p in opened] == ["Flackey.pkg"]
     assert list(applications.iterdir()) == []
+
+
+@respx.mock
+def test_a_keyed_build_will_not_open_an_installer_that_carries_no_signature(app, monkeypatch):
+    """A release stripped of its signed files must not walk the app onto an unchecked installer."""
+    c, _, _, _ = app
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(archive=None, sig=False)))
+    pkg = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=PKG))
+
+    assert c.get("/api/update").json()["available"] is False
+    assert c.post("/api/update/install", headers=FROM_APP).status_code == 409
+    assert pkg.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("bad", ["tampered", "archive-signature", "other-key"])
+def test_an_installer_whose_signature_does_not_verify_is_never_opened(app, private_key, monkeypatch, bad):
+    c, settings, _, _ = app
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(archive=None, sig=False,
+                                                                            installer_sig=True)))
+    served = b"87654321" if bad == "tampered" else PKG
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=served))
+    if bad == "archive-signature":  # a zip's signature over the same bytes: the domain tells them apart
+        sig = sign(private_key, PKG).hex().encode()
+    elif bad == "other-key":
+        sig = sign_pkg(Ed25519PrivateKey.generate(), PKG)
+    else:
+        sig = sign_pkg(private_key, PKG)
+    respx.get(INSTALLER_SIG_URL).mock(return_value=httpx.Response(200, content=sig))
+
+    state = press(c, "error")
+
+    assert "could not be verified" in state["error"]
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+
+
+@respx.mock
+def test_assets_outside_the_repo_are_treated_as_missing(app, monkeypatch):
+    c, _, _, _ = app
+    elsewhere = feed()
+    for a in elsewhere[0]["assets"]:
+        a["browser_download_url"] = a["browser_download_url"].replace("github.com", "github.com.evil.example")
+    elsewhere[0]["html_url"] = "javascript:alert(1)"
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=elsewhere))
+
+    body = c.get("/api/update").json()
+
+    assert body["available"] is False and body["seamless"] is False
+    assert body["url"] is None and body["release_url"] is None
 
 
 @respx.mock
@@ -340,7 +403,7 @@ def test_restart_refuses_when_nothing_is_staged(app):
 def test_a_page_that_is_not_flackeys_cannot_trigger_a_restart(app):
     c, _, _, quits = app
 
-    assert c.post("/api/update/restart").status_code == 403
+    assert c.post("/api/update/restart", headers={"x-flackey-app": ""}).status_code == 403
     assert quits == []
 
 
@@ -365,13 +428,15 @@ def test_pressing_update_again_while_one_is_staged_does_not_download_it_twice(ap
 
 
 @respx.mock
-def test_a_build_with_no_key_takes_the_installer_path(app, archive_bytes, monkeypatch, applications):
+def test_a_copy_that_cannot_update_in_place_takes_the_signed_installer_path(app, archive_bytes, private_key,
+                                                                          monkeypatch, applications):
     c, _, _, _ = app
     monkeypatch.setattr(selfupdate, "seamless_available", lambda *a, **k: False)
     opened: list = []
     monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
-    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed()))
-    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"12345678"))
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(installer_sig=True)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=PKG))
+    respx.get(INSTALLER_SIG_URL).mock(return_value=httpx.Response(200, content=sign_pkg(private_key, PKG)))
 
     state = press(c, "ready")
 

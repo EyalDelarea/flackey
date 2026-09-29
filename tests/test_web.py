@@ -10,7 +10,6 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
 
 import flackey.web.update
 from flackey import __version__
@@ -25,6 +24,7 @@ from flackey.web import create_app
 from flackey.web.update import RELEASES_URL
 from flackey.worker import Worker
 from flackey.youtube import YouTubeEntry, YouTubeError
+from tests.appclient import AppClient
 
 
 class DummySource:
@@ -57,10 +57,17 @@ def make(tmp_path: Path, **kw):
     return create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, **kw), store, settings
 
 
+@pytest.fixture(autouse=True)
+def _keyless_build(monkeypatch):
+    """A build with no release key, whose updates take the plain installer path; a keyed build's installer
+    must verify, which `test_web_seamless_update.py` covers."""
+    monkeypatch.setattr("flackey.selfupdate.signature.baked_public_key", lambda: None)
+
+
 @pytest.fixture
 def client(tmp_path: Path):
     app, store, settings = make(tmp_path)
-    return TestClient(app), store, settings
+    return AppClient(app), store, settings
 
 
 @pytest.fixture
@@ -70,7 +77,7 @@ def client_with_worker(tmp_path: Path):
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
     worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
-    return TestClient(create_app(store, worker, Inbox(store, youtube=fake_youtube), settings)), worker
+    return AppClient(create_app(store, worker, Inbox(store, youtube=fake_youtube), settings)), worker
 
 
 def test_health(client):
@@ -87,7 +94,7 @@ def test_health(client):
 def test_health_reflects_shared_status(tmp_path):
     status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True)
     app, _, _ = make(tmp_path, status=status)
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.get("/api/health").json()["telegram_authorized"] is False
     status["telegram_authorized"] = True
     assert c.get("/api/health").json()["telegram_authorized"] is True
@@ -98,15 +105,15 @@ def test_update_reports_new_installer(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
         "draft": False, "prerelease": False, "tag_name": "v9.9.9",
-        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "assets": [{"name": "Flackey.pkg", "size": 12345678,
-                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+                    "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
         "ok": True, "current": __version__, "newer": True, "available": True, "latest": "9.9.9",
-        "url": "https://example.test/Flackey.pkg", "release_url": "https://example.test/releases/v9.9.9",
+        "url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg", "release_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
-        "published_date": "2026-09-15", "prerelease": False,
+        "published_date": "2026-09-15", "prerelease": False, "installer_signature_url": None,
         # A release carrying only the pkg: there is nothing signed to install in place, so the press
         # leads to Installer.app exactly as it did before.
         "seamless": False, "archive_url": None, "archive_size": None, "signature_url": None,
@@ -120,7 +127,7 @@ def test_update_says_current_release_is_up_to_date(client):
         "draft": False, "prerelease": False, "tag_name": "v0.1.0",
         "published_at": "2026-09-15T10:00:00Z",
         "assets": [{"name": "Flackey.pkg", "size": 123,
-                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+                    "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     body = c.get("/api/update").json()
     assert body["ok"] is True and body["newer"] is False and body["available"] is False and body["latest"] == "0.1.0"
@@ -139,13 +146,13 @@ def test_update_flags_newer_release_missing_its_installer(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
         "draft": False, "prerelease": False, "tag_name": newer_tag,
-        "published_at": "2026-09-17T10:38:25Z", "html_url": f"https://example.test/releases/{newer_tag}",
+        "published_at": "2026-09-17T10:38:25Z", "html_url": f"https://github.com/EyalDelarea/flackey/releases/tag/{newer_tag}",
         "assets": [],
     }]))
     body = c.get("/api/update").json()
     assert body["ok"] is True and body["newer"] is True and body["available"] is False
     assert body["latest"] == newer_version and body["url"] is None
-    assert body["release_url"] == f"https://example.test/releases/{newer_tag}"
+    assert body["release_url"] == f"https://github.com/EyalDelarea/flackey/releases/tag/{newer_tag}"
 
 
 @respx.mock
@@ -157,22 +164,24 @@ def test_update_ignores_prerelease_releases(client):
         "draft": False, "prerelease": True, "tag_name": "v9.9.9",
         "published_at": "2026-09-15T10:00:00Z",
         "assets": [{"name": "Flackey.pkg", "size": 123,
-                    "browser_download_url": "https://example.test/Flackey.pkg"}],
+                    "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     body = c.get("/api/update").json()
     assert body["ok"] is True and body["newer"] is False and body["available"] is False and body["latest"] is None
 
 
-INSTALLER_URL = "https://example.test/Flackey.pkg"
+INSTALLER_URL = "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"
 INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
 # What the app's own page sends. A stranger's page cannot: inventing a header makes the request
 # preflighted, and the preflight is refused.
 FROM_APP = {"x-flackey-app": "1"}
+# `AppClient` sends the header on every request; an empty value is how a test leaves it out.
+NOT_FROM_APP = {"x-flackey-app": ""}
 
 
 def _release_feed(size: int | None = 8, assets: bool = True):
     return [{"draft": False, "prerelease": False, "tag_name": "v9.9.9",
-             "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+             "published_at": "2026-09-15T10:00:00Z", "html_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
              "assets": [{"name": "Flackey.pkg", "size": size, "browser_download_url": INSTALLER_URL}]
              if assets else []}]
 
@@ -282,7 +291,7 @@ def test_update_install_will_not_start_a_second_download(tmp_path, monkeypatch):
     feed = respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=slowly()))
     app, _, _ = make(tmp_path)
-    with TestClient(app) as c:
+    with AppClient(app) as c:
         c.post("/api/update/install", headers=FROM_APP)
         assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "downloading"
         assert feed.call_count == 1 and route.call_count == 1
@@ -341,8 +350,11 @@ def test_update_side_effects_refuse_a_press_from_another_page(client, monkeypatc
     monkeypatch.setattr("flackey.web.update.open_url", lambda u: pytest.fail("browser opened"))
     feed = respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     c, _, _ = client
-    r = c.post(path, headers=headers)
-    assert r.status_code == 403 and r.json()["detail"] == "That request did not come from Flackey."
+    r = c.post(path, headers={**NOT_FROM_APP, **headers})
+    if "host" in headers:
+        assert r.status_code == 400 and r.json()["detail"] == "Unknown host."
+    else:
+        assert r.status_code == 403 and r.json()["detail"] == "That request did not come from Flackey."
     # Refused before it looks anything up, let alone fetches it.
     assert feed.call_count == 0
     assert c.get("/api/update/progress").json()["state"] == "idle"
@@ -355,7 +367,7 @@ def test_update_release_still_works_for_the_app_itself(client, monkeypatch):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed()))
     assert c.post("/api/update/release", headers=FROM_APP).status_code == 200
-    assert opened == ["https://example.test/releases/v9.9.9"]
+    assert opened == ["https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9"]
 
 
 @respx.mock
@@ -365,7 +377,7 @@ def test_update_will_not_offer_an_installer_with_no_declared_size(client):
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
         "draft": False, "prerelease": False, "tag_name": "v9.9.9",
-        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://example.test/releases/v9.9.9",
+        "published_at": "2026-09-15T10:00:00Z", "html_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "assets": [{"name": "Flackey.pkg", "browser_download_url": INSTALLER_URL}],
     }]))
     body = c.get("/api/update").json()
@@ -398,7 +410,7 @@ def test_update_install_survives_two_presses_landing_together(tmp_path, monkeypa
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     route = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
     app, _, _ = make(tmp_path)
-    with TestClient(app) as c, ThreadPoolExecutor(max_workers=2) as pool:
+    with AppClient(app) as c, ThreadPoolExecutor(max_workers=2) as pool:
         both = [pool.submit(c.post, "/api/update/install", headers=FROM_APP) for _ in range(2)]
         assert [f.result().status_code for f in both] == [200, 200]
         _settle(c, "ready")
@@ -438,7 +450,7 @@ def test_update_progress_reaches_the_page_over_the_status_stream(tmp_path, monke
     bus = EventBus()
     status = Status(bus, telegram_authorized=True, worker_running=False, setup_done=True)
     app, _, _ = make(tmp_path, status=status, bus=bus)
-    c = TestClient(app)
+    c = AppClient(app)
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
     respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
     c.post("/api/update/install", headers=FROM_APP)
@@ -454,8 +466,8 @@ def test_update_release_opens_the_page_in_the_real_browser(client, monkeypatch):
     monkeypatch.setattr("flackey.web.update.open_url", opened.append)
     c, _, _ = client
     respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed()))
-    assert c.post("/api/update/release", headers=FROM_APP).json() == {"ok": True, "url": "https://example.test/releases/v9.9.9"}
-    assert opened == ["https://example.test/releases/v9.9.9"]
+    assert c.post("/api/update/release", headers=FROM_APP).json() == {"ok": True, "url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9"}
+    assert opened == ["https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9"]
 
 
 @respx.mock
@@ -467,11 +479,79 @@ def test_update_release_says_so_when_github_cannot_be_reached(client, monkeypatc
     assert r.status_code == 502 and r.json()["detail"] == "Could not check for updates."
 
 
-def test_cors_allows_vite_dev_server(client):
+def test_no_other_origin_is_granted_cors(client):
+    """The UI is served from this origin and the Vite dev server proxies `/api`, so nobody else gets a pass."""
     c, _, _ = client
-    r = c.options("/api/health", headers={"Origin": "http://localhost:5173",
-                                          "Access-Control-Request-Method": "GET"})
-    assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    for origin in ("http://localhost:5173", "https://evil.test"):
+        r = c.options("/api/health", headers={"Origin": origin, "Access-Control-Request-Method": "POST",
+                                              "Access-Control-Request-Headers": "x-flackey-app"})
+        assert "access-control-allow-origin" not in r.headers
+
+
+@pytest.mark.parametrize("host", ["evil.test", "evil.test:8765", "localhost.evil.test", "127.0.0.1.nip.io", ""])
+def test_a_name_other_than_localhost_is_refused_on_every_path(client, host):
+    """DNS rebinding: a page that re-points its own name at 127.0.0.1 still sends that name as Host."""
+    c, _, _ = client
+    for method, path in (("GET", "/api/health"), ("GET", "/api/setup/soulseek/password"), ("GET", "/"),
+                         ("PUT", "/api/settings")):
+        r = c.request(method, path, headers={"host": host})
+        assert r.status_code == 400 and r.json()["detail"] == "Unknown host.", (method, path)
+
+
+@pytest.mark.parametrize("host", ["localhost:8765", "127.0.0.1:8765", "[::1]:8765", "192.168.1.20:8765",
+                                  "LOCALHOST"])
+def test_loopback_and_addresses_are_answered(client, host):
+    c, _, _ = client
+    assert c.get("/api/health", headers={"host": host}).status_code == 200
+
+
+def test_an_allowed_host_name_is_answered(tmp_path):
+    s = Settings(_env_file=None, library_root=tmp_path / "lib2", data_dir=tmp_path / "data2",
+                 web_allowed_hosts="nas.local, Other.Example")
+    store = Store(s.db_path)
+    api = create_app(store, Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), s),
+                     Inbox(store, youtube=fake_youtube), s)
+    c = AppClient(api)
+    assert c.get("/api/health", headers={"host": "nas.local:8765"}).status_code == 200
+    assert c.get("/api/health", headers={"host": "other.example"}).status_code == 200
+    assert c.get("/api/health", headers={"host": "evil.test"}).status_code == 400
+
+
+@pytest.mark.parametrize("method, path", [
+    ("POST", "/api/telegram/logout"), ("POST", "/api/setup/reset"), ("POST", "/api/requests/clear-failed"),
+    ("POST", "/api/library/refresh"), ("PUT", "/api/settings"), ("DELETE", "/api/requests/1"),
+])
+def test_a_state_change_without_the_app_header_is_refused(client, method, path):
+    """A body-less POST is a CORS simple request: any page can fire it blind. The header forces a preflight."""
+    c, _, _ = client
+    r = c.request(method, path, headers=NOT_FROM_APP)
+    assert r.status_code == 403 and r.json()["detail"] == "That request did not come from Flackey."
+
+
+@pytest.mark.parametrize("path", ["/api/setup/soulseek/password", "/api/setup/slskd/credentials"])
+def test_a_secret_is_only_read_with_the_app_header(client, path):
+    c, _, _ = client
+    assert c.get(path, headers=NOT_FROM_APP).status_code == 403
+    assert c.get(path).status_code == 404  # with the header it gets as far as "nothing saved"
+
+
+@pytest.mark.parametrize("where", ["home", "above-home", "root", "data-dir", "symlink-to-home"])
+def test_a_library_folder_that_would_share_home_or_flackeys_data_is_refused(client, tmp_path, monkeypatch,
+                                                                             where):
+    """The library is shared with the whole Soulseek network."""
+    c, _, settings = client
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    link = tmp_path / "link"
+    link.symlink_to(home)
+    folder = {"home": home, "above-home": tmp_path, "root": Path("/"), "data-dir": settings.data_dir,
+              "symlink-to-home": link}[where]
+
+    r = c.put("/api/settings", json={"library_root": str(folder)})
+
+    assert r.status_code == 400 and "Choose a folder just for your music" in r.json()["detail"]
+    assert c.get("/api/settings").json()["library_root"] != str(folder)
 
 
 def test_queue_bundles(client, tmp_path):
@@ -815,7 +895,7 @@ def test_clear_failed_removes_only_failed_states(client):
 def test_delete_and_clear_failed_publish_a_queue_event(tmp_path):
     bus = EventBus()
     app, store, _ = make(tmp_path, bus=bus)
-    c = TestClient(app)
+    c = AppClient(app)
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.REJECTED)
     other = store.add_request("q2", RequestKind.TEXT)
@@ -831,7 +911,7 @@ def test_store_changes_reach_the_bus_as_bundles(tmp_path):
     bus = EventBus()
     q = bus.subscribe()
     app, store, _ = make(tmp_path, bus=bus)
-    TestClient(app)  # create_app wires the listener; no request needed
+    AppClient(app)  # create_app wires the listener; no request needed
     rid = store.add_request("q", RequestKind.TEXT)
     name, data = q.get_nowait()
     assert name == "request" and data["request"]["id"] == rid and data["candidates"] == []
@@ -976,7 +1056,7 @@ def test_static_ui_mount(tmp_path: Path):
     ui.mkdir()
     (ui / "index.html").write_text("<h1>crate</h1>")
     app, _, _ = make(tmp_path, ui_dir=ui)
-    c = TestClient(app)
+    c = AppClient(app)
     assert "crate" in c.get("/").text and c.get("/api/health").status_code == 200
 
 
@@ -1051,7 +1131,7 @@ def test_reveal_only_opens_places_the_app_itself_named(tmp_path: Path):
     library -- are both simply not on the list."""
     opened = []
     app, store, settings = make(tmp_path, opener=lambda p: opened.append(p))
-    c = TestClient(app)
+    c = AppClient(app)
     filed = settings.library_root / "A" / "x.mp3"
     filed.parent.mkdir(parents=True)
     filed.write_bytes(b"x")
@@ -1083,7 +1163,7 @@ def test_reveal_shows_a_playlist_export_by_its_exported_name(tmp_path: Path):
     without trusting it, so the name is rebuilt from the playlist rows rather than taken from the body."""
     opened = []
     app, store, _ = make(tmp_path, opener=lambda p: opened.append(p))
-    c = TestClient(app)
+    c = AppClient(app)
     # Two playlists that sanitize to the same stem: the second gets a " (id)" suffix, and /reveal has to
     # recognise that suffixed name too -- which it does by calling the same playlist_names() the route does.
     store.upsert_playlist("https://example.test/p", "Late Night")
@@ -1104,7 +1184,7 @@ def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
     async def boom():
         raise RuntimeError("kaboom")
 
-    c = TestClient(app, raise_server_exceptions=False)
+    c = AppClient(app, raise_server_exceptions=False)
     r = c.get("/api/boom")
     assert r.status_code == 500
     assert r.json() == {"detail": "Something went wrong. The log has the details."}
@@ -1203,7 +1283,7 @@ def test_setup_soulseek_post_asks_the_link_to_connect_when_one_is_wired_in(tmp_p
 
     link = FakeLink()
     app, _, _ = make(tmp_path, link=link)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/setup/soulseek", json={"username": "digger", "password": "not-a-real-password"})
     assert r.json() == {"ok": True, "restart_required": False, "connecting": True}
     assert link.calls == 1
@@ -1369,7 +1449,7 @@ def test_telegram_routes(tmp_path):
     status = Status(None, telegram_authorized=True, worker_running=True, setup_done=True)
     login = FakeLogin()
     app, _, _ = make(tmp_path, status=status, login=login)
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.get("/api/telegram/status").json()["authorized"] is False
     assert c.post("/api/telegram/qr").json()["id"] == "q1"
     assert c.get("/api/telegram/qr/q1").json() == {"state": "waiting"}
@@ -1396,7 +1476,7 @@ def test_telegram_route_failure_becomes_a_plain_words_503(tmp_path):
 
     status = Status(None, telegram_authorized=True, worker_running=True, setup_done=True)
     app, _, _ = make(tmp_path, status=status, login=BrokenLogin())
-    r = TestClient(app).post("/api/telegram/qr")
+    r = AppClient(app).post("/api/telegram/qr")
     assert r.status_code == 503
     assert r.json()["detail"] == "Telegram isn't reachable right now. Try again in a moment."
 
@@ -1414,7 +1494,7 @@ def test_telegram_status_survives_a_client_that_was_never_connected(tmp_path):
 
     login = TelegramLogin(Disconnected(), False)
     app, _, _ = make(tmp_path, login=login)
-    r = TestClient(app).get("/api/telegram/status")
+    r = AppClient(app).get("/api/telegram/status")
     assert r.status_code == 200
     assert r.json() == {"authorized": False, "configured": False, "phone_masked": None}
 
@@ -1424,7 +1504,7 @@ def test_pick_folder_with_fake_picker(tmp_path, monkeypatch):
     fake_path = Path("/tmp/x")
     fake_picker = lambda initial: fake_path
     app, _, _ = make(tmp_path, picker=fake_picker)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/pick-folder", json={"initial": None})
     assert r.status_code == 200 and r.json() == {"path": "/tmp/x"}
 
@@ -1433,7 +1513,7 @@ def test_pick_folder_returns_null_when_cancelled(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     fake_picker = lambda initial: None
     app, _, _ = make(tmp_path, picker=fake_picker)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/pick-folder", json={"initial": "/Users/me"})
     assert r.status_code == 200 and r.json() == {"path": None}
 
@@ -1445,7 +1525,7 @@ def test_pick_folder_returns_500_on_picker_error(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     app, _, _ = make(tmp_path, picker=failing_picker)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/pick-folder", json={"initial": None})
     assert r.status_code == 500 and r.json()["detail"] == "Couldn't open the folder chooser."
 
@@ -1453,7 +1533,7 @@ def test_pick_folder_returns_500_on_picker_error(tmp_path, monkeypatch):
 def test_pick_folder_returns_501_on_non_darwin(tmp_path, monkeypatch):
     fake_picker = lambda initial: Path("/tmp/x")
     app, _, _ = make(tmp_path, picker=fake_picker)
-    c = TestClient(app)
+    c = AppClient(app)
     monkeypatch.setattr(sys, "platform", "linux")
     r = c.post("/api/pick-folder", json={"initial": None})
     assert r.status_code == 501 and r.json()["detail"] == "Choosing a folder in a window only works on macOS."
@@ -1461,7 +1541,7 @@ def test_pick_folder_returns_501_on_non_darwin(tmp_path, monkeypatch):
 
 def test_pick_folder_available_reflects_platform(tmp_path, monkeypatch):
     app, _, _ = make(tmp_path)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.get("/api/pick-folder/available")
     assert r.status_code == 200 and r.json() == {"available": sys.platform == "darwin"}
     monkeypatch.setattr(sys, "platform", "linux")
@@ -1644,7 +1724,7 @@ def test_track_bundle_has_format_and_evidence(client, tmp_path: Path):
 
 def test_settings_never_expose_the_api_key_and_accept_lossless_keys(tmp_path: Path):
     app, _, settings = make(tmp_path)
-    c = TestClient(app)
+    c = AppClient(app)
     settings.slskd_api_key = "secret-key-value"
     out = c.get("/api/settings").json()
     assert "secret-key-value" not in json.dumps(out) and out["soulseek_enabled"] is True
@@ -1664,7 +1744,7 @@ def test_the_api_key_never_appears_in_settings_or_health_responses(tmp_path: Pat
     # from both raw response bodies (not just json.dumps of the parsed dict), covering any accidental
     # leak through a header, an error detail, or a field the parsed-dict check wouldn't catch.
     app, _, settings = make(tmp_path)
-    c = TestClient(app)
+    c = AppClient(app)
     key = "sekrit-slskd-api-key-do-not-leak-1234567890"
     settings.slskd_api_key = key
     r_settings = c.get("/api/settings")
@@ -1689,18 +1769,18 @@ def test_reported_ports_are_read_from_this_install_not_assumed(tmp_path: Path, u
     than one saying nothing."""
     app, _, settings = make(tmp_path)
     settings.slskd_url = url
-    ports = TestClient(app).get("/api/settings").json()["ports"]
+    ports = AppClient(app).get("/api/settings").json()["ports"]
     assert ports["sidecar"] == {"port": port, "host": host, "public": public}
 
 
 def test_the_listen_port_comes_from_the_managed_config_when_one_exists(tmp_path: Path):
     from flackey.slskd_config import config_path
     app, _, settings = make(tmp_path)
-    assert TestClient(app).get("/api/settings").json()["ports"]["soulseek_listen"]["port"] == 50300
+    assert AppClient(app).get("/api/settings").json()["ports"]["soulseek_listen"]["port"] == 50300
     p = config_path(settings.data_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"soulseek": {"listen_port": 51515}}))   # JSON is valid YAML
-    assert TestClient(app).get("/api/settings").json()["ports"]["soulseek_listen"]["port"] == 51515
+    assert AppClient(app).get("/api/settings").json()["ports"]["soulseek_listen"]["port"] == 51515
 
 
 def test_a_non_loopback_app_host_is_reported_as_public(tmp_path: Path):
@@ -1708,7 +1788,7 @@ def test_a_non_loopback_app_host_is_reported_as_public(tmp_path: Path):
     "this Mac only" once they have."""
     app, _, settings = make(tmp_path)
     settings.web_host = "0.0.0.0"
-    assert TestClient(app).get("/api/settings").json()["ports"]["app"]["public"] is True
+    assert AppClient(app).get("/api/settings").json()["ports"]["app"]["public"] is True
 
 
 def test_reconnect_asks_the_link_to_sign_in_again_without_touching_credentials(tmp_path: Path):
@@ -1723,7 +1803,7 @@ def test_reconnect_asks_the_link_to_sign_in_again_without_touching_credentials(t
 
     link = FakeLink()
     app, _, settings = make(tmp_path, link=link)
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.post("/api/setup/soulseek/connect").status_code == 409     # nothing saved yet
     assert link.calls == 0
     settings.slskd_api_key = "k"
@@ -1734,7 +1814,7 @@ def test_reconnect_asks_the_link_to_sign_in_again_without_touching_credentials(t
 def test_reconnect_without_a_link_says_so_rather_than_pretending(tmp_path: Path):
     app, _, settings = make(tmp_path)
     settings.slskd_api_key = "k"
-    r = TestClient(app).post("/api/setup/soulseek/connect")
+    r = AppClient(app).post("/api/setup/soulseek/connect")
     assert r.status_code == 409 and "Restart flackey" in r.json()["detail"]
 
 
@@ -1750,7 +1830,7 @@ def test_telegram_keys_route_saves_and_reconfigures(tmp_path: Path):
     login = TelegramLogin(Client(), False, make_client=Client)
     app, _, settings = make(tmp_path, login=login)
     settings.telegram_api_id = None; settings.telegram_api_hash = None
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.post("/api/telegram/keys", json={"api_id": "abc", "api_hash": "x"}).status_code == 400
     assert c.post("/api/telegram/keys", json={"api_id": 12, "api_hash": ""}).status_code == 400
     # A real hash is exactly 32 hex characters, so a half-copied one is refused here rather than at
@@ -1770,7 +1850,7 @@ def test_telegram_skip_route_turns_the_source_off(tmp_path: Path):
     status = Status(None, telegram_authorized=True, worker_running=False, setup_done=False,
                     source_enabled=True)
     app, _, settings = make(tmp_path, status=status)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/telegram/skip")
     assert r.status_code == 200 and r.json() == {"source_enabled": False}
     assert settings.source_enabled is False
@@ -1787,7 +1867,7 @@ def test_telegram_source_can_be_enabled_without_signing_in_again(tmp_path: Path)
     login = FakeLogin()
     login.authorized = True
     app, _, settings = make(tmp_path, status=status, login=login)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/telegram/source", json={"enabled": True})
     assert r.status_code == 200 and r.json() == {"source_enabled": True}
     assert settings.source_enabled is True and status["source_enabled"] is True
@@ -1801,7 +1881,7 @@ def test_telegram_source_cannot_be_enabled_without_an_authorized_session(tmp_pat
                     source_enabled=False)
     app, _, settings = make(tmp_path, status=status, login=FakeLogin())
     settings.source_enabled = False
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/telegram/source", json={"enabled": True})
     assert r.status_code == 409 and "Sign in to Telegram" in r.json()["detail"]
     assert settings.source_enabled is False
@@ -1813,7 +1893,7 @@ def test_health_takes_the_source_flag_from_the_shared_status(tmp_path: Path):
     status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True,
                     source_enabled=False)
     app, _, _ = make(tmp_path, status=status)
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.get("/api/health").json()["source_enabled"] is False
     status.update(telegram_authorized=True, source_enabled=True)
     assert c.get("/api/health").json()["source_enabled"] is True
@@ -1823,7 +1903,7 @@ def test_health_says_when_the_source_is_off(tmp_path: Path):
     """The setup screen's "skip" turns the bot source off; the UI reads that back from health."""
     app, _, settings = make(tmp_path)
     settings.source_enabled = False
-    assert TestClient(app).get("/api/health").json()["source_enabled"] is False
+    assert AppClient(app).get("/api/health").json()["source_enabled"] is False
 
 
 def test_changing_the_library_folder_moves_the_soulseek_share(tmp_path: Path):
@@ -1833,7 +1913,7 @@ def test_changing_the_library_folder_moves_the_soulseek_share(tmp_path: Path):
     app, _, settings = make(tmp_path)
     write_credentials(settings.data_dir, "digger", "not-a-real-password",
                       library_root=settings.library_root)
-    c = TestClient(app)
+    c = AppClient(app)
     new = tmp_path / "moved"
     assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
     data = yaml.safe_load(config_path(settings.data_dir).read_text())
@@ -1845,7 +1925,7 @@ def test_soulseek_setup_shares_the_library(tmp_path: Path):
 
     from flackey.slskd_config import config_path
     app, _, settings = make(tmp_path)
-    c = TestClient(app)
+    c = AppClient(app)
     r = c.post("/api/setup/soulseek",
                json={"username": "digger", "password": "not-a-real-password"})
     assert r.status_code == 200
@@ -1877,7 +1957,7 @@ def test_a_library_move_asks_a_wired_in_link_to_rescan_the_share(tmp_path: Path)
     write_credentials(settings.data_dir, "digger", "not-a-real-password",
                       library_root=settings.library_root)
     new = tmp_path / "moved"
-    with TestClient(app) as c:
+    with AppClient(app) as c:
         assert c.put("/api/settings", json={"library_root": str(new)}).status_code == 200
         assert link.rescanned.wait(2), "the rescan task was scheduled but never ran"
         assert link.calls == 1
@@ -1912,7 +1992,7 @@ def test_sharing_routes_with_a_service(tmp_path: Path):
 
     sharing = FakeSharing()
     app, _, _ = make(tmp_path, sharing=sharing)
-    c = TestClient(app)
+    c = AppClient(app)
     assert c.get("/api/sharing").json()["reachable"] is False
     assert c.post("/api/sharing/check").json()["checking"] is True and sharing.started == 1
 
@@ -1941,7 +2021,7 @@ def _sharing_service(soulseek_enabled: bool):
 def test_sharing_check_is_refused_while_soulseek_is_off(tmp_path: Path):
     _, sharing = _sharing_service(soulseek_enabled=False)
     app, _, _ = make(tmp_path, sharing=sharing)
-    assert TestClient(app).post("/api/sharing/check").status_code == 409
+    assert AppClient(app).post("/api/sharing/check").status_code == 409
 
 
 def test_sharing_check_follows_the_setting_not_the_last_refresh(tmp_path: Path):
@@ -1952,11 +2032,11 @@ def test_sharing_check_follows_the_setting_not_the_last_refresh(tmp_path: Path):
     setting.soulseek_enabled = True          # what POST /api/setup/soulseek does, before anything connects
     assert sharing.state["enabled"] is False
     app, _, _ = make(tmp_path, sharing=sharing)
-    assert TestClient(app).post("/api/sharing/check").status_code == 200
+    assert AppClient(app).post("/api/sharing/check").status_code == 200
 
 
 def test_health_reports_the_sharing_state(tmp_path: Path):
     status = Status(None, telegram_authorized=True, worker_running=False, setup_done=False)
     status["sharing"] = {"port": 50300, "enabled": True}
     app, _, _ = make(tmp_path, status=status)
-    assert TestClient(app).get("/api/health").json()["sharing"] == {"port": 50300, "enabled": True}
+    assert AppClient(app).get("/api/health").json()["sharing"] == {"port": 50300, "enabled": True}

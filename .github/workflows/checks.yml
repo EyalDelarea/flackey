@@ -21,7 +21,7 @@ jobs:
     name: ruff, lint-imports, pytest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
@@ -38,8 +38,8 @@ jobs:
     name: vitest and build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
@@ -56,18 +56,23 @@ jobs:
     needs: [python, web]
     if: github.event_name == 'push'
     runs-on: macos-14
-    env:
-      # Only baked into the build (by packaging/build_app.sh) on a tagged release; a plain push to main
-      # builds a keyless copy whose setup screen asks for keys instead. Keeps the keys off every push's
-      # installer artifact -- they only need to reach users through an actual release. Never printed.
-      FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
-      FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history so the tag can be checked against main below.
+          fetch-depth: 0
+      - name: Tagged commit is on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error title=Tag not on main::$GITHUB_SHA is not an ancestor of origin/main; refusing to build a release from it."
+            exit 1
+          }
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
@@ -76,11 +81,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: packaging/check_version.sh "$GITHUB_REF_NAME"
       - name: Cache helper downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packaging/build/helpers
           key: helpers-${{ hashFiles('packaging/fetch_helpers.sh') }}
       - name: Build
+        # Only baked into the build (by packaging/build_app.sh) on a tagged release; a plain push to
+        # main builds a keyless copy whose setup screen asks for keys instead. Never printed.
+        env:
+          FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
+          FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
         run: packaging/build_app.sh
       - name: Smoke-launch
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
@@ -98,7 +108,7 @@ jobs:
         run: |
           packaging/build_installer.sh
           cd packaging/build && shasum -a 256 Flackey.pkg > Flackey.pkg.sha256 && cat Flackey.pkg.sha256
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Flackey.installer
           path: |
@@ -115,11 +125,20 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Tagged commit is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error title=Tag not on main::$GITHUB_SHA is not an ancestor of origin/main; refusing to publish."
+            exit 1
+          }
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Flackey.installer
           path: dist
@@ -129,13 +148,23 @@ jobs:
         # Here rather than in the mac job: this is the only step that needs the private key, and it
         # should not run alongside npm install and PyInstaller.
         #
-        # An unset secret is not a failure -- the script says so and the release publishes the zip
-        # unsigned, which reads to every installed copy as "no seamless update here, use the installer".
+        # A missing signing key fails the release: installed copies only take a seamless update
+        # that verifies against this key, so an unsigned release must never be published.
         env:
           FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
         # --no-project: the script reads the signed-message format straight out of src/, so none of
-        # the app's macOS-shaped dependencies need to resolve on this runner.
-        run: uv run --no-project --with cryptography packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
+        # the app's macOS-shaped dependencies need to resolve on this runner. Pinned to the version in
+        # uv.lock since this step holds the private key.
+        run: |
+          if [[ -z "${FLACKEY_UPDATE_SIGNING_KEY// /}" ]]; then
+            echo "::error title=No signing key::FLACKEY_UPDATE_SIGNING_KEY is empty; refusing to publish an unsigned release."
+            exit 1
+          fi
+          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
+          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
+          test -s dist/Flackey-"${GITHUB_REF_NAME#v}".zip.sig
+          test -s dist/Flackey.pkg.sig
+        shell: bash
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,17 +174,10 @@ jobs:
 
           zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
           assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json)
-          # Both optional and independently so -- the .sig is missing whenever the signing secret is
-          # unset -- and publishing the pkg must not depend on either.
-          if [[ -f "$zip" ]]; then
-            assets+=("$zip")
-            if [[ -f "$zip.sig" ]]; then
-              assets+=("$zip.sig")
-            else
-              echo "::notice title=Unsigned release::No $zip.sig; installed copies will update by installer."
-            fi
-          else
-            echo "::warning title=No update archive::$zip was not built."
-          fi
+          # Every signed file is mandatory: installed copies refuse an update or installer without one.
+          for f in "$zip" "$zip.sig" dist/Flackey.pkg.sig; do
+            [[ -f "$f" ]] || { echo "::error title=Missing asset::$f is missing."; exit 1; }
+            assets+=("$f")
+          done
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes

@@ -23,7 +23,7 @@ def _clean_url(url: str) -> str:
     p = urlparse(url)
     q = parse_qs(p.query)
     keep = {k: v for k, v in q.items() if k in ("v", "list")}
-    return urlunparse((p.scheme, p.netloc, p.path, "", urlencode(keep, doseq=True), ""))
+    return urlunparse((p.scheme, (p.hostname or "").lower(), p.path, "", urlencode(keep, doseq=True), ""))
 
 
 def _spotify_entity_id(path: str, entity_type: str) -> str | None:
@@ -50,20 +50,24 @@ def classify(text: str) -> tuple[RequestKind, str | None]:
         if playlist_id:
             return RequestKind.SPOTIFY_PLAYLIST, f"https://open.spotify.com/playlist/{playlist_id}"
         return RequestKind.TEXT, None
-    if not any(h in host for h in ("youtube.com", "youtu.be")):
+    # The exact host or a subdomain of it: a substring test let `youtube.com.evil.example` through to
+    # yt-dlp, which would fetch it with its generic extractor.
+    name = (p.hostname or "").lower()
+    if not any(name == d or name.endswith("." + d) for d in ("youtube.com", "youtu.be")):
         return RequestKind.TEXT, None
     q = parse_qs(p.query)
     lid = q.get("list", [""])[0]
     if lid and not lid.startswith("RD"):  # RD… lists are YouTube's autoplay "mixes", not playlists
         # one canonical URL per playlist, whatever track it was shared from
         return RequestKind.YT_PLAYLIST, f"https://www.youtube.com/playlist?list={lid}"
-    if "youtu.be" in host:
+    if name == "youtu.be" or name.endswith(".youtu.be"):
         vid = p.path.strip("/")
         return RequestKind.YT_TRACK, f"https://www.youtube.com/watch?v={vid}"
-    # For regular tracks, keep only the video ID, preserve original scheme and host
+    # For regular tracks, keep only the video ID and the original scheme and host name (never a port or
+    # a `user@`, which would have ridden along to yt-dlp from the netloc)
     vid = q.get("v", [""])[0]
     if vid:
-        return RequestKind.YT_TRACK, f"{p.scheme}://{p.netloc}/watch?v={vid}"
+        return RequestKind.YT_TRACK, f"{p.scheme}://{name}/watch?v={vid}"
     return RequestKind.YT_TRACK, _clean_url(url)
 
 

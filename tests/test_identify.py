@@ -116,3 +116,18 @@ def test_split_ignores_a_dash_inside_brackets():
     assert (q.artist, q.title) == ("Artist [Live - 1997]", "Title")
     q = parse_text("Artist [a (b) - c] - Title")  # nested: depth, not an in-bracket flag
     assert (q.artist, q.title) == ("Artist [a (b) - c]", "Title")
+
+
+@pytest.mark.parametrize("url", [
+    "https://youtube.com.evil.example/watch?v=abc",
+    "https://notyoutube.com/watch?v=abc",
+    "https://youtube.com@127.0.0.1:50300/watch?v=abc",
+    "https://evil.example/youtu.be/abc",
+])
+def test_a_host_that_only_contains_youtube_is_not_youtube(url):
+    assert classify(url) == (RequestKind.TEXT, None)
+
+
+def test_a_youtube_link_keeps_only_the_host_name():
+    assert classify("https://user@music.youtube.com:443/watch?v=abc") == (
+        RequestKind.YT_TRACK, "https://music.youtube.com/watch?v=abc")
