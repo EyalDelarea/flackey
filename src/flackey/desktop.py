@@ -21,6 +21,7 @@ from pathlib import Path
 from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
 from .config import Settings, save_settings
 from .selfupdate import install as update_install
+from .single_instance import claim_single_instance, focus_running_window
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
@@ -137,88 +138,6 @@ def set_app_name(name: str = APP_NAME) -> bool:
     return True
 
 
-SINGLE_INSTANCE_MUTEX = "FlackeySingleInstance"  # per logon session: Windows' default namespace for a name
-_ERROR_ALREADY_EXISTS = 183
-_SW_RESTORE = 9
-_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_instance_mutex: int | None = None  # held for the life of the process; Windows lets go of it at exit
-
-
-def claim_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> bool:
-    """True when this is the only Flackey running for this user, and from now on it is the one.
-
-    macOS never starts an app twice, so this is Windows only. There each double-click on the shortcut is a
-    new process, and on a slow first launch -- no window for ten seconds or more on an Arm PC emulating
-    x64 -- people click again. The copies then open the same database and port at once: one dies on
-    "database is locked" in an error box, another on the port. A named mutex is how Windows programs
-    tell: the first process creates it, later ones find it already there. True as well when the mutex
-    cannot be made at all, since starting is better than refusing to start."""
-    global _instance_mutex
-    if sys.platform != "win32":
-        return True
-    import ctypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.restype = ctypes.c_void_p
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.CreateMutexW(None, False, name)
-    if not handle:
-        return True
-    if ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:
-        kernel32.CloseHandle(handle)
-        return False
-    _instance_mutex = handle
-    return True
-
-
-def focus_running_window(title: str = APP_NAME) -> bool:
-    """Bring the running Flackey's window to the front, restoring it if minimized. Matched on the title
-    *and* on the program behind it, so a File Explorer window open on a folder called Flackey is left
-    alone. False when there is no window yet (the other copy is still starting, and will show one) or
-    off Windows."""
-    if sys.platform != "win32":
-        return False
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.WinDLL("user32")
-    kernel32 = ctypes.WinDLL("kernel32")
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    ours = os.path.normcase(os.path.abspath(sys.executable))
-    found: list[int] = []
-
-    def image_of(hwnd: int) -> str:
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
-        process = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if not process:
-            return ""
-        try:
-            buf = ctypes.create_unicode_buffer(32768)
-            size = wintypes.DWORD(len(buf))
-            ok = kernel32.QueryFullProcessImageNameW(process, 0, buf, ctypes.byref(size))
-            return os.path.normcase(buf.value) if ok else ""
-        finally:
-            kernel32.CloseHandle(process)
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def visit(hwnd, _lparam):
-        text = ctypes.create_unicode_buffer(256)
-        user32.GetWindowTextW(hwnd, text, len(text))
-        if text.value == title and user32.IsWindowVisible(hwnd) and image_of(hwnd) == ours:
-            found.append(hwnd)
-            return False  # stop enumerating
-        return True
-
-    user32.EnumWindows(visit, 0)
-    if not found:
-        return False
-    hwnd = wintypes.HWND(found[0])
-    if user32.IsIconic(hwnd):
-        user32.ShowWindow(hwnd, _SW_RESTORE)  # only when minimized: on a maximized one it would un-maximize
-    return bool(user32.SetForegroundWindow(hwnd))
-
-
 _WINDOWS_THEME_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
 
@@ -261,8 +180,11 @@ def system_is_dark() -> bool:
 
 
 def screen_size() -> tuple[int, int] | None:
-    """The usable size of the display the window will open on, or None off macOS and without AppKit.
-    `visibleFrame` rather than `frame`, so the menu bar and the Dock are already taken off it."""
+    """The usable size of the display the window will open on, or None where it can't be measured.
+    On macOS `visibleFrame` rather than `frame`, so the menu bar and the Dock are already taken off it;
+    on Windows the work area, which leaves out the taskbar."""
+    if sys.platform == "win32":
+        return _windows_work_area()
     if sys.platform != "darwin":
         return None
     try:
@@ -275,6 +197,29 @@ def screen_size() -> tuple[int, int] | None:
         log.debug("could not read the screen size", exc_info=True)
         return None
     return int(frame.size.width), int(frame.size.height)
+
+
+_SPI_GETWORKAREA = 0x0030
+
+
+def _windows_work_area() -> tuple[int, int] | None:
+    """The primary display's work area in the logical pixels pywebview sizes windows in. A DPI-aware
+    process is told physical pixels, so they are scaled back by the system DPI; an unaware one is told
+    logical pixels and a DPI of 96 alike, so the division changes nothing there. Seen in the Windows VM:
+    without this the 1100 x 720 first window overhung a 1024 x 768 screen."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(_SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            return None
+        dpi = ctypes.windll.user32.GetDpiForSystem() or 96
+    except Exception:
+        log.debug("could not read the work area", exc_info=True)
+        return None
+    scale = dpi / 96
+    return int((rect.right - rect.left) / scale), int((rect.bottom - rect.top) / scale)
 
 
 def startup_size(settings: Settings, limit: tuple[int, int] | None = None) -> tuple[int, int]:

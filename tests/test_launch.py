@@ -58,7 +58,31 @@ def test_the_streams_are_fixed_before_logging_is_configured(monkeypatch, tmp_pat
     monkeypatch.setattr(launch, "configure_logging", lambda d: order.append("logging"))
     import flackey.desktop
     monkeypatch.setattr(flackey.desktop, "run_in_window", lambda s: order.append("window"))
+    import flackey.single_instance
+    monkeypatch.setattr(flackey.single_instance, "claim_single_instance", lambda: order.append("claim") or True)
 
     launch.main()
 
-    assert order == ["streams", "settings", "logging", "window"]
+    assert order == ["streams", "settings", "logging", "claim", "window"]
+
+
+def test_a_second_copy_hands_over_before_loading_the_app(monkeypatch, tmp_path: Path):
+    """On an Arm PC the desktop imports took three minutes before the old check ran. A second launch now
+    brings the first copy forward and exits without ever reaching the window code."""
+    launch = _launch_module()
+    monkeypatch.setattr(launch, "load_settings", lambda: type("S", (), {"data_dir": tmp_path})())
+    monkeypatch.setattr(launch, "configure_logging", lambda d: None)
+    import flackey.desktop
+    import flackey.single_instance
+    focused: list[bool] = []
+    monkeypatch.setattr(flackey.single_instance, "claim_single_instance", lambda: False)
+    monkeypatch.setattr(flackey.single_instance, "focus_running_window", lambda: focused.append(True) or True)
+
+    def no_window(settings):
+        raise AssertionError("a second copy must not open a window")
+
+    monkeypatch.setattr(flackey.desktop, "run_in_window", no_window)
+
+    launch.main()
+
+    assert focused == [True]

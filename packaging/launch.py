@@ -51,6 +51,14 @@ def main() -> None:
     settings = load_settings()
     configure_logging(settings.data_dir)
     log = logging.getLogger("flackey.launch")
+    # Before `flackey.desktop`, whose imports take minutes on an Arm PC emulating x64: a second
+    # double-click hands over to the running copy now rather than after all of them.
+    from flackey.single_instance import claim_single_instance, focus_running_window
+
+    if not claim_single_instance():
+        shown = focus_running_window()
+        log.info("Flackey is already running: %s", "brought its window forward" if shown else "it is still starting")
+        return
     try:
         from flackey.desktop import run_in_window
 

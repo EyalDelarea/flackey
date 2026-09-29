@@ -162,6 +162,15 @@ def test_screen_size_is_none_off_macos(monkeypatch):
     assert desktop.screen_size() is None
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="reads the real Windows work area")
+def test_screen_size_on_windows_is_the_work_area():
+    """The window must not open wider or taller than the screen: 1100 x 720 overhung a 1024 x 768 one."""
+    from flackey import desktop
+
+    size = desktop.screen_size()
+    assert size is not None and size[0] > 0 and size[1] > 0
+
+
 def test_set_app_name_is_false_off_macos(monkeypatch):
     from flackey import desktop
 
@@ -266,13 +275,36 @@ def test_single_instance_is_left_to_macos(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="a Windows named mutex")
-def test_single_instance_second_claim_is_refused_on_windows(monkeypatch):
-    from flackey import desktop
+def test_single_instance_claim_is_refused_while_another_copy_holds_it():
+    import ctypes
 
-    monkeypatch.setattr(desktop, "_instance_mutex", None)
+    from flackey import single_instance
+
     name = f"FlackeyTest-{uuid.uuid4()}"
-    assert desktop.claim_single_instance(name) is True
-    assert desktop.claim_single_instance(name) is False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    other = kernel32.CreateMutexW(None, False, name)   # the copy already running
+    try:
+        assert single_instance.claim_single_instance(name) is False
+    finally:
+        kernel32.CloseHandle(other)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows named mutex")
+def test_single_instance_claim_again_from_the_holder_is_not_a_refusal():
+    """launch.py claims first thing and run_in_window checks again: the holder must not refuse itself."""
+    from flackey import single_instance
+
+    name = f"FlackeyTest-{uuid.uuid4()}"
+    assert single_instance.claim_single_instance(name) is True
+    assert single_instance.claim_single_instance(name) is True
+
+
+def test_window_title_matched_by_single_instance_is_the_app_name():
+    from flackey import desktop, single_instance
+
+    assert single_instance.WINDOW_TITLE == desktop.APP_NAME
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows window enumeration")
