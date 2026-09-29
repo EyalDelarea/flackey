@@ -25,12 +25,17 @@ from .slskd_binary import SlskdBinaryError, binary_path, install_dir, is_install
 
 log = logging.getLogger(__name__)
 
+
+class SlskdStartTimeout(SlskdBinaryError):
+    """slskd is installed and was launched but never answered in time: slow, not missing."""
+
 _POLL_INTERVAL_S = 0.2
-# How long a freshly spawned slskd gets to answer. A warm start on a Mac takes a few seconds, but the very
-# first start of a just-downloaded slskd.exe waits on the antivirus scanning 120 MB of it: 35 seconds in
-# the Windows test VM, where 30 was the old limit and slskd was killed moments before it came up. Only a
-# slskd that never starts ever waits this long.
-SLSKD_START_TIMEOUT_S = 90.0
+_WAIT_REQUEST_TIMEOUT_S = 5.0
+# How long a freshly spawned slskd gets to answer. A warm start on a Mac takes a few seconds, but a slow PC
+# is another matter: in the Windows test VM (x64 slskd emulated on ARM, on a fresh install busy updating
+# and scanning) Windows took up to 90 s to launch the new slskd.exe and slskd another minute to finish
+# starting. Only a slskd that never starts ever waits this long.
+SLSKD_START_TIMEOUT_S = 180.0
 _SIGKILL_GRACE_S = 5.0
 _CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW, which only a Windows build defines
 
@@ -111,31 +116,47 @@ class SlskdProcess:
         if not healthy:
             # Never leave an orphan behind: if it didn't come up healthy, tear it down before raising.
             await self.stop()
-            raise SlskdBinaryError("slskd did not become healthy within the timeout")
+            raise SlskdStartTimeout("slskd did not become healthy within the timeout")
 
-    async def probe(self) -> bool:
+    async def probe(self, client: httpx.AsyncClient | None = None) -> bool:
         """A single health check, no polling. True when something answers `GET .../application` with a
         non-server-error status. Used to detect an already-running slskd without waiting for one."""
+        return await self._check(client) is None
+
+    async def _check(self, client: httpx.AsyncClient | None = None) -> str | None:
+        """One health check: None when slskd answered, else why not (for the log)."""
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(
-                    f"{self._url}/api/v0/application",
-                    headers={"X-API-Key": self._api_key},
-                )
-            return resp.status_code < 500
-        except httpx.HTTPError:
-            return False
+            if client is None:
+                async with httpx.AsyncClient(timeout=2.0) as own:
+                    resp = await self._get_application(own)
+            else:
+                resp = await self._get_application(client)
+        except httpx.HTTPError as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return None if resp.status_code < 500 else f"HTTP {resp.status_code}"
+
+    async def _get_application(self, client: httpx.AsyncClient) -> httpx.Response:
+        return await client.get(f"{self._url}/api/v0/application", headers={"X-API-Key": self._api_key})
 
     async def wait_healthy(self, *, timeout_s: float = 30) -> bool:
         """Poll `GET <url>/api/v0/application` until it answers or the timeout expires. Returns a
-        bool; never raises on an unhealthy or unreachable sidecar."""
+        bool; never raises on an unhealthy or unreachable sidecar.
+
+        One client serves every poll: building an httpx client sets up TLS, which cost 130 ms a probe on
+        a Windows CI runner and far more on a slow PC busy starting slskd itself. Each request gets
+        `_WAIT_REQUEST_TIMEOUT_S`, since a slskd just starting can be slow to answer its first one."""
         deadline = self._clock() + timeout_s
-        while True:
-            if await self.probe():
-                return True
-            if self._clock() >= deadline:
-                return False
-            await self._sleep(_POLL_INTERVAL_S)
+        last = "no answer"
+        async with httpx.AsyncClient(timeout=_WAIT_REQUEST_TIMEOUT_S) as client:
+            while True:
+                failure = await self._check(client)
+                if failure is None:
+                    return True
+                last = failure
+                if self._clock() >= deadline:
+                    log.warning("slskd gave no healthy answer in %.0f s; last try: %s", timeout_s, last)
+                    return False
+                await self._sleep(_POLL_INTERVAL_S)
 
     async def stop(self, *, timeout_s: float = 10) -> None:
         """Send SIGTERM, wait, then SIGKILL if it must. Safe to call when nothing is running, and

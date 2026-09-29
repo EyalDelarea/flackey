@@ -7,7 +7,7 @@ import respx
 
 from flackey import slskd_process
 from flackey.slskd_binary import SlskdBinaryError
-from flackey.slskd_process import SlskdProcess
+from flackey.slskd_process import SlskdProcess, SlskdStartTimeout
 
 BASE = "http://slskd.test/api/v0"
 
@@ -79,10 +79,29 @@ async def test_wait_healthy_returns_false_on_timeout_without_real_sleep(tmp_path
     wall_elapsed = time.perf_counter() - wall_start
 
     assert result is False
-    # Never performed a real wait: well under the 5s timeout. Not tighter, because each probe builds an
-    # httpx client and that alone took 3.3s over the 26 probes on a Windows CI runner.
+    # Never performed a real wait: well under the 5s timeout.
     assert wall_elapsed < 4.5
     assert clock.t >= 5  # but the injected clock did advance past the timeout
+
+
+@respx.mock
+async def test_wait_healthy_reuses_one_client_for_every_poll(tmp_path: Path, monkeypatch):
+    """A client per poll meant a TLS setup per poll, which a slow PC busy starting slskd could not keep up with."""
+    route = respx.get(f"{BASE}/application")
+    route.side_effect = [httpx.ConnectError("refused"), httpx.ConnectError("refused"), httpx.Response(401)]
+    built = []
+    real = httpx.AsyncClient
+
+    def counting(*args, **kwargs):
+        built.append(kwargs.get("timeout"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(slskd_process.httpx, "AsyncClient", counting)
+    clock = Clock()
+    proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
+
+    assert await proc.wait_healthy(timeout_s=5) is True
+    assert route.call_count == 3 and len(built) == 1
 
 
 @respx.mock
@@ -166,14 +185,14 @@ async def test_start_hides_the_slskd_console_only_on_windows(tmp_path: Path, mon
         spawned.update(kwargs)
         return FakeProc()
 
-    answers = iter([False, True])  # nothing running yet, then healthy on the first poll
+    answers = iter(["refused", None])  # nothing running yet, then healthy on the first poll
 
-    async def probe(self) -> bool:
+    async def check(self, client=None) -> str | None:
         return next(answers)
 
     monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
     monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(SlskdProcess, "probe", probe)
+    monkeypatch.setattr(SlskdProcess, "_check", check)
     monkeypatch.setattr(slskd_process.sys, "platform", platform)
     clock = Clock()
     proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
@@ -181,3 +200,33 @@ async def test_start_hides_the_slskd_console_only_on_windows(tmp_path: Path, mon
     await proc.start()
 
     assert {k: v for k, v in spawned.items() if k == "creationflags"} == expected
+
+
+async def test_start_that_never_answers_raises_a_timeout_and_leaves_no_orphan(tmp_path: Path, monkeypatch, caplog):
+    """A slow slskd is told apart from a missing one, so the setup screen doesn't send the owner back
+    to install what is already installed."""
+    fake = FakeProc()
+
+    async def spawn(*args, **kwargs):
+        return fake
+
+    async def check(self, client=None) -> str | None:
+        return "ReadTimeout: timed out"
+
+    monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(SlskdProcess, "_check", check)
+    clock = Clock()
+
+    async def sleep(s: float) -> None:
+        clock.t += s
+        if fake.terminated:
+            fake.returncode = 0
+
+    proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=sleep)
+
+    with pytest.raises(SlskdStartTimeout):
+        await proc.start(timeout_s=5)
+    assert fake.terminated == 1 and proc.running is False
+    # Why the last try failed is logged, so a report from a slow PC says what slskd was doing.
+    assert "ReadTimeout: timed out" in caplog.text
