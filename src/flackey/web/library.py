@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import __version__
@@ -23,6 +23,7 @@ from ..slskd_config import (
     read_password,
     read_username,
     read_web_credentials,
+    unsafe_share_reason,
     write_credentials,
     write_share,
 )
@@ -31,6 +32,7 @@ from ..store import Store
 from ..tools import tool_path
 from ..youtube import ytdlp_available
 from . import SETUP_DONE_KEY, Bundles, to_dict
+from .guard import from_the_app
 
 log = logging.getLogger(__name__)
 
@@ -214,6 +216,9 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         path = Path(raw).expanduser() if raw else None
         if path is None or not path.is_absolute():
             raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")
+        reason = unsafe_share_reason(path, settings.data_dir)
+        if reason:
+            raise HTTPException(400, reason)
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -284,23 +289,25 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         return {"configured": username is not None, "username": username}
 
     @r.get("/setup/soulseek/password")
-    async def get_soulseek_password() -> dict:
+    async def get_soulseek_password(request: Request) -> dict:
         """Hand the owner back the Soulseek password flackey generated for them.
 
         The only route in flackey that returns a secret, and it is here because Soulseek has no password
         reset: the name is bound to the password it was claimed with, and an owner who cannot produce that
         string cannot sign in from anywhere else, ever. Keeping it unreadable would not protect them from
-        anything -- the file is 0600 under their own account, so anything that can call this can already
-        read it -- it would only make the account unrecoverable. Deliberately its own path rather than a
+        anything -- the file is 0600 under their own account, and with other sites' pages refused (the Host
+        check in `web.guard`, and the header below) anything that can call this can already read it -- it would only make the account unrecoverable. Deliberately its own path rather than a
         field on GET /setup/soulseek, which the wizard polls: a secret must not ride along on a poll."""
+        from_the_app(request)
         password = read_password(settings.data_dir)
         if password is None:
             raise HTTPException(404, "No Soulseek password is saved.")
         return {"username": read_username(settings.data_dir), "password": password}
 
     @r.get("/setup/slskd/credentials")
-    async def get_slskd_credentials() -> dict:
+    async def get_slskd_credentials(request: Request) -> dict:
         """Expose the local helper's web-login secret only on an explicit owner request."""
+        from_the_app(request)
         credentials = read_web_credentials(settings.data_dir)
         if credentials is None:
             raise HTTPException(404, "No Soulseek helper login is saved.")

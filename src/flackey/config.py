@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
     web_host: str = "127.0.0.1"
+    # Host names, comma-separated, the API answers to besides localhost and any IP address -- for a Docker
+    # owner who opens the UI as http://nas.local:8765. Every other name is refused (see `web.guard`), which
+    # is what stops a website from rebinding its own name to this machine.
+    web_allowed_hosts: str = ""
     data_dir: Path = Field(default_factory=default_data_dir)
     # How many requests the worker runs at once; None means every queued track at the same time. This is a
     # limit for the machine (ffmpeg, sockets, file handles), not for correctness: the slow stage is a
@@ -106,6 +110,10 @@ class Settings(BaseSettings):
         if v not in FILING_FORMATS:
             raise ValueError(f"lossless_filing_format must be one of {FILING_FORMATS}")
         return v
+
+    @property
+    def allowed_hosts(self) -> frozenset[str]:
+        return frozenset(h.strip().lower() for h in self.web_allowed_hosts.split(",") if h.strip())
 
     @property
     def telegram_configured(self) -> bool:
@@ -255,6 +263,27 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     if not result.slskd_api_key:
         result.slskd_api_key = read_api_key(result.data_dir)
     return result
+
+
+def secure_private_files(settings: Settings) -> None:
+    """Owner-only permissions on the data folder and the Telegram session, every start.
+
+    The session file *is* the Telegram login, and Telethon creates it with the umask's 0644. The folder's
+    0700 is what actually keeps other accounts out, so it is set rather than left to whoever created it
+    first; the session is made 0600 besides -- created that way if missing, so Telethon never opens a
+    readable one, and SQLite gives its -journal the same mode. Best effort: a Docker volume the container
+    user cannot chmod must not stop the app."""
+    try:
+        os.chmod(settings.data_dir, 0o700)
+    except OSError as e:
+        log.warning("could not make %s private: %s", settings.data_dir, e.strerror or e)
+    session = settings.session_path.with_name(settings.session_path.name + ".session")
+    try:
+        os.close(os.open(session, os.O_WRONLY | os.O_CREAT, 0o600))
+        for p in settings.data_dir.glob(session.name + "*"):
+            os.chmod(p, 0o600)
+    except OSError as e:
+        log.warning("could not make the Telegram session private: %s", e.strerror or e)
 
 
 def save_settings(settings: Settings, **updates) -> Settings:

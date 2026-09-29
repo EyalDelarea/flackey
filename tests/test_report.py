@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from fastapi.testclient import TestClient
 
 from flackey import __version__
 from flackey.config import Settings
@@ -26,9 +25,11 @@ from flackey.web.report import (
     write_zip,
 )
 from flackey.worker import Worker
+from tests.appclient import AppClient
 
 HOME = Path("/Users/someone")
 APP = {"x-flackey-app": "1"}
+NOT_FROM_APP = {"x-flackey-app": ""}
 
 
 # ---- Redactor ---------------------------------------------------------------------------------
@@ -202,7 +203,7 @@ def app(tmp_path: Path, monkeypatch):
     revealed: list[Path] = []
     opened: list[str] = []
     monkeypatch.setattr(report, "open_url", opened.append)
-    client = TestClient(create_app(store, worker, Inbox(store), settings, opener=revealed.append))
+    client = AppClient(create_app(store, worker, Inbox(store), settings, opener=revealed.append))
     return client, settings, revealed, opened
 
 
@@ -240,7 +241,7 @@ def test_sending_writes_the_zip_reveals_it_and_opens_the_email(app, via, opens):
 
 def test_sending_needs_the_app_header_and_a_description(app):
     client, _, revealed, opened = app
-    assert client.post("/api/bug-report", json={"description": "x"}).status_code == 403
+    assert client.post("/api/bug-report", json={"description": "x"}, headers=NOT_FROM_APP).status_code == 403
     res = client.post("/api/bug-report", json={"description": "   "}, headers=APP)
     assert res.status_code == 400 and "what went wrong" in res.json()["detail"]
     assert revealed == [] and opened == []
@@ -261,7 +262,7 @@ def test_reveal_shows_the_newest_report_or_says_it_is_gone(app):
     assert client.post("/api/bug-report/reveal", headers=APP).status_code == 404
     out = client.post("/api/bug-report", json={"description": "x"}, headers=APP).json()
     revealed.clear()
-    assert client.post("/api/bug-report/reveal").status_code == 403
+    assert client.post("/api/bug-report/reveal", headers=NOT_FROM_APP).status_code == 403
     assert client.post("/api/bug-report/reveal", headers=APP).json() == {"ok": True}
     assert revealed == [settings.data_dir / "bug-reports" / out["file"]]
 
@@ -289,3 +290,14 @@ def test_the_url_stays_short_even_for_text_that_encodes_large(tmp_path: Path, vi
     email = compose_email(rep, hebrew, hebrew, "flackey-bug-report-1.zip", Redactor([], home=HOME), via)
     assert len(email.url) <= report.URL_MAX
     assert email.body.startswith("החלון") and "…" in email.body
+
+
+@pytest.mark.parametrize("line, gone", [
+    ("password: my pass phrase here", "pass phrase"),
+    ("slskd_password=two words", "two words"),
+    ("fetching http://dj:hunter2@proxy.example:8080/x", "hunter2"),
+    ("fetching https://dj@host.example/x", "dj@"),
+])
+def test_passwords_with_spaces_and_url_logins_are_redacted(line, gone):
+    out = Redactor([], home=HOME)(line)
+    assert gone not in out and "<redacted>" in out

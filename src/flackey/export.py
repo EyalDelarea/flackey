@@ -22,14 +22,20 @@ def playlist_names(playlists: list[Playlist]) -> dict[int, str]:
     return names
 
 
+def _one_line(text: str) -> str:
+    """Names come from Spotify, Deezer and the bot; a line break in one would start a new playlist entry,
+    which Rekordbox would then import as a path."""
+    return " ".join("".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in text).split())
+
+
 def build_m3u8(playlist: Playlist, tracks: dict[int, Track]) -> str:
-    lines = ["#EXTM3U", f"#PLAYLIST:{playlist.name}"]
+    lines = ["#EXTM3U", f"#PLAYLIST:{_one_line(playlist.name)}"]
     for tid in playlist.track_ids:
         t = tracks.get(tid)
         if t is None:  # deleted from the index after it was added to the playlist
             continue
         secs = -1 if t.duration_s is None else t.duration_s
-        lines.append(f"#EXTINF:{secs},{t.artist} - {t.title}")
+        lines.append(f"#EXTINF:{secs},{_one_line(f'{t.artist} - {t.title}')}")
         lines.append(str(t.path))
     return "\n".join(lines) + "\n"
 

@@ -9,7 +9,9 @@ from flackey.slskd_config import (
     read_api_key,
     read_password,
     read_username,
+    unsafe_share_reason,
     write_credentials,
+    write_share,
 )
 
 
@@ -198,3 +200,24 @@ def test_write_share_does_nothing_without_a_config(tmp_path: Path):
     from flackey.slskd_config import write_share
     assert write_share(tmp_path, tmp_path / "lib") is False
     assert not config_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize("where", ["home", "above-home", "data-dir", "above-data-dir"])
+def test_a_share_that_would_hold_home_or_flackeys_data_is_refused(tmp_path: Path, monkeypatch, where):
+    """Shared with the whole Soulseek network: never the home folder, or the folder with the Telegram session."""
+    home = tmp_path / "home"
+    data = home / "Library" / "Flackey"
+    data.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    write_credentials(data, "dj", "pw", library_root=home / "Music")
+    folder = {"home": home, "above-home": tmp_path, "data-dir": data, "above-data-dir": home / "Library"}[where]
+
+    assert unsafe_share_reason(folder, data)
+    with pytest.raises(SlskdConfigError):
+        write_share(data, folder)
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(home / "Music")]
+
+
+def test_a_music_folder_is_a_fine_share(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert unsafe_share_reason(tmp_path / "Music" / "DJ Library", tmp_path / "Library" / "Flackey") is None

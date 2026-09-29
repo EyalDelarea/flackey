@@ -71,3 +71,11 @@ def test_write_playlists_writes_one_file_per_playlist(tmp_path: Path):
     assert text.startswith("#EXTM3U\n#PLAYLIST:Goa Set\n") and str(lib / "Psy-Trance" / "L" / "A - T.mp3") in text
     assert write_playlists(s, lib) == written  # idempotent, atomic replace
     assert not list((lib / "Playlists").glob("*.tmp"))
+
+
+def test_build_m3u8_keeps_names_that_carry_line_breaks_on_one_line():
+    """A line break in a name would start an entry of its own, which Rekordbox imports as a path."""
+    tracks = {1: _track(1, "/lib/A/A - T.mp3", "A\n/Users/x/secret.mp3", "T\r\n#EXTINF")}
+    out = build_m3u8(_playlist(1, "Set\n/etc/passwd", [1]), tracks)
+    assert out.splitlines() == ["#EXTM3U", "#PLAYLIST:Set /etc/passwd",
+                                "#EXTINF:442,A /Users/x/secret.mp3 - T #EXTINF", "/lib/A/A - T.mp3"]

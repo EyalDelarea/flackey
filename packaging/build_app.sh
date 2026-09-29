@@ -10,7 +10,7 @@ BUILD="$ROOT/packaging/build"
 cd "$ROOT"
 
 echo "==> web UI"
-npm --prefix web install --silent
+npm --prefix web ci --silent
 npm --prefix web run build
 
 echo "==> icon"
@@ -44,7 +44,7 @@ echo "==> helpers"
 packaging/fetch_helpers.sh
 
 echo "==> bundle"
-uv run --with pyinstaller pyinstaller --noconfirm --clean \
+uv run --frozen --with pyinstaller==6.22.3 pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \
   packaging/Flackey.spec
 

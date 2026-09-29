@@ -190,7 +190,7 @@ def write_credentials(data_dir: Path, username: str, password: str,
     directories.setdefault("incomplete", str(data_dir / "slskd" / "incomplete"))
 
     if library_root is not None:
-        _set_share(config, path, library_root)
+        _set_share(config, path, library_root, data_dir)
 
     _atomic_write(path, config)
     log.info("wrote slskd config: %s", path)
@@ -211,11 +211,29 @@ def _atomic_write(path: Path, config: dict) -> None:
         raise SlskdConfigError(f"could not write {path}: {e.strerror or e}") from e
 
 
-def _set_share(config: dict, path: Path, library_root: Path, previous: Path | None = None) -> None:
+def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
+    """Why this folder must never be the library, or None. The library is shared with the whole Soulseek
+    network, so a folder that holds the home directory or Flackey's own data would hand strangers the
+    Telegram session and every saved password. Resolved first, so a symlink to ~ is caught too."""
+    root = library_root.expanduser().resolve()
+    home = Path.home().resolve()
+    if root == Path(root.anchor) or root == home or home.is_relative_to(root):
+        return "That folder holds your whole home folder. Choose a folder just for your music."
+    if data_dir.expanduser().resolve().is_relative_to(root):
+        return "That folder holds Flackey's own settings and sign-ins. Choose a folder just for your music."
+    return None
+
+
+def _set_share(config: dict, path: Path, library_root: Path, data_dir: Path,
+               previous: Path | None = None) -> None:
     """Make the library folder one of slskd's shared directories. Sharing is what keeps a Soulseek
     user in good standing -- many peers refuse anyone who offers nothing -- and the spec
     (2026-09-07 §2) says the whole DJ Library is shared. Other entries are the owner's and stay; a
-    previous library folder goes, because it is the same share moved, not a second one."""
+    previous library folder goes, because it is the same share moved, not a second one. Raises
+    SlskdConfigError for a folder `unsafe_share_reason` refuses."""
+    reason = unsafe_share_reason(library_root, data_dir)
+    if reason:
+        raise SlskdConfigError(reason)
     shares = _submapping(config, "shares", path)
     dirs = shares.get("directories")
     if not isinstance(dirs, list):
@@ -236,7 +254,7 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
     if not path.exists():
         return False
     config = _load_config(path)
-    _set_share(config, path, library_root, previous)
+    _set_share(config, path, library_root, data_dir, previous)
     _atomic_write(path, config)
     log.info("slskd share now %s", library_root)
     return True

@@ -1,12 +1,14 @@
 #!/usr/bin/env python
-"""Sign an update archive with the Ed25519 release key.
+"""Sign an update archive or the installer with the Ed25519 release key.
 
     FLACKEY_UPDATE_SIGNING_KEY=<64 hex chars> packaging/sign_archive.py dist/Flackey-0.1.7.zip
+    FLACKEY_UPDATE_SIGNING_KEY=<64 hex chars> packaging/sign_archive.py dist/Flackey.pkg 0.1.7
 
-Signs `signing_message(version, archive)`, not the bare zip, so the signature only ever names the
-release it was made for. The version comes from the `Flackey-<version>.zip` filename, or a second
-argument. Writes `<archive>.sig`, the detached signature as hex. Exits 0 without writing when the
-secret is unset, so a release built before the key existed still publishes its installer.
+Signs `signing_message(version, file, domain)`, not the bare bytes, so the signature only ever names the
+release it was made for -- and, through the domain, which of the two files it is for. The version comes
+from the `Flackey-<version>.zip` filename, or a second argument (required for the .pkg). Writes
+`<file>.sig`, the detached signature as hex. An unset secret fails: installed copies refuse an unsigned
+update, so publishing one would only strand them.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from flackey.selfupdate.signature import signing_message
+from flackey.selfupdate.signature import DOMAIN, INSTALLER_DOMAIN, signing_message
 
 ENV_VAR = "FLACKEY_UPDATE_SIGNING_KEY"
 KEY_BYTES = 32
@@ -37,6 +39,7 @@ def main(argv: list[str]) -> int:
     if not archive.is_file():
         print(f"no such archive: {archive}", file=sys.stderr)
         return 1
+    domain = INSTALLER_DOMAIN if archive.suffix == ".pkg" else DOMAIN
 
     if len(argv) == 3:
         version = argv[2]
@@ -50,8 +53,9 @@ def main(argv: list[str]) -> int:
 
     secret = os.environ.get(ENV_VAR, "").strip()
     if not secret:
-        print(f"{ENV_VAR} is not set: publishing {archive.name} unsigned, so updates use the installer.")
-        return 0
+        print(f"::error title=No signing key::{ENV_VAR} is not set, so {archive.name} cannot be signed.",
+              file=sys.stderr)
+        return 1
 
     try:
         raw = bytes.fromhex(secret)
@@ -65,7 +69,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     private = Ed25519PrivateKey.from_private_bytes(raw)
-    signature = private.sign(signing_message(version, archive.read_bytes()))
+    signature = private.sign(signing_message(version, archive.read_bytes(), domain))
     out = archive.with_name(archive.name + ".sig")
     out.write_text(signature.hex() + "\n")
 

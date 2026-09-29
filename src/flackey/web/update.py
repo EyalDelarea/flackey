@@ -16,10 +16,16 @@ from ..config import Settings
 from ..events import Status
 from ..selfupdate import install as selfupdate
 from ..selfupdate import signature
+from .guard import from_the_app
 
 log = logging.getLogger(__name__)
 
 RELEASES_URL = "https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10"
+# Where a release's files and page may live. The feed is trusted to name the release, not to send the app
+# anywhere it likes: an asset or page link outside the repo is treated as missing. Checked on the link
+# the feed gives; GitHub then redirects the download to its CDN, which is expected.
+ASSET_PREFIX = "https://github.com/EyalDelarea/flackey/releases/download/"
+RELEASE_PAGE_PREFIX = "https://github.com/EyalDelarea/flackey/releases/"
 INSTALLER_NAME = "Flackey.pkg"
 SIGNATURE_SUFFIX = ".sig"
 MAX_SIGNATURE_BYTES = 4096
@@ -27,19 +33,6 @@ MAX_SIGNATURE_BYTES = 4096
 DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 PROGRESS_KEY = "update_download"
 INCOMPLETE = "The download arrived incomplete. Check your connection and try again."
-
-
-APP_HEADER = "x-flackey-app"
-
-
-def from_the_app(request: Request) -> None:
-    """Refuse a press that some other page made the browser send.
-
-    Flackey listens on loopback, and these endpoints are wanted for what they *do*, which CORS does
-    not hide. Inventing a header forces a preflight, which only `create_app`'s origins satisfy. Not
-    an `Origin` check: a WKWebView on http:// and a dev-server proxy make that unguessable here."""
-    if not request.headers.get(APP_HEADER):
-        raise HTTPException(403, "That request did not come from Flackey.")
 
 
 class ShortDownload(Exception):
@@ -61,6 +54,11 @@ def archive_name(version: str) -> str:
     """Built from the version, not matched by pattern, so somebody else's zip cannot be mistaken
     for this one."""
     return f"Flackey-{version}.zip"
+
+
+def _release_page(latest: dict | None) -> str | None:
+    url = str(latest.get("html_url") or "") if latest else ""
+    return url if url.startswith(RELEASE_PAGE_PREFIX) else None
 
 
 def open_installer(path: Path) -> None:
@@ -91,9 +89,11 @@ async def latest_release() -> dict:
     assets = latest.get("assets", []) if latest else []
 
     def asset(name: str) -> dict | None:
-        return next((a for a in assets if isinstance(a, dict) and a.get("name") == name), None)
+        return next((a for a in assets if isinstance(a, dict) and a.get("name") == name
+                     and str(a.get("browser_download_url") or "").startswith(ASSET_PREFIX)), None)
 
     installer = asset(INSTALLER_NAME)
+    installer_sig = asset(INSTALLER_NAME + SIGNATURE_SUFFIX)
     tag = str(latest.get("tag_name") or "") if latest else ""
     latest_version = tag.removeprefix("v")
     archive = asset(archive_name(latest_version)) if latest_version else None
@@ -107,7 +107,10 @@ async def latest_release() -> dict:
         return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else None
 
     size = declared_size(installer)
-    available = size is not None and newer
+    # A build that carries the release key only opens an installer that verifies against it: otherwise
+    # a release stripped of its signed zip would walk every copy onto the unchecked installer path.
+    installer_verified = signature.seamless_updates_configured()
+    available = size is not None and newer and (installer_sig is not None or not installer_verified)
     archive_size = declared_size(archive)
     # Will pressing Update replace the app in place, or open an installer? A release missing either
     # half of the signed pair is not one to install seamlessly, and nor is a build that cannot
@@ -126,7 +129,8 @@ async def latest_release() -> dict:
     return {"ok": True, "current": __version__, "newer": newer, "available": available,
             "latest": latest_version or None,
             "url": installer.get("browser_download_url") if installer else None,
-            "release_url": latest.get("html_url") if latest else None,
+            "installer_signature_url": installer_sig.get("browser_download_url") if installer_sig else None,
+            "release_url": _release_page(latest),
             "size": size, "size_label": _size_mb(size),
             "published_at": published, "published_date": date,
             "prerelease": bool(latest.get("prerelease")) if latest else False,
@@ -309,7 +313,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         publish(state="staged", percent=100, received=received, total=total, version=version,
                 path=str(new.path), seamless=True, busy=in_flight())
 
-    async def download(url: str, total: int | None, version: str) -> None:
+    async def download(url: str, total: int | None, version: str, sig_url: str | None) -> None:
         received = 0
         target = target_path()
         try:
@@ -334,6 +338,23 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="error", version=version,
                     error="The download failed. The log has the details.")
             return
+        if signature.seamless_updates_configured():
+            # Installer.app runs the package's scripts as root once the owner types their password, so
+            # it is checked like the seamless archive before anything opens it.
+            publish(state="verifying", percent=100, received=received, total=total, version=version)
+            sig = await fetch_signature(sig_url) if sig_url else None
+            try:
+                payload = target.read_bytes()
+            except OSError:
+                payload = None
+            if (sig is None or payload is None
+                    or not signature.verify_archive(version, payload, sig, domain=signature.INSTALLER_DOMAIN)):
+                log.error("the installer for %s did not match its signature; refusing to open it", version)
+                remove_download(target)
+                publish(state="error", version=version,
+                        error="This update could not be verified, so Flackey did not open it. "
+                              "Download it from the release page instead.")
+                return
         publish(state="ready", percent=100, received=received, total=total, version=version,
                 path=str(target))
         try:
@@ -394,7 +415,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                 info["archive_url"], info["archive_size"], info["signature_url"], info["latest"]))
         else:
             publish(state="downloading", total=info["size"], version=info["latest"])
-            task = asyncio.create_task(download(info["url"], info["size"], info["latest"]))
+            task = asyncio.create_task(download(info["url"], info["size"], info["latest"],
+                                                info.get("installer_signature_url")))
         task.add_done_callback(finished)
         return dict(state)
 

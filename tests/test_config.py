@@ -8,6 +8,7 @@ from flackey.config import (
     default_data_dir,
     load_settings,
     save_settings,
+    secure_private_files,
 )
 
 
@@ -301,3 +302,18 @@ def test_build_defaults_never_land_in_settings_json(tmp_path: Path):
     s = load_settings(env, build_defaults=build)
     save_settings(s, library_root=tmp_path / "lib")
     assert json.loads(s.settings_path.read_text()) == {"library_root": str(tmp_path / "lib")}
+
+
+def test_the_data_folder_and_telegram_session_are_owner_only(tmp_path: Path):
+    """The session file is the Telegram login; Telethon would create it with the umask's 0644."""
+    s = Settings(_env_file=None, data_dir=tmp_path / "data")
+    s.data_dir.mkdir(mode=0o755)
+    journal = s.data_dir / "owner.session-journal"
+    journal.write_text("")
+    journal.chmod(0o644)
+
+    secure_private_files(s)
+
+    assert s.data_dir.stat().st_mode & 0o777 == 0o700
+    assert (s.data_dir / "owner.session").stat().st_mode & 0o777 == 0o600
+    assert journal.stat().st_mode & 0o777 == 0o600

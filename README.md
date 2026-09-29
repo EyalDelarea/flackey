@@ -203,8 +203,13 @@ and can be deleted at any time.
 
 ```bash
 docker build -t flackey .
-docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 8765:8765 flackey
+docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 127.0.0.1:8765:8765 flackey
 ```
+
+The API has no login, so publish the port on `127.0.0.1` as above unless you mean to reach Flackey from
+other machines. If you do (`-p 8765:8765`), anyone on your network can use it. Open it by the host's IP
+address, or list the host names you use in `WEB_ALLOWED_HOSTS` (comma-separated, e.g.
+`WEB_ALLOWED_HOSTS=nas.local`); any other name is refused.
 
 Open `http://localhost:8765` and sign in to Telegram from the setup screen
 (QR code or phone number). The Telethon session is stored in the `/data`
