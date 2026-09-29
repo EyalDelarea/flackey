@@ -1,6 +1,9 @@
 import asyncio
 
-from flackey.app import supervise_worker
+import pytest
+
+from flackey.app import start_sidecar, supervise_worker
+from flackey.slskd_binary import SlskdBinaryError
 
 
 async def test_supervisor_starts_the_worker_when_telegram_becomes_authorized():
@@ -398,3 +401,31 @@ async def test_a_client_rebuilt_mid_probe_is_not_acted_on():
     await asyncio.sleep(0.05)
     assert status["telegram_authorized"] is True
     task.cancel()
+
+
+class _Sidecar:
+    def __init__(self, error: BaseException | None = None):
+        self.error, self.started = error, 0
+
+    async def start(self) -> None:
+        self.started += 1
+        if self.error is not None:
+            raise self.error
+
+
+async def test_start_sidecar_starts_the_boot_slskd():
+    sidecar = _Sidecar()
+    await start_sidecar(sidecar)
+    assert sidecar.started == 1
+
+
+async def test_start_sidecar_without_soulseek_does_nothing():
+    await start_sidecar(None)
+
+
+@pytest.mark.parametrize("error", [SlskdBinaryError("slskd did not become healthy"), RuntimeError("boom")])
+async def test_a_sidecar_that_will_not_start_leaves_the_server_running(error):
+    """It runs in the server's TaskGroup, where a raise would cancel the server with it."""
+    sidecar = _Sidecar(error)
+    await start_sidecar(sidecar)
+    assert sidecar.started == 1

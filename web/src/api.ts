@@ -88,7 +88,9 @@ export interface QrStart { id:string; url:string; expires_at:string }
 export interface SoulseekSetup { configured: boolean; username: string | null }
 export interface SoulseekPassword { username: string | null; password: string }
 export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 'failed'
-  username: string | null; error: string | null }
+  username: string | null; error: string | null
+  // Set only when Soulseek itself turned the name down: the one failure a different name can fix.
+  taken?: boolean }
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;

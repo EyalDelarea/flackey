@@ -85,6 +85,7 @@ async def test_a_login_the_server_keeps_refusing_names_the_likeliest_cause_witho
     link.start_connect()
     await link._task
     assert link.state["state"] == "failed" and link.state["error"] == TAKEN_HINT
+    assert link.state["taken"] is True   # the one failure the setup screen answers with a fresh name
 
 
 async def test_an_unreachable_sidecar_does_not_blame_the_account(tmp_path: Path):
@@ -93,6 +94,7 @@ async def test_an_unreachable_sidecar_does_not_blame_the_account(tmp_path: Path)
     await link._task
     assert link.state["state"] == "failed" and "didn't answer" in link.state["error"]
     assert TAKEN_HINT not in link.state["error"]
+    assert link.state["taken"] is False
 
 
 async def test_it_gives_up_rather_than_polling_for_ever(tmp_path: Path):
@@ -117,6 +119,8 @@ async def test_a_missing_sidecar_says_so_instead_of_failing_silently(tmp_path: P
     link.start_connect()
     await link._task
     assert link.state["state"] == "failed" and "isn't installed" in link.state["error"]
+    # Not a rejected name: dealing a new one here would hide the real problem behind a name never tried.
+    assert link.state["taken"] is False
 
 
 async def test_a_sidecar_that_will_not_start_is_reported_not_raised(tmp_path: Path):

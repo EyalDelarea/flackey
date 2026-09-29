@@ -26,6 +26,11 @@ from .slskd_binary import SlskdBinaryError, binary_path, install_dir, is_install
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 0.2
+# How long a freshly spawned slskd gets to answer. A warm start on a Mac takes a few seconds, but the very
+# first start of a just-downloaded slskd.exe waits on the antivirus scanning 120 MB of it: 35 seconds in
+# the Windows test VM, where 30 was the old limit and slskd was killed moments before it came up. Only a
+# slskd that never starts ever waits this long.
+SLSKD_START_TIMEOUT_S = 90.0
 _SIGKILL_GRACE_S = 5.0
 _CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW, which only a Windows build defines
 
@@ -69,7 +74,7 @@ class SlskdProcess:
         another instance — `stop()` only ever signals a process this instance spawned."""
         return self._proc is not None and self._proc.returncode is None
 
-    async def start(self, *, timeout_s: float = 30) -> None:
+    async def start(self, *, timeout_s: float = SLSKD_START_TIMEOUT_S) -> None:
         """Launch slskd and wait for it to become healthy.
 
         If something already answers health checks on `url` — the owner's own slskd, or a previous

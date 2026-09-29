@@ -110,8 +110,10 @@ class SoulseekLink:
                     log.exception("could not start the port check after signing in")
                 return
             if self._clock() >= deadline:
-                self._fail(TAKEN_HINT if last == "not_logged_in" else
-                           "Soulseek didn't answer in time. Check your connection and try again.")
+                if last == "not_logged_in":
+                    self._fail(TAKEN_HINT, taken=True)
+                else:
+                    self._fail("Soulseek didn't answer in time. Check your connection and try again.")
                 return
             await self._sleep(POLL_S)
 
@@ -124,5 +126,8 @@ class SoulseekLink:
             except (LosslessError, httpx.HTTPError, OSError) as e:
                 log.warning("%s: rescan after the library moved failed: %s", p.name, e)
 
-    def _fail(self, message: str) -> None:
-        self.state = {"state": "failed", "username": None, "error": message}
+    def _fail(self, message: str, *, taken: bool = False) -> None:
+        """`taken` is set only when the server itself turned the sign-in down, the one failure a new name
+        can fix. The setup screen deals a fresh name on that alone: dealing one for a sidecar that never
+        started would hide the real problem behind a name that was never tried."""
+        self.state = {"state": "failed", "username": None, "error": message, "taken": taken}

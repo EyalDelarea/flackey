@@ -189,6 +189,23 @@ async def run_until_server_stops(serve: Coroutine, *loops: Coroutine) -> None:
         tg.create_task(serve).add_done_callback(lambda _: [t.cancel() for t in tasks])
 
 
+async def start_sidecar(process: SlskdProcess | None) -> None:
+    """Start the boot-time slskd alongside the server instead of ahead of it. The window gives the server
+    `WEB_SERVER_START_TIMEOUT_S` to answer, and a slskd starting slowly -- the first start of a freshly
+    downloaded one waits on the antivirus -- used to spend all of it, so the app died with "web server
+    did not start" before any window. Until slskd answers, Soulseek reads as unreachable, the same as a
+    sidecar still booting at any other time. Never raises: Soulseek is one provider among several, and
+    this task failing would take the whole server down with it."""
+    if process is None:
+        return
+    try:
+        await process.start()
+    except SlskdBinaryError as exc:
+        log.warning("slskd not started: %s", exc)
+    except Exception:
+        log.exception("slskd not started")
+
+
 def build_providers(settings: Settings, http: httpx.AsyncClient) -> list[LosslessProvider]:
     """One provider per configured network (spec §10). Only the sidecar URL and folder are logged, never the key."""
     providers: list[LosslessProvider] = []
@@ -263,18 +280,13 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     http = httpx.AsyncClient(timeout=20)
     providers = build_providers(settings, http)
 
-    # Lazy by design: this only ever starts an *already-installed* slskd (start() is cheap and
-    # never downloads). The download itself is triggered from the setup wizard's
-    # `POST /api/setup/slskd` (web/library.py), never from here or at import time -- a first run
-    # with no slskd installed must still start the app. A failure here is not fatal: Soulseek is
-    # one provider among several, so we log and carry on rather than crash startup.
+    # Lazy by design: this only ever starts an *already-installed* slskd (start() never downloads). The
+    # download itself is triggered from the setup wizard's `POST /api/setup/slskd` (web/library.py), never
+    # from here or at import time -- a first run with no slskd installed must still start the app. It is
+    # started by `start_sidecar` below, beside the server rather than before it.
     slskd_process: SlskdProcess | None = None
     if settings.soulseek_enabled:
         slskd_process = SlskdProcess(settings.data_dir, settings.slskd_url, settings.slskd_api_key or "")
-        try:
-            await slskd_process.start()
-        except SlskdBinaryError as exc:
-            log.warning("slskd not started: %s", exc)
     # Sign-out (TelegramLogin.log_out) rebuilds the client and reassigns login.client; the source must
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
@@ -316,6 +328,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     try:
         await run_until_server_stops(
             serve(server, url, handle),
+            start_sidecar(slskd_process),
             supervise_worker(worker, status,
                              run_when=lambda: bool(status.get("telegram_authorized"))
                              or not settings.source_enabled),
