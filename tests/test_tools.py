@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,11 +9,19 @@ from flackey import tools
 
 
 def _fake_tool(directory: Path, name: str) -> Path:
+    """A stand-in helper this platform would run: an executable-bit script on POSIX, a `.exe` name on
+    Windows, where the name is what makes a file runnable and the mode bits mean nothing."""
     directory.mkdir(parents=True, exist_ok=True)
-    exe = directory / name
+    exe = directory / (name + ".exe" if sys.platform == "win32" else name)
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
     return exe
+
+
+def _same(found: str | None, exe: Path) -> bool:
+    """`shutil.which` on Windows builds the name from PATHEXT, whose case (`.EXE`) need not match the
+    file's; the file system does not care, so neither does this comparison."""
+    return found is not None and os.path.normcase(found) == os.path.normcase(str(exe))
 
 
 def test_a_checkout_finds_its_helpers_on_the_path(monkeypatch, tmp_path: Path):
@@ -20,7 +31,7 @@ def test_a_checkout_finds_its_helpers_on_the_path(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("PATH", str(tmp_path))
     exe = _fake_tool(tmp_path, "ffmpeg")
 
-    assert tools.tool_path("ffmpeg") == str(exe)
+    assert _same(tools.tool_path("ffmpeg"), exe)
 
 
 def test_the_copy_inside_the_app_wins_over_one_on_the_path(monkeypatch, tmp_path: Path):
@@ -41,7 +52,7 @@ def test_a_bundle_without_its_own_copy_still_falls_back_to_the_path(monkeypatch,
     monkeypatch.setattr(tools, "bundled_bin_dir", lambda: tmp_path / "bundle" / "bin")
     monkeypatch.setenv("PATH", str(tmp_path / "homebrew"))
 
-    assert tools.tool_path("ffmpeg") == str(exe)
+    assert _same(tools.tool_path("ffmpeg"), exe)
 
 
 def test_a_missing_helper_reports_itself_rather_than_pretending(monkeypatch, tmp_path: Path):
@@ -54,6 +65,7 @@ def test_a_missing_helper_reports_itself_rather_than_pretending(monkeypatch, tmp
     assert tools.tool_path("ffmpeg") is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Homebrew prefixes are a macOS fallback only")
 def test_a_helper_is_found_where_brew_put_it_even_with_finder_s_bare_path(monkeypatch, tmp_path: Path):
     """Finder launches a .app with a PATH of roughly /usr/bin:/bin:/usr/sbin:/sbin -- no Homebrew prefix.
     That is the whole reason a double-clicked app fails on a machine where the tools plainly work in a
@@ -133,3 +145,45 @@ def test_the_helpers_a_machine_is_missing_are_named(monkeypatch):
     monkeypatch.setattr(tools.shutil, "which", lambda _: None)
 
     assert tools.missing_helpers() == tools.HELPERS
+
+
+def test_a_windows_bundle_finds_its_exe_helpers(monkeypatch, tmp_path: Path):
+    """The Windows build carries `bin/ffmpeg.exe`, not `bin/ffmpeg`, and nothing sets an executable bit
+    on it -- so the bundled lookup has to add the extension and settle for the file existing."""
+    bundled = tmp_path / "bundle" / "bin"
+    bundled.mkdir(parents=True)
+    (bundled / "ffmpeg").write_text("not the Windows one")  # a bare name must not be taken for the tool
+    exe = bundled / "ffmpeg.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(tools, "bundled_bin_dir", lambda: bundled)
+    monkeypatch.setattr(tools.shutil, "which", lambda _: None)
+    monkeypatch.setattr(tools.os, "access", lambda *a: False)  # X_OK is meaningless there; never asked
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert tools.tool_path("ffmpeg") == str(exe)
+
+
+def test_windows_never_looks_in_the_homebrew_folders(monkeypatch, tmp_path: Path):
+    """There is no Homebrew on Windows. `which` has already searched the PATH with every PATHEXT
+    extension, so a miss there is a miss."""
+    brew = tmp_path / "brew"
+    brew.mkdir()
+    (brew / "ffmpeg").write_bytes(b"x")
+    monkeypatch.setattr(tools, "bundled_bin_dir", lambda: None)
+    monkeypatch.setattr(tools, "BREW_BINS", (str(brew),))
+    monkeypatch.setattr(tools.shutil, "which", lambda _: None)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert tools.tool_path("ffmpeg") is None
+
+
+def test_no_window_hides_the_console_only_on_windows(monkeypatch):
+    """A windowed Windows app flashes a console for every child it starts unless told not to; everywhere
+    else the call must stay exactly what it was, because POSIX Popen refuses any creationflags."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert tools.no_window() == {}
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert tools.no_window() == {}
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert tools.no_window() == {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    assert tools.no_window()["creationflags"] == 0x08000000

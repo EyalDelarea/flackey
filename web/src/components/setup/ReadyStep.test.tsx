@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ReadyStep from './ReadyStep'
 import { api } from '../../api'
+import { PlatformContext } from '../../platform'
 
 beforeEach(() => { vi.clearAllMocks() })
 
@@ -14,6 +15,13 @@ it('names ffmpeg when it is missing', async () => {
   vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: false, ffprobe: true, yt_dlp: true })
   render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="connected" soulseek="skipped" />)
   await waitFor(() => expect(screen.getByText(/brew install ffmpeg/)).toBeInTheDocument())
+})
+
+it('tells a Windows owner to reinstall, since the helpers ship inside the app', async () => {
+  vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: false, ffprobe: true, yt_dlp: true })
+  render(<PlatformContext.Provider value="windows"><ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="connected" soulseek="skipped" /></PlatformContext.Provider>)
+  await waitFor(() => expect(screen.getByText(/Reinstall Flackey to restore it/)).toBeInTheDocument())
+  expect(screen.queryByText(/brew/)).not.toBeInTheDocument()
 })
 
 it('shows the setup error passed down from App when starting fails', async () => {

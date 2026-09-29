@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ def test_config_path_is_under_data_dir_slskd(tmp_path: Path):
 def test_fresh_write_produces_the_full_template_at_mode_0600(tmp_path: Path):
     key = write_credentials(tmp_path, "digger", "not-a-real-password")
     path = config_path(tmp_path)
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or path.stat().st_mode & 0o777 == 0o600
 
     data = yaml.safe_load(path.read_text())
     assert data["remote_configuration"] is False
@@ -61,7 +62,7 @@ def test_second_write_preserves_generated_secrets_and_other_keys(tmp_path: Path)
 
     key2 = write_credentials(tmp_path, "someone-else", "another-fake-password")
     assert key2 == key1
-    assert path.stat().st_mode & 0o777 == 0o600  # the rewrite path stays 0600 too, not just the first write
+    assert sys.platform == "win32" or path.stat().st_mode & 0o777 == 0o600  # the rewrite path stays 0600 too, not just the first write
 
     after = yaml.safe_load(path.read_text())
     assert after["web"]["authentication"]["password"] == web_password_before
@@ -80,7 +81,7 @@ def test_write_fills_missing_secrets_on_a_hand_written_file(tmp_path: Path):
     path.write_text("soulseek:\n  username: old\n")
     path.chmod(0o644)  # a hand-written file is not 0600; the rewrite must still end up 0600
     key = write_credentials(tmp_path, "digger", "not-a-real-password")
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or path.stat().st_mode & 0o777 == 0o600
     data = yaml.safe_load(path.read_text())
     assert data["web"]["authentication"]["password"]
     assert data["web"]["authentication"]["api_keys"]["flackey"]["key"] == key
@@ -191,7 +192,7 @@ def test_write_share_moves_the_share_with_the_library_folder(tmp_path: Path):
     data = yaml.safe_load(config_path(tmp_path).read_text())
     assert data["shares"]["directories"] == [str(new)]
     assert data["soulseek"]["username"] == "digger"           # nothing else touched
-    assert config_path(tmp_path).stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or config_path(tmp_path).stat().st_mode & 0o777 == 0o600
     assert write_share(tmp_path, new, previous=old) is True   # idempotent
     assert yaml.safe_load(config_path(tmp_path).read_text())["shares"]["directories"] == [str(new)]
 
@@ -209,6 +210,7 @@ def test_a_share_that_would_hold_home_or_flackeys_data_is_refused(tmp_path: Path
     data = home / "Library" / "Flackey"
     data.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what Path.home() reads on Windows
     write_credentials(data, "dj", "pw", library_root=home / "Music")
     folder = {"home": home, "above-home": tmp_path, "data-dir": data, "above-data-dir": home / "Library"}[where]
 
@@ -220,4 +222,31 @@ def test_a_share_that_would_hold_home_or_flackeys_data_is_refused(tmp_path: Path
 
 def test_a_music_folder_is_a_fine_share(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert unsafe_share_reason(tmp_path / "Music" / "DJ Library", tmp_path / "Library" / "Flackey") is None
+
+
+def test_a_windows_library_path_survives_the_yaml_round_trip(tmp_path: Path):
+    """A Windows path is full of backslashes -- `C:\\Users\\...` holds a `\\U`, which a hand-built
+    double-quoted YAML string would read as a unicode escape and reject. The file is written by
+    `yaml.safe_dump`, which quotes whatever needs it, so the share slskd reads is the folder that was
+    given, character for character, including one outside ASCII."""
+    from flackey.slskd_config import read_listen_port, write_share
+    windows = "C:\\Users\\Ünal\\Music\\DJ Library"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=Path(windows))
+    assert yaml.safe_load(config_path(tmp_path).read_text(encoding="utf-8"))["shares"]["directories"] == [windows]
+    moved = "D:\\Müzik\\new\\x"
+    assert write_share(tmp_path, Path(moved), previous=Path(windows)) is True
+    assert yaml.safe_load(config_path(tmp_path).read_text(encoding="utf-8"))["shares"]["directories"] == [moved]
+    assert read_listen_port(tmp_path) == 50300
+
+
+def test_an_undecodable_config_reads_as_absent_rather_than_crashing_startup(tmp_path: Path):
+    """`read_listen_port` and `read_api_key` run while the app starts; a file that is not UTF-8 (a hand
+    edit saved in a Windows code page) must read as "no config", not raise out of `app._run`."""
+    from flackey.slskd_config import SOULSEEK_LISTEN_PORT, read_listen_port
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"soulseek:\n  listen_port: 1234\n  username: \xff\xfe\x81\n")
+    assert read_listen_port(tmp_path) == SOULSEEK_LISTEN_PORT
+    assert read_api_key(tmp_path) is None

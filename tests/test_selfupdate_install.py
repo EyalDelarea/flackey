@@ -192,6 +192,17 @@ def test_a_checkout_is_never_offered_a_seamless_update():
     assert install.seamless_available() is False
 
 
+def test_windows_is_never_offered_a_seamless_update(tmp_path, monkeypatch):
+    """Everything else lined up, so only the platform can be what refuses."""
+    applications = tmp_path / "Applications"
+    monkeypatch.setattr(install.signature, "seamless_updates_configured", lambda: True)
+    monkeypatch.setattr(install, "running_bundle", lambda: applications / "Flackey.app")
+    monkeypatch.setattr(install, "helper_path", lambda: tmp_path / "helper")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert install.seamless_available(applications=applications) is False
+
+
 def test_seamless_is_refused_when_the_app_is_not_the_one_in_applications(tmp_path, monkeypatch):
     elsewhere = tmp_path / "Downloads" / "Flackey.app"
     elsewhere.mkdir(parents=True)

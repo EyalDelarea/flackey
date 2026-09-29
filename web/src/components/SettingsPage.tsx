@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { AppSettings, LosslessHealth, TelegramStatus, UpdateStatus } from '../api'
+import type { AppSettings, LosslessHealth, Platform, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
+import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
 import FormatOptions, { FORMAT_LABELS } from './FormatOptions'
@@ -15,7 +16,7 @@ const PORT_ROWS: [keyof NonNullable<AppSettings['ports']>, string][] = [
 
 /* Same two questions the sidebar keeps apart: `enabled` means credentials are saved, `provider.status`
    means the helper answered a probe just now. Neither one alone is "connected". */
-function soulseekLine(l: LosslessHealth | undefined): { ok: boolean; text: string; hint?: string } {
+function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: boolean; text: string; hint?: string } {
   if (!l?.enabled) return { ok: false, text: 'Not set up — run setup again to add an account' }
   if (l.provider === null) return { ok: false, text: 'Starting…' }
   if (l.provider.status === 'ok') return { ok: true, text: `Connected as ${l.provider.username ?? 'your account'}` }
@@ -23,7 +24,7 @@ function soulseekLine(l: LosslessHealth | undefined): { ok: boolean; text: strin
     return { ok: false, text: 'Signing in…',
       hint: 'If it stays here, Soulseek may be refusing the name — somebody else may already use it.' }
   }
-  return { ok: false, text: 'Not reachable', hint: 'The Soulseek helper is not answering on this Mac.' }
+  return { ok: false, text: 'Not reachable', hint: `The Soulseek helper is not answering on ${thisComputer(platform)}.` }
 }
 
 /* Four readings, not two. The bot is reached *through* the Telegram account above it, so "on" is only
@@ -38,6 +39,7 @@ function deezerBotLine(authorized: boolean, enabled: boolean): { dot: string; te
 }
 
 export default function SettingsPage({ live, onReconnect, focusUpdate, onReport }: { live: Live; onReconnect: () => void; focusUpdate?: number; onReport?: () => void }) {
+  const platform = usePlatform()
   const s = live.settings; const authorized = live.health?.telegram_authorized ?? true
   const [editing, setEditing] = useState(false); const [path, setPath] = useState(''); const [err, setErr] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
@@ -141,7 +143,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .finally(() => setSourceBusy(false))
   }
   const lossless: LosslessHealth | undefined = live.health?.lossless
-  const soulseek = soulseekLine(lossless)
+  const soulseek = soulseekLine(lossless, platform)
   // The same three conditions the rows in that box carry, asked once: an account's two logins and its
   // sharing state, or the diagnostics. None of them is a given, so neither is the box.
   const soulseekRows = !!s.soulseek_enabled || !!s.ports || !!(lossless?.enabled && s.ranking)
@@ -354,7 +356,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
             {s.ports && <><div className="k">Ports</div>
               <div className="v mono">{PORT_ROWS.map(([key, label]) => {
                 const p = s.ports![key]
-                return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : '· this Mac only'}</div>
+                return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : `· ${thisComputer(platform)} only`}</div>
               })}</div></>}
             {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
               <div className="v">Files a peer offers are tried nearest the video's length first
@@ -390,7 +392,9 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           {download?.state === 'installing' && <div className="v">Closing to install version {download?.version}…</div>}
           {/* Not when `ready` carries an error: the installer downloaded but would not open. */}
           {download?.state === 'ready' && !download.error && <div className="v">
-            Downloaded. The macOS installer is open — follow it through, then reopen Flackey.
+            {platform === 'windows'
+              ? 'Downloaded. The installer is open — follow it through; it will close Flackey and can reopen it when it finishes.'
+              : 'Downloaded. The macOS installer is open — follow it through, then reopen Flackey.'}
           </div>}
           {download?.error && <div className="err">{download.error}</div>}
           {installError && <div className="err">{installError}</div>}
@@ -418,7 +422,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions"><button className="btn-secondary" onClick={toggleAutoUpdate} disabled={autoUpdateBusy}>
             {autoUpdateBusy ? 'Saving…' : autoUpdateOn ? 'Turn off' : 'Turn on'}</button></div></div>
         <div className="srow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{s.data_dir}</div></div>
-          <div className="actions"><button className="btn-secondary" onClick={reveal}>Show in Finder</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
+          <div className="actions"><button className="btn-secondary" onClick={reveal}>{revealLabel(platform)}</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
         {onReport && <div className="srow"><div className="srow-body"><div className="k">Report a problem</div>
           <div className="v">Something not working? Send a report with the details we need to fix it.</div></div>
           <div className="actions"><button className="btn-secondary" onClick={onReport}>Report a bug…</button></div></div>}

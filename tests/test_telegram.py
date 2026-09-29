@@ -370,6 +370,21 @@ async def test_start_qr_gives_up_rather_than_hanging_when_telegram_never_answers
     assert "Telegram" in str(e.value)
 
 
+@pytest.mark.parametrize("system,computer", [("darwin", "this Mac"), ("win32", "this PC")])
+async def test_the_qr_timeout_names_the_computer_the_way_the_page_does(monkeypatch, system, computer):
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "QR_START_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(telegram_module.sys, "platform", system)
+
+    class NeverAnswers(FakeClient):
+        async def qr_login(self):
+            await asyncio.sleep(3600)
+
+    with pytest.raises(LoginError, match=f"Check {computer}'s internet connection"):
+        await TelegramLogin(NeverAnswers(), True).start_qr()
+
+
 async def test_start_qr_gives_up_when_the_connection_never_completes(monkeypatch):
     from flackey import telegram as telegram_module
 

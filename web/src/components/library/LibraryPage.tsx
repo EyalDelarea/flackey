@@ -3,6 +3,7 @@ import { ApiError, api } from '../../api'
 import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
 import { bucketOf, canRetry, gb, soulseekWait } from '../../presentation'
+import { revealLabel, usePlatform } from '../../platform'
 import Icon from '../Icon'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
@@ -61,6 +62,7 @@ function PlaylistImportStatus({ bundles, playlistId, filedPositions = [], onRetr
 }
 
 export default function LibraryPage({ live, selectedPlaylist }: { live: Live; selectedPlaylist: number | null }) {
+  const platform = usePlatform()
   const [q, setQ] = useState(''); const [tracks, setTracks] = useState<Track[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -170,7 +172,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
             Drag your library folder into the Rekordbox collection to bring tracks in — Rekordbox skips
             tracks it already knows, so this is safe to repeat, and it handles BPM and key analysis for you.
           </div>
-          <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Show in Finder</button>
+          <button className="btn-secondary" onClick={() => reveal(s.library_root)}>{revealLabel(platform)}</button>
           <button className="btn-link muted" onClick={dismissRekordboxGuide}>Got it</button>
         </div>
       )}

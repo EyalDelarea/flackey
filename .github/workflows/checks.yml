@@ -1,6 +1,9 @@
-# Every push and pull request: the four checks the README lists for development, plus a type-checked
-# build of the web UI. On a push to main (or a version tag) the green checks gate a macOS installer
-# build; on a version tag that installer is published as a GitHub Release.
+# Every push and pull request: the four checks the README lists for development, a type-checked build
+# of the web UI, and the test suite again on Windows. The green checks gate two installer builds:
+#   - macOS (Flackey.pkg), on a push to main or a version tag;
+#   - Windows (Flackey-Setup.exe), on every push *and* pull request -- nobody on the project has a
+#     Windows machine, so a PR's artifact, installed in a VM, is how a Windows change gets tried.
+# On a version tag both installers are published together as one GitHub Release.
 name: checks
 
 on:
@@ -31,6 +34,29 @@ jobs:
         run: uv run ruff check src tests
       - name: lint-imports
         run: uv run lint-imports
+      - name: pytest
+        run: uv run pytest -q
+
+  python-windows:
+    name: pytest (Windows)
+    runs-on: windows-latest
+    env:
+      # Python on Windows opens text files in the ANSI code page unless told otherwise; the tests (like
+      # the Linux run) assume UTF-8. Only here: the build job below leaves it unset so the packaged app
+      # is smoke-tested the way it runs on a real machine.
+      PYTHONUTF8: 1
+    steps:
+      - name: Check out with LF line endings
+        # The Windows runner's git converts to CRLF on checkout (core.autocrlf=true). Keeping the bytes
+        # identical to Linux stops fixtures and file comparisons from differing only on this runner.
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      # ruff and lint-imports read source, not the platform: the ubuntu job is enough for them.
       - name: pytest
         run: uv run pytest -q
 
@@ -117,9 +143,68 @@ jobs:
             packaging/build/Flackey-*.zip
           if-no-files-found: error
 
+  windows:
+    name: Flackey installer (Windows x64)
+    needs: [python, web]
+    # Unlike the mac job, pull requests too: see the header.
+    runs-on: windows-latest
+    env:
+      # Same gating as the mac job: keys only on a tagged release, never on a push or PR artifact.
+      FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
+      FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out with LF line endings
+        # Otherwise check_version.sh arrives with CRLF endings and bash stops at the first carriage return.
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Tag matches the version in the tree
+        if: startsWith(github.ref, 'refs/tags/v')
+        # The same script the mac job runs, under the runner's Git Bash.
+        shell: bash
+        run: packaging/check_version.sh "$GITHUB_REF_NAME"
+      - name: Inno Setup
+        # Preinstalled on the windows-latest image (actions/runner-images lists InnoSetup 6.x); installed
+        # here only if an image update ever drops it. build_windows.ps1 finds ISCC.exe either way.
+        run: |
+          if (Get-Command ISCC.exe -ErrorAction SilentlyContinue) {
+            Write-Host "Inno Setup on PATH"
+          } elseif (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')) {
+            Write-Host "Inno Setup in Program Files (x86)"
+          } else {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Cache helper downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: packaging/build/helpers
+          key: helpers-windows-${{ hashFiles('packaging/fetch_helpers_windows.ps1') }}
+      - name: Build
+        run: ./packaging/build_windows.ps1
+      - name: Smoke-launch
+        run: ./packaging/smoke_windows.ps1 packaging/build/dist/Flackey/Flackey.exe
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: Flackey.windows
+          path: |
+            packaging/build/Flackey-Setup.exe
+            packaging/build/Flackey-Setup.exe.sha256
+          if-no-files-found: error
+
   release:
     name: GitHub release
-    needs: mac
+    needs: [mac, windows, python-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -142,7 +227,13 @@ jobs:
         with:
           name: Flackey.installer
           path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: Flackey.windows
+          path: dist
       - name: latest.json
+        # Mac only, as before: installed Mac copies and the site read it. Windows copies find
+        # Flackey-Setup.exe among the release's assets instead.
         run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 | tee dist/latest.json
       - name: Sign the update archive
         # Here rather than in the mac job: this is the only step that needs the private key, and it
@@ -163,7 +254,9 @@ jobs:
           uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
           uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
           test -s dist/Flackey-"${GITHUB_REF_NAME#v}".zip.sig
+          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey-Setup.exe "${GITHUB_REF_NAME#v}"
           test -s dist/Flackey.pkg.sig
+          test -s dist/Flackey-Setup.exe.sig
         shell: bash
       - name: Publish
         env:
@@ -173,9 +266,12 @@ jobs:
           set -euo pipefail
 
           zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
-          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json)
+          # Flackey-Setup.exe keeps the same name every release, like Flackey.pkg: it is the name the
+          # Windows update check looks for.
+          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json
+                  dist/Flackey-Setup.exe dist/Flackey-Setup.exe.sha256)
           # Every signed file is mandatory: installed copies refuse an update or installer without one.
-          for f in "$zip" "$zip.sig" dist/Flackey.pkg.sig; do
+          for f in "$zip" "$zip.sig" dist/Flackey.pkg.sig dist/Flackey-Setup.exe.sig; do
             [[ -f "$f" ]] || { echo "::error title=Missing asset::$f is missing."; exit 1; }
             assets+=("$f")
           done

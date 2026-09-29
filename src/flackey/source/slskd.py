@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -122,11 +123,26 @@ def parse_response(resp: dict) -> list[LosslessFile]:
     return out
 
 
-def local_path_for(downloads: Path, file: LosslessFile) -> Path:
+# What slskd 0.26.0 replaces with `_` in each path segment when it runs on Windows
+# (`FileSafety.InvalidFileNameCharactersOnWindows`). On macOS and Linux it only forbids `/` and NUL, which a
+# Soulseek path segment never carries, so there the peer's name is the name on disk.
+_SLSKD_WINDOWS_INVALID = str.maketrans({c: "_" for c in '"<>|:*?' + "".join(map(chr, range(1, 32)))})
+
+
+def local_path_for(downloads: Path, file: LosslessFile, *, windows: bool | None = None) -> Path:
     """Where slskd writes a completed file: <downloads>/<last remote folder segment>/<file name>. The result must
-    resolve inside the downloads folder; the peer chose both strings (spec §7, §16.2)."""
+    resolve inside the downloads folder; the peer chose both strings (spec §7, §16.2).
+
+    On Windows slskd rewrites the characters Windows forbids before it saves, so the derived path has to make
+    the same substitution or a track called "What?" is never found where slskd left it. `windows` defaults to
+    the machine this runs on, which is also the machine slskd runs on."""
+    if windows is None:
+        windows = sys.platform == "win32"
     folder = file.folder.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-    candidate = downloads / folder / file.name if folder else downloads / file.name
+    name = file.name
+    if windows:
+        folder, name = folder.translate(_SLSKD_WINDOWS_INVALID), name.translate(_SLSKD_WINDOWS_INVALID)
+    candidate = downloads / folder / name if folder else downloads / name
     root, resolved = downloads.resolve(), candidate.resolve()
     if resolved == root or not resolved.is_relative_to(root):
         raise LosslessError(f"peer path escapes the downloads folder: {file.path!r}", "transfer_failed")

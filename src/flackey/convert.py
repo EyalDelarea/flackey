@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .tools import tool_path
+from .tools import no_window, tool_path
 
 log = logging.getLogger(__name__)
 RUN_TIMEOUT_S = 300
@@ -30,7 +30,7 @@ def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
            "-c:a", codec, str(dst)]
     t0 = time.monotonic()
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False)
+        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
     except subprocess.TimeoutExpired as e:
         dst.unlink(missing_ok=True)
         raise ConvertError(f"ffmpeg timed out after {RUN_TIMEOUT_S}s") from e

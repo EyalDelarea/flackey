@@ -6,6 +6,7 @@ import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +33,7 @@ from .store import Store
 from .telegram import TelegramLogin, probe_authorized
 from .tools import resource_dir
 from .web import create_app
+from .web.pick import Picker, native_picker
 from .worker import Worker
 
 log = logging.getLogger(__name__)
@@ -60,6 +62,15 @@ class ServerHandle:
     # Set by the desktop window once it exists, which is after the server has already started -- hence
     # a slot read at call time rather than a callback passed in at construction.
     on_quit: Callable[[], None] | None = None
+    # The window's own folder dialog, registered by `desktop.run_in_window` off macOS -- the Mac keeps
+    # its AppleScript dialog, which needs no window. A slot for the same reason as `on_quit`: the window
+    # that owns the dialog is created after the server that serves `/api/pick-folder`.
+    pick_folder: Callable[[Path | None], Path | None] | None = None
+
+    def find_picker(self) -> Picker | None:
+        """The folder dialog a request should open right now: the window's, once there is one, and
+        otherwise whatever this system can open by itself (AppleScript on macOS, nothing elsewhere)."""
+        return self.pick_folder or native_picker()
 
     def stop(self) -> None:
         """Safe from any thread: uvicorn polls should_exit on its own loop."""
@@ -283,7 +294,11 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
                         on_connected=sharing.start_refresh)
     link.adopt(slskd_process)
     api = create_app(store, worker, inbox, settings, ui_dir=UI_DIR, status=status, bus=bus, login=login,
-                     link=link, sharing=sharing, quit_app=handle.quit_app)
+                     link=link, sharing=sharing, quit_app=handle.quit_app,
+                     find_picker=handle.find_picker)
+    # No `loop=` choice matters here: uvicorn's loop factory is only consulted by `Server.run()`, and this
+    # awaits `Server.serve()` inside the loop the caller's `asyncio.run` already made -- which on Windows
+    # is the Proactor loop that the slskd subprocess needs (a selector loop cannot spawn one there).
     server = uvicorn.Server(uvicorn.Config(api, host=settings.web_host, port=settings.web_port,
                                            log_level="warning", log_config=None))
 

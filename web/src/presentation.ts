@@ -1,5 +1,6 @@
-import type { Bundle, Candidate, FetchProgress, Playlist, Request, RequestState } from './api'
+import type { Bundle, Candidate, FetchProgress, Platform, Playlist, Request, RequestState } from './api'
 import { candidatePreviewUrl, referenceAudioUrl, rejectedAudioUrl, spectrogramUrl } from './api'
+import { revealLabel } from './platform'
 
 export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
 /* A rung earns its place if the request can stop on it: Search ends in not_found, Choose waits on the owner
@@ -77,6 +78,8 @@ export interface GroupView { key: string; name: string; summary: GroupSummary; r
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
   soulseekConnected?: boolean
+  /** Whose word for the file manager the reveal button uses. A Mac when absent. */
+  platform?: Platform
   /** One entry per track currently transferring; the row picks out its own by request id. */
   fetchProgress?: FetchProgress[] | null
 }
@@ -526,14 +529,14 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       if (b.track) {
         // No status line: it used to carry the library-relative path, which is `Artist/Artist - Title`
         // -- the same sentence as the title directly above it, ellipsized before it ever reached the
-        // filename. Show in Finder is right there for anyone who wants the location.
-        v.action = { label: 'Show in Finder', kind: 'reveal', path: b.track.path }
+        // filename. The reveal button is right there for anyone who wants the location.
+        v.action = { label: revealLabel(opts.platform ?? 'mac'), kind: 'reveal', path: b.track.path }
         if (!v.version) v.version = b.track.mix_name
       } else { v.status = 'Filed earlier — the file is no longer in your library folder'; v.statusTone = 'muted' }
       break
     case 'duplicate':
       v.status = 'Already in your library — skipped, nothing downloaded twice'
-      if (b.track) v.action = { label: 'Show in Finder', kind: 'reveal', path: b.track.path }
+      if (b.track) v.action = { label: revealLabel(opts.platform ?? 'mac'), kind: 'reveal', path: b.track.path }
       break
     case 'rejected': {
       const reason = b.rejection?.reason || r.error_message || 'Failed the quality check'

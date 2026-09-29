@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import os
 import re
 import subprocess
+import sys
 import webbrowser
 from pathlib import Path
 
@@ -27,6 +29,9 @@ RELEASES_URL = "https://api.github.com/repos/EyalDelarea/flackey/releases?per_pa
 ASSET_PREFIX = "https://github.com/EyalDelarea/flackey/releases/download/"
 RELEASE_PAGE_PREFIX = "https://github.com/EyalDelarea/flackey/releases/"
 INSTALLER_NAME = "Flackey.pkg"
+# The Windows installer, under the same name on every release so this lookup never has to guess a
+# version into it. Inno Setup builds it; there is no seamless path on Windows yet, so it is the only one.
+WINDOWS_INSTALLER_NAME = "Flackey-Setup.exe"
 SIGNATURE_SUFFIX = ".sig"
 MAX_SIGNATURE_BYTES = 4096
 # Per read, not for the whole transfer: a single deadline would abort a slow but healthy download.
@@ -61,7 +66,19 @@ def _release_page(latest: dict | None) -> str | None:
     return url if url.startswith(RELEASE_PAGE_PREFIX) else None
 
 
+def installer_name() -> str:
+    """The release asset this system installs from: the `.pkg` on the Mac, `Flackey-Setup.exe` on
+    Windows. Also the name the download is saved under, and the one the "open it yourself" message
+    names, so the three can never disagree."""
+    return WINDOWS_INSTALLER_NAME if sys.platform == "win32" else INSTALLER_NAME
+
+
 def open_installer(path: Path) -> None:
+    if sys.platform == "win32":
+        # The shell runs the .exe as a double-click would -- including SmartScreen's prompt for an
+        # unsigned download, which is the owner's to answer, and the UAC prompt if Inno asks for one.
+        os.startfile(path)
+        return
     subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -92,8 +109,8 @@ async def latest_release() -> dict:
         return next((a for a in assets if isinstance(a, dict) and a.get("name") == name
                      and str(a.get("browser_download_url") or "").startswith(ASSET_PREFIX)), None)
 
-    installer = asset(INSTALLER_NAME)
-    installer_sig = asset(INSTALLER_NAME + SIGNATURE_SUFFIX)
+    installer = asset(installer_name())
+    installer_sig = asset(installer_name() + SIGNATURE_SUFFIX)
     tag = str(latest.get("tag_name") or "") if latest else ""
     latest_version = tag.removeprefix("v")
     archive = asset(archive_name(latest_version)) if latest_version else None
@@ -170,7 +187,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         return root / "updates"
 
     def target_path() -> Path:
-        return updates_dir() / INSTALLER_NAME
+        return updates_dir() / installer_name()
 
     def remove_download(path: Path | None) -> None:
         if path is None:
@@ -313,6 +330,26 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         publish(state="staged", percent=100, received=received, total=total, version=version,
                 path=str(new.path), seamless=True, busy=in_flight())
 
+    def hand_over_to_installer(path: Path) -> None:
+        """Open the installer, and on Windows get out of its way.
+
+        Windows cannot replace a program file that is running, so Flackey quits once Setup.exe is up
+        and the installer finds nothing of ours in use. Inno Setup's CloseApplications would ask the
+        owner to close Flackey itself otherwise; this saves them the dialog. The Mac keeps running
+        instead: Installer.app swaps a bundle that is not in use until the next launch, and the owner
+        may want to finish what they were doing first.
+
+        The quit is the same one the seamless restart uses (`ServerHandle.quit_app`), so it closes the
+        window, stops the server and slskd, and lets the queue resume on the next start. Not reached
+        when the installer did not open: the owner then still has a running app and a message."""
+        open_installer(path)
+        if sys.platform == "win32" and quit_app is not None:
+            log.info("installer opened; quitting so it can replace Flackey")
+            try:
+                quit_app()
+            except Exception:
+                log.exception("could not close Flackey after opening the installer")
+
     async def download(url: str, total: int | None, version: str, sig_url: str | None) -> None:
         received = 0
         target = target_path()
@@ -340,7 +377,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return
         if signature.seamless_updates_configured():
             # Installer.app runs the package's scripts as root once the owner types their password, so
-            # it is checked like the seamless archive before anything opens it.
+            # it is checked like the seamless archive before anything opens it. Setup.exe on Windows is
+            # held to the same rule: it is the release job that signs it, alongside the .pkg.
             publish(state="verifying", percent=100, received=received, total=total, version=version)
             sig = await fetch_signature(sig_url) if sig_url else None
             try:
@@ -358,13 +396,13 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         publish(state="ready", percent=100, received=received, total=total, version=version,
                 path=str(target))
         try:
-            open_installer(target)
+            hand_over_to_installer(target)
         except Exception:
             log.warning("could not open the downloaded installer at %s", target, exc_info=True)
             # Still ready: the file is there and correct, only the last step needs a hand.
             publish(state="ready", percent=100, received=received, total=total, version=version,
                     path=str(target), error="The installer downloaded but would not open. "
-                                            "Open Flackey.pkg from the app data folder to finish.")
+                                            f"Open {installer_name()} from the app data folder to finish.")
 
     @r.get("/update")
     async def update() -> dict:
@@ -389,7 +427,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         # Re-open what is already on disk rather than fetching it again. This is also what the
         # "Open installer" button presses, so the two paths stay one endpoint.
         if state["state"] == "ready" and state["path"] and Path(state["path"]).exists():
-            open_installer(Path(state["path"]))
+            hand_over_to_installer(Path(state["path"]))
             return dict(state)
         # Claimed before the lookup below, which awaits: two presses that both got past the checks
         # while it ran would interleave their writes onto the same part-file.

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .models import Verdict
-from .tools import tool_path
+from .tools import no_window, tool_path
 
 MIN_MP3_BITRATE = 320
 MIN_MP3_CUTOFF = 18_000
@@ -51,7 +51,7 @@ def _run(cmd: list[str]) -> bytes:
         raise VerifyError(f"{name} is not installed")
     cmd = [found, *cmd[1:]]
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False)
+        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
     except subprocess.TimeoutExpired as e:
         raise VerifyError(f"{name} timed out after {RUN_TIMEOUT_S}s") from e
     if p.returncode != 0:

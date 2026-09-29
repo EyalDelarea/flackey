@@ -148,3 +148,34 @@ async def test_stop_is_safe_to_call_twice(tmp_path: Path):
     await proc.stop()  # no error; self._proc is already None, so this is a pure no-op
 
     assert fake.terminated == 1  # signaled exactly once, not twice
+
+
+@pytest.mark.parametrize("platform,expected", [
+    ("darwin", {}),
+    ("win32", {"creationflags": 0x08000000}),
+])
+async def test_start_hides_the_slskd_console_only_on_windows(tmp_path: Path, monkeypatch, platform, expected):
+    """slskd is a console program: started from the windowed Windows build without CREATE_NO_WINDOW it
+    would sit in a black console window for as long as the app runs. On the Mac the spawn is exactly
+    what it was, since POSIX Popen refuses `creationflags`."""
+    spawned = {}
+
+    async def spawn(*args, **kwargs):
+        spawned.update(kwargs)
+        return FakeProc()
+
+    answers = iter([False, True])  # nothing running yet, then healthy on the first poll
+
+    async def probe(self) -> bool:
+        return next(answers)
+
+    monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(SlskdProcess, "probe", probe)
+    monkeypatch.setattr(slskd_process.sys, "platform", platform)
+    clock = Clock()
+    proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
+
+    await proc.start()
+
+    assert {k: v for k, v in spawned.items() if k == "creationflags"} == expected

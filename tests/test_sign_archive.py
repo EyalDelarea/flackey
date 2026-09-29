@@ -82,15 +82,18 @@ def test_an_unset_key_fails_rather_than_publishing_unsigned(sign_archive, archiv
     assert list(archive.parent.glob("*.sig")) == []
 
 
-def test_the_installer_is_signed_under_its_own_domain(sign_archive, tmp_path, keypair, monkeypatch):
+@pytest.mark.parametrize("name", ["Flackey.pkg", "Flackey-Setup.exe"])
+def test_the_installer_is_signed_under_its_own_domain(sign_archive, tmp_path, keypair, monkeypatch, name):
+    """The Mac .pkg and the Windows Setup.exe are both installers: the app verifies either one under
+    `INSTALLER_DOMAIN` before it opens it, so that is the domain they have to be signed under."""
     private, public = keypair
     monkeypatch.setenv(sign_archive.ENV_VAR, private.private_bytes_raw().hex())
-    pkg = tmp_path / "Flackey.pkg"
+    pkg = tmp_path / name
     pkg.write_bytes(b"xar!installer")
 
     assert sign_archive.main(["sign_archive.py", str(pkg), "v1.2.3"]) == 0
 
-    sig = signature.decode_signature((tmp_path / "Flackey.pkg.sig").read_bytes())
+    sig = signature.decode_signature((tmp_path / f"{name}.sig").read_bytes())
     assert signature.verify_archive("1.2.3", pkg.read_bytes(), sig, public,
                                     domain=signature.INSTALLER_DOMAIN) is True
     # ...and is no use as an update archive's signature over the same bytes.

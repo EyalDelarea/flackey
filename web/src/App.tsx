@@ -19,12 +19,17 @@ import SoulseekStep from './components/setup/SoulseekStep'
 import TelegramStep from './components/setup/TelegramStep'
 import WelcomeStep from './components/setup/WelcomeStep'
 import { useLive } from './live'
-import { insetTitlebar } from './platform'
+import type { Live } from './live'
+import { insetTitlebar, PlatformContext } from './platform'
 
 const inset = insetTitlebar()
 
 export default function App() {
   const live = useLive()
+  return <PlatformContext.Provider value={live.health?.platform ?? 'mac'}><AppBody live={live} /></PlatformContext.Provider>
+}
+
+function AppBody({ live }: { live: Live }) {
   const [tab, setTab] = useState<Tab>('download')
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)

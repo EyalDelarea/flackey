@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sys
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -201,8 +202,10 @@ class TelegramLogin:
             # Nothing was recorded in `_qr` yet, so there is no half-started login to clean up --
             # whatever the timeout interrupted is dropped with the cancelled task.
             log.warning("Telegram did not answer a QR sign-in within %ss", QR_START_TIMEOUT_S)
+            # "this PC" on Windows, the same words the page uses there (`thisComputer` in platform.ts).
+            computer = "this PC" if sys.platform == "win32" else "this Mac"
             raise LoginError(
-                "Telegram did not answer in time. Check this Mac's internet connection and try "
+                f"Telegram did not answer in time. Check {computer}'s internet connection and try "
                 "again, or sign in with your phone number instead.") from None
         qr_id = uuid.uuid4().hex
         entry = {"qr": qr, "state": "waiting", "task": None}

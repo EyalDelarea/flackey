@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..attempts import raw_size_bytes
-from ..config import Settings
+from ..config import Settings, platform_name
 from ..events import EventBus, Status
 from ..fingerprint import fpcalc_available
 from ..inbox import Inbox
@@ -94,7 +94,10 @@ class Bundles:
 def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, ui_dir: Path | None = None,
                status: Status | dict | None = None, bus: EventBus | None = None, opener=None, picker=None,
                login: TelegramLogin | None = None, link=None, sharing=None,
-               quit_app=None) -> FastAPI:
+               quit_app=None, find_picker=None) -> FastAPI:
+    """`picker` is one fixed folder dialog (the tests hand in a fake); `find_picker` is asked on every
+    request instead, which is how the desktop window's dialog reaches a server that was built before the
+    window existed. With neither, the platform's own: AppleScript on macOS, none elsewhere."""
     # here, not at module top: the routers import `Bundles` from this module
     from . import library, lossless, pick, report, requests, stream, telegram, update
     from . import sharing as sharing_web  # aliased: `sharing` here is the service, not the module
@@ -136,6 +139,9 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     @app.get("/api/health")
     async def health() -> dict:
         return {"ok": True, "version": __version__,
+                # Which system the app is running on, so the page can draw a Mac title bar or a Windows
+                # one and word "Finder" or "File Explorer" -- the page cannot tell from inside WebView2.
+                "platform": platform_name(),
                 "telegram_authorized": bool(status.get("telegram_authorized", True)),
                 "worker_running": bool(status.get("worker_running", False)),
                 "setup_done": bool(status.get("setup_done", False)),
@@ -153,7 +159,8 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(library.router(store, settings, status, bundles, link=link,
                                       **({"opener": opener} if opener else {})))
     app.include_router(telegram.router(login, status, settings))
-    app.include_router(pick.router(**({"picker": picker} if picker else {})))
+    app.include_router(pick.router((lambda: picker) if picker is not None
+                                   else find_picker or pick.native_picker))
     app.include_router(lossless.router(store, worker))
     app.include_router(sharing_web.router(sharing))
     app.include_router(update.router(status, settings, quit_app=quit_app))

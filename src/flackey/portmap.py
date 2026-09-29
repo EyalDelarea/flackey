@@ -27,6 +27,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+_CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW, which only a Windows build defines
 NATPMP_PORT = 5351
 SSDP_ADDR = ("239.255.255.250", 1900)
 WAN_SERVICES = ("urn:schemas-upnp-org:service:WANIPConnection:2",
@@ -50,24 +51,62 @@ class Mapping:
 
 # ---- where the router is -------------------------------------------------------------------------
 
+def _no_window() -> dict:
+    """A copy of `tools.no_window`, which this module sits below in the import layers and may not
+    import: `route` is a console program, and a windowed Windows app would flash a console for it."""
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", _CREATE_NO_WINDOW)}
+    return {}
+
+
+_IPV4 = r"\d{1,3}(?:\.\d{1,3}){3}"
+# One row of `route print`'s active IPv4 table for the default route: destination and mask both
+# 0.0.0.0, then gateway, interface address and metric. Anchored to that five-column shape on purpose.
+# The persistent-routes table below it has four columns (its last one reads "Default", localized), and
+# an on-link route's gateway is a word ("On-link", also localized) rather than an address, so neither
+# matches -- and nothing here depends on a header, because every header in that output is translated.
+_WINDOWS_DEFAULT_ROUTE = re.compile(
+    rf"^[ \t]*0\.0\.0\.0[ \t]+0\.0\.0\.0[ \t]+({_IPV4})[ \t]+{_IPV4}[ \t]+(\d+)[ \t]*$",
+    re.MULTILINE)
+
+
+def _windows_gateway(output: str) -> str | None:
+    """The default route with the lowest metric, which is the one Windows sends through. A VPN adds a
+    second default route (usually at a higher metric, sometimes lower when it wants all the traffic),
+    and the first row printed is not necessarily the one in use."""
+    routes = [(int(metric), gateway) for gateway, metric in _WINDOWS_DEFAULT_ROUTE.findall(output)]
+    return min(routes)[1] if routes else None
+
+
 def default_gateway(run=subprocess.run) -> str | None:
-    """The default route's next hop. `route -n get default` on macOS, `ip route` elsewhere. None
-    when there is no default route or the command is missing; a VPN's utun default reports no
-    gateway."""
+    """The default route's next hop. `route -n get default` on macOS, `ip route` on Linux, and
+    `route print` on Windows -- not `ipconfig`, whose "Default Gateway" label is translated into the
+    user's language. None when there is no default route or the command is missing; a VPN's utun
+    default reports no gateway."""
+    extra: dict = {}
     if sys.platform == "darwin":
         cmd, pattern = ["route", "-n", "get", "default"], r"gateway:\s*([0-9.]+)"
+    elif sys.platform == "win32":
+        cmd, pattern = ["route", "print", "-4", "0.0.0.0"], None
+        # The output is in the console's OEM code page with translated labels in it; a byte that does
+        # not decode must not turn into a UnicodeDecodeError escaping the `except` below. Only the
+        # addresses matter, and those are ASCII in every code page.
+        extra = {"errors": "replace", **_no_window()}
     else:
         cmd, pattern = ["ip", "route", "show", "default"], r"default via ([0-9.]+)"
     try:
-        out = run(cmd, capture_output=True, text=True, timeout=3, check=False)
+        out = run(cmd, capture_output=True, text=True, timeout=3, check=False, **extra)
     except (OSError, subprocess.TimeoutExpired) as e:
         log.info("default gateway: %s failed (%s)", cmd[0], e.__class__.__name__)
         return None
-    m = re.search(pattern, out.stdout or "")
-    if m is None:
+    if pattern is None:
+        gateway = _windows_gateway(out.stdout or "")
+    else:
+        m = re.search(pattern, out.stdout or "")
+        gateway = m.group(1) if m else None
+    if gateway is None:
         log.info("default gateway: no default route in %s output", cmd[0])
-        return None
-    return m.group(1)
+    return gateway
 
 
 def lan_ip(gateway: str | None = None) -> str | None:

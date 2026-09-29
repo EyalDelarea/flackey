@@ -35,8 +35,8 @@ def read_listen_port(data_dir: Path) -> int:
     may have changed it, and a settings screen that states the default while the sidecar listens
     elsewhere is worse than saying nothing."""
     try:
-        config = yaml.safe_load(config_path(data_dir).read_text())
-    except (OSError, yaml.YAMLError):
+        config = yaml.safe_load(config_path(data_dir).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return SOULSEEK_LISTEN_PORT
     if not isinstance(config, dict):
         return SOULSEEK_LISTEN_PORT
@@ -50,7 +50,7 @@ def _load_or_none(path: Path) -> dict | None:
         return None
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return None
     return data if isinstance(data, dict) else None
 

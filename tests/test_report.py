@@ -2,9 +2,10 @@
 each asserts that a value is *gone* from what would be sent, not merely that the redactor ran."""
 
 import io
+import sys
 import zipfile
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -27,7 +28,8 @@ from flackey.web.report import (
 from flackey.worker import Worker
 from tests.appclient import AppClient
 
-HOME = Path("/Users/someone")
+# Pure, so it stays a Mac home with forward slashes when the suite runs on Windows.
+HOME = PurePosixPath("/Users/someone")
 APP = {"x-flackey-app": "1"}
 NOT_FROM_APP = {"x-flackey-app": ""}
 
@@ -56,6 +58,76 @@ def test_the_home_folder_becomes_a_tilde_and_the_user_name_goes_too():
     assert r("library root: /Users/someone/Music/DJ") == "library root: ~/Music/DJ"
     assert r("owner someone opened it") == "owner <user> opened it"
     assert r("/Users/another/Desktop/x.flac") == "/Users/<user>/Desktop/x.flac"
+
+
+WINDOWS_HOME = PureWindowsPath(r"C:\Users\eyald")
+
+
+@pytest.mark.parametrize("spelling", [r"C:\Users\eyald\Music\DJ", "C:/Users/eyald/Music/DJ",
+                                      r"C:\\Users\\eyald\\Music\\DJ", r"c:\users\EYALD\Music\DJ"])
+def test_a_windows_home_becomes_a_tilde_however_it_is_spelled(spelling):
+    """As Windows prints it, as Python sometimes does, inside a repr or JSON string, and in another case:
+    each is the same folder, and every one of them names the reporter."""
+    r = Redactor([], home=WINDOWS_HOME, users=["eyald"])
+    out = r(f"library root: {spelling}")
+    assert "eyald" not in out.lower()
+    assert out.startswith("library root: ~") and out.endswith("DJ")
+
+
+def test_a_windows_home_is_matched_as_a_whole_folder_name():
+    r = Redactor([], home=WINDOWS_HOME, users=[])
+    assert r(r"C:\Users\eyaldx\a") == r"C:\Users\<user>\a"
+
+
+@pytest.mark.parametrize("path,want", [
+    (r"D:\Users\Bob\x.flac", r"D:\Users\<user>\x.flac"),
+    ("C:/Users/Bob/x.flac", "C:/Users/<user>/x.flac"),
+    (r"C:\\Users\\Bob\\x.flac", r"C:\\Users\\<user>\\x.flac"),
+])
+def test_somebody_else_s_windows_home_loses_its_name(path, want):
+    r = Redactor([], home=WINDOWS_HOME, users=[])
+    assert r(path) == want
+
+
+def test_the_windows_sign_in_name_goes_even_when_the_folder_is_named_otherwise(monkeypatch):
+    """A Microsoft-account sign-in names the folder from the email's first five letters, so the folder
+    name alone would leave the real account name in the log."""
+    monkeypatch.setenv("USERNAME", "Eyal Delarea")
+    r = Redactor([], home=WINDOWS_HOME)
+    assert r("signed in as eyal delarea; folder eyald") == "signed in as <user>; folder <user>"
+
+
+def test_a_mac_home_does_not_look_up_a_windows_sign_in_name(monkeypatch):
+    monkeypatch.setenv("USERNAME", "somebody-else")
+    assert Redactor([], home=HOME)("somebody-else was here") == "somebody-else was here"
+
+
+def test_windows_is_described_by_release_and_build(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(report.platform, "win32_ver", lambda: ("11", "10.0.26100", "SP0", "Multiprocessor Free"))
+    monkeypatch.setattr(report.platform, "machine", lambda: "AMD64")
+    assert report.os_summary() == "Windows 11 (build 10.0.26100, AMD64)"
+
+
+@pytest.mark.parametrize("system,frozen,label", [
+    ("darwin", True, " (Mac app)"), ("win32", True, " (Windows app)"),
+    ("darwin", False, " (from source)"), ("win32", False, " (from source)"),
+])
+def test_the_report_says_which_build_sent_it(tmp_path, monkeypatch, system, frozen, label):
+    monkeypatch.setattr(report, "os_summary", lambda: "some system")
+    monkeypatch.setattr(report, "missing_helpers", list)
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(sys, "platform", system)
+    rep = build_report(settings_for(tmp_path), {}, ClientContext(), redact=Redactor([], home=HOME))
+    assert dict(rep.summary)["Flackey"] == __version__ + label
+
+
+@pytest.mark.parametrize("system,window", [("darwin", "Finder"), ("win32", "File Explorer")])
+def test_the_email_names_the_window_the_zip_is_shown_in(tmp_path, monkeypatch, system, window):
+    rep = build_report(settings_for(tmp_path), {}, ClientContext(), redact=Redactor([], home=HOME))
+    monkeypatch.setattr(sys, "platform", system)
+    email = compose_email(rep, "It broke", "", "z.zip", Redactor([], home=HOME))
+    assert f"drag it in from the {window} window Flackey opened" in email.body
 
 
 def test_key_value_secrets_are_redacted_by_shape():

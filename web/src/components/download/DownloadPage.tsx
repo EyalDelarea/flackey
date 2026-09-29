@@ -4,6 +4,7 @@ import type { Live } from '../../live'
 import { bucketCounts, bucketOf, failedSummary, groupRows, matchesFilter } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
+import { usePlatform } from '../../platform'
 import Banner from '../Banner'
 import FilterBar from './FilterBar'
 import { selectionKeys } from './selectionKeys'
@@ -42,6 +43,7 @@ function useNow(ms: number) {
 
 export default function DownloadPage({ live }: { live: Live }) {
   const now = useNow(1000)
+  const platform = usePlatform()
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   // One axis or the other, never both: `Bucket` and `Stage` share no value, so a single predicate picks
@@ -71,7 +73,7 @@ export default function DownloadPage({ live }: { live: Live }) {
   // elsewhere stays counted until they open History, so a finished batch is never silently absorbed.
   const [seenHistoryIds, setSeenHistoryIds] = useState<Set<number>>(new Set())
   const soulseekConnected = live.health?.lossless?.enabled && live.health.lossless.provider?.status === 'ok'
-  const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress }
+  const opts = { libraryRoot: live.settings?.library_root ?? '', telegramAuthorized: live.health?.telegram_authorized ?? true, soulseekConnected, now, whyOpen: false, fetchProgress: live.fetchProgress, platform }
   const bundles = [...live.bundles.values()]
   const scoped = bundles.filter(b => view === 'active' ? !isFinished(b)
     : view === 'failed' ? isFailed(b)

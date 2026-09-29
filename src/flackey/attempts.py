@@ -60,7 +60,7 @@ class AttemptRecorder:
                         self.id, safe_name)
             return
         try:
-            path.write_text(json.dumps(obj, ensure_ascii=False))
+            path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
         except (OSError, TypeError, ValueError) as e:
             log.warning("req=%d slsk=%d could not write %s: %s", self.request_id, self.id, path.name, e)
 

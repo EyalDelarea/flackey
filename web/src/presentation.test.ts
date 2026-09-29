@@ -85,6 +85,9 @@ describe('presentRow', () => {
     // Four rungs, not five: nobody was ever asked to choose this one. See the Choose tests above.
     expect(v.steps).toEqual(['Search', 'Download', 'Verify', 'Done'].map(name => ({ name, state: 'done' })))
     expect(v.action).toEqual({ label: 'Show in Finder', kind: 'reveal', path: track.path })
+    // The same button in the other platforms' words; the mac wording above is the default.
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), { ...opts, platform: 'windows' }).action?.label).toBe('Show in File Explorer')
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), { ...opts, platform: 'linux' }).action?.label).toBe('Show in folder')
   })
   it('a lossless row names the delivered format and shows the evidence it is the right recording', () => {
     // Both already ride in the bundle: /api/queue builds `track.format.label`, and the attempt row carries the

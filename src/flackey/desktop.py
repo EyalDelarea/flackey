@@ -1,7 +1,12 @@
 """The desktop window. `flackey start` runs the server on a background thread and shows the UI in a
 pywebview (WKWebView) window on the main thread, which is where macOS insists the GUI loop lives.
 Closing the window stops the server; Ctrl-C in the terminal still stops everything (pywebview installs
-a Mach interrupt handler so the GUI loop returns)."""
+a Mach interrupt handler so the GUI loop returns).
+
+On Windows the same window is Edge WebView2 under pywebview's WinForms backend. Everything AppKit-shaped
+below returns early off macOS, so what Windows gets is a plain framed window with the system title bar;
+the pieces it needs of its own are the dark-mode check (`system_is_dark`) and the folder dialog
+(`folder_picker`), which only the window can open there."""
 from __future__ import annotations
 
 import asyncio
@@ -125,8 +130,30 @@ def set_app_name(name: str = APP_NAME) -> bool:
     return True
 
 
+_WINDOWS_THEME_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+
+
+def _windows_is_dark() -> bool:
+    """Windows keeps the app theme in `AppsUseLightTheme` under the current user's Personalize key: 0
+    for dark, 1 for light. Absent on older builds and in some locked-down profiles, which read as light,
+    the default. Never raises -- this only picks the colour the window shows before the page paints."""
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_THEME_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
+    except OSError:
+        return False
+    return value == 0
+
+
 def system_is_dark() -> bool:
-    """macOS stores the appearance in `AppleInterfaceStyle`; the key is absent in light mode."""
+    """macOS stores the appearance in `AppleInterfaceStyle`; the key is absent in light mode. Windows
+    keeps it in the registry (`_windows_is_dark`)."""
+    if sys.platform == "win32":
+        return _windows_is_dark()
     if sys.platform != "darwin":
         return False
     try:
@@ -407,6 +434,29 @@ def inset_titlebar(window) -> bool:
     return True
 
 
+def folder_picker(window, dialog_type):
+    """The window's own "choose a folder" dialog, as `/api/pick-folder` calls it: given a folder to start
+    in, return the one chosen or None when the owner cancels.
+
+    What Windows uses instead of the Mac's AppleScript dialog, which has no Windows counterpart to shell
+    out to. It lives here because it needs the pywebview window, and `web` may not import pywebview; the
+    server finds it through `ServerHandle.pick_folder`. `dialog_type` is `webview.FileDialog.FOLDER`,
+    passed in so this module still imports without pywebview.
+
+    Called on a worker thread (`asyncio.to_thread`), the way pywebview's own examples call dialogs from
+    outside the GUI loop. pywebview answers a cancel with None or an empty tuple and a choice with a
+    tuple of paths (a bare string on some backends), and its WinForms backend also answers None when the
+    dialog itself fails, having logged why -- so a failure reads as a cancel, and the field keeps its
+    value either way."""
+    def pick(initial: Path | None) -> Path | None:
+        chosen = window.create_file_dialog(dialog_type, directory=str(initial) if initial else "")
+        if not chosen:
+            return None
+        first = chosen if isinstance(chosen, str) else chosen[0]
+        return Path(first) if first else None
+    return pick
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
@@ -445,6 +495,10 @@ def run_in_window(settings: Settings) -> None:
     # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers
     # above, the same path as the owner clicking the red button.
     handle.on_quit = window.destroy
+    if not inset:
+        # Off macOS the only folder dialog there is belongs to this window; the Mac keeps AppleScript's,
+        # which `web.pick` opens without one.
+        handle.pick_folder = folder_picker(window, webview.FileDialog.FOLDER)
     try:
         webview.start(icon=app_icon())
     finally:

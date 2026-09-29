@@ -1,4 +1,5 @@
 import type { SharingState } from '../api'
+import { thisComputer, usePlatform } from '../platform'
 
 /** Whether other Soulseek users can open a connection back to this Mac, and -- when they cannot -- the
  *  one thing the owner can do about it.
@@ -12,6 +13,7 @@ import type { SharingState } from '../api'
  *  into a router page, and the one reason a forward can look right and still not work: a VPN. */
 export default function SharingPanel({ state, onCheck, compact = false }: { state: SharingState | null; onCheck: () => void; compact?: boolean }) {
   const s = state
+  const platform = usePlatform()
   const checking = !!s?.checking
   // A result that has not arrived is not the same as a closed port -- but unlike `checking`, this stays
   // true across a re-check, so the forward instructions do not vanish the moment the owner clicks
@@ -30,7 +32,7 @@ export default function SharingPanel({ state, onCheck, compact = false }: { stat
         // No port number, nothing to tell them to forward -- so the instructions wait for one rather
         // than printing a sentence with a hole in it.
         : s.port !== null && <div className="sharing-how">
-            To open it, forward TCP port {s.port} on your router to this Mac{s.lan_ip ? ` (${s.lan_ip})` : ''}.
+            To open it, forward TCP port {s.port} on your router to {thisComputer(platform)}{s.lan_ip ? ` (${s.lan_ip})` : ''}.
             {s.gateway ? ` Your router's address is ${s.gateway}.` : ''}
             {s.public_ip
               ? ` If you use a VPN, its exit address (${s.public_ip}) is what other users see, so the forward has to be set up in the VPN app or provider instead.`

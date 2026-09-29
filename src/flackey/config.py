@@ -21,9 +21,31 @@ PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
 
+def platform_name() -> str:
+    """One of "mac", "windows" or "linux": the one word the page needs to lay itself out for the machine it runs
+    on (`/api/health` carries it), and the one spelling every platform branch outside this module can
+    agree on. Anything that is neither macOS nor Windows is treated as Linux, which is what the Docker
+    image is."""
+    if sys.platform == "darwin":
+        return "mac"
+    if sys.platform == "win32":
+        return "windows"
+    return "linux"
+
+
 def default_data_dir() -> Path:
+    """Where the settings, database and logs live: each system's own place for an app's data.
+
+    On Windows that is the roaming `%APPDATA%/Flackey`, which the installer never touches, so an
+    uninstall or an upgrade keeps the library index and the Soulseek credentials. APPDATA is set on
+    every real Windows session; the fallback spells out the same folder for the odd service context
+    that runs without it."""
     if sys.platform == "darwin":
         return Path("~/Library/Application Support/Flackey").expanduser()
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path("~/AppData/Roaming").expanduser()
+        return base / "Flackey"
     return XDG_DATA_DIR.expanduser()
 
 

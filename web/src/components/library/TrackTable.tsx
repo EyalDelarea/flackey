@@ -2,6 +2,7 @@ import { useState } from 'react'
 import Artwork from '../download/Artwork'
 import Icon from '../Icon'
 import type { Track } from '../../api'
+import { revealLabel, usePlatform } from '../../platform'
 
 /** A track whose `source_fmt` is unset was filed from the lossy Deezer copy: no lossless provider supplied
     it. That is the state the owner wants to act on, and it names no provider, so it stays true for the next
@@ -27,6 +28,7 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
   tracks: Track[]; onReveal: (path: string) => void
   onUpgrade?: (t: Track) => Promise<void>
 }) {
+  const platform = usePlatform()
   const [selected, setSelected] = useState<number | null>(null)
   const [busy, setBusy] = useState<number | null>(null)
   const upgrade = async (e: React.MouseEvent, t: Track) => {
@@ -63,7 +65,7 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
               {busy === t.id ? 'Searching…' : 'Find lossless'}
             </button>
           )}
-          <button className="btn-secondary" onClick={e => { e.stopPropagation(); releasePointer(e); onReveal(t.path) }}>Show in Finder</button>
+          <button className="btn-secondary" onClick={e => { e.stopPropagation(); releasePointer(e); onReveal(t.path) }}>{revealLabel(platform)}</button>
         </span>
       </div>)
     })}

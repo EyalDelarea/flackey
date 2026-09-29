@@ -23,6 +23,82 @@ def test_default_gateway_is_none_when_the_command_fails():
     assert default_gateway(run=boom) is None
 
 
+# `route print -4 0.0.0.0` as a German Windows 11 prints it with a WireGuard tunnel up: two active default
+# routes (the tunnel's at a *lower* metric, so it is the one in use), an on-link row, and a persistent
+# route whose last column is a word. Every label is translated, which is why the parser keys on the shape
+# of a row and never on a header.
+WINDOWS_ROUTE_PRINT = """\
+===========================================================================
+Schnittstellenliste
+ 12...00 15 5d 01 02 03 ......Intel(R) Wi-Fi 6 AX201 160MHz
+ 23...........................WireGuard Tunnel
+  1...........................Software Loopback Interface 1
+===========================================================================
+
+IPv4-Routentabelle
+===========================================================================
+Aktive Routen:
+     Netzwerkziel    Netzwerkmaske          Gateway    Schnittstelle Metrik
+          0.0.0.0          0.0.0.0      192.168.1.1     192.168.1.23     35
+          0.0.0.0          0.0.0.0         10.8.0.1         10.8.0.6      5
+          0.0.0.0          0.0.0.0   Auf Verbindung       10.66.66.2      0
+===========================================================================
+Ständige Routen:
+  Netzwerkadresse          Netzmaske  Gatewayadresse  Metrik
+          0.0.0.0          0.0.0.0    192.168.1.254  Standard
+===========================================================================
+"""
+
+
+def test_default_gateway_on_windows_takes_the_lowest_metric_active_route(monkeypatch):
+    """Only the five-column active rows with an address for a gateway count, and among those the lowest
+    metric is the route Windows actually uses."""
+    monkeypatch.setattr(portmap.sys, "platform", "win32")
+    seen = {}
+
+    class R:
+        stdout = WINDOWS_ROUTE_PRINT
+        returncode = 0
+
+    def run(cmd, **kw):
+        seen.update(cmd=cmd, **kw)
+        return R()
+
+    assert default_gateway(run=run) == "10.8.0.1"
+    assert seen["cmd"] == ["route", "print", "-4", "0.0.0.0"]
+    # No console flash from a windowed app, and a byte the OEM code page cannot decode is not an error.
+    assert seen["creationflags"] == 0x08000000 and seen["errors"] == "replace"
+
+
+def test_default_gateway_on_windows_ignores_persistent_and_on_link_rows(monkeypatch):
+    monkeypatch.setattr(portmap.sys, "platform", "win32")
+    only_those = "\n".join(line for line in WINDOWS_ROUTE_PRINT.splitlines()
+                           if "192.168.1.1 " not in line and "10.8.0.1 " not in line)
+
+    class R:
+        stdout = only_those
+        returncode = 0
+
+    assert default_gateway(run=lambda *a, **k: R()) is None
+
+
+def test_default_gateway_on_mac_passes_no_windows_flags(monkeypatch):
+    """The Mac call is the call it always was: POSIX Popen would refuse `creationflags`."""
+    monkeypatch.setattr(portmap.sys, "platform", "darwin")
+    seen = {}
+
+    class R:
+        stdout = "gateway: 10.0.0.1\n"
+        returncode = 0
+
+    def run(cmd, **kw):
+        seen.update(kw)
+        return R()
+
+    default_gateway(run=run)
+    assert seen == {"capture_output": True, "text": True, "timeout": 3, "check": False}
+
+
 async def test_natpmp_map_sends_a_tcp_mapping_request_and_reads_the_reply():
     sent = []
 

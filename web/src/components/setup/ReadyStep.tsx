@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../../api'
 import Icon from '../Icon'
 import type { Tools } from '../../api'
+import { usePlatform } from '../../platform'
 
 const NAME: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', yt_dlp: 'yt-dlp' }
 const BREW: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffmpeg', yt_dlp: 'yt-dlp' }
 
 export default function ReadyStep({ libraryRoot, onStart, onConnectSource, error, telegram, soulseek }: { libraryRoot: string; onStart: () => Promise<void>; onConnectSource?: () => void; error?: string | null; telegram: 'connected' | 'skipped'; soulseek: 'connected' | 'pending' | 'skipped' }) {
+  const platform = usePlatform()
   const [tools, setTools] = useState<Tools | null>(null)
   const [checkFailed, setCheckFailed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -30,7 +32,10 @@ export default function ReadyStep({ libraryRoot, onStart, onConnectSource, error
     return (<>
       <div className="ready-disc bad"><Icon name="x" size={24} stroke={2.4} /></div>
       <h1>Something is missing</h1>
-      <p className="lead">{names.join(' and ')} {names.length > 1 ? 'are' : 'is'} not installed. Install {names.length > 1 ? 'them' : 'it'} with <span className="mono">brew install {brewArgs}</span>, then try again.</p>
+      {platform === 'windows'
+        // They ship inside the app on Windows, so there is nothing to install by hand: a missing one is a broken install.
+        ? <p className="lead">{names.join(' and ')} {names.length > 1 ? 'are' : 'is'} missing from this copy of Flackey. Reinstall Flackey to restore {names.length > 1 ? 'them' : 'it'}, then try again.</p>
+        : <p className="lead">{names.join(' and ')} {names.length > 1 ? 'are' : 'is'} not installed. Install {names.length > 1 ? 'them' : 'it'} with <span className="mono">brew install {brewArgs}</span>, then try again.</p>}
       <button className="btn-primary lg" onClick={check}>Try again</button>
     </>)
   }

@@ -55,6 +55,7 @@ export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null;
     null whenever the router, the network or the check itself would not say. */
 export interface SharingState { port:number|null; enabled:boolean; checking:boolean; mapping:'natpmp'|'upnp'|null
   reachable:boolean|null; public_ip:string|null; lan_ip:string|null; gateway:string|null; checked_at:string|null; error:string|null }
+export type Platform = 'mac' | 'windows' | 'linux'
 export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
   setup_done:boolean; lossless?:LosslessHealth
   /** Whether this copy has Telegram API keys at all, and whether the owner left the source switched on.
@@ -62,7 +63,10 @@ export interface Health { ok:boolean; version:string; telegram_authorized:boolea
   telegram_configured?:boolean; source_enabled?:boolean
   /** Pushed on every `status` event, so a panel reading it re-renders without polling. Null before the
       sharing loop has published anything, absent in fixtures written before it existed. */
-  sharing?:SharingState|null }
+  sharing?:SharingState|null
+  /** Which OS the server runs on. Optional so a fixture written before it existed still type-checks; the
+      page treats an absent one as a Mac, which is what every copy before Windows was. */
+  platform?:Platform }
 export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
   speed_bps:number; pick:number; state:string
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */

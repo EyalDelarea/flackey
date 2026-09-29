@@ -8,12 +8,17 @@ own copies, so it looks inside itself first and only then at whatever the machin
 Resolving to an absolute path rather than passing a bare name also fixes the Finder case on its own:
 even with nothing bundled, this module can find Homebrew's copy where a bare `["ffmpeg", ...]` would
 raise FileNotFoundError.
+
+On Windows the same three helpers ship as `.exe` files in the same `bin` folder, there is no Homebrew,
+and "executable" is a property of the file name rather than a mode bit, so each of those three
+assumptions is branched on below rather than papered over.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +28,43 @@ from pathlib import Path
 # everything installed.
 HELPERS = ("ffmpeg", "ffprobe", "fpcalc")
 BREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")
+# `subprocess.CREATE_NO_WINDOW`, spelled out because the constant only exists in a Windows build of
+# the `subprocess` module and the tests exercise the Windows branch on a Mac.
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def no_window() -> dict:
+    """Extra `subprocess` keyword arguments that stop a child process from opening a console.
+
+    The packaged Windows app is a windowed (GUI-subsystem) executable, so it has no console of its own,
+    and Windows answers every console program it starts -- ffmpeg, fpcalc, slskd, `route` -- by opening
+    a fresh black console window for it: a flash per fingerprint, dozens a minute while a playlist
+    downloads. CREATE_NO_WINDOW runs the child with no console at all. It changes nothing else (stdout
+    and stderr are still captured through the pipes the caller asked for).
+
+    Empty off Windows, so a Mac or Linux call is exactly the call it was before -- and has to be, since
+    POSIX `Popen` rejects any nonzero `creationflags` outright. Spread into the call as `**no_window()`.
+
+    `slskd_process` and `portmap` keep their own copy of these few lines: they sit below this module in
+    the import-linter layers and may not import it."""
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", _CREATE_NO_WINDOW)}
+    return {}
+
+
+def _executable_name(name: str) -> str:
+    """`ffmpeg` is `ffmpeg.exe` on Windows. Only for the paths this module builds itself: `shutil.which`
+    already tries every extension in PATHEXT."""
+    return name + ".exe" if sys.platform == "win32" else name
+
+
+def _is_executable(candidate: Path) -> bool:
+    """A file that can be run. On Windows `os.access(X_OK)` says nothing -- it answers True for any file
+    that exists, a README included -- so the `.exe` name built by `_executable_name` is what carries
+    that meaning there and existence is the whole check."""
+    if sys.platform == "win32":
+        return candidate.is_file()
+    return candidate.is_file() and os.access(candidate, os.X_OK)
 
 
 def bundled_bin_dir() -> Path | None:
@@ -51,16 +93,18 @@ def tool_path(name: str) -> str | None:
     from deep inside a subprocess call, which says much less about what is wrong."""
     bundled = bundled_bin_dir()
     if bundled is not None:
-        candidate = bundled / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+        candidate = bundled / _executable_name(name)
+        if _is_executable(candidate):
             return str(candidate)
     found = shutil.which(name)
     if found:
         return found
+    if sys.platform == "win32":
+        return None  # no Homebrew there, and `which` has already searched the PATH
     # Only reached in a GUI launch, where Finder's PATH omits the Homebrew prefixes.
     for prefix in BREW_BINS:
         candidate = Path(prefix) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+        if _is_executable(candidate):
             return str(candidate)
     return None
 

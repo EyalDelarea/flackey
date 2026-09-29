@@ -2,11 +2,19 @@
 
 `slskd_config.py` owns the config file and API key; this module owns the process only — it takes
 the URL and API key as plain constructor arguments and never reads slskd.yml itself.
+
+On Windows the same code runs with two differences worth knowing. The asyncio subprocess needs the
+Proactor event loop, which is what `asyncio.run` gives a Windows thread by default and what both entry
+points use (`desktop.start_server_thread` and `cli.start`); uvicorn never gets to choose, because the
+app awaits `Server.serve()` inside that loop and only `Server.run()` consults uvicorn's loop factory.
+And `terminate()` is TerminateProcess, a hard kill rather than SIGTERM -- see `stop`.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +27,17 @@ log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 0.2
 _SIGKILL_GRACE_S = 5.0
+_CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW, which only a Windows build defines
+
+
+def _no_window() -> dict:
+    """A copy of `tools.no_window`, which this module sits below in the import layers and may not
+    import: on Windows, start slskd without the console window a GUI app's console child otherwise
+    gets (slskd is a console program, and that window would sit open for as long as the app runs).
+    Empty elsewhere, where POSIX `Popen` rejects any `creationflags`."""
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", _CREATE_NO_WINDOW)}
+    return {}
 
 
 class SlskdProcess:
@@ -78,6 +97,7 @@ class SlskdProcess:
                 cwd=str(install_dir(self._data_dir)),
                 stdout=log_file,
                 stderr=log_file,
+                **_no_window(),
             )
         finally:
             log_file.close()
@@ -114,7 +134,14 @@ class SlskdProcess:
 
     async def stop(self, *, timeout_s: float = 10) -> None:
         """Send SIGTERM, wait, then SIGKILL if it must. Safe to call when nothing is running, and
-        safe to call twice."""
+        safe to call twice.
+
+        On Windows there is no SIGTERM to send: asyncio's `terminate()` is TerminateProcess, which ends
+        slskd on the spot with no shutdown of its own. That is accepted rather than worked around. slskd
+        keeps its state in SQLite, which survives an abrupt stop, and a transfer cut off mid-file is one
+        this app already treats as failed and retries; the alternative (a console control event) needs
+        slskd to share a console with this process, which the windowed build deliberately does not have.
+        The wait below then returns on the first poll, and the `kill()` fallback is never reached."""
         proc, self._proc = self._proc, None
         if proc is None or proc.returncode is not None:
             return

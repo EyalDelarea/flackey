@@ -3,6 +3,7 @@ import inspect
 import sys
 import threading
 import types
+from pathlib import Path
 
 import pytest
 
@@ -76,6 +77,54 @@ def test_system_is_dark_is_false_off_macos(monkeypatch):
     assert desktop.system_is_dark() is False
 
 
+def _fake_winreg(value=None, error: type[Exception] | None = None):
+    """Just enough `winreg` for `system_is_dark`: the key it opens and the value it asks for."""
+    opened: list = []
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(root, path):
+        opened.append((root, path))
+        if error is not None:
+            raise error("no such key")
+        return Key()
+
+    def query_value_ex(key, name):
+        assert name == "AppsUseLightTheme"
+        return value, 4  # REG_DWORD
+
+    return types.SimpleNamespace(HKEY_CURRENT_USER="HKCU", OpenKey=open_key,
+                                 QueryValueEx=query_value_ex), opened
+
+
+@pytest.mark.parametrize("value,dark", [(0, True), (1, False)])
+def test_system_is_dark_reads_the_windows_app_theme(monkeypatch, value, dark):
+    """`AppsUseLightTheme` is 0 in dark mode; it decides the colour the window shows before the page
+    paints, which is the flash the Mac path avoids with `AppleInterfaceStyle`."""
+    from flackey import desktop
+
+    winreg, opened = _fake_winreg(value)
+    monkeypatch.setitem(sys.modules, "winreg", winreg)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.system_is_dark() is dark
+    assert opened == [("HKCU", r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")]
+
+
+def test_system_is_dark_on_windows_without_the_key_is_light(monkeypatch):
+    """Older builds and locked-down profiles have no such value; light is Windows' own default."""
+    from flackey import desktop
+
+    winreg, _ = _fake_winreg(error=FileNotFoundError)
+    monkeypatch.setitem(sys.modules, "winreg", winreg)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.system_is_dark() is False
+
+
 def test_app_icon_asset_is_a_1024_square_png():
     from flackey.desktop import APP_ICON
 
@@ -125,6 +174,12 @@ class FakeWindow:
         self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook(), resized=Hook())
         self.destroyed = False
 
+    def create_file_dialog(self, dialog_type, directory="", **kwargs):
+        """Records the ask and answers with `self.dialog_answer`, as pywebview does: a tuple of paths,
+        or None for a cancel."""
+        self.dialog_calls = [*getattr(self, "dialog_calls", []), (dialog_type, directory)]
+        return getattr(self, "dialog_answer", None)
+
     def destroy(self) -> None:
         """What `handle.quit_app()` reaches for when the app closes itself to install an update. The
         real one fires `closed`, so this does too -- a test that stubbed it silently would show the
@@ -150,7 +205,8 @@ def _install_fake_webview(monkeypatch, tmp_path):
         return window
 
     fake_webview = types.SimpleNamespace(
-        create_window=create_window, start=lambda **kw: started.update(kw))
+        create_window=create_window, start=lambda **kw: started.update(kw),
+        FileDialog=types.SimpleNamespace(OPEN=10, FOLDER=20, SAVE=30))
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
     monkeypatch.setattr(desktop, "UI_DIR", tmp_path)
 
@@ -203,6 +259,48 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
     assert "transparent" not in window.kwargs
     assert window.kwargs["vibrancy"] is False
     assert len(window.events.loaded) == 0
+
+
+def test_off_macos_the_window_lends_the_server_its_folder_dialog(monkeypatch, tmp_path):
+    """There is no AppleScript on Windows; the only folder dialog is the pywebview window's, and the
+    server that answers `/api/pick-folder` was built before the window existed -- so the window registers
+    its dialog on the handle, which the router asks on every request."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(desktop, "system_is_dark", lambda: False)
+    windows, _, handle = _install_fake_webview(monkeypatch, tmp_path)
+    assert handle.find_picker() is None  # before the window: nothing to open
+    desktop.run_in_window(settings=object())
+    window = windows["window"]
+
+    window.dialog_answer = ("C:\\Users\\dj\\Music",)
+    assert handle.find_picker()(tmp_path) == Path("C:\\Users\\dj\\Music")
+    assert window.dialog_calls == [(20, str(tmp_path))]  # FileDialog.FOLDER, starting where the field is
+
+
+def test_on_macos_the_folder_dialog_stays_applescript(monkeypatch, tmp_path):
+    from flackey import desktop
+    from flackey.web.pick import choose_folder
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _, _, handle = _install_fake_webview(monkeypatch, tmp_path)
+    desktop.run_in_window(settings=object())
+    assert handle.pick_folder is None
+    assert handle.find_picker() is choose_folder
+
+
+def test_the_window_folder_dialog_reads_a_cancel_as_none():
+    from flackey import desktop
+
+    window = FakeWindow()
+    pick = desktop.folder_picker(window, 20)
+    for cancelled in (None, (), [], ""):
+        window.dialog_answer = cancelled
+        assert pick(None) is None
+    assert window.dialog_calls[-1] == (20, "")  # no starting folder: the dialog's own default
+    window.dialog_answer = "/a/bare/string"  # what some backends return instead of a tuple
+    assert pick(None) == Path("/a/bare/string")
 
 
 def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):

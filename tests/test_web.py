@@ -4,6 +4,7 @@ import logging
 import subprocess
 import sys
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -82,13 +83,25 @@ def client_with_worker(tmp_path: Path):
 
 def test_health(client):
     c, _, _ = client
+    from flackey.config import platform_name
     from flackey.fingerprint import fpcalc_available
-    assert c.get("/api/health").json() == {"ok": True, "version": __version__, "telegram_authorized": True,
+    assert c.get("/api/health").json() == {"ok": True, "version": __version__, "platform": platform_name(),
+                                          "telegram_authorized": True,
                                           "worker_running": False, "setup_done": False,
                                           "telegram_configured": True, "source_enabled": True,
                                           "sharing": None,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
                                                        "attempts_24h": {}, "raw_mb": 0.0}}
+
+
+@pytest.mark.parametrize("raw,word", [("darwin", "mac"), ("win32", "windows"), ("linux", "linux")])
+def test_health_says_which_system_the_page_is_running_on(client, monkeypatch, raw, word):
+    """The page draws a Mac title bar or a Windows one from this, and nothing inside WebView2 can tell."""
+    c, _, _ = client
+    # Health also looks for fpcalc, and `shutil.which` on a pretend Windows reaches for `_winapi`.
+    monkeypatch.setattr("flackey.web.fpcalc_available", lambda: False)
+    monkeypatch.setattr(sys, "platform", raw)
+    assert c.get("/api/health").json()["platform"] == word
 
 
 def test_health_reflects_shared_status(tmp_path):
@@ -184,6 +197,119 @@ def _release_feed(size: int | None = 8, assets: bool = True):
              "published_at": "2026-09-15T10:00:00Z", "html_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
              "assets": [{"name": "Flackey.pkg", "size": size, "browser_download_url": INSTALLER_URL}]
              if assets else []}]
+
+
+REAL_INSTALLER_NAME = flackey.web.update.installer_name
+# Taken at import, before conftest swaps it for a tripwire on every test.
+REAL_OPEN_INSTALLER = flackey.web.update.open_installer
+
+
+@pytest.fixture(autouse=True)
+def _the_mac_installer_by_default(monkeypatch):
+    """The update tests below are written against the Mac's `Flackey.pkg`. Pinned so they say the same
+    thing when the suite runs on Windows, where the real name is `Flackey-Setup.exe`; the tests that
+    are about the Windows name put the real function back."""
+    monkeypatch.setattr(flackey.web.update, "installer_name", lambda: "Flackey.pkg")
+
+
+def _pretend_windows(monkeypatch) -> None:
+    """Windows, as far as `web/update.py` can tell. Only that module's `sys` is swapped: patching the
+    real `sys.platform` on a Mac sends the rest of the process (httpx, asyncio, `shutil.which`) down
+    Windows paths it cannot take here."""
+    monkeypatch.setattr(flackey.web.update, "installer_name", REAL_INSTALLER_NAME)
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="win32"))
+
+
+def test_the_installer_is_the_pkg_on_macos_and_setup_exe_on_windows(monkeypatch):
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin"))
+    assert REAL_INSTALLER_NAME() == "Flackey.pkg"
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="win32"))
+    assert REAL_INSTALLER_NAME() == "Flackey-Setup.exe"
+
+
+@respx.mock
+def test_windows_offers_setup_exe_and_never_the_pkg(monkeypatch):
+    """A release carries both installers, and Windows must pick its own. (That Windows is never offered
+    the seamless swap is `seamless_available`'s to decide; test_selfupdate_install.py pins it.)"""
+    _pretend_windows(monkeypatch)
+    feed = _release_feed(size=8)
+    download = "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/"
+    feed[0]["assets"] += [{"name": "Flackey-Setup.exe", "size": 99,
+                           "browser_download_url": download + "Flackey-Setup.exe"},
+                          {"name": "Flackey-Setup.exe.sig", "size": 129,
+                           "browser_download_url": download + "Flackey-Setup.exe.sig"}]
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["url"] == download + "Flackey-Setup.exe" and info["size"] == 99
+    assert info["installer_signature_url"] == download + "Flackey-Setup.exe.sig"
+    assert info["available"] is True and info["seamless"] is False
+
+
+def test_windows_opens_the_installer_through_the_shell(monkeypatch, tmp_path):
+    """`os.startfile` is a double-click: SmartScreen's prompt for an unsigned download appears as it
+    would for one the owner fetched in a browser. The Mac's `open` is never tried."""
+    started = []
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(flackey.web.update.os, "startfile", started.append, raising=False)
+    monkeypatch.setattr(flackey.web.update.subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("ran `open` on Windows"))
+    # conftest swaps `open_installer` for a tripwire; this test is the one place the real one runs.
+    monkeypatch.setattr(flackey.web.update, "open_installer", REAL_OPEN_INSTALLER)
+    installer = tmp_path / "Flackey-Setup.exe"
+    flackey.web.update.open_installer(installer)
+    assert started == [installer]
+
+
+@respx.mock
+def test_windows_quits_once_setup_exe_is_open_so_it_can_replace_the_app(tmp_path, monkeypatch):
+    """Windows cannot overwrite a running Flackey.exe, so the app gets out of the installer's way."""
+    _pretend_windows(monkeypatch)
+    events = []
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: events.append(("open", p.name)))
+    app, _, settings = make(tmp_path, quit_app=lambda: events.append(("quit", None)))
+    c = AppClient(app)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        **_release_feed()[0], "assets": [{"name": "Flackey-Setup.exe", "size": 8,
+                                          "browser_download_url": INSTALLER_URL}]}]))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"EXE-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert (settings.data_dir / "updates" / "Flackey-Setup.exe").read_bytes() == b"EXE-DATA"
+    assert events == [("open", "Flackey-Setup.exe"), ("quit", None)]
+
+
+@respx.mock
+def test_windows_stays_open_when_setup_exe_would_not_start(tmp_path, monkeypatch):
+    """Quitting after a failed open would leave the owner with no app and no installer."""
+    _pretend_windows(monkeypatch)
+
+    def refuses(path):
+        raise OSError("no association")
+
+    monkeypatch.setattr("flackey.web.update.open_installer", refuses)
+    app, _, _ = make(tmp_path, quit_app=lambda: pytest.fail("quit without an installer running"))
+    c = AppClient(app)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[{
+        **_release_feed()[0], "assets": [{"name": "Flackey-Setup.exe", "size": 8,
+                                          "browser_download_url": INSTALLER_URL}]}]))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"EXE-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    assert "Flackey-Setup.exe" in _settle(c, "ready")["error"]
+
+
+@respx.mock
+def test_the_mac_keeps_running_while_installer_app_is_open(tmp_path, monkeypatch):
+    """Installer.app swaps a bundle that is not in use until the next launch; the owner may be busy."""
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin"))
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    app, _, _ = make(tmp_path, quit_app=lambda: pytest.fail("quit on the Mac"))
+    c = AppClient(app)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert len(opened) == 1
 
 
 def _settle(c, want: str) -> dict:
@@ -1190,20 +1316,44 @@ def test_unhandled_exception_becomes_a_plain_words_500(tmp_path: Path):
     assert r.json() == {"detail": "Something went wrong. The log has the details."}
 
 
-def test_reveal_in_finder_uses_open_dash_r_for_files_and_directories(tmp_path: Path, monkeypatch):
-    from flackey.web.library import reveal_in_finder
+def test_reveal_uses_open_dash_r_for_files_and_directories_on_macos(tmp_path: Path, monkeypatch):
+    from flackey.web.library import reveal_path
 
     calls = []
     monkeypatch.setattr("flackey.web.library.subprocess.Popen",
-                        lambda cmd, **kw: calls.append(cmd))
+                        lambda cmd, **kw: calls.append((cmd, kw)))
     monkeypatch.setattr("flackey.web.library.sys.platform", "darwin")
     f = tmp_path / "x.mp3"
     f.write_bytes(b"x")
     d = tmp_path / "a_dir"
     d.mkdir()
-    reveal_in_finder(f)
-    reveal_in_finder(d)
-    assert calls == [["open", "-R", str(f)], ["open", "-R", str(d)]]
+    reveal_path(f)
+    reveal_path(d)
+    assert [c for c, _ in calls] == [["open", "-R", str(f)], ["open", "-R", str(d)]]
+    assert all("creationflags" not in kw for _, kw in calls)  # the Mac call is the call it always was
+
+
+def test_reveal_on_windows_selects_a_file_in_explorer_and_opens_a_folder(tmp_path: Path, monkeypatch):
+    """A file is shown selected in File Explorer; a folder is opened with `os.startfile`, the way a
+    double-click would. The `/select,` argument keeps its quotes after the comma, where Explorer wants
+    them -- a path with a space in it otherwise opens Documents instead."""
+    import os
+
+    from flackey.web.library import reveal_path
+
+    calls, started = [], []
+    monkeypatch.setattr("flackey.web.library.subprocess.Popen",
+                        lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setattr(os, "startfile", started.append, raising=False)
+    f = tmp_path / "DJ Library" / "x.flac"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+    monkeypatch.setattr("flackey.web.library.sys.platform", "win32")
+    reveal_path(f)
+    reveal_path(f.parent)
+    assert [c for c, _ in calls] == [f'explorer /select,"{f}"']
+    assert calls[0][1]["creationflags"] == 0x08000000
+    assert started == [f.parent]
 
 
 def test_tools_and_setup_done(client):
@@ -1338,7 +1488,8 @@ def test_setup_soulseek_password_never_reaches_a_response_or_a_log(client, caplo
     assert not [r for r in caplog.records if secret in r.getMessage()]
     # and it is on disk only in the one file, readable only by its owner
     cfg = settings.data_dir / "slskd" / "slskd.yml"
-    assert secret in cfg.read_text() and cfg.stat().st_mode & 0o777 == 0o600
+    assert secret in cfg.read_text(encoding="utf-8")
+    assert sys.platform == "win32" or cfg.stat().st_mode & 0o777 == 0o600  # Windows has no mode bits
 
 
 class _FakeInstall:
@@ -1501,12 +1652,12 @@ def test_telegram_status_survives_a_client_that_was_never_connected(tmp_path):
 
 def test_pick_folder_with_fake_picker(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-    fake_path = Path("/tmp/x")
+    fake_path = tmp_path / "x"
     fake_picker = lambda initial: fake_path
     app, _, _ = make(tmp_path, picker=fake_picker)
     c = AppClient(app)
     r = c.post("/api/pick-folder", json={"initial": None})
-    assert r.status_code == 200 and r.json() == {"path": "/tmp/x"}
+    assert r.status_code == 200 and r.json() == {"path": str(fake_path)}
 
 
 def test_pick_folder_returns_null_when_cancelled(tmp_path, monkeypatch):
@@ -1530,23 +1681,49 @@ def test_pick_folder_returns_500_on_picker_error(tmp_path, monkeypatch):
     assert r.status_code == 500 and r.json()["detail"] == "Couldn't open the folder chooser."
 
 
-def test_pick_folder_returns_501_on_non_darwin(tmp_path, monkeypatch):
-    fake_picker = lambda initial: Path("/tmp/x")
-    app, _, _ = make(tmp_path, picker=fake_picker)
+def test_pick_folder_returns_501_when_there_is_no_dialog_to_open(tmp_path, monkeypatch):
+    """Off macOS with no window to lend its dialog -- `flackey start --no-browser` on Windows or Linux --
+    there is nothing to open, and the page keeps its text field."""
+    app, _, _ = make(tmp_path)
     c = AppClient(app)
     monkeypatch.setattr(sys, "platform", "linux")
     r = c.post("/api/pick-folder", json={"initial": None})
-    assert r.status_code == 501 and r.json()["detail"] == "Choosing a folder in a window only works on macOS."
+    assert r.status_code == 501
+    assert r.json()["detail"] == "Choosing a folder needs the Flackey window. Type the folder's path instead."
 
 
 def test_pick_folder_available_reflects_platform(tmp_path, monkeypatch):
     app, _, _ = make(tmp_path)
     c = AppClient(app)
+    monkeypatch.setattr(sys, "platform", "darwin")
     r = c.get("/api/pick-folder/available")
-    assert r.status_code == 200 and r.json() == {"available": sys.platform == "darwin"}
+    assert r.status_code == 200 and r.json() == {"available": True}
     monkeypatch.setattr(sys, "platform", "linux")
     r = c.get("/api/pick-folder/available")
     assert r.json() == {"available": False}
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert c.get("/api/pick-folder/available").json() == {"available": False}
+
+
+def test_on_windows_the_window_s_dialog_is_found_at_request_time(tmp_path, monkeypatch):
+    """The Windows dialog belongs to the pywebview window, which is created after the server is already
+    serving. So the router asks on every request: unavailable until the window registers its dialog,
+    available -- and used -- the moment it has."""
+    registered: dict = {}
+    app, _, _ = make(tmp_path, find_picker=lambda: registered.get("picker"))
+    c = AppClient(app)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert c.get("/api/pick-folder/available").json() == {"available": False}
+    assert c.post("/api/pick-folder", json={"initial": None}).status_code == 501
+
+    asked: list = []
+    chosen = tmp_path / "Music" / "DJ Library"
+    registered["picker"] = lambda initial: asked.append(initial) or chosen
+
+    assert c.get("/api/pick-folder/available").json() == {"available": True}
+    r = c.post("/api/pick-folder", json={"initial": str(tmp_path)})
+    assert r.status_code == 200 and r.json() == {"path": str(chosen)}
+    assert asked == [tmp_path]
 
 
 def test_choose_folder_with_valid_path(monkeypatch, tmp_path):

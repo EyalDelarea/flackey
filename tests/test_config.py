@@ -7,6 +7,7 @@ from flackey.config import (
     Settings,
     default_data_dir,
     load_settings,
+    platform_name,
     save_settings,
     secure_private_files,
 )
@@ -25,11 +26,34 @@ def test_load_settings_from_env_file(tmp_path: Path):
     assert s.data_dir == tmp_path / "data" and s.settings_path == tmp_path / "data" / "settings.json"
 
 
-def test_default_data_dir_is_mac_native_on_darwin():
-    if sys.platform == "darwin":
-        assert default_data_dir() == Path("~/Library/Application Support/Flackey").expanduser()
-    else:
-        assert default_data_dir() == XDG_DATA_DIR.expanduser()
+def test_default_data_dir_is_mac_native_on_darwin(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert default_data_dir() == Path("~/Library/Application Support/Flackey").expanduser()
+
+
+def test_default_data_dir_is_the_xdg_folder_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert default_data_dir() == XDG_DATA_DIR.expanduser()
+
+
+def test_default_data_dir_is_roaming_appdata_on_windows(monkeypatch, tmp_path: Path):
+    """`%APPDATA%\\Flackey`: the per-user roaming folder the installer never touches, so an uninstall
+    leaves the library index and the credentials where the next install finds them."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert default_data_dir() == tmp_path / "Roaming" / "Flackey"
+
+
+def test_default_data_dir_on_windows_without_appdata_names_the_same_folder(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    assert default_data_dir() == Path("~/AppData/Roaming").expanduser() / "Flackey"
+
+
+def test_platform_name_is_the_word_the_page_lays_itself_out_by(monkeypatch):
+    for raw, word in (("darwin", "mac"), ("win32", "windows"), ("linux", "linux"), ("freebsd14", "linux")):
+        monkeypatch.setattr(sys, "platform", raw)
+        assert platform_name() == word
 
 
 def test_credentials_are_optional(tmp_path: Path):
@@ -161,9 +185,9 @@ def test_load_settings_survives_no_slskd_config_at_all(tmp_path: Path):
 def test_save_settings_leaves_settings_json_at_mode_0600(tmp_path: Path):
     s = load_settings(_env(tmp_path))
     save_settings(s, library_root=tmp_path / "new")
-    assert s.settings_path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or s.settings_path.stat().st_mode & 0o777 == 0o600
     save_settings(s, telegram_api_id=1, telegram_api_hash="h")  # a later write stays 0600 too
-    assert s.settings_path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or s.settings_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_path: Path):
