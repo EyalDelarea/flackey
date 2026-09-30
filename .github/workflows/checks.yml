@@ -229,13 +229,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - name: Tagged commit is on main
+      # A tag on main is a release. A tag anywhere else (a branch build handed to a tester) is published
+      # only as a pre-release: the in-app update check skips pre-releases, so no installed copy is ever
+      # offered a commit that has not reached main.
+      - name: Tagged commit is on main, or this is a pre-release
+        id: channel
         run: |
           git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "::error title=Tag not on main::$GITHUB_SHA is not an ancestor of origin/main; refusing to publish."
-            exit 1
-          }
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Pre-release::$GITHUB_SHA is not on main; publishing $GITHUB_REF_NAME as a pre-release."
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
@@ -277,6 +283,7 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
@@ -291,5 +298,7 @@ jobs:
             [[ -f "$f" ]] || { echo "::error title=Missing asset::$f is missing."; exit 1; }
             assets+=("$f")
           done
-          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+          channel=()
+          [[ "$PRERELEASE" == "true" ]] && channel=(--prerelease --latest=false)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${channel[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes

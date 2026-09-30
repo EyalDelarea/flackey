@@ -28,7 +28,7 @@
         ><a href="#help">Help</a
         ><a href="#release-notes">Release notes</a>
       </nav>
-      <a class="button compact" href="#download">Download for Mac</a>
+      <a class="button compact" href="#download">Download</a>
     </header>
     <main>
       <section class="hero" id="overview" aria-labelledby="title">
@@ -37,7 +37,7 @@
             <h1 id="title">From link<br />to FLAC.</h1>
             <p class="lede">High-quality tracks. Ready to download.</p>
             <div class="hero-actions">
-              <a class="button" href="#download">Download for Mac</a
+              <a class="button" href="#download">Download</a
               ><a class="watch" href="#preview"
                 ><span class="small-play" aria-hidden="true">▶</span>Watch
                 preview</a
@@ -560,14 +560,24 @@
           <h2 id="download-title">
             Get the best quality available.<br /><span>Share it back.</span>
           </h2>
-          <p>Apple Silicon Mac · macOS 12 or newer</p>
-          <a class="button unavailable" id="download-link" aria-disabled="true"
-            >Installer coming soon</a
-          >
+          <div class="downloads">
+            <div class="download-option">
+              <a class="button unavailable" id="download-mac" aria-disabled="true"
+                >Mac installer coming soon</a
+              >
+              <p class="download-req">Apple Silicon Mac · macOS 12 or newer<span class="download-size"></span></p>
+            </div>
+            <div class="download-option windows">
+              <a class="button unavailable" id="download-windows" aria-disabled="true"
+                >Windows installer coming soon</a
+              >
+              <p class="download-req">Windows 10 or 11 · 64-bit PC<span class="download-size"></span></p>
+            </div>
+          </div>
           <p class="release" id="release-line">Checking for a release…</p>
         </div>
-        <details class="install" open>
-          <summary><span class="install-eyebrow">Please read</span> Installing Flackey</summary>
+        <details class="install" id="install-mac" open>
+          <summary><span class="install-eyebrow">Please read</span> Installing on a Mac</summary>
           <ol>
             <li>Download and open <strong>Flackey.pkg</strong>.</li>
             <li>
@@ -633,6 +643,72 @@
               On macOS 14 and earlier you could control-click the installer and
               choose Open. macOS 15 removed that, so Privacy &amp; Security is
               now the only route.
+            </p>
+            <p class="gk-note">
+              Rather not take our word for it? Flackey is open source — you can
+              read the code and
+              <a href="https://github.com/EyalDelarea/flackey">build it yourself</a>.
+            </p>
+          </div>
+
+        </details>
+        <details class="install" id="install-windows">
+          <summary><span class="install-eyebrow">Please read</span> Installing on Windows</summary>
+          <ol>
+            <li>Download and open <strong>Flackey-Setup.exe</strong>.</li>
+            <li>
+              Windows will warn you the first time — see below. This is expected.
+            </li>
+            <li>
+              Follow the setup steps. Flackey installs for your account only, so
+              no administrator password is needed.
+            </li>
+            <li>
+              Open Flackey and connect Telegram, Soulseek, or both. When Windows
+              Firewall asks about <strong>slskd</strong> (Flackey’s Soulseek
+              client), click <strong>Allow</strong> so others can download what
+              you share.
+            </li>
+          </ol>
+          <div class="gatekeeper">
+            <h3>Windows will say it protected your PC</h3>
+            <p>
+              Flackey isn’t code-signed yet, so Microsoft Defender SmartScreen
+              doesn’t recognise it and shows this the first time you open the
+              installer:
+            </p>
+            <!-- A drawing of the SmartScreen screen, like the macOS one above: at
+                 first it offers only "Don't run", and the way on is a small link. -->
+            <figure class="gk-dialog">
+              <div class="ss-sheet" aria-hidden="true">
+                <p class="ss-title">Windows protected your PC</p>
+                <p class="ss-body">
+                  Microsoft Defender SmartScreen prevented an unrecognized app
+                  from starting. Running this app might put your PC at risk.
+                </p>
+                <p class="ss-link">More info</p>
+                <div class="ss-buttons"><span class="ss-btn">Don’t run</span></div>
+              </div>
+              <figcaption>
+                <strong>Click “More info.”</strong> The “Run anyway” button only
+                appears after that; “Don’t run” closes the installer.
+              </figcaption>
+            </figure>
+            <ol class="gk-steps">
+              <li>Click <strong>More info</strong>.</li>
+              <li>
+                Check that it names <em>Flackey-Setup.exe</em>, then click
+                <strong>Run anyway</strong>. Setup then runs normally.
+              </li>
+            </ol>
+            <p class="gk-note">
+              <strong>If your browser says the file isn’t commonly
+              downloaded,</strong> open the download’s <strong>…</strong> menu and
+              choose <strong>Keep</strong>.
+            </p>
+            <p class="gk-note">
+              Windows on Arm PCs run Flackey too, through Windows’ own emulation;
+              expect it to be slower.
             </p>
             <p class="gk-note">
               Rather not take our word for it? Flackey is open source — you can
