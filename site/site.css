@@ -1270,19 +1270,47 @@ h2 {
 .download-section .button {
   margin-top: 26px;
 }
-.downloads {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0 28px;
+/* Mac or Windows: one choice decides which download and which install guide show. */
+.os-picker {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 28px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #eef0f4;
+}
+.os-picker [role="tab"] {
+  min-width: 120px;
+  padding: 9px 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #525866;
+  font-size: 15px;
+  font-weight: 600;
+  transition:
+    background 0.2s,
+    color 0.2s,
+    box-shadow 0.2s;
+}
+.os-picker [role="tab"]:hover {
+  color: var(--ink);
+}
+.os-picker [role="tab"][aria-selected="true"] {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(20, 22, 30, 0.14);
+}
+.os-picker [role="tab"]:focus-visible {
+  outline-offset: 2px;
+}
+.os-panel[hidden] {
+  display: none;
 }
 .download-option {
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-.windows-first .download-option.windows {
-  order: -1;
 }
 .download-section .download-req {
   margin-top: 10px;
@@ -1293,22 +1321,17 @@ h2 {
 }
 .install {
   max-width: 700px;
-  margin: 35px auto 0;
+  margin: 30px auto 0;
   text-align: left;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   font-size: 14px;
   line-height: 1.6;
 }
-.install + .install {
-  margin-top: 0;
-  border-top: 0;
-}
-.install summary {
-  cursor: pointer;
-  padding: 18px 0;
+.install-head {
+  padding: 18px 0 4px;
   text-align: center;
-  color: #525866;
+  color: #525866 !important;
 }
 .install-eyebrow {
   display: inline-block;
