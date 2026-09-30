@@ -36,6 +36,17 @@ requires_fpcalc = pytest.mark.skipif(not has_fpcalc(), reason="fpcalc (chromapri
 
 
 @pytest.fixture(autouse=True)
+def _no_public_deezer_lookup(monkeypatch):
+    """The worker asks Deezer's public API for a record when the bot gave none, and the worker tests use a
+    real `httpx.AsyncClient`. Without this every such test would reach api.deezer.com. Tests of the lookup
+    itself call `reference.find_deezer_record` directly, and worker tests that want a record patch this."""
+    async def none(cand, http):
+        return None, "no deezer lookup in tests"
+
+    monkeypatch.setattr("flackey.worker.find_deezer_record", none)
+
+
+@pytest.fixture(autouse=True)
 def _never_open_the_real_installer(monkeypatch):
     """`open_installer` shells out to `open`, so a test that reaches it throws a modal Installer.app
     dialog at whoever is running the suite. Tests that mean to reach this path stub it themselves."""

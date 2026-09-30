@@ -923,6 +923,30 @@ async def test_source_switched_off_searches_the_providers_on_the_beatport_match_
     assert "could not be checked acoustically" in r.error_message
 
 
+async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, monkeypatch):
+    """Without Telegram a Spotify link or typed text has no bot record, but Deezer's public catalogue still
+    has the track: its preview is the reference, and the file is checked and filed as with the bot on."""
+    settings, store, _, provider, fake_check, _ = lenv
+    seen, check = _capture_reference(fake_check)
+    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    looked_up = []
+
+    async def lookup(cand, http):
+        looked_up.append((cand.source, cand.isrc))
+        return 1754956977, "deezer:1754956977 by search"
+
+    monkeypatch.setattr(worker_mod, "find_deezer_record", lookup)
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+
+    assert looked_up == [(worker_mod.CATALOG_SOURCE, CT3.isrc)]   # the Beatport stand-in, ISRC and all
+    assert seen == ["deezer:1754956977"]
+    assert attempt_of(store, rid).outcome == "filed"
+    assert r.state == RequestState.DONE and r.track_id is not None and provider.downloaded == ["a"]
+
+
 async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeypatch):
     settings, store, _, _, fake_check, _ = lenv
     _, check = _capture_reference(fake_check)

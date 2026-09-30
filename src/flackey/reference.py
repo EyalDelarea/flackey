@@ -13,7 +13,9 @@ from uuid import uuid4
 
 import httpx
 
+from .deezer import DeezerError, parse_track_json
 from .fingerprint import SUBFRAME_TRIMS_S, AcousticReference, FingerprintError, compare, fingerprint
+from .match import candidate_query, decide
 from .models import Candidate
 from .verify import VerifyError, probe
 from .youtube import fetch_audio, video_id
@@ -22,6 +24,9 @@ log = logging.getLogger(__name__)
 
 EXCERPT_S = 30.0          # the Deezer preview's shape; `compare` needs the needle shorter than the hay
 DEEZER_TRACK = "https://api.deezer.com/track/{id}"
+DEEZER_SEARCH = "https://api.deezer.com/search"
+LOOKUP_SOURCE = "deezer_api"
+LOOKUP_LIMIT = 10
 DEEZER_TRIES = 3
 # Previews tried per request: the bot's menu is text-ordered, so the record is in the first few.
 IDENTIFY_MAX = 5
@@ -98,6 +103,42 @@ async def deezer_reference(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Pat
     """The Deezer preview as the reference, for a request that has no audio of its own."""
     needles = await deezer_needles(deezer_id, http, tmp_dir)
     return AcousticReference("deezer", str(deezer_id), needles, needles[0], 0.0, EXCERPT_S)
+
+
+async def find_deezer_record(cand: Candidate, http: httpx.AsyncClient) -> tuple[int | None, str]:
+    """A Deezer id for the recording `cand` describes, from Deezer's public API, which needs no account.
+    This is what gives a request with no audio of its own (a Spotify link, typed text) a reference when the
+    Telegram bot -- until now the only way to a Deezer id -- is switched off or found nothing.
+
+    The ISRC first: it names one recording, so Deezer's record for it is the right preview by definition.
+    Otherwise a text search, and a result counts only when `decide` would have taken it from the bot:
+    the requested version, and a length within the scoring's tolerance. A wrong record cannot file a wrong
+    file on its own -- the fingerprint still has to find its preview inside the download -- but a remix's
+    preview would vouch for a remix, so the version rule is the one that matters here. Never raises: the
+    reason comes back instead, for the attempt row."""
+    if cand.isrc:
+        try:
+            r = await http.get(DEEZER_TRACK.format(id=f"isrc:{cand.isrc}"), timeout=20)
+            if r.status_code == 200:
+                return parse_track_json(r.json()).id, f"deezer:isrc:{cand.isrc}"
+        except (httpx.HTTPError, DeezerError, ValueError, KeyError) as e:
+            log.info("deezer lookup: isrc %s: %s", cand.isrc, e or type(e).__name__)
+    want = candidate_query(cand)
+    try:
+        r = await http.get(DEEZER_SEARCH, params={"q": want.search_text(), "limit": LOOKUP_LIMIT}, timeout=20)
+        r.raise_for_status()
+        found = [parse_track_json(item) for item in r.json().get("data") or []]
+    except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError) as e:
+        return None, f"deezer search failed: {e or type(e).__name__}"
+    cands = [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
+                       mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, rank=i)
+             for i, t in enumerate(found) if t.preview_url]
+    if not cands:
+        return None, f"deezer has no previewable record for '{want.search_text()}'"
+    decision = decide(want, cands, None)
+    if not decision.auto or decision.chosen is None:
+        return None, f"no deezer record is this recording: {decision.reason}"
+    return decision.chosen.deezer_id, f"deezer:{decision.chosen.deezer_id} by search, {decision.reason}"
 
 
 @dataclass(frozen=True)
