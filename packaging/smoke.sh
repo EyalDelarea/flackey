@@ -33,8 +33,15 @@ if [[ -z "$health" ]]; then
   exit 1
 fi
 
-expect_keys="false"
-[[ -n "${FLACKEY_TELEGRAM_API_ID:-}" && -n "${FLACKEY_TELEGRAM_API_HASH:-}" ]] && expect_keys="true"
+# CI says whether the build baked keys in (SMOKE_EXPECT_KEYS) without handing this step the keys; by
+# hand, the keys in the environment that build_app.sh would have baked are the answer.
+if [[ -n "${SMOKE_EXPECT_KEYS:-}" ]]; then
+  expect_keys="$SMOKE_EXPECT_KEYS"
+elif [[ -n "${FLACKEY_TELEGRAM_API_ID:-}" && -n "${FLACKEY_TELEGRAM_API_HASH:-}" ]]; then
+  expect_keys="true"
+else
+  expect_keys="false"
+fi
 python3 - "$health" "$expect_keys" <<'EOF'
 import json
 import sys

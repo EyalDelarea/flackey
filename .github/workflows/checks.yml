@@ -112,6 +112,9 @@ jobs:
           FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
         run: packaging/build_app.sh
       - name: Smoke-launch
+        # Whether the build above baked keys in, without handing the smoke test the keys themselves.
+        env:
+          SMOKE_EXPECT_KEYS: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: packaging/smoke.sh packaging/build/dist/Flackey.app
       - name: Update helper is inside the signed bundle
         # A bundle published without the helper looks perfect until someone presses Update months
