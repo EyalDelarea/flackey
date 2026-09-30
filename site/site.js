@@ -155,12 +155,30 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
         '<p class="release-notes-status">Release notes are temporarily unavailable.</p>';
   });
 
-// A visitor on Windows gets the Windows download first and its install steps open instead of the Mac's.
-if (/Windows/.test(navigator.userAgent)) {
-  document.querySelector(".downloads")?.classList.add("windows-first");
-  document.querySelector("#install-mac")?.removeAttribute("open");
-  document.querySelector("#install-windows")?.setAttribute("open", "");
+// Mac or Windows: the choice shows that OS's download with its install guide.
+// A visitor on Windows starts on Windows; everyone else starts on Mac.
+const osTabs = [...document.querySelectorAll('.os-picker [role="tab"]')];
+function chooseOs(chosen) {
+  for (const tab of osTabs) {
+    const selected = tab === chosen;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    const panel = document.getElementById(tab.getAttribute("aria-controls"));
+    if (panel) panel.hidden = !selected;
+  }
 }
+for (const tab of osTabs) {
+  tab.addEventListener("click", () => chooseOs(tab));
+  tab.addEventListener("keydown", (event) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const next = osTabs[(osTabs.indexOf(tab) + step + osTabs.length) % osTabs.length];
+    chooseOs(next);
+    next.focus();
+  });
+}
+if (/Windows/.test(navigator.userAgent)) chooseOs(document.querySelector("#os-tab-windows"));
 
 // The app-walkthrough demo. Every value below is interpolated per frame rather
 // than stepped between a handful of states: the percentage, the arc that draws
