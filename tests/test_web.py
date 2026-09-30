@@ -14,7 +14,7 @@ import respx
 
 import flackey.web.update
 from flackey import __version__
-from flackey.config import Settings
+from flackey.config import Settings, default_filing_format
 from flackey.deezer import DeezerApi
 from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
@@ -1235,7 +1235,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
                            "soulseek_listen": {"port": 50300, "host": "0.0.0.0", "public": True}},
                  "ranking": {"max_picks": 4, "max_queue": None, "fingerprint_min": 0.79},
-                 "filing_formats": ["aiff", "wav", "flac"]}
+                 "filing_formats": ["aiff", "wav", "flac"], "default_filing_format": default_filing_format()}
     # Only one of the three is reachable from outside this machine, and it has to be: peers connect
     # inbound to it to download from the shared library.
     assert [k for k, v in s["ports"].items() if v["public"]] == ["soulseek_listen"]
@@ -1907,7 +1907,7 @@ def test_settings_never_expose_the_api_key_and_accept_lossless_keys(tmp_path: Pa
     settings.slskd_api_key = "secret-key-value"
     out = c.get("/api/settings").json()
     assert "secret-key-value" not in json.dumps(out) and out["soulseek_enabled"] is True
-    assert out["slskd_url"] == "http://127.0.0.1:5030" and out["lossless_filing_format"] == "aiff"
+    assert out["slskd_url"] == "http://127.0.0.1:5030" and out["lossless_filing_format"] == default_filing_format()
     r = c.put("/api/settings", json={"library_root": str(tmp_path / "lib"), "slskd_api_key": "new-key",
                                      "slskd_url": "http://127.0.0.1:5031", "lossless_filing_format": "aiff"})
     assert r.status_code == 200 and "new-key" not in r.text and r.json()["lossless_filing_format"] == "aiff"

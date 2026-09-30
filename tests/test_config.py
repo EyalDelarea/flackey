@@ -6,6 +6,7 @@ from flackey.config import (
     XDG_DATA_DIR,
     Settings,
     default_data_dir,
+    default_filing_format,
     load_settings,
     platform_name,
     save_settings,
@@ -91,9 +92,25 @@ def test_save_settings_preserves_keys_written_by_an_earlier_save(tmp_path: Path)
     assert data == {"telegram_api_id": 999, "telegram_api_hash": "file-hash", "library_root": str(tmp_path / "new")}
 
 
-def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path):
-    """AIFF stays the default because Rekordbox's WAVE metadata path is RIFF INFO, not ID3/APIC artwork.
+def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path, monkeypatch):
+    """AIFF stays the Mac default because Rekordbox's WAVE metadata path is RIFF INFO, not ID3/APIC artwork.
     WAV remains selectable for owners who want it, but AIFF is still the richest Rekordbox import path."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
+
+
+def test_windows_files_flac_so_the_app_can_play_what_it_filed(tmp_path: Path, monkeypatch):
+    """The Windows window is Chromium (WebView2), which cannot decode AIFF: Library's play button would be
+    silent on every track. FLAC keeps Rekordbox's tags and artwork and plays there."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert default_filing_format() == "flac"
+    assert load_settings(_env(tmp_path)).lossless_filing_format == "flac"
+
+
+def test_a_chosen_format_is_kept_whatever_the_system_default(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    s = load_settings(_env(tmp_path))
+    save_settings(s, lossless_filing_format="aiff")
     assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
 
 
@@ -120,7 +137,7 @@ def test_lossless_is_off_until_an_api_key_is_set(tmp_path: Path):
     assert s.slskd_downloads == tmp_path / "slskd" / "downloads"
     assert s.lossless_raw_dir == tmp_path / "lossless" / "attempts"
     assert (s.lossless_filing_format, s.lossless_search_wait_s, s.lossless_first_byte_s, s.lossless_transfer_s,
-            s.lossless_poll_s) == ("aiff", 30, 60, 600, 2.0)
+            s.lossless_poll_s) == (default_filing_format(), 30, 60, 600, 2.0)
     assert (s.lossless_max_queue, s.lossless_fingerprint_min, s.lossless_max_picks,
             s.lossless_keep_raw_days) == (None, 0.79, 4, 30)
     on = Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="k")
@@ -246,7 +263,7 @@ def test_a_file_with_nothing_usable_in_it_falls_back_to_the_defaults(tmp_path: P
 
     reloaded = load_settings(_env(tmp_path))
     assert reloaded.window_size is None
-    assert reloaded.lossless_filing_format == "aiff"
+    assert reloaded.lossless_filing_format == default_filing_format()
 
 
 def test_a_rejection_that_names_no_field_never_logs_the_values_it_rejected(tmp_path: Path, caplog):

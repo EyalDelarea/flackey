@@ -106,7 +106,27 @@ def test_windows_is_described_by_release_and_build(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(report.platform, "win32_ver", lambda: ("11", "10.0.26100", "SP0", "Multiprocessor Free"))
     monkeypatch.setattr(report.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(report, "_windows_native_machine", lambda: 0x8664)
     assert report.os_summary() == "Windows 11 (build 10.0.26100, AMD64)"
+
+
+def test_windows_on_arm_says_the_app_is_emulated(monkeypatch):
+    """The x64 app on an Arm PC is told AMD64; the emulation is what makes everything there slow."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(report.platform, "win32_ver", lambda: ("11", "10.0.26200", "SP0", "Multiprocessor Free"))
+    monkeypatch.setattr(report.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(report, "_windows_native_machine", lambda: 0xAA64)
+    assert report.os_summary() == "Windows 11 (build 10.0.26200, AMD64, emulated on Arm)"
+
+
+def test_windows_displays_carry_the_scaling():
+    assert report.windows_display_text(1, 1024, 768, 96) == "1 (primary 1024×768, 100% scale)"
+    assert report.windows_display_text(2, 2560, 1440, 144) == "2 (primary 2560×1440, 150% scale)"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reads the real Windows displays")
+def test_windows_display_summary_reads_the_machine():
+    assert report.display_summary() != "unknown"
 
 
 @pytest.mark.parametrize("system,frozen,label", [

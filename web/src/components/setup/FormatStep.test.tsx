@@ -19,3 +19,15 @@ it('defaults to AIFF and saves the selected format', async () => {
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith('/lib', { lossless_filing_format: 'wav' }))
   expect(mockOnDone).toHaveBeenCalledWith('wav')
 })
+
+it('on Windows marks FLAC as the default and starts on it', () => {
+  // The server's default there is FLAC: the Windows window (Chromium) cannot play AIFF.
+  render(<FormatStep libraryRoot="/lib" initial="" formats={['aiff', 'wav', 'flac']} onDone={mockOnDone} defaultFormat="flac" />)
+  const flac = screen.getByRole('button', { name: /FLAC/ })
+  expect(flac).toHaveAttribute('aria-pressed', 'true')
+  expect(flac).toHaveTextContent('Default')
+  const aiff = screen.getByRole('button', { name: /AIFF/ })
+  expect(aiff).not.toHaveTextContent('Default')
+  // "Recommended" goes with the default, so AIFF does not claim it beside a FLAC marked Default.
+  expect(aiff).not.toHaveTextContent('Recommended')
+})

@@ -117,7 +117,8 @@ class FakeProvider:
 def lenv(tmp_path: Path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", library_root=tmp_path / "lib",
                         data_dir=tmp_path / "data", slskd_api_key="k", lossless_poll_s=0.01, lossless_search_wait_s=5,
-                        lossless_first_byte_s=10, lossless_transfer_s=20, lossless_queue_wait_s=15)
+                        lossless_first_byte_s=10, lossless_transfer_s=20, lossless_queue_wait_s=15,
+                        lossless_filing_format="aiff")  # the tests read AIFF out; Windows' default is FLAC
     store = Store(settings.db_path)
     downloads = settings.slskd_downloads
     downloads.mkdir(parents=True)

@@ -21,6 +21,14 @@ PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 
 
+def default_filing_format() -> str:
+    """AIFF on the Mac, FLAC on Windows. Both carry Rekordbox's tags and artwork; the difference is the
+    app's own player. The Mac window is WebKit, which plays AIFF, but the Windows window is WebView2
+    (Chromium), which cannot decode AIFF at all -- every track filed there would be silent in Library.
+    FLAC plays in both, and is smaller. Only a default: a format the owner picked is kept on any system."""
+    return "flac" if sys.platform == "win32" else "aiff"
+
+
 def platform_name() -> str:
     """One of "mac", "windows" or "linux": the one word the page needs to lay itself out for the machine it runs
     on (`/api/health` carries it), and the one spelling every platform branch outside this module can
@@ -92,11 +100,12 @@ class Settings(BaseSettings):
     slskd_url: str = "http://127.0.0.1:5030"
     slskd_api_key: str | None = None
     slskd_downloads_dir: Path | None = None       # default: <data_dir>/slskd/downloads, see `slskd_downloads`
-    # AIFF by default: Rekordbox plays WAV, but documents RIFF INFO -- not WAV ID3/APIC -- as its WAVE
-    # metadata source, and that text path has no reliable embedded artwork field. AIFF is the same PCM at
-    # the same size in a container Rekordbox imports with richer tags and cover art. WAV remains selectable
-    # for owners who prefer plain PCM interchange.
-    lossless_filing_format: str = "aiff"
+    # AIFF by default on the Mac (FLAC on Windows, see `default_filing_format`): Rekordbox plays WAV, but
+    # documents RIFF INFO -- not WAV ID3/APIC -- as its WAVE metadata source, and that text path has no
+    # reliable embedded artwork field. AIFF is the same PCM at the same size in a container Rekordbox
+    # imports with richer tags and cover art. WAV remains selectable for owners who prefer plain PCM
+    # interchange.
+    lossless_filing_format: str = Field(default_factory=default_filing_format)
     lossless_search_wait_s: int = 30
     lossless_first_byte_s: int = 60
     # How long to sit in one peer's queue before moving to the next survivor. The peers holding a rare goa

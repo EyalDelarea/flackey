@@ -75,7 +75,9 @@ export interface PortInfo { port:number; host:string; public:boolean }
 export interface Ranking { max_picks:number; max_queue:number|null; fingerprint_min:number }
 export interface AppSettings { library_root:string; data_dir:string; version:string; telegram_configured:boolean;
   log_path:string; soulseek_enabled?:boolean; slskd_url?:string; slskd_downloads_dir?:string;
-  lossless_filing_format?:string; filing_formats?:string[]; auto_update_check?:boolean;
+  lossless_filing_format?:string; filing_formats?:string[];
+  /** AIFF on the Mac, FLAC on Windows (its window cannot play AIFF). Absent from an older server: AIFF. */
+  default_filing_format?:string; auto_update_check?:boolean;
   ports?:{ app:PortInfo; sidecar:PortInfo; soulseek_listen:PortInfo }; ranking?:Ranking }
 export interface Submission { summary:string; request_ids:number[]; playlist_id:number|null; name:string; total:number; already_in_library:number; already_queued:number }
 export interface Tools { ffmpeg:boolean; ffprobe:boolean; yt_dlp:boolean }

@@ -155,7 +155,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .finally(() => setReconnecting(false))
   }
   const formats = s.filing_formats ?? ['aiff', 'wav', 'flac']
-  const currentFormat = s.lossless_filing_format ?? 'aiff'
+  const defaultFormat = s.default_filing_format ?? 'aiff'
+  const currentFormat = s.lossless_filing_format ?? defaultFormat
   const saveFormat = (format: string) => {
     if (format === currentFormat) return
     setFormatBusy(true); setFormatError(null)
@@ -311,7 +312,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
             : <button className="btn-secondary" onClick={() => { setPath(s.library_root); setEditing(true); setErr(null) }}>Change</button>}</div></div>
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}.</div>
-          <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} />
+          <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} defaultFormat={defaultFormat} />
           {formatError && <div className="err">{formatError}</div>}</div></div>
       </div>
       {/* What is left is Soulseek and nothing else: its two logins, whether other people can reach this

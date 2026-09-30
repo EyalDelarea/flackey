@@ -46,7 +46,7 @@ def _distinct(src: Path, fmt: str) -> Path:
 
     ffmpeg refuses outright when its output names its input ("Output ... same as Input #0"), and a peer's
     file often already carries the filing format's own extension -- an .aiff download while
-    `lossless_filing_format` is "aiff", which is the default. The comparison is case-insensitive because
+    `lossless_filing_format` is "aiff", the Mac default. The comparison is case-insensitive because
     macOS is: writing `x.wav` while reading `x.WAV` is the same collision, spelled differently."""
     dst = src.with_suffix(f".{fmt}")
     return dst if dst.name.lower() != src.name.lower() else src.with_name(f"{src.stem}.clean.{fmt}")

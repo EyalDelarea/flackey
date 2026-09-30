@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import __version__
-from ..config import FILING_FORMATS, Settings, save_settings
+from ..config import FILING_FORMATS, Settings, default_filing_format, save_settings
 from ..export import PLAYLIST_DIR, playlist_names, write_playlists
 from ..library import prune_missing_tracks
 from ..logsetup import LOG_FILE
@@ -220,7 +220,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "ranking": {"max_picks": settings.lossless_max_picks,
                             "max_queue": settings.lossless_max_queue,
                             "fingerprint_min": settings.lossless_fingerprint_min},
-                "filing_formats": list(FILING_FORMATS)}
+                "filing_formats": list(FILING_FORMATS), "default_filing_format": default_filing_format()}
 
     @r.get("/settings")
     async def get_settings() -> dict:

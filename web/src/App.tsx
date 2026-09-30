@@ -105,6 +105,7 @@ function AppBody({ live }: { live: Live }) {
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <FormatStep libraryRoot={libraryRoot} initial={filingFormat}
         formats={live.settings?.filing_formats ?? ['aiff', 'wav', 'flac']}
+        defaultFormat={live.settings?.default_filing_format}
         onDone={f => { setFilingFormat(f); setStep(3) }} />}
       {current === 3 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
       {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { setSoulseekState('skipped'); setStep(5) }} />}

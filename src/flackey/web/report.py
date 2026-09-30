@@ -175,6 +175,8 @@ def display_summary() -> str:
     """How many displays, and whether one is external -- the window flicker (#31) turned on exactly
     that. Quartz rather than `NSScreen`: this runs on a server thread, and the CoreGraphics display
     list is safe to read from one. Anything short of an answer is "unknown", never a guess."""
+    if sys.platform == "win32":
+        return _windows_displays()
     if sys.platform != "darwin":
         return "unknown"
     try:
@@ -198,13 +200,59 @@ def display_summary() -> str:
     return f"{count} ({', '.join(parts)})"
 
 
+_SM_CXSCREEN, _SM_CYSCREEN, _SM_CMONITORS = 0, 1, 80
+_IMAGE_FILE_MACHINE_ARM64 = 0xAA64
+
+
+def windows_display_text(count: int, width: int, height: int, dpi: int) -> str:
+    """Scaling is the part that matters: the window's size and place are computed in it (see
+    `desktop.window_origin`), and it is what differs between two machines at the same resolution."""
+    return f"{count} (primary {width}×{height}, {round(dpi * 100 / 96)}% scale)"
+
+
+def _windows_displays() -> str:
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        count = user32.GetSystemMetrics(_SM_CMONITORS)
+        width, height = user32.GetSystemMetrics(_SM_CXSCREEN), user32.GetSystemMetrics(_SM_CYSCREEN)
+        dpi = user32.GetDpiForSystem() or 96
+    except Exception:
+        log.debug("could not read the displays", exc_info=True)
+        return "unknown"
+    return windows_display_text(count, width, height, dpi) if count else "unknown"
+
+
+def _windows_native_machine() -> int | None:
+    """The CPU's own architecture, which `platform.machine()` does not give: an x64 Flackey emulated on an
+    Arm PC is told AMD64. That emulation is why everything there is slow (a first launch took minutes in
+    the Arm test VM), so a report that hid it would send the reader looking for a bug that isn't one."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        process, native = wintypes.USHORT(), wintypes.USHORT()
+        if not kernel32.IsWow64Process2(kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+            return None
+    except Exception:                    # IsWow64Process2 is Windows 10 1709 and later
+        log.debug("could not read the native architecture", exc_info=True)
+        return None
+    return native.value
+
+
 def os_summary() -> str:
     if sys.platform == "win32":
         # `platform.platform()` on Windows is `Windows-10-10.0.22631-SP0`: right, but not how anyone
         # says it. The build number stays because it is what tells Windows 10 from 11 on a Python
         # that reports both as release "10".
         release, version, _, _ = platform.win32_ver()
-        return f"Windows {release} (build {version}, {platform.machine()})"
+        machine = platform.machine()
+        if _windows_native_machine() == _IMAGE_FILE_MACHINE_ARM64 and machine.upper() != "ARM64":
+            machine += ", emulated on Arm"
+        return f"Windows {release} (build {version}, {machine})"
     mac = platform.mac_ver()[0]
     return f"macOS {mac} ({platform.machine()})" if mac else platform.platform()
 
