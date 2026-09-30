@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .tools import tool_path
+from .tools import no_window, tool_path
 
 log = logging.getLogger(__name__)
 RUN_TIMEOUT_S = 300
@@ -30,7 +30,7 @@ def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
            "-c:a", codec, str(dst)]
     t0 = time.monotonic()
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False)
+        p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
     except subprocess.TimeoutExpired as e:
         dst.unlink(missing_ok=True)
         raise ConvertError(f"ffmpeg timed out after {RUN_TIMEOUT_S}s") from e
@@ -46,7 +46,7 @@ def _distinct(src: Path, fmt: str) -> Path:
 
     ffmpeg refuses outright when its output names its input ("Output ... same as Input #0"), and a peer's
     file often already carries the filing format's own extension -- an .aiff download while
-    `lossless_filing_format` is "aiff", which is the default. The comparison is case-insensitive because
+    `lossless_filing_format` is "aiff", the Mac default. The comparison is case-insensitive because
     macOS is: writing `x.wav` while reading `x.WAV` is the same collision, spelled differently."""
     dst = src.with_suffix(f".{fmt}")
     return dst if dst.name.lower() != src.name.lower() else src.with_name(f"{src.stem}.clean.{fmt}")

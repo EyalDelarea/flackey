@@ -1,5 +1,9 @@
 const release = document.querySelector("#release-line");
-const downloadLink = document.querySelector("#download-link");
+// One button per installer, filled in from the same release.
+const downloads = [
+  { link: document.querySelector("#download-mac"), asset: "Flackey.pkg", label: "Download for Mac" },
+  { link: document.querySelector("#download-windows"), asset: "Flackey-Setup.exe", label: "Download for Windows" },
+];
 const notesList = document.querySelector("#release-notes-list");
 
 const formatReleaseDate = (iso) =>
@@ -96,19 +100,23 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       ? releases.filter((item) => !item.draft && !item.prerelease)
       : [];
     const data = published[0] || null;
-    const asset = data?.assets?.find((item) => item.name === "Flackey.pkg");
-    if (!release || !downloadLink || !asset?.browser_download_url) {
-      if (release) release.textContent = "The first download is on its way.";
-    } else {
-      downloadLink.href = asset.browser_download_url;
-      downloadLink.removeAttribute("aria-disabled");
-      downloadLink.classList.remove("unavailable");
-      downloadLink.innerHTML =
-        'Download Mac installer <span aria-hidden="true">↓</span>';
-      const version = String(data.tag_name || "").replace(/^v/, "");
-      const size = `${(asset.size / 1e6).toFixed(1)} MB`;
-      const status = data.prerelease ? "Beta" : "Stable";
-      release.textContent = `Version ${version} · ${status} installer · ${size} · ${formatReleaseDate(data.published_at)}`;
+    let offered = 0;
+    for (const { link, asset: name, label } of downloads) {
+      const asset = data?.assets?.find((item) => item.name === name);
+      if (!link || !asset?.browser_download_url) continue;
+      link.href = asset.browser_download_url;
+      link.removeAttribute("aria-disabled");
+      link.classList.remove("unavailable");
+      link.innerHTML = `${label} <span aria-hidden="true">↓</span>`;
+      const size = link.parentElement?.querySelector(".download-size");
+      if (size) size.textContent = ` · ${(asset.size / 1e6).toFixed(0)} MB`;
+      offered += 1;
+    }
+    if (release) {
+      const version = String(data?.tag_name || "").replace(/^v/, "");
+      release.textContent = offered
+        ? `Version ${version} · ${formatReleaseDate(data.published_at)}`
+        : "The first download is on its way.";
     }
 
     if (notesList) {
@@ -146,6 +154,13 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
       notesList.innerHTML =
         '<p class="release-notes-status">Release notes are temporarily unavailable.</p>';
   });
+
+// A visitor on Windows gets the Windows download first and its install steps open instead of the Mac's.
+if (/Windows/.test(navigator.userAgent)) {
+  document.querySelector(".downloads")?.classList.add("windows-first");
+  document.querySelector("#install-mac")?.removeAttribute("open");
+  document.querySelector("#install-windows")?.setAttribute("open", "");
+}
 
 // The app-walkthrough demo. Every value below is interpolated per frame rather
 // than stepped between a handful of states: the percentage, the arc that draws

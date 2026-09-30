@@ -47,7 +47,13 @@ from .models import (
     source_label,
 )
 from .notify import Button, Notifier
-from .reference import Identification, deezer_reference, identify_record, youtube_reference
+from .reference import (
+    Identification,
+    deezer_reference,
+    find_deezer_record,
+    identify_record,
+    youtube_reference,
+)
 from .source import (
     LosslessError,
     LosslessProvider,
@@ -1193,14 +1199,22 @@ class Worker:
             return Acoustic(AcousticReference.from_dict(stored))
         ref, why = await self._video_reference(req)
         reasons = [why] if ref is None and why else []
-        if ref is None and cand.deezer_id:
+        deezer_id = cand.deezer_id
+        if ref is None and deezer_id is None:
+            # No bot record (the bot is off, or found nothing): Deezer's public catalogue still has the
+            # preview for most tracks, and without one a request with no video cannot be checked at all.
+            deezer_id, found = await find_deezer_record(cand, self.http)
+            log.info("req#%d deezer lookup: %s", req.id, found)
+            if deezer_id is None:
+                reasons.append(found)
+        if ref is None and deezer_id:
             try:
                 async with self._cpu:
-                    ref = await deezer_reference(cand.deezer_id, self.http, self.settings.tmp_dir)
+                    ref = await deezer_reference(deezer_id, self.http, self.settings.tmp_dir)
             except REFERENCE_ERRORS as e:
                 reasons.append(f"deezer preview: {e or type(e).__name__}")
         if ref is None:
-            return Acoustic(None, "; ".join(reasons) or "no video and no Deezer id to fingerprint against")
+            return Acoustic(None, "; ".join(reasons) or "no video and no Deezer record to fingerprint against")
         self.store.set_reference(req.id, ref.to_dict())
         return Acoustic(ref)
 

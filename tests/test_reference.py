@@ -1,5 +1,6 @@
 """The request's own audio as fingerprints (issue #67). `fingerprint` itself is faked here -- what these
 tests are about is which excerpt is taken, how many needles come back, and that the audio is deleted."""
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,7 @@ from flackey.reference import (
     IDENTIFY_MAX,
     deezer_needles,
     deezer_reference,
+    find_deezer_record,
     identify_record,
     youtube_reference,
 )
@@ -143,3 +145,82 @@ async def test_identify_record_never_raises_on_an_unexpected_failure(tmp_path: P
     monkeypatch.setattr(ref_mod, "deezer_needles", fake_needles)
     got = await identify_record(VIDEO, [_cand(1)], None, tmp_path, minimum=0.9)
     assert got.chosen is None and got.tried == [(1, None)]
+
+
+# ---- a Deezer record from the public API, for when the bot gave none ----------------------------------------
+
+def _hit(id_: int, title: str, version: str = "", duration: int = 442, preview: bool = True) -> dict:
+    return {"id": id_, "title": title, "title_short": title, "title_version": version, "duration": duration,
+            "artist": {"name": "Astral Projection"}, "preview": f"https://cdn.test/{id_}.mp3" if preview else ""}
+
+
+VOID = Candidate(source="query", source_ref="query:1", artist="Astral Projection", title="Into the Void",
+                 mix_name="Original mix", duration_s=442)
+
+
+@respx.mock
+async def test_the_isrc_names_the_record_without_a_search():
+    respx.get("https://api.deezer.com/track/isrc:UKU932231081").mock(
+        return_value=httpx.Response(200, json=_hit(1754956977, "Into the Void")))
+    search = respx.get("https://api.deezer.com/search")
+    async with httpx.AsyncClient() as http:
+        found, why = await find_deezer_record(replace(VOID, isrc="UKU932231081"), http)
+    assert found == 1754956977 and "isrc" in why and not search.called
+
+
+@respx.mock
+async def test_an_unknown_isrc_falls_back_to_the_search():
+    respx.get("https://api.deezer.com/track/isrc:XX0000000000").mock(
+        return_value=httpx.Response(200, json={"error": {"type": "DataException", "code": 800}}))
+    respx.get("https://api.deezer.com/search").mock(
+        return_value=httpx.Response(200, json={"data": [_hit(1754956977, "Into the Void")]}))
+    async with httpx.AsyncClient() as http:
+        found, _ = await find_deezer_record(replace(VOID, isrc="XX0000000000"), http)
+    assert found == 1754956977
+
+
+@respx.mock
+async def test_the_search_takes_the_requested_version_not_the_first_hit():
+    route = respx.get("https://api.deezer.com/search").mock(return_value=httpx.Response(200, json={"data": [
+        _hit(1, "Into the Void", "(Vini Vici Remix)", duration=410),
+        _hit(2, "Into the Void", duration=442)]}))
+    async with httpx.AsyncClient() as http:
+        found, why = await find_deezer_record(VOID, http)
+    assert found == 2 and "by search" in why
+    assert route.calls.last.request.url.params["q"] == "Astral Projection Into the Void"   # no "Original mix"
+
+
+@respx.mock
+async def test_a_remix_alone_is_not_taken_for_the_original():
+    """A remix's preview would vouch for a remix download: no record beats the wrong one."""
+    respx.get("https://api.deezer.com/search").mock(return_value=httpx.Response(200, json={"data": [
+        _hit(1, "Into the Void", "(Vini Vici Remix)", duration=410)]}))
+    async with httpx.AsyncClient() as http:
+        found, why = await find_deezer_record(VOID, http)
+    assert found is None and "no deezer record is this recording" in why
+
+
+@respx.mock
+async def test_a_record_of_another_length_is_not_taken():
+    respx.get("https://api.deezer.com/search").mock(return_value=httpx.Response(200, json={"data": [
+        _hit(1, "Into the Void", duration=240)]}))
+    async with httpx.AsyncClient() as http:
+        found, _ = await find_deezer_record(VOID, http)
+    assert found is None
+
+
+@respx.mock
+async def test_records_without_a_preview_are_no_use():
+    respx.get("https://api.deezer.com/search").mock(return_value=httpx.Response(200, json={"data": [
+        _hit(2, "Into the Void", preview=False)]}))
+    async with httpx.AsyncClient() as http:
+        found, why = await find_deezer_record(VOID, http)
+    assert found is None and "no previewable record" in why
+
+
+@respx.mock
+async def test_deezer_down_is_a_reason_not_an_exception():
+    respx.get("https://api.deezer.com/search").mock(side_effect=httpx.ConnectError("offline"))
+    async with httpx.AsyncClient() as http:
+        found, why = await find_deezer_record(VOID, http)
+    assert found is None and why.startswith("deezer search failed")

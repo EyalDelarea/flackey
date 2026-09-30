@@ -6,7 +6,9 @@ from flackey.config import (
     XDG_DATA_DIR,
     Settings,
     default_data_dir,
+    default_filing_format,
     load_settings,
+    platform_name,
     save_settings,
     secure_private_files,
 )
@@ -25,11 +27,34 @@ def test_load_settings_from_env_file(tmp_path: Path):
     assert s.data_dir == tmp_path / "data" and s.settings_path == tmp_path / "data" / "settings.json"
 
 
-def test_default_data_dir_is_mac_native_on_darwin():
-    if sys.platform == "darwin":
-        assert default_data_dir() == Path("~/Library/Application Support/Flackey").expanduser()
-    else:
-        assert default_data_dir() == XDG_DATA_DIR.expanduser()
+def test_default_data_dir_is_mac_native_on_darwin(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert default_data_dir() == Path("~/Library/Application Support/Flackey").expanduser()
+
+
+def test_default_data_dir_is_the_xdg_folder_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert default_data_dir() == XDG_DATA_DIR.expanduser()
+
+
+def test_default_data_dir_is_roaming_appdata_on_windows(monkeypatch, tmp_path: Path):
+    """`%APPDATA%\\Flackey`: the per-user roaming folder the installer never touches, so an uninstall
+    leaves the library index and the credentials where the next install finds them."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert default_data_dir() == tmp_path / "Roaming" / "Flackey"
+
+
+def test_default_data_dir_on_windows_without_appdata_names_the_same_folder(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    assert default_data_dir() == Path("~/AppData/Roaming").expanduser() / "Flackey"
+
+
+def test_platform_name_is_the_word_the_page_lays_itself_out_by(monkeypatch):
+    for raw, word in (("darwin", "mac"), ("win32", "windows"), ("linux", "linux"), ("freebsd14", "linux")):
+        monkeypatch.setattr(sys, "platform", raw)
+        assert platform_name() == word
 
 
 def test_credentials_are_optional(tmp_path: Path):
@@ -67,9 +92,25 @@ def test_save_settings_preserves_keys_written_by_an_earlier_save(tmp_path: Path)
     assert data == {"telegram_api_id": 999, "telegram_api_hash": "file-hash", "library_root": str(tmp_path / "new")}
 
 
-def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path):
-    """AIFF stays the default because Rekordbox's WAVE metadata path is RIFF INFO, not ID3/APIC artwork.
+def test_lossless_is_filed_as_aiff_so_rekordbox_can_read_the_tag(tmp_path: Path, monkeypatch):
+    """AIFF stays the Mac default because Rekordbox's WAVE metadata path is RIFF INFO, not ID3/APIC artwork.
     WAV remains selectable for owners who want it, but AIFF is still the richest Rekordbox import path."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
+
+
+def test_windows_files_flac_so_the_app_can_play_what_it_filed(tmp_path: Path, monkeypatch):
+    """The Windows window is Chromium (WebView2), which cannot decode AIFF: Library's play button would be
+    silent on every track. FLAC keeps Rekordbox's tags and artwork and plays there."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert default_filing_format() == "flac"
+    assert load_settings(_env(tmp_path)).lossless_filing_format == "flac"
+
+
+def test_a_chosen_format_is_kept_whatever_the_system_default(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    s = load_settings(_env(tmp_path))
+    save_settings(s, lossless_filing_format="aiff")
     assert load_settings(_env(tmp_path)).lossless_filing_format == "aiff"
 
 
@@ -96,7 +137,7 @@ def test_lossless_is_off_until_an_api_key_is_set(tmp_path: Path):
     assert s.slskd_downloads == tmp_path / "slskd" / "downloads"
     assert s.lossless_raw_dir == tmp_path / "lossless" / "attempts"
     assert (s.lossless_filing_format, s.lossless_search_wait_s, s.lossless_first_byte_s, s.lossless_transfer_s,
-            s.lossless_poll_s) == ("aiff", 30, 60, 600, 2.0)
+            s.lossless_poll_s) == (default_filing_format(), 30, 60, 600, 2.0)
     assert (s.lossless_max_queue, s.lossless_fingerprint_min, s.lossless_max_picks,
             s.lossless_keep_raw_days) == (None, 0.79, 4, 30)
     on = Settings(_env_file=None, data_dir=tmp_path, slskd_api_key="k")
@@ -161,9 +202,9 @@ def test_load_settings_survives_no_slskd_config_at_all(tmp_path: Path):
 def test_save_settings_leaves_settings_json_at_mode_0600(tmp_path: Path):
     s = load_settings(_env(tmp_path))
     save_settings(s, library_root=tmp_path / "new")
-    assert s.settings_path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or s.settings_path.stat().st_mode & 0o777 == 0o600
     save_settings(s, telegram_api_id=1, telegram_api_hash="h")  # a later write stays 0600 too
-    assert s.settings_path.stat().st_mode & 0o777 == 0o600
+    assert sys.platform == "win32" or s.settings_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_the_source_toggle_survives_a_round_trip_through_the_settings_file(tmp_path: Path):
@@ -222,7 +263,7 @@ def test_a_file_with_nothing_usable_in_it_falls_back_to_the_defaults(tmp_path: P
 
     reloaded = load_settings(_env(tmp_path))
     assert reloaded.window_size is None
-    assert reloaded.lossless_filing_format == "aiff"
+    assert reloaded.lossless_filing_format == default_filing_format()
 
 
 def test_a_rejection_that_names_no_field_never_logs_the_values_it_rejected(tmp_path: Path, caplog):
@@ -304,6 +345,7 @@ def test_build_defaults_never_land_in_settings_json(tmp_path: Path):
     assert json.loads(s.settings_path.read_text()) == {"library_root": str(tmp_path / "lib")}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits; %APPDATA% is already per-user by ACL")
 def test_the_data_folder_and_telegram_session_are_owner_only(tmp_path: Path):
     """The session file is the Telegram login; Telethon would create it with the umask's 0644."""
     s = Settings(_env_file=None, data_dir=tmp_path / "data")

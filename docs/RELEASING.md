@@ -52,8 +52,12 @@ a change is major, minor, or patch is decided by judgment, not automation.
 2. The workflow checks out that ref, runs `packaging/check_version.sh` against
    the requested tag, and only then creates and pushes `vX.Y.Z`.
 3. The `checks` workflow (`.github/workflows/checks.yml`) builds and
-   smoke-tests the macOS installer, then its `release` job publishes a GitHub
-   Release for the tag with `gh release create --generate-notes`.
+   smoke-tests the macOS installer (`Flackey.pkg`) and the Windows installer
+   (`Flackey-Setup.exe`, built by `packaging/build_windows.ps1`), then its
+   `release` job publishes both, with their `.sha256` files, as one GitHub
+   Release for the tag with `gh release create --generate-notes`. A failed
+   Windows build blocks the release just like a failed Mac build.
+   `latest.json` still describes the Mac installer only.
 4. GitHub groups the generated notes using `.github/release.yml` —
    `enhancement`-labeled PRs under "🚀 Features", `bug` under "🐛 Bug Fixes",
    `documentation` under "📝 Documentation", `chore` under "🧹 Chores", and

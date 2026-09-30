@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ReportBugDialog from './ReportBugDialog'
 import { api, ApiError } from '../api'
 import type { BugPreview } from '../api'
+import { PlatformContext } from '../platform'
 
 const preview: BugPreview = {
   summary: [['Flackey', '0.1.9 (Mac app)'], ['System', 'macOS 26.6 (arm64)'], ['Displays', '2 (built-in 1512×982, external 3440×1440)'], ['Was on', 'Library']],
@@ -81,4 +82,15 @@ it('closes on Escape and on the close button', () => {
   fireEvent.keyDown(window, { key: 'Escape' })
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))
   expect(onClose).toHaveBeenCalledTimes(2)
+})
+
+it('speaks Windows on Windows: File Explorer, no Mac, and the version loses its "(Windows app)"', async () => {
+  vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, summary: [['Flackey', '0.1.9 (Windows app)'], ['System', 'Windows 11 (AMD64)']] })
+  vi.spyOn(api, 'sendBugReport').mockResolvedValue({ file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 'x', body: 'x' })
+  render(<PlatformContext.Provider value="windows"><ReportBugDialog screen="download" onClose={() => {}} /></PlatformContext.Provider>)
+  expect(await screen.findByText('Flackey 0.1.9 on Windows 11 (AMD64)')).toBeInTheDocument()
+  expect(screen.getByText(/passwords and user name are taken out/)).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'Broken' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email with Gmail' }))
+  expect(await screen.findByText(/from the File Explorer window into the email/)).toBeInTheDocument()
 })

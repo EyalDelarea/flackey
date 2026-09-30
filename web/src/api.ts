@@ -55,6 +55,7 @@ export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null;
     null whenever the router, the network or the check itself would not say. */
 export interface SharingState { port:number|null; enabled:boolean; checking:boolean; mapping:'natpmp'|'upnp'|null
   reachable:boolean|null; public_ip:string|null; lan_ip:string|null; gateway:string|null; checked_at:string|null; error:string|null }
+export type Platform = 'mac' | 'windows' | 'linux'
 export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
   setup_done:boolean; lossless?:LosslessHealth
   /** Whether this copy has Telegram API keys at all, and whether the owner left the source switched on.
@@ -62,7 +63,10 @@ export interface Health { ok:boolean; version:string; telegram_authorized:boolea
   telegram_configured?:boolean; source_enabled?:boolean
   /** Pushed on every `status` event, so a panel reading it re-renders without polling. Null before the
       sharing loop has published anything, absent in fixtures written before it existed. */
-  sharing?:SharingState|null }
+  sharing?:SharingState|null
+  /** Which OS the server runs on. Optional so a fixture written before it existed still type-checks; the
+      page treats an absent one as a Mac, which is what every copy before Windows was. */
+  platform?:Platform }
 export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
   speed_bps:number; pick:number; state:string
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */
@@ -71,7 +75,9 @@ export interface PortInfo { port:number; host:string; public:boolean }
 export interface Ranking { max_picks:number; max_queue:number|null; fingerprint_min:number }
 export interface AppSettings { library_root:string; data_dir:string; version:string; telegram_configured:boolean;
   log_path:string; soulseek_enabled?:boolean; slskd_url?:string; slskd_downloads_dir?:string;
-  lossless_filing_format?:string; filing_formats?:string[]; auto_update_check?:boolean;
+  lossless_filing_format?:string; filing_formats?:string[];
+  /** AIFF on the Mac, FLAC on Windows (its window cannot play AIFF). Absent from an older server: AIFF. */
+  default_filing_format?:string; auto_update_check?:boolean;
   ports?:{ app:PortInfo; sidecar:PortInfo; soulseek_listen:PortInfo }; ranking?:Ranking }
 export interface Submission { summary:string; request_ids:number[]; playlist_id:number|null; name:string; total:number; already_in_library:number; already_queued:number }
 export interface Tools { ffmpeg:boolean; ffprobe:boolean; yt_dlp:boolean }
@@ -84,7 +90,9 @@ export interface QrStart { id:string; url:string; expires_at:string }
 export interface SoulseekSetup { configured: boolean; username: string | null }
 export interface SoulseekPassword { username: string | null; password: string }
 export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 'failed'
-  username: string | null; error: string | null }
+  username: string | null; error: string | null
+  // Set only when Soulseek itself turned the name down: the one failure a different name can fix.
+  taken?: boolean }
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;

@@ -1270,6 +1270,24 @@ h2 {
 .download-section .button {
   margin-top: 26px;
 }
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 28px;
+}
+.download-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.windows-first .download-option.windows {
+  order: -1;
+}
+.download-section .download-req {
+  margin-top: 10px;
+  font-size: 13px;
+}
 .release {
   font-size: 13px;
 }
@@ -1281,6 +1299,10 @@ h2 {
   border-bottom: 1px solid var(--line);
   font-size: 14px;
   line-height: 1.6;
+}
+.install + .install {
+  margin-top: 0;
+  border-top: 0;
 }
 .install summary {
   cursor: pointer;
@@ -1395,6 +1417,48 @@ h2 {
 }
 .gk-dialog figcaption strong {
   color: var(--ink);
+}
+/* The SmartScreen screen, drawn the same way: its blue, its square corners, and the one button. */
+.ss-sheet {
+  flex: none;
+  width: 260px;
+  padding: 16px 18px 14px;
+  background: #1d5fae;
+  box-shadow: 0 10px 24px -14px rgba(20, 22, 30, 0.5);
+  text-align: left;
+}
+.gatekeeper .ss-title {
+  font-size: 16px;
+  font-weight: 400;
+  color: #fff;
+  margin: 0 0 8px;
+}
+.gatekeeper .ss-body {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #e3ecf8;
+  margin: 0 0 8px;
+}
+.gatekeeper .ss-link {
+  font-size: 11.5px;
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin: 0 0 14px;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.45);
+  display: inline-block;
+  padding: 0 3px;
+}
+.ss-buttons {
+  display: flex;
+  justify-content: flex-end;
+}
+.ss-btn {
+  padding: 5px 16px;
+  border: 1px solid #fff;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .gk-steps {
   padding: 0 0 0 22px !important;
@@ -1592,7 +1656,7 @@ footer > a:last-child {
     padding-top: 14px;
     padding-bottom: 6px;
   }
-  /* The hero's "Download for Mac" sits in the same first screen on a phone,
+  /* The hero's "Download" sits in the same first screen on a phone,
      so the header's copy is dropped rather than squeezed next to the brand.
      That hands the whole second row to the nav, which needs it. */
   .header .compact {

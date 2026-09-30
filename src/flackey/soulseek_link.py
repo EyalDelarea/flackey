@@ -21,7 +21,7 @@ import httpx
 
 from .config import Settings
 from .slskd_binary import SlskdBinaryError, is_installed
-from .slskd_process import SlskdProcess
+from .slskd_process import SlskdProcess, SlskdStartTimeout
 from .source.lossless import LosslessError
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,10 @@ class SoulseekLink:
             await self._restart_sidecar()
             self._worker.providers = self._build_providers(self._settings, self._http)
             await self._wait_for_login()
+        except SlskdStartTimeout as e:
+            log.warning("soulseek connect: sidecar was too slow to start: %s", e)
+            self._fail("Soulseek took too long to start. Try again: the first start on a new computer "
+                       "can take a few minutes.")
         except SlskdBinaryError as e:
             log.warning("soulseek connect: sidecar would not start: %s", e)
             self._fail("Soulseek isn't installed yet. Finish getting it ready, then try again.")
@@ -110,8 +114,10 @@ class SoulseekLink:
                     log.exception("could not start the port check after signing in")
                 return
             if self._clock() >= deadline:
-                self._fail(TAKEN_HINT if last == "not_logged_in" else
-                           "Soulseek didn't answer in time. Check your connection and try again.")
+                if last == "not_logged_in":
+                    self._fail(TAKEN_HINT, taken=True)
+                else:
+                    self._fail("Soulseek didn't answer in time. Check your connection and try again.")
                 return
             await self._sleep(POLL_S)
 
@@ -124,5 +130,8 @@ class SoulseekLink:
             except (LosslessError, httpx.HTTPError, OSError) as e:
                 log.warning("%s: rescan after the library moved failed: %s", p.name, e)
 
-    def _fail(self, message: str) -> None:
-        self.state = {"state": "failed", "username": None, "error": message}
+    def _fail(self, message: str, *, taken: bool = False) -> None:
+        """`taken` is set only when the server itself turned the sign-in down, the one failure a new name
+        can fix. The setup screen deals a fresh name on that alone: dealing one for a sidecar that never
+        started would hide the real problem behind a name that was never tried."""
+        self.state = {"state": "failed", "username": None, "error": message, "taken": taken}

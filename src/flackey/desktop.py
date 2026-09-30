@@ -1,7 +1,12 @@
 """The desktop window. `flackey start` runs the server on a background thread and shows the UI in a
 pywebview (WKWebView) window on the main thread, which is where macOS insists the GUI loop lives.
 Closing the window stops the server; Ctrl-C in the terminal still stops everything (pywebview installs
-a Mach interrupt handler so the GUI loop returns)."""
+a Mach interrupt handler so the GUI loop returns).
+
+On Windows the same window is Edge WebView2 under pywebview's WinForms backend. Everything AppKit-shaped
+below returns early off macOS, so what Windows gets is a plain framed window with the system title bar;
+the pieces it needs of its own are the dark-mode check (`system_is_dark`) and the folder dialog
+(`folder_picker`), which only the window can open there."""
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +21,7 @@ from pathlib import Path
 from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
 from .config import Settings, save_settings
 from .selfupdate import install as update_install
+from .single_instance import claim_single_instance, focus_running_window
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
@@ -101,7 +107,14 @@ def relaunch_bundled(settings: Settings) -> bool:
 
 
 def app_icon() -> str | None:
-    """Path of the Dock icon, or None when the asset is missing (pywebview then keeps the default)."""
+    """Path of the Dock icon, or None when the asset is missing (pywebview then keeps the default).
+
+    Always None on Windows: pywebview's WinForms backend hands this path to `System.Drawing.Icon`,
+    which reads only .ico files, and a PNG throws on the GUI thread and takes the process down before
+    any window appears. Given None it extracts the icon from `sys.executable` instead, which for the
+    packaged app is Flackey.exe with Flackey.ico built in."""
+    if sys.platform == "win32":
+        return None
     return str(APP_ICON) if APP_ICON.is_file() else None
 
 
@@ -125,8 +138,73 @@ def set_app_name(name: str = APP_NAME) -> bool:
     return True
 
 
+_WINDOWS_THEME_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+
+
+def _windows_is_dark() -> bool:
+    """Windows keeps the app theme in `AppsUseLightTheme` under the current user's Personalize key: 0
+    for dark, 1 for light. Absent on older builds and in some locked-down profiles, which read as light,
+    the default. Never raises -- this only picks the colour the window shows before the page paints."""
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_THEME_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
+    except OSError:
+        return False
+    return value == 0
+
+
+# Microsoft's registry test for the Evergreen WebView2 Runtime ("Detect if a WebView2 Runtime is already
+# installed", learn.microsoft.com/microsoft-edge/webview2/concepts/distribution): `pv` under this client
+# key, per machine (WOW6432Node on 64-bit Windows) or per user, and a version above 0.0.0.0. Installer
+# and app ask the same question: Flackey.iss's NeedsWebView2 is this function in Pascal.
+_WEBVIEW2_CLIENT = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+_WEBVIEW2_KEYS = (("HKEY_LOCAL_MACHINE", rf"SOFTWARE\WOW6432Node\{_WEBVIEW2_CLIENT}"),
+                  ("HKEY_LOCAL_MACHINE", rf"SOFTWARE\{_WEBVIEW2_CLIENT}"),
+                  ("HKEY_CURRENT_USER", rf"Software\{_WEBVIEW2_CLIENT}"))
+WEBVIEW2_DOWNLOAD = "https://developer.microsoft.com/microsoft-edge/webview2/consumer/"
+_MB_OKCANCEL, _MB_ICONWARNING, _IDOK = 0x1, 0x30, 1
+
+
+def webview2_version() -> str | None:
+    """The installed WebView2 Runtime's version, or None when there is none. Never raises."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    for hive, path in _WEBVIEW2_KEYS:
+        try:
+            with winreg.OpenKey(getattr(winreg, hive), path) as key:
+                value, _kind = winreg.QueryValueEx(key, "pv")
+        except OSError:
+            continue
+        if isinstance(value, str) and value.strip() not in ("", "0.0.0.0"):
+            return value.strip()
+    return None
+
+
+def explain_missing_webview2() -> None:
+    """Say why no window opens, instead of opening a blank one. Without the runtime pywebview does not
+    fail: it quietly falls back to MSHTML, Internet Explorer's engine, which cannot run the page. The
+    installer runs Microsoft's bootstrapper when the runtime is missing, so this is the machine that was
+    offline then, or had it removed since."""
+    import ctypes
+
+    text = ("Flackey needs Microsoft Edge WebView2 to draw its window, and it is not installed on this PC.\n\n"
+            "Click OK to open Microsoft's download page. Install the \"Evergreen Bootstrapper\", "
+            "then open Flackey again.")
+    if ctypes.windll.user32.MessageBoxW(None, text, "Flackey", _MB_OKCANCEL | _MB_ICONWARNING) == _IDOK:
+        os.startfile(WEBVIEW2_DOWNLOAD)  # the default browser
+
+
 def system_is_dark() -> bool:
-    """macOS stores the appearance in `AppleInterfaceStyle`; the key is absent in light mode."""
+    """macOS stores the appearance in `AppleInterfaceStyle`; the key is absent in light mode. Windows
+    keeps it in the registry (`_windows_is_dark`)."""
+    if sys.platform == "win32":
+        return _windows_is_dark()
     if sys.platform != "darwin":
         return False
     try:
@@ -145,8 +223,11 @@ def system_is_dark() -> bool:
 
 
 def screen_size() -> tuple[int, int] | None:
-    """The usable size of the display the window will open on, or None off macOS and without AppKit.
-    `visibleFrame` rather than `frame`, so the menu bar and the Dock are already taken off it."""
+    """The usable size of the display the window will open on, or None where it can't be measured.
+    On macOS `visibleFrame` rather than `frame`, so the menu bar and the Dock are already taken off it;
+    on Windows the work area, which leaves out the taskbar."""
+    if sys.platform == "win32":
+        return _windows_work_area()
     if sys.platform != "darwin":
         return None
     try:
@@ -159,6 +240,52 @@ def screen_size() -> tuple[int, int] | None:
         log.debug("could not read the screen size", exc_info=True)
         return None
     return int(frame.size.width), int(frame.size.height)
+
+
+_SPI_GETWORKAREA = 0x0030
+
+
+def _windows_work_area_rect() -> tuple[int, int, int, int] | None:
+    """The primary display's work area -- left, top, width, height -- in the logical pixels pywebview
+    sizes and places windows in. A DPI-aware process is told physical pixels, so they are scaled back by
+    the system DPI; an unaware one is told logical pixels and a DPI of 96 alike, so the division changes
+    nothing there."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(_SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            return None
+        dpi = ctypes.windll.user32.GetDpiForSystem() or 96
+    except Exception:
+        log.debug("could not read the work area", exc_info=True)
+        return None
+    scale = dpi / 96
+    return (int(rect.left / scale), int(rect.top / scale),
+            int((rect.right - rect.left) / scale), int((rect.bottom - rect.top) / scale))
+
+
+def _windows_work_area() -> tuple[int, int] | None:
+    """Seen in the Windows VM: without this the 1100 x 720 first window overhung a 1024 x 768 screen."""
+    rect = _windows_work_area_rect()
+    return rect[2:] if rect else None
+
+
+def window_origin(size: tuple[int, int],
+                  work: tuple[int, int, int, int] | None = None) -> tuple[int, int] | None:
+    """Where the window's top-left corner goes: centred in the Windows work area, or None to leave it to
+    the system. Windows only, because there the window otherwise opened at (52, 52) in the VM -- the
+    default cascade, not pywebview's centring -- so a window as wide as the screen hid its close button
+    past the right-hand edge. AppKit already places the Mac window sensibly."""
+    if work is None:
+        if sys.platform != "win32":
+            return None
+        work = _windows_work_area_rect()
+        if work is None:
+            return None
+    left, top, width, height = work
+    return left + max(0, (width - size[0]) // 2), top + max(0, (height - size[1]) // 2)
 
 
 def startup_size(settings: Settings, limit: tuple[int, int] | None = None) -> tuple[int, int]:
@@ -407,9 +534,40 @@ def inset_titlebar(window) -> bool:
     return True
 
 
+def folder_picker(window, dialog_type):
+    """The window's own "choose a folder" dialog, as `/api/pick-folder` calls it: given a folder to start
+    in, return the one chosen or None when the owner cancels.
+
+    What Windows uses instead of the Mac's AppleScript dialog, which has no Windows counterpart to shell
+    out to. It lives here because it needs the pywebview window, and `web` may not import pywebview; the
+    server finds it through `ServerHandle.pick_folder`. `dialog_type` is `webview.FileDialog.FOLDER`,
+    passed in so this module still imports without pywebview.
+
+    Called on a worker thread (`asyncio.to_thread`), the way pywebview's own examples call dialogs from
+    outside the GUI loop. pywebview answers a cancel with None or an empty tuple and a choice with a
+    tuple of paths (a bare string on some backends), and its WinForms backend also answers None when the
+    dialog itself fails, having logged why -- so a failure reads as a cancel, and the field keeps its
+    value either way."""
+    def pick(initial: Path | None) -> Path | None:
+        chosen = window.create_file_dialog(dialog_type, directory=str(initial) if initial else "")
+        if not chosen:
+            return None
+        first = chosen if isinstance(chosen, str) else chosen[0]
+        return Path(first) if first else None
+    return pick
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
+    if not claim_single_instance():
+        shown = focus_running_window()
+        log.info("Flackey is already running: %s", "brought its window forward" if shown else "it is still starting")
+        return
+    if sys.platform == "win32" and webview2_version() is None:
+        log.error("no WebView2 Runtime on this PC; told the owner where to get it")
+        explain_missing_webview2()
+        return
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()
@@ -418,9 +576,10 @@ def run_in_window(settings: Settings) -> None:
     url = wait_for_server(handle)
     inset = sys.platform == "darwin"
     size = startup_size(settings)
+    x, y = window_origin(size) or (None, None)
     window = webview.create_window(
         "Flackey", url + (INSET_FLAG if inset else ""),
-        width=size[0], height=size[1], min_size=MIN_SIZE,
+        width=size[0], height=size[1], x=x, y=y, min_size=MIN_SIZE,
         # Opaque on purpose: this is what the window shows until `inset_titlebar` turns the background
         # clear on `shown`, and it is what stops a white/black flash before the page paints. Passing
         # pywebview's own transparent=True instead would zero this colour's alpha at creation *and*
@@ -445,6 +604,10 @@ def run_in_window(settings: Settings) -> None:
     # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers
     # above, the same path as the owner clicking the red button.
     handle.on_quit = window.destroy
+    if not inset:
+        # Off macOS the only folder dialog there is belongs to this window; the Mac keeps AppleScript's,
+        # which `web.pick` opens without one.
+        handle.pick_folder = folder_picker(window, webview.FileDialog.FOLDER)
     try:
         webview.start(icon=app_icon())
     finally:

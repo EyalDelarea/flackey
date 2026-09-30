@@ -68,6 +68,23 @@ def test_local_path_is_derived_and_contained(tmp_path: Path):
         local_path_for(tmp_path, LosslessFile(path="a\\..", **base))                    # name ".." resolves to the root
 
 
+def test_local_path_mirrors_slskd_sanitizing_on_windows(tmp_path: Path):
+    """slskd on Windows swaps the characters Windows forbids for `_` in the folder and the file name
+    (FileSafety.SanitizeFilename in slskd 0.26.0); elsewhere it only forbids `/` and NUL, so a Mac keeps the
+    peer's characters as they are."""
+    from flackey.lossless import LosslessFile
+    base = {"provider": "soulseek", "username": "u", "extension": "flac", "size": 1, "length_s": 1,
+            "bitrate_kbps": None, "sample_rate": None, "bit_depth": None, "has_free_slot": True,
+            "upload_speed_bps": 0, "queue_length": 0}
+    f = LosslessFile(path='Music\\What? Live: "Mix"\\01. A|B <Edit>*.flac', **base)
+    assert local_path_for(tmp_path, f, windows=True) == (
+        tmp_path / "What_ Live_ _Mix_" / "01. A_B _Edit__.flac").resolve()
+    assert local_path_for(tmp_path, f, windows=False) == (
+        tmp_path / 'What? Live: "Mix"' / "01. A|B <Edit>*.flac").resolve()
+    tab = LosslessFile(path="Dir\tX\\a\x01b.flac", **base)
+    assert local_path_for(tmp_path, tab, windows=True) == (tmp_path / "Dir_X" / "a_b.flac").resolve()
+
+
 @respx.mock
 async def test_health_reports_login_state_and_unreachable(provider, fixtures: Path):
     p, _, _ = provider

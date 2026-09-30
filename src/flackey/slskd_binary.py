@@ -11,6 +11,7 @@ import hashlib
 import os
 import platform
 import shutil
+import sys
 import tempfile
 import zipfile
 from collections.abc import Callable, Iterable
@@ -19,7 +20,9 @@ from pathlib import Path
 SLSKD_VERSION = "0.26.0"
 
 # (asset file name, pinned sha256, pinned size in bytes) — the arm64 digest was confirmed by
-# downloading the release and hashing it locally; both come from the GitHub release metadata.
+# downloading the release and hashing it locally; both come from the GitHub release metadata. The
+# win-x64 digest and size were confirmed the same way on 2026-09-29 (and its zip holds `slskd.exe` at
+# the top level, beside `wwwroot/`, like the Mac archives hold `slskd`).
 ASSETS: dict[str, tuple[str, str, int]] = {
     "arm64": (
         "slskd-0.26.0-osx-arm64.zip",
@@ -31,7 +34,15 @@ ASSETS: dict[str, tuple[str, str, int]] = {
         "3d624c53de73229caa090c395ee5eada9c7f54d59fd3a0e79a2597e8b467b448",
         60596634,
     ),
+    "win-x64": (
+        "slskd-0.26.0-win-x64.zip",
+        "942299d8c97da6cc1f6cd82dcd4a3662b97b82fbd1742df4bec165b79357268a",
+        60777709,
+    ),
 }
+# The one Windows build Flackey ships is x64, and it runs on ARM Windows under emulation. The sidecar
+# follows the app rather than the machine: an x64 slskd is what the x64 installer was tested with.
+WINDOWS_ASSET = "win-x64"
 
 _RELEASE_URL = f"https://github.com/slskd/slskd/releases/download/{SLSKD_VERSION}/{{asset}}"
 _CHUNK_SIZE = 1024 * 1024
@@ -48,17 +59,31 @@ def install_dir(data_dir: Path) -> Path:
     return data_dir / "slskd" / "bin"
 
 
+def binary_name() -> str:
+    """What the archive calls the executable: `slskd.exe` in the Windows zip, `slskd` in the Mac ones."""
+    return "slskd.exe" if sys.platform == "win32" else "slskd"
+
+
 def binary_path(data_dir: Path) -> Path:
-    return install_dir(data_dir) / "slskd"
+    return install_dir(data_dir) / binary_name()
 
 
 def is_installed(data_dir: Path) -> bool:
-    """True when the binary exists and is executable."""
+    """True when the binary exists and is executable. On Windows existence is the whole test:
+    `os.access(X_OK)` there answers True for any file at all, and the `.exe` name is what makes it
+    runnable -- so asking would look like a check without being one."""
     path = binary_path(data_dir)
+    if sys.platform == "win32":
+        return path.is_file()
     return path.is_file() and os.access(path, os.X_OK)
 
 
 def _arch_key() -> str:
+    # Not `platform.machine()` on Windows: an x64 Python running under emulation on an ARM64 machine can
+    # report the machine's native "ARM64" there (it reads the processor, not the process), which is not
+    # a key below and would refuse an install that the x64 asset serves perfectly well.
+    if sys.platform == "win32":
+        return WINDOWS_ASSET
     machine = platform.machine()
     if machine in ASSETS:
         return machine
@@ -174,10 +199,12 @@ def install(
         extract_dir = tmp_dir / "extracted"
         _safe_extract(archive_path, extract_dir)
 
-        extracted_binary = extract_dir / "slskd"
+        extracted_binary = extract_dir / binary_name()
         if not extracted_binary.is_file():
-            raise SlskdBinaryError("archive did not contain an 'slskd' executable")
-        os.chmod(extracted_binary, 0o755)
+            raise SlskdBinaryError(f"archive did not contain an {binary_name()!r} executable")
+        if sys.platform != "win32":
+            # Mode bits mean nothing to Windows, and `chmod` there can only toggle read-only.
+            os.chmod(extracted_binary, 0o755)
 
         if target.exists():
             shutil.rmtree(target)

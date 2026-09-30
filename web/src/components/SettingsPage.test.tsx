@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
 import { api, ApiError } from '../api'
+import { PlatformContext } from '../platform'
 import type { AppSettings, Health, LosslessHealth, SharingState, UpdateDownload } from '../api'
 
 const makeLive = (over: { settings: AppSettings; health: Health }) =>
@@ -115,6 +116,16 @@ it('keeps the button held while an unrelated status event lands mid-press', asyn
   expect(screen.getByText('Downloading…')).toBeDisabled()
   expect(screen.queryByText('Try again')).not.toBeInTheDocument()
   settle(progress({ state: 'downloading', version: '0.1.1' }))
+})
+
+it('speaks Windows on Windows: File Explorer and an installer that closes Flackey', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<PlatformContext.Provider value="windows"><SettingsPage live={liveWith(progress({ state: 'ready', percent: 100, received: 12_345_678,
+    total: 12_345_678, version: '0.1.1', path: '/data/updates/Flackey-Setup.exe' }))} onReconnect={() => {}} /></PlatformContext.Provider>)
+  await waitFor(() => expect(screen.getByText(/it will close Flackey and can reopen it when it finishes/)).toBeInTheDocument())
+  expect(screen.queryByText(/macOS/)).not.toBeInTheDocument()
+  expect(screen.getByText('Show in File Explorer')).toBeInTheDocument()
+  expect(screen.queryByText('Show in Finder')).not.toBeInTheDocument()
 })
 
 it('does not claim the installer is open when it would not open', async () => {

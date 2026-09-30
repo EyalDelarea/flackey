@@ -7,6 +7,7 @@ import pytest
 
 from flackey.config import Settings
 from flackey.slskd_binary import SlskdBinaryError
+from flackey.slskd_process import SlskdStartTimeout
 from flackey.soulseek_link import TAKEN_HINT, SoulseekLink
 
 
@@ -85,6 +86,7 @@ async def test_a_login_the_server_keeps_refusing_names_the_likeliest_cause_witho
     link.start_connect()
     await link._task
     assert link.state["state"] == "failed" and link.state["error"] == TAKEN_HINT
+    assert link.state["taken"] is True   # the one failure the setup screen answers with a fresh name
 
 
 async def test_an_unreachable_sidecar_does_not_blame_the_account(tmp_path: Path):
@@ -93,6 +95,7 @@ async def test_an_unreachable_sidecar_does_not_blame_the_account(tmp_path: Path)
     await link._task
     assert link.state["state"] == "failed" and "didn't answer" in link.state["error"]
     assert TAKEN_HINT not in link.state["error"]
+    assert link.state["taken"] is False
 
 
 async def test_it_gives_up_rather_than_polling_for_ever(tmp_path: Path):
@@ -117,15 +120,29 @@ async def test_a_missing_sidecar_says_so_instead_of_failing_silently(tmp_path: P
     link.start_connect()
     await link._task
     assert link.state["state"] == "failed" and "isn't installed" in link.state["error"]
+    # Not a rejected name: dealing a new one here would hide the real problem behind a name never tried.
+    assert link.state["taken"] is False
 
 
 async def test_a_sidecar_that_will_not_start_is_reported_not_raised(tmp_path: Path):
     proc = FakeProcess()
-    proc.start_error = SlskdBinaryError("did not become healthy")
+    proc.start_error = SlskdBinaryError("archive did not contain slskd")
     link, _, _, _ = make(tmp_path, ["ok"], process=proc)
     link.start_connect()
     await link._task
     assert link.state["state"] == "failed"
+
+
+async def test_a_sidecar_too_slow_to_start_is_not_called_missing(tmp_path: Path):
+    """Seen in the Windows VM: slskd was installed and running but slower than the start limit, and
+    the owner was told to finish installing something already installed."""
+    proc = FakeProcess()
+    proc.start_error = SlskdStartTimeout("did not become healthy")
+    link, _, _, _ = make(tmp_path, ["ok"], process=proc)
+    link.start_connect()
+    await link._task
+    assert link.state["state"] == "failed" and "took too long" in link.state["error"]
+    assert "isn't installed" not in link.state["error"] and link.state["taken"] is False
 
 
 async def test_a_second_connect_while_one_is_running_does_not_start_another(tmp_path: Path):

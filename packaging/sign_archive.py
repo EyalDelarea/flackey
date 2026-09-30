@@ -39,7 +39,8 @@ def main(argv: list[str]) -> int:
     if not archive.is_file():
         print(f"no such archive: {archive}", file=sys.stderr)
         return 1
-    domain = INSTALLER_DOMAIN if archive.suffix == ".pkg" else DOMAIN
+    # An installer (.pkg on the Mac, Setup.exe on Windows) is signed for opening, not for a seamless swap.
+    domain = INSTALLER_DOMAIN if archive.suffix in (".pkg", ".exe") else DOMAIN
 
     if len(argv) == 3:
         version = argv[2]

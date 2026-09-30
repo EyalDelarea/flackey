@@ -69,7 +69,13 @@ def helper_path() -> Path | None:
 
 
 def seamless_available(applications: Path = APPLICATIONS) -> bool:
-    """False means "use the installer", never "this update failed"."""
+    """False means "use the installer", never "this update failed".
+
+    Always False on Windows, and said first rather than left to fall out of the checks below: the swap
+    is `ditto`, `xattr` and a C helper that renames a `.app`, none of which exist there, and `sweep`
+    calls `os.getuid`, which Windows does not have. Windows updates by running Flackey-Setup.exe."""
+    if sys.platform == "win32":
+        return False
     bundle = running_bundle()
     return (signature.seamless_updates_configured()
             and bundle is not None

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, type BugContext, type BugPreview, type BugSent } from '../api'
 import CopyButton from './CopyButton'
 import Icon from './Icon'
+import { fileManager, thisComputer, usePlatform } from '../platform'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
 
@@ -12,6 +13,7 @@ const getErrorMessage = (e: unknown, fallback: string): string => e instanceof A
  *
  *  A plain `div role="dialog"` rather than `<dialog>.showModal()`, which jsdom does not implement. */
 export default function ReportBugDialog({ screen, onClose }: { screen: string; onClose: () => void }) {
+  const platform = usePlatform()
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [preview, setPreview] = useState<BugPreview | null>(null)
@@ -67,7 +69,7 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
     api.revealBugReport().catch(e => setRevealError(getErrorMessage(e, "Couldn't show the file.")))
   }
   const summary = new Map(preview?.summary ?? [])
-  // "0.1.9 (Mac app)" -> "0.1.9": how it was installed is for the details, not the one-line summary.
+  // "0.1.9 (Mac app)" or "0.1.9 (Windows app)" -> "0.1.9": how it was installed is for the details, not the one-line summary.
   const version = summary.get('Flackey')?.split(' ')[0]
 
   return (
@@ -81,7 +83,7 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
           <div className="modal-body">
             <ol className="report-steps">
               <li>An email to the Flackey developer opened with your report already written.</li>
-              <li>Drag <strong className="mono">{sent.file}</strong> from the Finder window into the email.</li>
+              <li>Drag <strong className="mono">{sent.file}</strong> from the {fileManager(platform)} window into the email.</li>
               <li>Press <strong>Send</strong>. That's it — thank you!</li>
             </ol>
             <div className="report-fallback">
@@ -108,12 +110,12 @@ export default function ReportBugDialog({ screen, onClose }: { screen: string; o
             <div className="report-included">
               <div className="report-included-head">Sent along with your words</div>
               {preview ? (<ul>
-                <li><Icon name="check" size={12} stroke={2.4} />Flackey {version} on {summary.get('System') ?? 'this Mac'}</li>
+                <li><Icon name="check" size={12} stroke={2.4} />Flackey {version} on {summary.get('System') ?? thisComputer(platform)}</li>
                 <li><Icon name="check" size={12} stroke={2.4} />Your displays, and that you were on {summary.get('Was on') ?? 'an unknown screen'}</li>
                 <li><Icon name="check" size={12} stroke={2.4} />Flackey's recent activity log ({preview.log_lines.toLocaleString()} lines)</li>
               </ul>) : previewError ? <div className="err">{previewError}</div>
                 : <div className="muted">Gathering details…</div>}
-              <p className="faint">Your phone number, email addresses, passwords and Mac user name are taken out of these first.</p>
+              <p className="faint">Your phone number, email addresses, passwords and {platform === 'mac' ? 'Mac user name' : 'user name'} are taken out of these first.</p>
               {preview && <button className="btn-link" aria-expanded={details} onClick={() => setDetails(d => !d)}>
                 {details ? 'Hide details' : "Show everything that's included"}</button>}
               {preview && details && <div className="report-details">

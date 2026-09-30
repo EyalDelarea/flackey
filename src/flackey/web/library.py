@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -11,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import __version__
-from ..config import FILING_FORMATS, Settings, save_settings
+from ..config import FILING_FORMATS, Settings, default_filing_format, save_settings
 from ..export import PLAYLIST_DIR, playlist_names, write_playlists
 from ..library import prune_missing_tracks
 from ..logsetup import LOG_FILE
@@ -29,7 +30,7 @@ from ..slskd_config import (
 )
 from ..slskd_process import SlskdProcess
 from ..store import Store
-from ..tools import tool_path
+from ..tools import no_window, tool_path
 from ..youtube import ytdlp_available
 from . import SETUP_DONE_KEY, Bundles, to_dict
 from .guard import from_the_app
@@ -44,14 +45,29 @@ AUDIO_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".wav": "audio/wav",
                ".m4a": "audio/mp4", ".aiff": "audio/aiff", ".aif": "audio/aiff", ".ogg": "audio/ogg"}
 
 
-def reveal_in_finder(path: Path) -> None:
-    if sys.platform == "darwin":
+def reveal_path(path: Path) -> None:
+    """Show `path` in the system's file manager: Finder on macOS, File Explorer on Windows, whatever
+    `xdg-open` picks elsewhere."""
+    if sys.platform == "win32":
+        if path.is_dir():
+            # A folder is opened, the way double-clicking it would. `os.startfile` hands it to the shell
+            # directly: no child process of ours, so no console to hide.
+            os.startfile(path)  # a path this app built, never one taken from the request
+            return
+        # A file is shown selected in its folder. A command *line*, not an argument list: Explorer parses
+        # its own command line rather than argv, and it wants the quotes after the comma --
+        # `/select,"C:\a b\x.flac"`. The list form would make Popen quote the whole argument
+        # (`"/select,C:\a b\x.flac"`) at the first space, which Explorer answers by opening Documents.
+        # A Windows path cannot contain `"`, so nothing in it can close the quote early. Explorer
+        # answers 1 even when it worked, so the exit code says nothing and is not read.
+        cmd = f'explorer /select,"{path}"'
+    elif sys.platform == "darwin":
         # `-R` reveals the path in a Finder window, selected; a bare `open` on a directory instead
         # *launches* it, which is wrong for a `.app`/`.rbxml`/other bundle directory.
         cmd = ["open", "-R", str(path)]
     else:
         cmd = ["xdg-open", str(path if path.is_dir() else path.parent)]
-    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_window())
 
 
 def _revealable(settings: Settings, store: Store) -> Iterator[Path]:
@@ -82,7 +98,7 @@ def _host_port(url: str) -> tuple[str, int]:
 
 
 def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
-           opener: Callable[[Path], None] = reveal_in_finder, link=None) -> APIRouter:
+           opener: Callable[[Path], None] = reveal_path, link=None) -> APIRouter:
     r = APIRouter(prefix="/api")
 
     # Progress for the in-flight (if any) slskd install, scoped to this router instance -- a single
@@ -204,7 +220,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "ranking": {"max_picks": settings.lossless_max_picks,
                             "max_queue": settings.lossless_max_queue,
                             "fingerprint_min": settings.lossless_fingerprint_min},
-                "filing_formats": list(FILING_FORMATS)}
+                "filing_formats": list(FILING_FORMATS), "default_filing_format": default_filing_format()}
 
     @r.get("/settings")
     async def get_settings() -> dict:

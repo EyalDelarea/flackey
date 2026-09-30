@@ -3,6 +3,8 @@ import inspect
 import sys
 import threading
 import types
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -76,6 +78,54 @@ def test_system_is_dark_is_false_off_macos(monkeypatch):
     assert desktop.system_is_dark() is False
 
 
+def _fake_winreg(value=None, error: type[Exception] | None = None):
+    """Just enough `winreg` for `system_is_dark`: the key it opens and the value it asks for."""
+    opened: list = []
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(root, path):
+        opened.append((root, path))
+        if error is not None:
+            raise error("no such key")
+        return Key()
+
+    def query_value_ex(key, name):
+        assert name == "AppsUseLightTheme"
+        return value, 4  # REG_DWORD
+
+    return types.SimpleNamespace(HKEY_CURRENT_USER="HKCU", OpenKey=open_key,
+                                 QueryValueEx=query_value_ex), opened
+
+
+@pytest.mark.parametrize("value,dark", [(0, True), (1, False)])
+def test_system_is_dark_reads_the_windows_app_theme(monkeypatch, value, dark):
+    """`AppsUseLightTheme` is 0 in dark mode; it decides the colour the window shows before the page
+    paints, which is the flash the Mac path avoids with `AppleInterfaceStyle`."""
+    from flackey import desktop
+
+    winreg, opened = _fake_winreg(value)
+    monkeypatch.setitem(sys.modules, "winreg", winreg)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.system_is_dark() is dark
+    assert opened == [("HKCU", r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")]
+
+
+def test_system_is_dark_on_windows_without_the_key_is_light(monkeypatch):
+    """Older builds and locked-down profiles have no such value; light is Windows' own default."""
+    from flackey import desktop
+
+    winreg, _ = _fake_winreg(error=FileNotFoundError)
+    monkeypatch.setitem(sys.modules, "winreg", winreg)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.system_is_dark() is False
+
+
 def test_app_icon_asset_is_a_1024_square_png():
     from flackey.desktop import APP_ICON
 
@@ -92,6 +142,17 @@ def test_app_icon_is_none_when_the_asset_is_missing(monkeypatch, tmp_path):
     assert desktop.app_icon() is None
 
 
+def test_app_icon_is_none_on_windows_so_the_exe_s_own_icon_is_used(monkeypatch):
+    """pywebview's WinForms backend loads `icon` with `System.Drawing.Icon`, which reads only .ico
+    files: a PNG throws on its GUI thread and the process dies with no window. With None it takes the
+    icon embedded in `sys.executable` -- Flackey.exe, built with Flackey.ico."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop.APP_ICON.is_file()
+    assert desktop.app_icon() is None
+
+
 def test_screen_size_is_none_off_macos(monkeypatch):
     """`startup_size` then applies no ceiling at all, which is right: there is no NSScreen to ask, and a
     size the owner chose is a better guess than one this could not measure."""
@@ -99,6 +160,43 @@ def test_screen_size_is_none_off_macos(monkeypatch):
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.screen_size() is None
+
+
+def test_window_origin_centres_the_window_in_the_work_area():
+    from flackey import desktop
+
+    # The VM: a 1024 x 768 screen with a 48 px taskbar, and a window already cut down to fit it.
+    assert desktop.window_origin((1024, 720), work=(0, 0, 1024, 720)) == (0, 0)
+    assert desktop.window_origin((800, 600), work=(0, 0, 1920, 1032)) == (560, 216)
+    # A taskbar docked at the top or left moves the work area's corner, and the window with it.
+    assert desktop.window_origin((800, 600), work=(62, 40, 1858, 1040)) == (62 + 529, 40 + 220)
+    # Never off the top-left even if the window is bigger than the work area (the MIN_SIZE floor).
+    assert desktop.window_origin((600, 500), work=(0, 0, 500, 400)) == (0, 0)
+
+
+def test_window_origin_is_left_to_the_system_off_windows(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop.window_origin((1100, 720)) is None
+
+
+def test_run_in_window_places_the_window_where_window_origin_says(monkeypatch, tmp_path):
+    from flackey import desktop
+
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "window_origin", lambda size: (12, 34))
+    desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
+    assert (windows["window"].kwargs["x"], windows["window"].kwargs["y"]) == (12, 34)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reads the real Windows work area")
+def test_screen_size_on_windows_is_the_work_area():
+    """The window must not open wider or taller than the screen: 1100 x 720 overhung a 1024 x 768 one."""
+    from flackey import desktop
+
+    size = desktop.screen_size()
+    assert size is not None and size[0] > 0 and size[1] > 0
 
 
 def test_set_app_name_is_false_off_macos(monkeypatch):
@@ -125,6 +223,12 @@ class FakeWindow:
         self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook(), resized=Hook())
         self.destroyed = False
 
+    def create_file_dialog(self, dialog_type, directory="", **kwargs):
+        """Records the ask and answers with `self.dialog_answer`, as pywebview does: a tuple of paths,
+        or None for a cancel."""
+        self.dialog_calls = [*getattr(self, "dialog_calls", []), (dialog_type, directory)]
+        return getattr(self, "dialog_answer", None)
+
     def destroy(self) -> None:
         """What `handle.quit_app()` reaches for when the app closes itself to install an update. The
         real one fires `closed`, so this does too -- a test that stubbed it silently would show the
@@ -150,7 +254,8 @@ def _install_fake_webview(monkeypatch, tmp_path):
         return window
 
     fake_webview = types.SimpleNamespace(
-        create_window=create_window, start=lambda **kw: started.update(kw))
+        create_window=create_window, start=lambda **kw: started.update(kw),
+        FileDialog=types.SimpleNamespace(OPEN=10, FOLDER=20, SAVE=30))
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
     monkeypatch.setattr(desktop, "UI_DIR", tmp_path)
 
@@ -163,7 +268,140 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "set_app_name", lambda: True)
     monkeypatch.setattr(desktop, "relaunch_bundled", lambda settings: False)
     monkeypatch.setattr(desktop, "screen_size", lambda: HUGE)  # never the machine the suite runs on
+    monkeypatch.setattr(desktop, "window_origin", lambda size: None)
+    # The real one would take the app's own mutex on a Windows test runner.
+    monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
+    # Tests that pretend to be Windows would otherwise read a registry the suite does not have.
+    monkeypatch.setattr(desktop, "webview2_version", lambda: "154.0.4258.37")
     return windows, started, handle
+
+
+def _fake_webview2_registry(values: dict[tuple[str, str], object]):
+    """`winreg` holding just the `pv` values given, keyed by (hive, path)."""
+    class Key:
+        def __init__(self, where):
+            self.where = where
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(hive, path):
+        if (hive, path) not in values:
+            raise FileNotFoundError(path)
+        return Key((hive, path))
+
+    def query_value_ex(key, name):
+        assert name == "pv"
+        return values[key.where], 1  # REG_SZ
+
+    return types.SimpleNamespace(HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU",
+                                 OpenKey=open_key, QueryValueEx=query_value_ex)
+
+
+_WV2 = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+@pytest.mark.parametrize("values,expected", [
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): "154.0.4258.37"}, "154.0.4258.37"),   # per machine
+    ({("HKCU", rf"Software\{_WV2}"): "154.0.4258.37"}, "154.0.4258.37"),               # per user
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): "0.0.0.0"}, None),                   # uninstalled leftover
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): ""}, None),
+    ({}, None),
+])
+def test_webview2_is_found_the_way_microsoft_says_to_look(monkeypatch, values, expected):
+    from flackey import desktop
+
+    monkeypatch.setitem(sys.modules, "winreg", _fake_webview2_registry(values))
+    assert desktop.webview2_version() == expected
+
+
+def test_without_webview2_the_owner_is_told_instead_of_shown_a_blank_window(monkeypatch, tmp_path):
+    """pywebview would fall back to Internet Explorer's engine, which cannot run the page."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    windows, started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "webview2_version", lambda: None)
+    told = []
+    monkeypatch.setattr(desktop, "explain_missing_webview2", lambda: told.append(True))
+
+    def no_server(settings):
+        raise AssertionError("no server without a window to show it")
+
+    monkeypatch.setattr(desktop, "start_server_thread", no_server)
+    desktop.run_in_window(settings=object())
+    assert told == [True] and windows == {} and started == {}
+
+
+def test_run_in_window_hands_over_to_the_copy_already_running(monkeypatch, tmp_path):
+    """A second launch on Windows must not reach the database or the port: it brings the first copy's
+    window forward and ends, instead of dying in an error box."""
+    from flackey import desktop
+
+    windows, started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    focused = []
+    monkeypatch.setattr(desktop, "claim_single_instance", lambda: False)
+    monkeypatch.setattr(desktop, "focus_running_window", lambda: focused.append(True) or True)
+
+    def no_server(settings):
+        raise AssertionError("a second copy must not start a server")
+
+    monkeypatch.setattr(desktop, "start_server_thread", no_server)
+    desktop.run_in_window(settings=object())
+    assert focused == [True]
+    assert windows == {} and started == {}
+
+
+def test_single_instance_is_left_to_macos(monkeypatch):
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop.claim_single_instance() is True
+    assert desktop.claim_single_instance() is True
+    assert desktop.focus_running_window() is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows named mutex")
+def test_single_instance_claim_is_refused_while_another_copy_holds_it():
+    import ctypes
+
+    from flackey import single_instance
+
+    name = f"FlackeyTest-{uuid.uuid4()}"
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    other = kernel32.CreateMutexW(None, False, name)   # the copy already running
+    try:
+        assert single_instance.claim_single_instance(name) is False
+    finally:
+        kernel32.CloseHandle(other)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows named mutex")
+def test_single_instance_claim_again_from_the_holder_is_not_a_refusal():
+    """launch.py claims first thing and run_in_window checks again: the holder must not refuse itself."""
+    from flackey import single_instance
+
+    name = f"FlackeyTest-{uuid.uuid4()}"
+    assert single_instance.claim_single_instance(name) is True
+    assert single_instance.claim_single_instance(name) is True
+
+
+def test_window_title_matched_by_single_instance_is_the_app_name():
+    from flackey import desktop, single_instance
+
+    assert single_instance.WINDOW_TITLE == desktop.APP_NAME
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows window enumeration")
+def test_focus_running_window_without_a_window_is_false():
+    from flackey import desktop
+
+    assert desktop.focus_running_window(f"no such window {uuid.uuid4()}") is False
 
 
 def test_run_in_window_hands_the_dock_icon_to_pywebview(monkeypatch, tmp_path):
@@ -203,6 +441,48 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
     assert "transparent" not in window.kwargs
     assert window.kwargs["vibrancy"] is False
     assert len(window.events.loaded) == 0
+
+
+def test_off_macos_the_window_lends_the_server_its_folder_dialog(monkeypatch, tmp_path):
+    """There is no AppleScript on Windows; the only folder dialog is the pywebview window's, and the
+    server that answers `/api/pick-folder` was built before the window existed -- so the window registers
+    its dialog on the handle, which the router asks on every request."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(desktop, "system_is_dark", lambda: False)
+    windows, _, handle = _install_fake_webview(monkeypatch, tmp_path)
+    assert handle.find_picker() is None  # before the window: nothing to open
+    desktop.run_in_window(settings=object())
+    window = windows["window"]
+
+    window.dialog_answer = ("C:\\Users\\dj\\Music",)
+    assert handle.find_picker()(tmp_path) == Path("C:\\Users\\dj\\Music")
+    assert window.dialog_calls == [(20, str(tmp_path))]  # FileDialog.FOLDER, starting where the field is
+
+
+def test_on_macos_the_folder_dialog_stays_applescript(monkeypatch, tmp_path):
+    from flackey import desktop
+    from flackey.web.pick import choose_folder
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _, _, handle = _install_fake_webview(monkeypatch, tmp_path)
+    desktop.run_in_window(settings=object())
+    assert handle.pick_folder is None
+    assert handle.find_picker() is choose_folder
+
+
+def test_the_window_folder_dialog_reads_a_cancel_as_none():
+    from flackey import desktop
+
+    window = FakeWindow()
+    pick = desktop.folder_picker(window, 20)
+    for cancelled in (None, (), [], ""):
+        window.dialog_answer = cancelled
+        assert pick(None) is None
+    assert window.dialog_calls[-1] == (20, "")  # no starting folder: the dialog's own default
+    window.dialog_answer = "/a/bare/string"  # what some backends return instead of a tuple
+    assert pick(None) == Path("/a/bare/string")
 
 
 def test_closing_the_window_stops_the_server(monkeypatch, tmp_path):
@@ -628,6 +908,7 @@ def _fake_venv(monkeypatch, tmp_path):
     return venv, base
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a macOS .app bundle: exec bits and a venv symlink")
 def test_build_bundle_lays_out_an_app_around_a_copy_of_the_interpreter(monkeypatch, tmp_path):
     from flackey import desktop
 
@@ -662,6 +943,7 @@ def test_build_bundle_is_none_outside_a_venv(monkeypatch, tmp_path):
     assert desktop.build_bundle(types.SimpleNamespace(data_dir=tmp_path / "data")) is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a macOS .app bundle: exec bits and a venv symlink")
 def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
     from flackey import desktop
 

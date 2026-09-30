@@ -119,7 +119,7 @@ def sweep(out: Path = typer.Option(Path("sweep.md"), "--out",  # noqa: B008
             return await run(Store(s.db_path), s, http, progress=typer.echo)
 
     rows = asyncio.run(go())
-    out.write_text(render(rows, s.lossless_fingerprint_min))
+    out.write_text(render(rows, s.lossless_fingerprint_min), encoding="utf-8")
     typer.echo(f"wrote {out}")
 
 
@@ -133,7 +133,7 @@ def replay_picks(out: Path = typer.Option(Path("replay.md"), "--out",  # noqa: B
     from .store import Store
 
     rows = run(Store(_settings().db_path), rules=HARD_RULES, rankers=IDENTITY_RANKERS + PEER_RANKERS)
-    out.write_text(render(rows))
+    out.write_text(render(rows), encoding="utf-8")
     typer.echo(f"{len(rows)} attempts replayed; wrote {out}")
 
 
@@ -166,7 +166,7 @@ def replay(request_id: int) -> None:
     # a traceback.
     try:
         stored = PickReport.from_dict(attempt.report)
-        files = [f for r in json.loads(raw.read_text()) for f in parse_response(r)]
+        files = [f for r in json.loads(raw.read_text(encoding="utf-8")) for f in parse_response(r)]
     except (json.JSONDecodeError, KeyError, IndexError, AttributeError, TypeError, ValueError,
             UnicodeDecodeError, OSError) as e:
         typer.echo(f"stored attempt {attempt.id} is corrupt: {e}")

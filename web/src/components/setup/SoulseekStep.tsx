@@ -69,8 +69,9 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
         if (s.state === 'connected' || s.state === 'failed') { stopConnectPolling(); setBusy(false) }
         // A name flackey dealt is not one the owner has any attachment to, so a rejection deals another
         // rather than leaving them to edit a random string by hand. Their next click retries with a fresh
-        // pair; the only outcome they ever see is a working account.
-        if (s.state === 'failed' && generated) deal()
+        // pair; the only outcome they ever see is a working account. Only a rejection, though: a sidecar
+        // that never came up says so, since a new name would not fix it and would hide why it failed.
+        if (s.state === 'failed' && generated && s.taken) deal()
       })
       .catch(() => { stopConnectPolling(); setBusy(false) })
     connectTimer.current = window.setInterval(tick, POLL_MS)
@@ -120,6 +121,10 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
   const progressText = install?.state === 'extracting' ? 'Almost there…'
     : pct === null ? 'Getting things ready…' : `Getting things ready… ${pct}%`
   const connected = connect?.state === 'connected'
+  // Signing in starts the sidecar, which is not there to start until the download has unpacked. A failed
+  // download does not hold the button: the sign-in then says Soulseek isn't installed, and Try again is
+  // right beside it.
+  const installing = install !== null && install.state !== 'done' && install.state !== 'error'
   // The port check starts on the server the moment the sidecar signs in, so this only waits for it to
   // finish: poll until the state stops saying `checking`, then stop. Its own effect rather than a branch
   // of pollConnect, so leaving the step while a check is running cannot leave an interval behind.
@@ -178,20 +183,22 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
     {connect?.state === 'connecting' && <div className="hint-row">Signing in to Soulseek…</div>}
     {connected && <div className="hint-row ok">Signed in as {connect?.username ?? username}. The account is yours.</div>}
     {connected && sharing && <SharingPanel state={sharing} onCheck={() => {}} compact />}
-    {connect?.state === 'failed' && (generated
+    {connect?.state === 'failed' && (generated && connect.taken
       ? <div className="hint-row">That name was taken. Here is another one — try again.</div>
       : <div className="err">{connect.error}</div>)}
     {install && install.state !== 'done' && (install.state === 'error'
       ? <div className="hint-row">Couldn't finish getting Soulseek ready. You can carry on — Soulseek stays
           off until this succeeds. <button className="btn-link" onClick={startInstall}>Try again</button></div>
       : <div className="hint-row">{progressText}</div>)}
-    {!connected && <div className="hint-row">While Flackey is running, other Soulseek users can download files
-      from your DJ Library folder{libraryRoot ? <> (<span className="mono">{libraryRoot}</span>)</> : ''}.
+    {/* One span inside the flex row: as loose text and a path, each piece became a column of its own, and a
+        long Windows path squeezed the sentence around it into slivers. */}
+    {!connected && <div className="hint-row"><span>While Flackey is running, other Soulseek users can download
+      files from your DJ Library folder{libraryRoot ? <> (<span className="mono">{libraryRoot}</span>)</> : ''}.
       Changing that folder later changes what's shared too. Review or turn this off any time from
-      Settings › Sharing.</div>}
+      Settings › Sharing.</span></div>}
     <div className="row-gap">
       <button className="btn-primary lg" onClick={connected ? () => onDone(true) : save}
-        disabled={!connected && (busy || !username || !password)}>{saveLabel}</button>
+        disabled={!connected && (busy || installing || !username || !password)}>{saveLabel}</button>
       <button className="btn-link" onClick={onSkip}>Skip for now</button>
     </div>
     {err && <div className="err">{err}</div>}

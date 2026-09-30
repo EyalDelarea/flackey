@@ -6,6 +6,7 @@ import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +33,7 @@ from .store import Store
 from .telegram import TelegramLogin, probe_authorized
 from .tools import resource_dir
 from .web import create_app
+from .web.pick import Picker, native_picker
 from .worker import Worker
 
 log = logging.getLogger(__name__)
@@ -60,6 +62,15 @@ class ServerHandle:
     # Set by the desktop window once it exists, which is after the server has already started -- hence
     # a slot read at call time rather than a callback passed in at construction.
     on_quit: Callable[[], None] | None = None
+    # The window's own folder dialog, registered by `desktop.run_in_window` off macOS -- the Mac keeps
+    # its AppleScript dialog, which needs no window. A slot for the same reason as `on_quit`: the window
+    # that owns the dialog is created after the server that serves `/api/pick-folder`.
+    pick_folder: Callable[[Path | None], Path | None] | None = None
+
+    def find_picker(self) -> Picker | None:
+        """The folder dialog a request should open right now: the window's, once there is one, and
+        otherwise whatever this system can open by itself (AppleScript on macOS, nothing elsewhere)."""
+        return self.pick_folder or native_picker()
 
     def stop(self) -> None:
         """Safe from any thread: uvicorn polls should_exit on its own loop."""
@@ -178,6 +189,23 @@ async def run_until_server_stops(serve: Coroutine, *loops: Coroutine) -> None:
         tg.create_task(serve).add_done_callback(lambda _: [t.cancel() for t in tasks])
 
 
+async def start_sidecar(process: SlskdProcess | None) -> None:
+    """Start the boot-time slskd alongside the server instead of ahead of it. The window gives the server
+    `WEB_SERVER_START_TIMEOUT_S` to answer, and a slskd starting slowly -- the first start of a freshly
+    downloaded one waits on the antivirus -- used to spend all of it, so the app died with "web server
+    did not start" before any window. Until slskd answers, Soulseek reads as unreachable, the same as a
+    sidecar still booting at any other time. Never raises: Soulseek is one provider among several, and
+    this task failing would take the whole server down with it."""
+    if process is None:
+        return
+    try:
+        await process.start()
+    except SlskdBinaryError as exc:
+        log.warning("slskd not started: %s", exc)
+    except Exception:
+        log.exception("slskd not started")
+
+
 def build_providers(settings: Settings, http: httpx.AsyncClient) -> list[LosslessProvider]:
     """One provider per configured network (spec §10). Only the sidecar URL and folder are logged, never the key."""
     providers: list[LosslessProvider] = []
@@ -252,18 +280,13 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     http = httpx.AsyncClient(timeout=20)
     providers = build_providers(settings, http)
 
-    # Lazy by design: this only ever starts an *already-installed* slskd (start() is cheap and
-    # never downloads). The download itself is triggered from the setup wizard's
-    # `POST /api/setup/slskd` (web/library.py), never from here or at import time -- a first run
-    # with no slskd installed must still start the app. A failure here is not fatal: Soulseek is
-    # one provider among several, so we log and carry on rather than crash startup.
+    # Lazy by design: this only ever starts an *already-installed* slskd (start() never downloads). The
+    # download itself is triggered from the setup wizard's `POST /api/setup/slskd` (web/library.py), never
+    # from here or at import time -- a first run with no slskd installed must still start the app. It is
+    # started by `start_sidecar` below, beside the server rather than before it.
     slskd_process: SlskdProcess | None = None
     if settings.soulseek_enabled:
         slskd_process = SlskdProcess(settings.data_dir, settings.slskd_url, settings.slskd_api_key or "")
-        try:
-            await slskd_process.start()
-        except SlskdBinaryError as exc:
-            log.warning("slskd not started: %s", exc)
     # Sign-out (TelegramLogin.log_out) rebuilds the client and reassigns login.client; the source must
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
@@ -283,7 +306,11 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
                         on_connected=sharing.start_refresh)
     link.adopt(slskd_process)
     api = create_app(store, worker, inbox, settings, ui_dir=UI_DIR, status=status, bus=bus, login=login,
-                     link=link, sharing=sharing, quit_app=handle.quit_app)
+                     link=link, sharing=sharing, quit_app=handle.quit_app,
+                     find_picker=handle.find_picker)
+    # No `loop=` choice matters here: uvicorn's loop factory is only consulted by `Server.run()`, and this
+    # awaits `Server.serve()` inside the loop the caller's `asyncio.run` already made -- which on Windows
+    # is the Proactor loop that the slskd subprocess needs (a selector loop cannot spawn one there).
     server = uvicorn.Server(uvicorn.Config(api, host=settings.web_host, port=settings.web_port,
                                            log_level="warning", log_config=None))
 
@@ -301,6 +328,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     try:
         await run_until_server_stops(
             serve(server, url, handle),
+            start_sidecar(slskd_process),
             supervise_worker(worker, status,
                              run_when=lambda: bool(status.get("telegram_authorized"))
                              or not settings.source_enabled),

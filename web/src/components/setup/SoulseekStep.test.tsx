@@ -173,6 +173,8 @@ describe('fetching the sidecar while the user types', () => {
     const { container } = render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
     await waitFor(() => expect(install).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByText('Getting things ready… 40%')).toBeInTheDocument())
+    // Signing in needs what is still downloading: clicked now, it would only fail with "not installed".
+    expect(screen.getByText('Create account')).toBeDisabled()
     // "They never see slskd": not the name, not the version, anywhere on the step.
     expect(container.textContent).not.toMatch(/slskd/i)
     expect(container.textContent).not.toContain('0.26.0')
@@ -202,6 +204,7 @@ describe('fetching the sidecar while the user types', () => {
     renderWithFakeTimers()
     await settle()
     expect(prog).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Create account')).not.toBeDisabled()   // and the account can be made now
     await settle(10 * POLL_MS)
     expect(prog).toHaveBeenCalledTimes(1)   // a live interval would have polled ten more times
   })
@@ -346,7 +349,7 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     // no attachment to it, so the step picks again itself and their next click retries with a fresh pair.
     vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
     vi.spyOn(api, 'soulseekConnectStatus')
-      .mockResolvedValue(connect({ state: 'failed', error: 'Somebody already uses that name.' }))
+      .mockResolvedValue(connect({ state: 'failed', error: 'Somebody already uses that name.', taken: true }))
     renderWithFakeTimers()
     await settle(0)
     const first = (screen.getByLabelText('Soulseek username') as HTMLInputElement).value
@@ -355,6 +358,22 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     expect(screen.getByLabelText('Soulseek username')).not.toHaveValue(first)
     expect(screen.getByText('That name was taken. Here is another one — try again.')).toBeInTheDocument()
     expect(screen.queryByText('Somebody already uses that name.')).not.toBeInTheDocument()
+  })
+
+  it('keeps the name it made up when the failure was not Soulseek turning it down', async () => {
+    // A sidecar that never started is not fixed by another name, and blaming the name hid the real
+    // reason: the Windows test VM showed "That name was taken" for a slskd that was still starting.
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus')
+      .mockResolvedValue(connect({ state: 'failed', error: 'Soulseek isn\'t installed yet.', taken: false }))
+    renderWithFakeTimers()
+    await settle(0)
+    const first = (screen.getByLabelText('Soulseek username') as HTMLInputElement).value
+    fireEvent.click(screen.getByText('Create account'))
+    await settle(POLL_MS)
+    expect(screen.getByLabelText('Soulseek username')).toHaveValue(first)
+    expect(screen.getByText('Soulseek isn\'t installed yet.')).toBeInTheDocument()
+    expect(screen.queryByText(/That name was taken/)).not.toBeInTheDocument()
   })
 
   it('does not leave polling running after the step unmounts', async () => {

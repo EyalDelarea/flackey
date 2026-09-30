@@ -19,12 +19,17 @@ import SoulseekStep from './components/setup/SoulseekStep'
 import TelegramStep from './components/setup/TelegramStep'
 import WelcomeStep from './components/setup/WelcomeStep'
 import { useLive } from './live'
-import { insetTitlebar } from './platform'
+import type { Live } from './live'
+import { insetTitlebar, PlatformContext } from './platform'
 
 const inset = insetTitlebar()
 
 export default function App() {
   const live = useLive()
+  return <PlatformContext.Provider value={live.health?.platform ?? 'mac'}><AppBody live={live} /></PlatformContext.Provider>
+}
+
+function AppBody({ live }: { live: Live }) {
   const [tab, setTab] = useState<Tab>('download')
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -100,6 +105,7 @@ export default function App() {
       {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <FormatStep libraryRoot={libraryRoot} initial={filingFormat}
         formats={live.settings?.filing_formats ?? ['aiff', 'wav', 'flac']}
+        defaultFormat={live.settings?.default_filing_format}
         onDone={f => { setFilingFormat(f); setStep(3) }} />}
       {current === 3 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
       {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { setSoulseekState('skipped'); setStep(5) }} />}

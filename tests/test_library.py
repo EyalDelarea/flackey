@@ -1,8 +1,9 @@
+import sys
 from pathlib import Path
 
 import pytest
 
-from flackey.library import file_track, final_path, find_duplicate, sanitize
+from flackey.library import WINDOWS_MAX_PATH, file_track, final_path, find_duplicate, sanitize
 from flackey.models import Candidate, CatalogTrack
 from flackey.store import Store
 
@@ -95,3 +96,73 @@ def test_prune_missing_tracks_removes_rows_and_playlist_membership(tmp_path: Pat
     assert prune_missing_tracks(store) == [tmp_path / "gone.mp3"]
     assert [t.id for t in store.list_tracks()] == [a]
     assert store.get_playlist(pid).track_ids == [a]
+
+
+# ---- Windows file names ------------------------------------------------------------------------
+
+@pytest.fixture
+def on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Aux", "Aux_"), ("con", "con_"), ("NUL.remix", "NUL_.remix"), ("COM1", "COM1_"), ("lpt9 ", "lpt9_"),
+    ("Auxiliary", "Auxiliary"), ("Con Brio", "Con Brio"), ("COM10", "COM10"),
+    ("tab\x01bed", "tab-bed"),
+    ("x" * 119 + " y", "x" * 119),  # the cut lands on the space, which Windows would drop by itself
+])
+def test_sanitize_on_windows_avoids_device_names_and_trailing_spaces(on_windows, raw, expected):
+    assert sanitize(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["Aux", "x" * 119 + " y", "tab\x01bed"])
+def test_sanitize_on_the_mac_keeps_the_names_it_always_gave(monkeypatch, raw):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert sanitize(raw) == " ".join(raw.split())[:120]
+
+
+def test_a_windows_artist_called_aux_gets_a_folder_windows_will_open(on_windows, tmp_path: Path):
+    ct = CatalogTrack(**{**CT.__dict__, "artist": "Aux"})
+    assert final_path(tmp_path, ct, "flac").parent == tmp_path / "Aux_"
+
+
+def _long(title: str) -> CatalogTrack:
+    return CatalogTrack(**{**CT.__dict__, "title": title})
+
+
+def test_a_windows_path_is_cut_to_fit_max_path(on_windows):
+    root = Path("C:/Users/someone/Music/Flackey")
+    p = final_path(root, _long("A" * 110 + " Extended"), "flac")
+    assert len(str(p)) <= WINDOWS_MAX_PATH
+    assert p.parent == root / "Astral Projection"
+    assert p.name.startswith("Astral Projection - AAAA") and p.suffix == ".flac"
+
+
+def test_two_long_titles_that_differ_only_at_the_end_stay_two_files(on_windows):
+    root = Path("C:/Users/someone/Music/" + "deep/" * 20)
+    extended = final_path(root, _long("B" * 115 + " (Extended Mix)"), "flac")
+    radio = final_path(root, _long("B" * 115 + " (Radio Edit)"), "flac")
+    assert extended != radio
+    assert len(str(extended)) <= WINDOWS_MAX_PATH and len(str(radio)) <= WINDOWS_MAX_PATH
+
+
+def test_the_same_long_title_always_cuts_to_the_same_name(on_windows):
+    """A lossless upgrade recomputes the path and has to land where the first copy is."""
+    root = Path("C:/Users/someone/Music/" + "deep/" * 20)
+    assert final_path(root, _long("C" * 120), "flac").name == final_path(root, _long("C" * 120), "flac").name
+
+
+def test_an_emoji_counts_twice_toward_the_windows_limit(on_windows):
+    root = Path("C:/Users/someone/Music/Flackey")
+    p = final_path(root, _long("\U0001f525" * 110), "flac")
+    assert len(str(p).encode("utf-16-le")) // 2 <= WINDOWS_MAX_PATH
+
+
+def test_a_short_windows_path_is_left_as_it_is(on_windows, tmp_path: Path):
+    assert final_path(tmp_path, CT, "mp3").name == "Astral Projection - Into the Void.mp3"
+
+
+def test_the_mac_never_cuts_a_long_title(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    root = Path("/Users/someone/Music/" + "deep/" * 20)
+    assert final_path(root, _long("D" * 120), "flac").name == "Astral Projection - " + "D" * 120 + ".flac"

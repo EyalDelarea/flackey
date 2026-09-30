@@ -1,7 +1,8 @@
 """Report a bug from inside the app (issue #33).
 
-Gathers the log, version, macOS release and displays, redacts them into a zip, and opens an email to
-the developer with the report already written, next to the zip in Finder for the reporter to drag in.
+Gathers the log, version, system release and displays, redacts them into a zip, and opens an email to
+the developer with the report already written, next to the zip in Finder (File Explorer on Windows) for
+the reporter to drag in.
 No token, no server of ours, no account: the reporter's own email is the transport, and they press Send.
 
 The repository is public, so `Redactor` is the security boundary. The preview the page shows and the
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import platform
 import re
 import sys
@@ -19,7 +21,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, HTTPException, Request
@@ -30,7 +32,7 @@ from ..logsetup import LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
 from ..tools import missing_helpers
 from .guard import from_the_app
-from .library import reveal_in_finder
+from .library import reveal_path
 from .update import open_url
 
 log = logging.getLogger(__name__)
@@ -83,6 +85,11 @@ _PASSWORD_REST = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:password|passwd|pass
 # `scheme://user:pass@host`: the whole userinfo goes, before `_EMAIL` would take only `pass@host`.
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
 _OTHER_HOME = re.compile(r"/Users/[^/\s]+")
+# Somebody's Windows home, in each spelling a log can hold it: `C:\Users\bob` as Windows prints it,
+# `C:/Users/bob` as Python sometimes does, and `C:\\Users\\bob` inside a repr or a JSON string. Any
+# drive and any case, because Windows paths are case-insensitive and nothing normalises them first.
+_OTHER_WINDOWS_HOME = re.compile(r"(?i)(?<![\w])([a-z]:)(\\{1,2}|/)users\2[^\\/\s\"'<>|:*?]+")
+_ANY_SEPARATOR = r"(?:\\{1,2}|/)"
 
 
 class Redactor:
@@ -93,25 +100,52 @@ class Redactor:
     Known values first, patterns second: an exact secret is caught wherever it lands, including places no
     pattern would think to look, and the patterns catch what nobody told this class about."""
 
-    def __init__(self, secrets: Iterable[str | None], home: Path | None = None):
+    def __init__(self, secrets: Iterable[str | None], home: PurePath | None = None,
+                 users: Iterable[str | None] | None = None):
+        """`home` and `users` default to this machine's. Tests hand in fixed ones so the result does
+        not depend on who runs them: a `PureWindowsPath` home works on a Mac, a `PurePosixPath` one on
+        Windows.
+
+        On Windows the user name is not always the home folder's name -- a Microsoft-account sign-in
+        makes the folder from the first five letters of the email, and a renamed account keeps its old
+        folder -- so the sign-in name (`USERNAME`) is taken out as well as the folder's."""
         home = home if home is not None else Path.home()
         self.home = str(home)
-        user = home.name
+        # A drive letter is how a Windows home announces itself, and derived from `home` rather than
+        # `sys.platform` so a test of the Windows shape runs the same on a Mac.
+        self._windows = bool(PureWindowsPath(self.home).drive)
+        if users is None:
+            users = [home.name, os.environ.get("USERNAME")] if self._windows else [home.name]
         known = {s.strip() for s in secrets if s and len(s.strip()) >= MIN_SECRET_CHARS}
         # Longest first, so a password that contains the username is not left half-replaced.
         self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])")
                        for s in sorted(known, key=len, reverse=True)]
-        self._user = re.compile(r"(?<![\w])" + re.escape(user) + r"(?![\w])") if len(user) >= 3 else None
+        names = sorted({u.strip() for u in users if u and len(u.strip()) >= 3}, key=len, reverse=True)
+        # Windows account names are case-insensitive, and a log prints whichever case the API returned.
+        flags = re.IGNORECASE if self._windows else 0
+        self._users = [re.compile(r"(?<![\w])" + re.escape(u) + r"(?![\w])", flags) for u in names]
+        self._home_pattern = self._windows_home_pattern(self.home) if self._windows else None
+
+    @staticmethod
+    def _windows_home_pattern(home: str) -> re.Pattern:
+        """This machine's home in any of the separators and cases `_OTHER_WINDOWS_HOME` accepts, and
+        only as a whole folder name: `C:\\Users\\eyal` must not take the front off `C:\\Users\\eyalx`."""
+        parts = [re.escape(p) for p in re.split(r"[\\/]+", home) if p]
+        return re.compile(r"(?i)(?<![\w])" + _ANY_SEPARATOR.join(parts) + r"(?![^\\/\s\"'<>|:*?])")
 
     def __call__(self, text: str) -> str:
         # The home folder before the known values: a Soulseek name that equals the macOS user name would
         # otherwise turn `/Users/eyal/Music` into `/Users/<redacted>/Music` instead of the tidier `~/Music`.
-        text = text.replace(self.home, "~")
+        if self._home_pattern is not None:
+            text = self._home_pattern.sub("~", text)
+        else:
+            text = text.replace(self.home, "~")
         text = _OTHER_HOME.sub("/Users/<user>", text)
+        text = _OTHER_WINDOWS_HOME.sub(lambda m: f"{m.group(1)}{m.group(2)}Users{m.group(2)}<user>", text)
         for pattern in self._known:
             text = pattern.sub("<redacted>", text)
-        if self._user is not None:
-            text = self._user.sub("<user>", text)
+        for pattern in self._users:
+            text = pattern.sub("<user>", text)
         text = _URL_USERINFO.sub(r"\1<redacted>@", text)
         text = _PASSWORD_REST.sub(_redact_value, text)
         text = _KEY_VALUE.sub(_redact_value, text)
@@ -141,6 +175,8 @@ def display_summary() -> str:
     """How many displays, and whether one is external -- the window flicker (#31) turned on exactly
     that. Quartz rather than `NSScreen`: this runs on a server thread, and the CoreGraphics display
     list is safe to read from one. Anything short of an answer is "unknown", never a guess."""
+    if sys.platform == "win32":
+        return _windows_displays()
     if sys.platform != "darwin":
         return "unknown"
     try:
@@ -164,9 +200,73 @@ def display_summary() -> str:
     return f"{count} ({', '.join(parts)})"
 
 
+_SM_CXSCREEN, _SM_CYSCREEN, _SM_CMONITORS = 0, 1, 80
+_IMAGE_FILE_MACHINE_ARM64 = 0xAA64
+
+
+def windows_display_text(count: int, width: int, height: int, dpi: int) -> str:
+    """Scaling is the part that matters: the window's size and place are computed in it (see
+    `desktop.window_origin`), and it is what differs between two machines at the same resolution."""
+    return f"{count} (primary {width}×{height}, {round(dpi * 100 / 96)}% scale)"
+
+
+def _windows_displays() -> str:
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        count = user32.GetSystemMetrics(_SM_CMONITORS)
+        width, height = user32.GetSystemMetrics(_SM_CXSCREEN), user32.GetSystemMetrics(_SM_CYSCREEN)
+        dpi = user32.GetDpiForSystem() or 96
+    except Exception:
+        log.debug("could not read the displays", exc_info=True)
+        return "unknown"
+    return windows_display_text(count, width, height, dpi) if count else "unknown"
+
+
+def _windows_native_machine() -> int | None:
+    """The CPU's own architecture, which `platform.machine()` does not give: an x64 Flackey emulated on an
+    Arm PC is told AMD64. That emulation is why everything there is slow (a first launch took minutes in
+    the Arm test VM), so a report that hid it would send the reader looking for a bug that isn't one."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        process, native = wintypes.USHORT(), wintypes.USHORT()
+        if not kernel32.IsWow64Process2(kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+            return None
+    except Exception:                    # IsWow64Process2 is Windows 10 1709 and later
+        log.debug("could not read the native architecture", exc_info=True)
+        return None
+    return native.value
+
+
 def os_summary() -> str:
+    if sys.platform == "win32":
+        # `platform.platform()` on Windows is `Windows-10-10.0.22631-SP0`: right, but not how anyone
+        # says it. The build number stays because it is what tells Windows 10 from 11 on a Python
+        # that reports both as release "10".
+        release, version, _, _ = platform.win32_ver()
+        machine = platform.machine()
+        if _windows_native_machine() == _IMAGE_FILE_MACHINE_ARM64 and machine.upper() != "ARM64":
+            machine += ", emulated on Arm"
+        return f"Windows {release} (build {version}, {machine})"
     mac = platform.mac_ver()[0]
     return f"macOS {mac} ({platform.machine()})" if mac else platform.platform()
+
+
+def file_browser() -> str:
+    """What the reporter calls the window the zip is shown in."""
+    return "File Explorer" if sys.platform == "win32" else "Finder"
+
+
+def _build_label() -> str:
+    """"(Mac app)" for the packaged app, "(Windows app)" for the Windows one, "(from source)" otherwise."""
+    if not getattr(sys, "frozen", False):
+        return " (from source)"
+    return " (Windows app)" if sys.platform == "win32" else " (Mac app)"
 
 
 @dataclass
@@ -237,7 +337,7 @@ def build_report(settings: Settings, status, client: ClientContext, description:
                  now: datetime | None = None) -> Report:
     redact = redact or Redactor(known_secrets(settings))
     now = now or datetime.now(UTC)
-    summary = [("Flackey", __version__ + (" (Mac app)" if getattr(sys, "frozen", False) else " (from source)")),
+    summary = [("Flackey", __version__ + _build_label()),
                ("System", os_summary()),
                ("Displays", display_summary())]
     if client.display:
@@ -284,7 +384,7 @@ def _compose_url(via: str, subject: str, body: str) -> str:
 def compose_email(report: Report, description: str, steps: str, zip_name: str, redact: Redactor,
                   via: str = "gmail") -> Email:
     """The email to the developer, written out, and the link that opens it: Gmail's compose page or a
-    mailto: for whatever mail app the Mac uses. Only the summary and the reporter's own words go in; the
+    mailto: for whatever mail app the system uses. Only the summary and the reporter's own words go in; the
     log goes in the zip, which the reporter attaches by dragging. Each piece is redacted on its own rather
     than the finished body, whose email redaction would take the To address with it."""
     def cap(text: str, n: int) -> str:
@@ -302,7 +402,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
             parts += ["", "What I was doing just before:", cap(redact(steps), limit)]
         parts += ["", "-- Details from Flackey --", details, "",
                   f"Attached: {zip_name} (the app log, with personal details removed).",
-                  "If it's not attached yet, drag it in from the Finder window Flackey opened."]
+                  f"If it's not attached yet, drag it in from the {file_browser()} window Flackey opened."]
         body = "\n".join(parts)
         url = _compose_url(via, subject, body)
         if len(url) <= URL_MAX or limit <= 50:
@@ -332,7 +432,7 @@ def latest_zip(folder: Path) -> Path | None:
     return found[-1] if found else None
 
 
-def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_in_finder) -> APIRouter:
+def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_path) -> APIRouter:
     r = APIRouter(prefix="/api/bug-report")
     folder = settings.data_dir / REPORT_DIR
 
@@ -370,7 +470,7 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_i
         try:
             opener(path)
         except Exception:
-            log.warning("could not show the bug report in Finder", exc_info=True)
+            log.warning("could not show the bug report in %s", file_browser(), exc_info=True)
         try:
             open_url(email.url)
         except Exception:

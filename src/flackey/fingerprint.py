@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .tools import tool_path
+from .tools import no_window, tool_path
 
 log = logging.getLogger(__name__)
 FPS = 8.06                                        # chromaprint hop: 1365 samples at 11025 Hz
@@ -51,11 +51,12 @@ def fingerprint(path: Path, start_s: float = 0.0, length_s: float | None = None)
                 raise FingerprintError("ffmpeg is not installed")
             trim = ["-ss", f"{start_s}"] + (["-t", f"{length_s}"] if length_s else [])
             r = subprocess.run([ffmpeg, "-v", "error", "-y", *trim, "-i", str(path), "-vn", "-map", "0:a",
-                                str(src)], capture_output=True, timeout=FPCALC_TIMEOUT_S, check=False)
+                                str(src)], capture_output=True, timeout=FPCALC_TIMEOUT_S, check=False,
+                               **no_window())
             if r.returncode != 0:
                 raise FingerprintError(r.stderr.decode(errors="replace")[-300:])
         r = subprocess.run([fpcalc, "-raw", "-json", "-length", "0", str(src)], capture_output=True,
-                            timeout=FPCALC_TIMEOUT_S, check=False)
+                            timeout=FPCALC_TIMEOUT_S, check=False, **no_window())
         if r.returncode != 0:
             raise FingerprintError(r.stderr.decode(errors="replace")[-300:] or "fpcalc failed")
         return [int(x) for x in json.loads(r.stdout)["fingerprint"]]
