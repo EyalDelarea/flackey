@@ -83,8 +83,8 @@ function renderReleaseBody(body) {
   return html;
 }
 
-// GitHub's /releases/latest endpoint deliberately excludes prereleases. Flackey is
-// still in beta, so read the release list and select the newest published build.
+// The newest published release that is not a pre-release: a pre-release is a branch build
+// handed to a tester, and the in-app update check skips them for the same reason.
 fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
   .then((response) => {
     if (response.status === 404) return null;
@@ -93,7 +93,7 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
   })
   .then((releases) => {
     const published = Array.isArray(releases)
-      ? releases.filter((item) => !item.draft)
+      ? releases.filter((item) => !item.draft && !item.prerelease)
       : [];
     const data = published[0] || null;
     const asset = data?.assets?.find((item) => item.name === "Flackey.pkg");
