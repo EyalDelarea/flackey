@@ -271,7 +271,69 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "window_origin", lambda size: None)
     # The real one would take the app's own mutex on a Windows test runner.
     monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
+    # Tests that pretend to be Windows would otherwise read a registry the suite does not have.
+    monkeypatch.setattr(desktop, "webview2_version", lambda: "154.0.4258.37")
     return windows, started, handle
+
+
+def _fake_webview2_registry(values: dict[tuple[str, str], object]):
+    """`winreg` holding just the `pv` values given, keyed by (hive, path)."""
+    class Key:
+        def __init__(self, where):
+            self.where = where
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(hive, path):
+        if (hive, path) not in values:
+            raise FileNotFoundError(path)
+        return Key((hive, path))
+
+    def query_value_ex(key, name):
+        assert name == "pv"
+        return values[key.where], 1  # REG_SZ
+
+    return types.SimpleNamespace(HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU",
+                                 OpenKey=open_key, QueryValueEx=query_value_ex)
+
+
+_WV2 = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+@pytest.mark.parametrize("values,expected", [
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): "154.0.4258.37"}, "154.0.4258.37"),   # per machine
+    ({("HKCU", rf"Software\{_WV2}"): "154.0.4258.37"}, "154.0.4258.37"),               # per user
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): "0.0.0.0"}, None),                   # uninstalled leftover
+    ({("HKLM", rf"SOFTWARE\WOW6432Node\{_WV2}"): ""}, None),
+    ({}, None),
+])
+def test_webview2_is_found_the_way_microsoft_says_to_look(monkeypatch, values, expected):
+    from flackey import desktop
+
+    monkeypatch.setitem(sys.modules, "winreg", _fake_webview2_registry(values))
+    assert desktop.webview2_version() == expected
+
+
+def test_without_webview2_the_owner_is_told_instead_of_shown_a_blank_window(monkeypatch, tmp_path):
+    """pywebview would fall back to Internet Explorer's engine, which cannot run the page."""
+    from flackey import desktop
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    windows, started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "webview2_version", lambda: None)
+    told = []
+    monkeypatch.setattr(desktop, "explain_missing_webview2", lambda: told.append(True))
+
+    def no_server(settings):
+        raise AssertionError("no server without a window to show it")
+
+    monkeypatch.setattr(desktop, "start_server_thread", no_server)
+    desktop.run_in_window(settings=object())
+    assert told == [True] and windows == {} and started == {}
 
 
 def test_run_in_window_hands_over_to_the_copy_already_running(monkeypatch, tmp_path):

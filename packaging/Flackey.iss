@@ -65,12 +65,20 @@ Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "build\dist\Flackey\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Microsoft's WebView2 bootstrapper (fetch_helpers_windows.ps1 checks its signature), unpacked only on a
+; PC that lacks the runtime and deleted when Setup ends.
+Source: "build\webview2\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView2
 
 [Icons]
 Name: "{autoprograms}\Flackey"; Filename: "{app}\Flackey.exe"
 Name: "{autodesktop}\Flackey"; Filename: "{app}\Flackey.exe"; Tasks: desktopicon
 
 [Run]
+; Flackey's window is WebView2. Windows 11 always has the runtime and most Windows 10 PCs do; without
+; it pywebview falls back to Internet Explorer's engine and the window is blank. Not elevated, so the
+; bootstrapper installs the runtime for this user, the same way Setup installs Flackey. It needs the
+; internet; if it fails, Setup still finishes and the app explains what is missing when it starts.
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing Microsoft Edge WebView2, which Flackey's window needs..."; Flags: waituntilterminated; Check: NeedsWebView2
 ; No skipifsilent: the in-app Update runs this installer and quits, and this checkbox is what brings the
 ; app back afterwards.
 Filename: "{app}\Flackey.exe"; Description: "{cm:LaunchProgram,Flackey}"; Flags: nowait postinstall
@@ -78,3 +86,22 @@ Filename: "{app}\Flackey.exe"; Description: "{cm:LaunchProgram,Flackey}"; Flags:
 ; No [UninstallDelete] on purpose. The uninstaller removes exactly what [Files] installed, and nothing
 ; else: the settings, the database, the Telegram session and the log live in %APPDATA%\Flackey and belong
 ; to the person, who may be uninstalling only to reinstall. Their music is in a folder they chose.
+
+[Code]
+// Microsoft's test for the Evergreen WebView2 Runtime, the same as desktop.webview2_version: a `pv`
+// above 0.0.0.0 under the client key, per machine (HKLM32 is the WOW6432Node view on 64-bit Windows)
+// or per user.
+const
+  WebView2Client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+function HasWebView2(RootKey: Integer; SubKey: String): Boolean;
+var
+  Version: String;
+begin
+  Result := RegQueryStringValue(RootKey, SubKey, 'pv', Version) and (Trim(Version) <> '') and (Trim(Version) <> '0.0.0.0');
+end;
+
+function NeedsWebView2: Boolean;
+begin
+  Result := not (HasWebView2(HKLM32, 'SOFTWARE\' + WebView2Client) or HasWebView2(HKLM64, 'SOFTWARE\' + WebView2Client) or HasWebView2(HKCU, 'Software\' + WebView2Client));
+end;

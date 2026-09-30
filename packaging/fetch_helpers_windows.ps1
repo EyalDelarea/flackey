@@ -4,6 +4,7 @@
 # Each download is pinned by SHA-256 and checked before it is unpacked. Result:
 #   packaging/build/bin/{ffmpeg,ffprobe,fpcalc}.exe   executables Flackey-windows.spec bundles at bin/
 #   packaging/build/bin/licenses/                     the licence texts that travel with them
+#   packaging/build/webview2/MicrosoftEdgeWebview2Setup.exe   for Flackey.iss (the installer, not the app)
 # Downloads are cached in packaging/build/helpers so a rebuild does not fetch 60 MB again.
 #
 # Written for Windows PowerShell 5.1 as well as PowerShell 7, and kept pure ASCII: 5.1 reads a script
@@ -86,6 +87,25 @@ fpcalc.exe: Chromaprint 1.6.1 from https://github.com/acoustid/chromaprint, LGPL
 '@
 [IO.File]::WriteAllText((Join-Path $Licenses 'README.txt'), ($readme -replace "`r`n", "`n") + "`n",
     (New-Object Text.UTF8Encoding $false))
+
+# Microsoft's WebView2 Evergreen Bootstrapper, for Flackey.iss to run on a PC without the runtime (a
+# minority of Windows 10 machines; Windows 11 always has it). Not in bin/: the installer carries it, the
+# app does not. Not pinned by SHA-256 either, because Microsoft reissues the file behind this link;
+# instead its Authenticode signature must be valid and Microsoft's. Fetched fresh every build so the
+# installer never carries a stale one.
+$WebView2Dir = Join-Path $Root 'packaging\build\webview2'
+$WebView2 = Join-Path $WebView2Dir 'MicrosoftEdgeWebview2Setup.exe'
+New-Item -ItemType Directory -Force -Path $WebView2Dir | Out-Null
+Write-Host '    fetching MicrosoftEdgeWebview2Setup.exe'
+& curl.exe -fsSL --retry 3 -o "$WebView2.part" 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+Assert-ExitCode 'downloading the WebView2 bootstrapper'
+Move-Item -Force -LiteralPath "$WebView2.part" -Destination $WebView2
+$signature = Get-AuthenticodeSignature -LiteralPath $WebView2
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+    Remove-Item -Force -LiteralPath $WebView2
+    throw "the WebView2 bootstrapper is not validly signed by Microsoft ($($signature.Status): $($signature.SignerCertificate.Subject))"
+}
+Write-Host "    WebView2 bootstrapper signed by $($signature.SignerCertificate.Subject)"
 
 # Each one has to run on this machine, or the bundle would carry three files nobody can execute. On a
 # Mac or Linux box (where this script can be dry-run under pwsh) they cannot, which is the point.

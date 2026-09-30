@@ -157,6 +157,49 @@ def _windows_is_dark() -> bool:
     return value == 0
 
 
+# Microsoft's registry test for the Evergreen WebView2 Runtime ("Detect if a WebView2 Runtime is already
+# installed", learn.microsoft.com/microsoft-edge/webview2/concepts/distribution): `pv` under this client
+# key, per machine (WOW6432Node on 64-bit Windows) or per user, and a version above 0.0.0.0. Installer
+# and app ask the same question: Flackey.iss's NeedsWebView2 is this function in Pascal.
+_WEBVIEW2_CLIENT = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+_WEBVIEW2_KEYS = (("HKEY_LOCAL_MACHINE", rf"SOFTWARE\WOW6432Node\{_WEBVIEW2_CLIENT}"),
+                  ("HKEY_LOCAL_MACHINE", rf"SOFTWARE\{_WEBVIEW2_CLIENT}"),
+                  ("HKEY_CURRENT_USER", rf"Software\{_WEBVIEW2_CLIENT}"))
+WEBVIEW2_DOWNLOAD = "https://developer.microsoft.com/microsoft-edge/webview2/consumer/"
+_MB_OKCANCEL, _MB_ICONWARNING, _IDOK = 0x1, 0x30, 1
+
+
+def webview2_version() -> str | None:
+    """The installed WebView2 Runtime's version, or None when there is none. Never raises."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    for hive, path in _WEBVIEW2_KEYS:
+        try:
+            with winreg.OpenKey(getattr(winreg, hive), path) as key:
+                value, _kind = winreg.QueryValueEx(key, "pv")
+        except OSError:
+            continue
+        if isinstance(value, str) and value.strip() not in ("", "0.0.0.0"):
+            return value.strip()
+    return None
+
+
+def explain_missing_webview2() -> None:
+    """Say why no window opens, instead of opening a blank one. Without the runtime pywebview does not
+    fail: it quietly falls back to MSHTML, Internet Explorer's engine, which cannot run the page. The
+    installer runs Microsoft's bootstrapper when the runtime is missing, so this is the machine that was
+    offline then, or had it removed since."""
+    import ctypes
+
+    text = ("Flackey needs Microsoft Edge WebView2 to draw its window, and it is not installed on this PC.\n\n"
+            "Click OK to open Microsoft's download page. Install the \"Evergreen Bootstrapper\", "
+            "then open Flackey again.")
+    if ctypes.windll.user32.MessageBoxW(None, text, "Flackey", _MB_OKCANCEL | _MB_ICONWARNING) == _IDOK:
+        os.startfile(WEBVIEW2_DOWNLOAD)  # the default browser
+
+
 def system_is_dark() -> bool:
     """macOS stores the appearance in `AppleInterfaceStyle`; the key is absent in light mode. Windows
     keeps it in the registry (`_windows_is_dark`)."""
@@ -520,6 +563,10 @@ def run_in_window(settings: Settings) -> None:
     if not claim_single_instance():
         shown = focus_running_window()
         log.info("Flackey is already running: %s", "brought its window forward" if shown else "it is still starting")
+        return
+    if sys.platform == "win32" and webview2_version() is None:
+        log.error("no WebView2 Runtime on this PC; told the owner where to get it")
+        explain_missing_webview2()
         return
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
