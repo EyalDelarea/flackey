@@ -1317,6 +1317,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                  "soulseek_enabled": False, "slskd_url": settings.slskd_url,
                  "slskd_downloads_dir": str(settings.slskd_downloads),
                  "lossless_filing_format": settings.lossless_filing_format,
+                 "library_layout": "artist", "library_layouts": ["artist", "month", "day", "flat"],
                  "auto_update_check": True,
                  "ports": {"app": {"port": 8765, "host": "127.0.0.1", "public": False},
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
@@ -2003,6 +2004,16 @@ def test_settings_never_expose_the_api_key_and_accept_lossless_keys(tmp_path: Pa
     assert c.put("/api/settings", json={"library_root": str(tmp_path / "lib"), "lossless_filing_format": "mp3"}).status_code == 400
     assert "secret" not in json.dumps(c.get("/api/health").json())
     assert "fpcalc" in c.get("/api/tools").json()
+
+
+def test_settings_save_the_library_layout_and_refuse_an_unknown_one(tmp_path: Path):
+    app, _, settings = make(tmp_path)
+    c = AppClient(app)
+    r = c.put("/api/settings", json={"library_root": str(tmp_path / "lib"), "library_layout": "day"})
+    assert r.status_code == 200 and r.json()["library_layout"] == "day" and settings.library_layout == "day"
+    assert json.loads(settings.settings_path.read_text())["library_layout"] == "day"
+    bad = c.put("/api/settings", json={"library_root": str(tmp_path / "lib"), "library_layout": "genre"})
+    assert bad.status_code == 400 and settings.library_layout == "day"
 
 
 def test_the_api_key_never_appears_in_settings_or_health_responses(tmp_path: Path):

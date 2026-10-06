@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import __version__
-from ..config import FILING_FORMATS, Settings, default_filing_format, save_settings
+from ..config import FILING_FORMATS, LIBRARY_LAYOUTS, Settings, default_filing_format, save_settings
 from ..export import PLAYLIST_DIR, playlist_names, write_playlists
 from ..library import prune_missing_tracks
 from ..logsetup import LOG_FILE
@@ -215,6 +215,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "soulseek_enabled": settings.soulseek_enabled, "slskd_url": settings.slskd_url,
                 "slskd_downloads_dir": str(settings.slskd_downloads),
                 "lossless_filing_format": settings.lossless_filing_format,
+                "library_layout": settings.library_layout, "library_layouts": list(LIBRARY_LAYOUTS),
                 "auto_update_check": settings.auto_update_check,
                 "ports": _ports(settings),
                 "ranking": {"max_picks": settings.lossless_max_picks,
@@ -244,6 +245,10 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             if body["lossless_filing_format"] not in FILING_FORMATS:
                 raise HTTPException(400, f"Filing format must be one of {', '.join(FILING_FORMATS)}.")
             extra["lossless_filing_format"] = body["lossless_filing_format"]
+        if "library_layout" in body:
+            if body["library_layout"] not in LIBRARY_LAYOUTS:
+                raise HTTPException(400, f"Folder layout must be one of {', '.join(LIBRARY_LAYOUTS)}.")
+            extra["library_layout"] = body["library_layout"]
         if "auto_update_check" in body:
             extra["auto_update_check"] = bool(body["auto_update_check"])
         if body.get("slskd_url"):

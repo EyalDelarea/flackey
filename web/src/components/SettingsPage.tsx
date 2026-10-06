@@ -6,6 +6,7 @@ import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
 import FormatOptions, { FORMAT_LABELS } from './FormatOptions'
+import LayoutOptions from './LayoutOptions'
 import SharingPanel from './SharingPanel'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
@@ -56,6 +57,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
   const [formatBusy, setFormatBusy] = useState(false)
   const [formatError, setFormatError] = useState<string | null>(null)
+  const [layoutBusy, setLayoutBusy] = useState(false)
+  const [layoutError, setLayoutError] = useState<string | null>(null)
   const [checkError, setCheckError] = useState<string | null>(null)
   // The saved Soulseek password, once the owner asks for it. Held only in this component's state:
   // nothing fetches it until the button is pressed, and leaving Settings forgets it again.
@@ -164,6 +167,15 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .then(next => live.setSettings(next))
       .catch(e => setFormatError(getErrorMessage(e, 'Could not save that format.')))
       .finally(() => setFormatBusy(false))
+  }
+  const currentLayout = s.library_layout ?? 'artist'
+  const saveLayout = (layout: string) => {
+    if (layout === currentLayout) return
+    setLayoutBusy(true); setLayoutError(null)
+    api.saveSettings(s.library_root, { library_layout: layout })
+      .then(next => live.setSettings(next))
+      .catch(e => setLayoutError(getErrorMessage(e, 'Could not save that layout.')))
+      .finally(() => setLayoutBusy(false))
   }
   const saveKeys = () => {
     setKeysBusy(true); setKeysError(null); setKeysSaved(false)
@@ -310,6 +322,12 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions">{editing
             ? <>{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}<button className="btn-secondary" onClick={() => { setEditing(false); setErr(null) }} disabled={busy}>Cancel</button><button className="btn-primary" onClick={save} disabled={busy}>Save</button></>
             : <button className="btn-secondary" onClick={() => { setPath(s.library_root); setEditing(true); setErr(null) }}>Change</button>}</div></div>
+        {/* Only new downloads follow the layout. Rekordbox finds a track by its full path, so moving the
+            ones already filed would leave every one of them "missing" there until relocated by hand. */}
+        <div className="srow"><div className="srow-body"><div className="k">Folder layout</div>
+          <div className="v">Where new downloads go. Tracks already filed stay put, so Rekordbox keeps finding them.</div>
+          <LayoutOptions value={currentLayout} onChange={saveLayout} disabled={layoutBusy} />
+          {layoutError && <div className="err">{layoutError}</div>}</div></div>
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">New lossless tracks will be filed as {FORMAT_LABELS[currentFormat] ?? currentFormat.toUpperCase()}.</div>
           <FormatOptions formats={formats} value={currentFormat} onChange={saveFormat} disabled={formatBusy} defaultFormat={defaultFormat} />

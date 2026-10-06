@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -152,6 +153,19 @@ async def test_happy_path_files_tags_exports(env):
     assert notifier.sent[-1][0].startswith("Done: Astral Projection – Into the Void")
     assert "BPM" not in notifier.sent[-1][0] and "A Major" not in notifier.sent[-1][0]  # Rekordbox analyzes both
 
+
+
+@pytest.mark.parametrize("layout", ["month", "day", "flat"])
+async def test_a_new_track_is_filed_by_the_library_layout(env, layout):
+    settings, store, _ = env
+    settings.library_layout = layout
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    track = store.get_track(r.track_id)
+    today = datetime.now().astimezone().date()
+    folder = {"month": today.strftime("%Y-%m"), "day": today.isoformat(), "flat": ""}[layout]
+    assert track.path == settings.library_root / folder / "Astral Projection - Into the Void.mp3"
+    assert track.path.exists()
 
 async def test_process_survives_a_request_removed_while_notifying(env, caplog):
     """A DELETE /api/requests/{id} is legal the instant a request goes terminal, so it can land in the window

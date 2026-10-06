@@ -779,6 +779,21 @@ async def test_upgrade_swaps_the_file_and_keeps_the_row_id(lenv):
     assert not list(settings.tmp_dir.iterdir())
 
 
+async def test_upgrade_keeps_the_file_in_the_folder_it_was_filed_in(lenv):
+    """Filed under one layout, upgraded after the owner switched to another: the new copy replaces the old
+    one in its folder rather than moving to where the new layout would put it."""
+    settings, store, _, provider, _, _ = lenv
+    w, before = await _file_on_deezer(lenv, provider)
+    settings.library_layout = "day"
+    provider.files = [lf("a")]
+
+    await w.upgrade(before.id)
+
+    after = store.get_track(before.id)
+    assert after.path.parent == before.path.parent == settings.library_root / "Astral Projection"
+    assert after.path.suffix == ".aiff" and after.path.exists()
+
+
 async def test_upgrade_rewrites_the_playlist_that_points_at_the_old_path(lenv):
     settings, store, _, provider, _, _ = lenv
     pid = store.upsert_playlist("https://example.test/p", "Set")
