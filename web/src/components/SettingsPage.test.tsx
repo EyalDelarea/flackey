@@ -33,6 +33,9 @@ const connections = () => section('Connections')
    everything else about it, so an unscoped lookup would have two answers. */
 const connRow = (name: string) => within(connections()).getByText(name).closest('.srow') as HTMLElement
 const dot = (r: HTMLElement) => r.querySelector('.status-dot') as HTMLElement
+/* Advanced is folded shut on every visit, and a role query cannot see into a hidden box. */
+const openAdvanced = () => fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+const advanced = () => section('Advanced')
 
 it('shows the settings cards and saves a new folder', async () => {
   const result = { library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/flackey.log' }
@@ -280,8 +283,9 @@ it('defaults automatic update checks to on and lets the owner turn them off', as
   const result = { ...liveSettings, auto_update_check: false }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
   render(<SettingsPage live={live} onReconnect={() => {}} />)
-  const row = screen.getByText('On — Flackey checks for updates when it starts.').closest('.srow') as HTMLElement
-  fireEvent.click(within(row).getByText('Turn off'))
+  const toggle = within(section('Updates')).getByRole('switch', { name: 'Automatic update checks' })
+  expect(toggle).toHaveAttribute('aria-checked', 'true')
+  fireEvent.click(toggle)
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(liveSettings.library_root, { auto_update_check: false }))
   expect(mockSetSettings).toHaveBeenCalledWith(result)
 })
@@ -290,7 +294,7 @@ it('shows automatic update checks as off when the setting is saved that way', as
   const current = live as unknown as { settings: AppSettings; health: Health }
   const off = makeLive({ ...current, settings: { ...current.settings, auto_update_check: false } })
   render(<SettingsPage live={off} onReconnect={() => {}} />)
-  expect(screen.getByText('Off — check for updates here instead.')).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Automatic update checks' })).toHaveAttribute('aria-checked', 'false')
 })
 
 it('shows error message when saveSettings fails with ApiError', async () => {
@@ -337,7 +341,12 @@ it('lets an already signed-in account turn the Deezer bot source back on', async
   expect(screen.getByText('Off — requests use Soulseek only')).toBeInTheDocument()
   // Switched off on purpose is not a fault: grey, not the amber that means something needs attention.
   expect(dot(connRow('Deezer bot'))).toHaveClass('off')
-  fireEvent.click(screen.getByText('Turn on'))
+  const toggle = within(connRow('Deezer bot')).getByRole('switch', { name: 'Deezer bot' })
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  fireEvent.click(toggle)
+  // Busy while it saves: held, and saying so, rather than only greyed out.
+  expect(toggle).toBeDisabled()
+  expect(toggle).toHaveAttribute('aria-busy', 'true')
   await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
   expect(mockRefresh).toHaveBeenCalled()
 })
@@ -361,23 +370,20 @@ describe('the Connections section', () => {
     expect(box.querySelectorAll('.status-dot')).toHaveLength(3)
   })
 
-  it('nests the Deezer bot under Telegram and says what it is and what it needs', () => {
+  it('puts the Deezer bot right after Telegram and says in its name that it uses Telegram', () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
     const bot = connRow('Deezer bot')
-    expect(bot).toHaveClass('sub')
     expect(connRow('Telegram').nextElementSibling).toBe(bot)
-    expect(within(bot).getByText(/A bot Flackey messages inside Telegram/)).toBeInTheDocument()
-    expect(within(bot).getByText(/needs the Telegram account above/)).toBeInTheDocument()
+    expect(within(bot).getByText('· uses Telegram')).toBeInTheDocument()
+    expect(within(bot).getByRole('switch', { name: 'Deezer bot' })).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('keeps the API keys with the Telegram connection, still folded shut', () => {
+  it('keeps the three status rows together, with the API keys moved to Advanced', () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
     const details = screen.getByText('Use your own Telegram API keys').closest('details')!
-    expect(details).not.toHaveAttribute('open')
-    expect(connections()).toContainElement(details)
-    // After the two Telegram rows it belongs to, and before the unrelated Soulseek one.
-    expect(connRow('Deezer bot').nextElementSibling).toBe(details.closest('.srow'))
-    expect(details.closest('.srow')!.nextElementSibling).toBe(connRow('Soulseek'))
+    expect(connections()).not.toContainElement(details)
+    expect(advanced()).toContainElement(details)
+    expect(connRow('Deezer bot').nextElementSibling).toBe(connRow('Soulseek'))
   })
 
   it('does not let the Deezer bot look fine while Telegram is signed out', async () => {
@@ -386,7 +392,7 @@ describe('the Connections section', () => {
     render(<SettingsPage live={signedOut()} onReconnect={() => {}} />)
     await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
     const bot = connRow('Deezer bot')
-    expect(within(bot).getByText(/On, but Telegram is signed out — sign in above/)).toBeInTheDocument()
+    expect(within(bot).getByText('On, but Telegram is signed out')).toBeInTheDocument()
     expect(dot(bot)).toHaveClass('amber')
     expect(dot(bot).className).not.toBe('status-dot')
   })
@@ -410,9 +416,7 @@ describe('the Connections section', () => {
     expect(library).toContainElement(screen.getByText('File format'))
   })
 
-  it('draws no Soulseek box when there is nothing Soulseek-specific to put in it', () => {
-    // Nothing in that box is unconditional now the format has moved out, so a copy with no account and
-    // no port table must not be given a titled empty card.
+  it('draws no Soulseek box: its status is a connection, the rest is Advanced', () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
     expect(screen.queryByRole('heading', { name: 'Soulseek' })).not.toBeInTheDocument()
     expect(connRow('Soulseek')).toBeInTheDocument()
@@ -497,6 +501,9 @@ describe('the Soulseek panel', () => {
   it('does not claim a connection before the first probe lands', () => {
     show(lossless({ provider: null }))
     expect(screen.getByText('Starting…')).toBeInTheDocument()
+    // On its way up, not in trouble: amber here read as a fault.
+    expect(dot(connRow('Soulseek'))).toHaveClass('pending')
+    expect(dot(connRow('Soulseek'))).not.toHaveClass('amber')
   })
 
   it('says only the Soulseek transfer port is reachable from outside this Mac', () => {
@@ -534,7 +541,7 @@ describe('the Soulseek panel', () => {
     const connect = vi.spyOn(api, 'connectSoulseek')
       .mockResolvedValue({ state: 'connecting', username: null, error: null })
     show(lossless({ provider: { name: 'soulseek', status: 'not_logged_in', username: null } }))
-    expect(screen.getByText(/somebody else may already use it/)).toBeInTheDocument()
+    expect(screen.getByText(/the name may already be taken/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(connect).toHaveBeenCalled()
   })
@@ -549,23 +556,31 @@ describe('the Soulseek panel', () => {
     expect(screen.queryByRole('button', { name: /Reconnect|Try again/ })).not.toBeInTheDocument()
   })
 
-  it('keeps its own box to rows that really are Soulseek', () => {
-    // The two logins, the sharing state and the diagnostics -- but not the filing format, which governs
-    // every lossless download and lives with the library folder those downloads land in.
+  it('folds the rarely needed rows into Advanced, shut on arrival', () => {
+    // The two logins, the sharing state, the keys, the diagnostics and starting over -- but not the
+    // filing format, which governs every lossless download and lives with the library folder.
     show(lossless({ provider: { name: 'soulseek', status: 'ok', username: 'digger' } }))
-    const box = section('Soulseek')
-    for (const name of ['Soulseek account password', 'Helper web login', 'Sharing', 'Technical details']) {
+    const box = advanced()
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute('aria-expanded', 'false')
+    expect(box).not.toBeVisible()
+    for (const name of ['Soulseek password', 'Helper web login', 'Sharing', 'Use your own Telegram API keys', 'Technical details', 'Run setup again']) {
       expect(box).toContainElement(screen.getByText(name))
     }
     expect(box).not.toContainElement(screen.getByText('File format'))
     expect(section('Library')).toContainElement(screen.getByText('File format'))
+    openAdvanced()
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute('aria-expanded', 'true')
+    expect(box).toBeVisible()
   })
 
   it('lets the owner choose the future lossless filing format', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ lossless_filing_format: 'wav' }))
     show(lossless())
-    expect(screen.getByText(/New lossless tracks will be filed as AIFF/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /WAV/ }))
+    const format = within(section('Library')).getByRole('radiogroup', { name: 'File format' })
+    expect(within(format).getByRole('radio', { name: 'AIFF' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('Uncompressed, with tags and artwork. Recommended.')).toBeInTheDocument()
+    fireEvent.click(within(format).getByRole('radio', { name: 'WAV' }))
+    expect(format).toHaveAttribute('aria-busy', 'true')
     await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { lossless_filing_format: 'wav' }))
     expect(mockSetSettings).toHaveBeenCalledWith(expect.objectContaining({ lossless_filing_format: 'wav' }))
   })
@@ -610,6 +625,7 @@ describe('the Soulseek panel', () => {
     expect(password).not.toHaveBeenCalled()
     expect(screen.queryByText('not-a-real-password')).not.toBeInTheDocument()
 
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Show' }))
     await waitFor(() => expect(screen.getByText('not-a-real-password')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
@@ -621,7 +637,8 @@ describe('the Soulseek panel', () => {
       .mockResolvedValue({ username: 'flackey', password: 'helper-secret' })
     show(lossless())
     expect(credentials).not.toHaveBeenCalled()
-    expect(screen.getByText('Soulseek account password')).toBeInTheDocument()
+    expect(screen.getByText('Soulseek password')).toBeInTheDocument()
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Show login' }))
     await waitFor(() => expect(screen.getByText('flackey · helper-secret')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
@@ -630,13 +647,14 @@ describe('the Soulseek panel', () => {
 
   it('has nothing to show when no Soulseek account was ever saved', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
+    openAdvanced()
     expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
   })
 
   it('hides the ranking diagnostics when no account is set up, but still allows choosing a future format', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
-    expect(screen.getByText(/Not set up — run setup again/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /WAV/ })).toBeInTheDocument()
+    expect(screen.getByText(/Not set up — run setup again, under Advanced/)).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'WAV' })).toBeInTheDocument()
     expect(screen.queryByText(/keeps a copy only if its fingerprint matches/)).not.toBeInTheDocument()
   })
 
@@ -651,6 +669,7 @@ describe('the Soulseek panel', () => {
     const check = vi.spyOn(api, 'checkSharing').mockResolvedValue(sharing({ checking: true }))
     show(lossless(), settings(), sharing({ reachable: true }))
     expect(screen.getByText('Other Soulseek users can download from you.')).toBeInTheDocument()
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await waitFor(() => expect(check).toHaveBeenCalled())
   })
@@ -659,6 +678,7 @@ describe('the Soulseek panel', () => {
     vi.spyOn(api, 'checkSharing')
       .mockRejectedValue(new ApiError(409, "Soulseek isn't set up yet, so there is no port to check."))
     show(lossless(), settings(), sharing({ reachable: false }))
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await waitFor(() => expect(screen.getByText("Soulseek isn't set up yet, so there is no port to check."))
       .toBeInTheDocument())
@@ -667,6 +687,7 @@ describe('the Soulseek panel', () => {
   it('falls back to its own sentence when the failure carries no server message', async () => {
     vi.spyOn(api, 'checkSharing').mockRejectedValue(new Error('network error'))
     show(lossless(), settings(), sharing({ reachable: false }))
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await waitFor(() => expect(screen.getByText('Could not start the check. Try again.')).toBeInTheDocument())
   })
@@ -674,6 +695,7 @@ describe('the Soulseek panel', () => {
   it('says nothing when the check starts fine', async () => {
     const check = vi.spyOn(api, 'checkSharing').mockResolvedValue(sharing({ checking: true }))
     show(lossless(), settings(), sharing({ reachable: false }))
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await waitFor(() => expect(check).toHaveBeenCalled())
     expect(screen.queryByText('Could not start the check. Try again.')).not.toBeInTheDocument()
@@ -689,6 +711,7 @@ describe('the Soulseek panel', () => {
 describe('using your own Telegram API keys', () => {
   const open = () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
+    openAdvanced()
     fireEvent.click(screen.getByText('Use your own Telegram API keys'))
   }
 
@@ -719,6 +742,7 @@ describe('using your own Telegram API keys', () => {
     // Almost nobody needs their own keys; the ones Flackey ships with work. So the override is folded
     // shut on arrival, the same way the ports table is.
     render(<SettingsPage live={live} onReconnect={() => {}} />)
+    openAdvanced()
     expect(screen.getByText('Use your own Telegram API keys').closest('details')).not.toHaveAttribute('open')
     expect(screen.getByRole('button', { name: 'Save keys' })).toBeDisabled()
     fireEvent.change(screen.getByLabelText('API ID'), { target: { value: '12345' } })
@@ -726,6 +750,13 @@ describe('using your own Telegram API keys', () => {
     fireEvent.change(screen.getByLabelText('API hash'), { target: { value: 'not-a-real-hash' } })
     expect(screen.getByRole('button', { name: 'Save keys' })).not.toBeDisabled()
   })
+})
+
+it('lets a long path wrap between folders rather than mid-word', () => {
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  const path = within(section('Help')).getByText(/Application Support/)
+  expect(path.querySelectorAll('wbr').length).toBeGreaterThan(2)
+  expect(path.textContent).toBe('/Users/me/Library/Application Support/Flackey')
 })
 
 it('offers Report a bug beside the logs', () => {

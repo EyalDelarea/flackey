@@ -38,7 +38,7 @@ export default function UploadsPage() {
     {feed && !feed.enabled && <Banner tone="amber" text="Soulseek is off. Turn it on in Settings to share back." />}
     {feed?.error && <Banner tone="amber" text={`Can't read transfers from ${feed.provider ?? 'the sidecar'}: ${feed.error}`} />}
     {sharing?.reachable === false && <Banner tone="amber"
-      text="Your Soulseek port is closed, so most people cannot download from you. Settings › Sharing shows how to open it." />}
+      text="Your Soulseek port is closed, so most people cannot download from you. Settings › Advanced › Sharing shows how to open it." />}
     {s && (
       <div className="up-summary">
         <div className="up-stat"><span className="n">{s.active}</span><span className="k">sending now</span></div>

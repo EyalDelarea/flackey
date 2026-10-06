@@ -521,26 +521,27 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* ---- Settings ---- */
 .settings { max-width: 640px; gap: 14px; padding: 22px 20px; }
 .settings h1 { margin-bottom: 4px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
-/* System Settings labels a box when its rows share a subject that no single row can state, and leaves the
-   rest to name themselves in their first line. Two boxes here need it -- the connections, and what is
-   left of Soulseek once its status row moves up -- so the folder, version and setup boxes stay bare.
-   The negative bottom margin eats most of the column's 14px gap: a heading spaced equally from the box
-   above and the box below belongs to neither. */
+/* Every box is titled, so the page reads as five groups rather than a column of rows. The negative bottom
+   margin eats most of the column's 14px gap: a heading spaced equally from the box above and the box
+   below belongs to neither. */
 .settings h2 { margin: 4px 2px -7px; font-size: 12px; font-weight: 600; color: var(--secondary); }
+/* Advanced is a heading that folds its box away. The whole heading line is the button, with the same
+   chevron the in-row disclosures use. */
+.settings h2.disclosure button { display: flex; align-items: center; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.settings h2.disclosure button::before { content: "›"; display: inline-block; width: 12px; font-size: 13px; transition: transform 120ms; }
+.settings h2.disclosure button[aria-expanded="true"]::before { transform: rotate(90deg); }
+.settings h2.disclosure button:hover { color: var(--text); }
+.settings h2.disclosure button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* 28px, not the toolbar's 22: these rows are read one at a time, and a small target in a sparse panel
+   only makes it harder to hit. Scoped here so the denser screens keep theirs. */
+.settings .btn-secondary, .settings .btn-primary { height: 28px; }
+.settings .segmented button { height: 24px; }
+.btn-secondary.destructive { color: var(--red); }
 .srow { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 14px; border-top: .5px solid var(--sep); }
 .srow:first-child { border-top: 0; }
-/* A row that depends on the row above it rather than standing beside it: the Deezer bot is a chat held
-   inside the Telegram account, not a fourth thing to sign into, and as a peer row it read as one. The
-   separator goes -- a rule between them would cut the parent off from its child -- and an elbow drawn
-   in --tertiary runs from the parent's row down and into the key, which is the same hairline weight
-   Finder uses for a disclosed child and quiet enough not to become a second border. The 19px is the
-   centre of that first line (10px of padding, half a 17px line) rather than half the row: the row grows
-   with the sentence under the status, and an elbow at 50% would drift down the page with it. */
-.srow.sub { position: relative; padding-left: 40px; border-top: 0; }
-.srow.sub::before { content: ''; position: absolute; left: 22px; top: 0; height: 19px; border-left: 1px solid var(--tertiary); }
-.srow.sub::after { content: ''; position: absolute; left: 22px; top: 19px; width: 9px; border-top: 1px solid var(--tertiary); }
 .srow-body { flex: 1; min-width: 0; }
 .srow .k { font-size: 13px; }
+.srow .k-note { color: var(--secondary); font-size: 12px; }
 .srow .v { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 12px; color: var(--secondary); }
 /* Wrap rather than ellipsize: these are file paths the owner may need to read, and a path cut off
    at "…/Application Support/Flackey" tells them nothing. */
@@ -549,7 +550,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* The disclosure the ports and the pick rules live behind. Closed it is one 13px line that reads like
    every other key in the panel; open, the blocks inside keep their own spacing, so the first `.k` sits
    under the summary rather than beside it. */
-.tech > summary { font-size: 13px; color: var(--secondary); cursor: default; list-style: none; }
+.tech > summary { display: block; font-size: 13px; color: var(--secondary); cursor: default; list-style: none; }
 .tech > summary::-webkit-details-marker { display: none; }
 .tech > summary::before { content: "›"; display: inline-block; width: 12px; transition: transform 120ms; }
 .tech[open] > summary::before { transform: rotate(90deg); }
@@ -634,6 +635,24 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .layout-options { margin-top: 8px; }
 .layout-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 .srow .v.layout-example { margin-top: 6px; color: var(--secondary); }
+/* Saving: the chosen segment pulses rather than the whole control just going grey, which read as
+   "unavailable" and not as "working on it". */
+.segmented.busy button:disabled { opacity: 1; }
+.segmented.busy button[aria-checked="true"] { animation: busy-pulse 1s ease-in-out infinite alternate; }
+/* The macOS switch: the thumb travels right and the track fills with the accent when on. */
+.switch { position: relative; flex: none; width: 32px; height: 18px; padding: 0; border: 0; border-radius: 9px; background: color-mix(in srgb, var(--text) 18%, transparent); transition: background 150ms; }
+.switch[aria-checked="true"] { background: var(--accent-fill); }
+.switch-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform 150ms; }
+.switch[aria-checked="true"] .switch-thumb { transform: translateX(14px); }
+.switch:disabled:not(.busy) { opacity: .45; }
+.switch.busy .switch-thumb { animation: busy-pulse 1s ease-in-out infinite alternate; }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A connection on its way up, not one in trouble: grey, breathing. */
+.status-dot.pending { background: var(--tertiary); animation: busy-pulse 1s ease-in-out infinite alternate; }
+@keyframes busy-pulse { from { opacity: 1; } to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  .segmented.busy button[aria-checked="true"], .switch.busy .switch-thumb, .status-dot.pending { animation: none; opacity: .6; }
+}
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .tg { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: center; width: 100%; text-align: left; }
 .tg .lead { max-width: none; }
@@ -715,6 +734,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   .filterbar { padding: 0 12px; }
   .scroll { padding: 14px 12px 18px; }
   .settings { padding: 18px 12px; }
+  .srow.stack-narrow { flex-direction: column; align-items: stretch; }
   .welcome-body { padding: 0 20px 24px; }
   /* Four nowrap steps and three 22px gaps do not fit, and a stepper that overflows pushes the step
      titles out of the window rather than ellipsizing -- they are the only guide through setup. */

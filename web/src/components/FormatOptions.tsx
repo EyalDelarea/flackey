@@ -11,6 +11,16 @@ export function formatNote(format: string, defaultFormat = 'aiff'): string {
   return 'Lossless filing format.'
 }
 
+/** One line for the Settings row, under the compact control: the setup step's cards have room for
+ *  `formatNote`, a settings row does not. */
+export function shortFormatNote(format: string, defaultFormat = 'aiff'): string {
+  const note = format === 'aiff' ? 'Uncompressed, with tags and artwork'
+    : format === 'wav' ? 'Uncompressed; Rekordbox skips its cover art'
+    : format === 'flac' ? 'Smaller lossless files, with tags and artwork'
+    : 'Lossless'
+  return format === defaultFormat ? `${note}. Recommended.` : `${note}.`
+}
+
 export default function FormatOptions({ formats, value, onChange, disabled = false, legend = 'File format', defaultFormat = 'aiff' }: {
   formats: string[]; value: string; onChange: (format: string) => void; disabled?: boolean; legend?: string; defaultFormat?: string
 }) {
