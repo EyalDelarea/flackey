@@ -6,7 +6,7 @@ import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
 import FormatOptions, { FORMAT_LABELS } from './FormatOptions'
-import LayoutOptions, { layoutSummary } from './LayoutOptions'
+import LayoutOptions from './LayoutOptions'
 import SharingPanel from './SharingPanel'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
@@ -325,7 +325,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
         {/* Only new downloads follow the layout. Rekordbox finds a track by its full path, so moving the
             ones already filed would leave every one of them "missing" there until relocated by hand. */}
         <div className="srow"><div className="srow-body"><div className="k">Folder layout</div>
-          <div className="v">{layoutSummary(currentLayout)} Tracks already in the library stay where they are, so Rekordbox keeps finding them.</div>
+          <div className="v">Where new downloads go. Tracks already filed stay put, so Rekordbox keeps finding them.</div>
           <LayoutOptions value={currentLayout} onChange={saveLayout} disabled={layoutBusy} />
           {layoutError && <div className="err">{layoutError}</div>}</div></div>
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
