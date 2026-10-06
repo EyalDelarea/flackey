@@ -37,7 +37,7 @@ class Submission:
 
     def summary(self) -> str:
         if self.playlist_id is None:
-            return "Queued"
+            return "Already queued" if self.already_queued else "Queued"
         detail = [f"{self.already_in_library} already in library"]
         if self.already_queued:
             detail.append(f"{self.already_queued} already queued")
@@ -55,6 +55,12 @@ class Inbox:
         self.spotify_playlist = spotify_playlist
 
     def _queue_track(self, name: str, kind: RequestKind, url: str, query: Query) -> Submission:
+        # The same link pasted again while the first is still open would be a second row racing the first
+        # for the same file -- five copies of one track, four of them parked for six hours, is what a user
+        # sent in. Playlists already skip these; a single paste now does too. A stopped or failed request
+        # is terminal and does not count, so pasting after a Stop is still how you ask again.
+        if self.store.open_request_for_url(url):
+            return Submission(name=name, total=1, already_queued=1)
         rid = self.store.add_request(name, kind, source_url=url, query=query)
         return Submission(name=name, request_ids=[rid], total=1)
 

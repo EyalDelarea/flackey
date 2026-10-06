@@ -98,6 +98,17 @@ def test_failed_states_match_the_ui():
     assert {s for s, f in finality.items() if f == "open"} == every - {s.value for s in TERMINAL_STATES}
 
 
+def test_stoppable_states_match_the_worker():
+    """The rows that carry Remove while still live are the rows the worker will stop; a Remove link on a
+    verifying row would only ever come back as skipped."""
+    from flackey.worker import CANCELLABLE
+
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
+    block = re.search(r"const STOPPABLE: RequestState\[\] = \[(.*?)\]", ts)
+    assert block, "presentation.ts no longer has a STOPPABLE list"
+    assert set(re.findall(r"'(\w+)'", block.group(1))) == {s.value for s in CANCELLABLE - TERMINAL_STATES}
+
+
 def test_stage_names_match_the_ui():
     """`failed_stage` is a free-text column: the worker writes a word and the browser looks it up. That is
     two copies of one vocabulary either side of an HTTP boundary, with nothing but this test between them --

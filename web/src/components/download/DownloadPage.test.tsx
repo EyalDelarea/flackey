@@ -6,7 +6,7 @@ import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn(), accept: vi.fn() } }
+  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), removeRequests: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn(), accept: vi.fn() } }
 })
 
 function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
@@ -105,6 +105,51 @@ describe('filter bar, remove and clear failed', () => {
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => expect(screen.getByText('That track is still being worked on. Skip it first.')).toBeInTheDocument())
     expect(dropBundle).not.toHaveBeenCalled()
+  })
+
+  it('Remove on a live row stops and removes it through the batch route', async () => {
+    vi.mocked(api.removeRequests).mockResolvedValueOnce({ removed: [1], skipped: [] })
+    const dropBundle = vi.fn()
+    render(<DownloadPage live={makeLive([mk(1, 'queued')], { dropBundle })} />)
+    fireEvent.click(screen.getByText('Remove'))
+    expect(api.removeRequests).toHaveBeenCalledWith([1])
+    expect(api.removeRequest).not.toHaveBeenCalled()
+    await waitFor(() => expect(dropBundle).toHaveBeenCalledWith(1))
+  })
+
+  it('Remove these asks first, in the page, then removes exactly the rows it counted', async () => {
+    vi.mocked(api.removeRequests).mockResolvedValueOnce({ removed: [1, 2], skipped: [] })
+    const dropBundle = vi.fn()
+    render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'fetching'), mk(3, 'verifying')], { dropBundle })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove these 2' }))
+    expect(api.removeRequests).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('group', { name: 'Confirm removal' })
+    expect(confirm).toHaveTextContent('Remove these 2 tracks from the list? They will be stopped first. Files already in your library stay where they are.')
+    expect(screen.getByRole('button', { name: 'Remove these 2' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2' }))
+    expect(api.removeRequests).toHaveBeenCalledWith([2, 1])
+    await waitFor(() => expect(dropBundle).toHaveBeenCalledWith(1))
+    expect(dropBundle).toHaveBeenCalledWith(2)
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument())
+  })
+
+  it('Cancel, or changing the filter, closes the confirm without removing anything', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
+    expect(api.removeRequests).not.toHaveBeenCalled()
+  })
+
+  it('says so when some of the rows could not be removed', async () => {
+    vi.mocked(api.removeRequests).mockResolvedValueOnce({ removed: [], skipped: [1] })
+    render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1' }))
+    expect(await screen.findByText('One track was not removed — a file was being checked or filed. Try again in a moment.')).toBeInTheDocument()
   })
 
   it('Clear failed calls api.clearFailed', async () => {

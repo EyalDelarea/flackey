@@ -432,6 +432,18 @@ class Worker:
             task.cancel()
         return self.store.get_request(request_id)
 
+    async def cancel_and_settle(self, request_id: int, timeout: float = 10.0) -> Request:
+        """`cancel`, then wait for the task to finish unwinding. For a caller about to delete the row: the
+        unwind still writes on its way out (it clears `fetch_source`, and the Soulseek attempt deletes its
+        partial file), and deleting under it would race those writes. Bounded, because a sidecar that never
+        answers must not hold the route open; past the timeout the writes land on a row that is gone, which
+        is a no-op UPDATE rather than an orphan."""
+        task = self._tasks.get(request_id)
+        req = await self.cancel(request_id)
+        if task is not None:
+            await asyncio.wait({task}, timeout=timeout)
+        return req
+
     async def retry(self, request_id: int) -> Request:
         """"Try now" on a backoff, "Try again" on a failure.
 

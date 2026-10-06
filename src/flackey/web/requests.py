@@ -10,7 +10,7 @@ from ..deezer import DeezerApi, DeezerError
 from ..inbox import BadLink, Inbox
 from ..models import FAILED_STATES, SWEEPABLE_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
-from ..worker import Worker
+from ..worker import CANCELLABLE, Worker
 from . import Bundles, to_dict
 
 RECENT = 500
@@ -45,6 +45,14 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             return
         unlink_under(settings.spectrogram_dir, rejection.spectrogram_path)
         unlink_under(settings.rejected_dir, getattr(rejection, "audio_path", None))
+
+    def forget(rid: int) -> None:
+        """One request row and the evidence files it owns. Never the filed track: see `delete_request`."""
+        rejection = store.get_rejection_for_request(rid)
+        attempt = store.get_attempt_for_request(rid)
+        store.delete_request(rid)
+        unlink_evidence(rejection)
+        unlink_evidence(attempt)
 
     @r.get("/queue")
     async def queue() -> list:
@@ -178,12 +186,37 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             raise HTTPException(404, "request not found")
         if req.state not in TERMINAL_STATES:
             raise HTTPException(409, "That track is still being worked on. Skip it first.")
-        rejection = store.get_rejection_for_request(rid)
-        attempt = store.get_attempt_for_request(rid)
-        store.delete_request(rid)
-        unlink_evidence(rejection)
-        unlink_evidence(attempt)
+        forget(rid)
         return {"ok": True}
+
+    @r.post("/requests/remove")
+    async def remove(body: dict) -> dict:
+        """"Remove these" on the rows the owner is looking at, and Remove on a single row that is still
+        live. Unlike DELETE this takes rows that have not finished: a request parked for six hours waiting
+        on Soulseek is exactly the one an owner wants gone, and making them Stop each one first and then
+        come back to Remove it is two presses per row for one decision. So a live row is stopped here, by
+        the same `CANCELLABLE` the Stop button is held to, and then forgotten like any finished one.
+        Verifying and filing are refused for the reason Stop refuses them -- a file is moving into the
+        library -- and land in `skipped` with ids that are gone, as `retry_failed` does. Only request rows
+        go: a filed track and its file stay in the library, the same as DELETE."""
+        ids = body.get("ids")
+        if not isinstance(ids, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
+            raise HTTPException(400, "ids must be a list of request ids")
+        removed: list[int] = []
+        skipped: list[int] = []
+        for rid in ids:
+            try:
+                state = store.get_request(rid).state
+                if state not in TERMINAL_STATES:
+                    if state not in CANCELLABLE:
+                        raise ValueError("being checked or filed")
+                    await worker.cancel_and_settle(rid)
+                forget(rid)
+            except (KeyError, ValueError):  # gone, or moved into verify/filing since the page last heard
+                skipped.append(rid)
+            else:
+                removed.append(rid)
+        return {"removed": removed, "skipped": skipped}
 
     @r.post("/requests/clear-failed")
     async def clear_failed() -> dict:

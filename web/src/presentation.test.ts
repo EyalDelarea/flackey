@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -482,11 +482,41 @@ describe('bucketCounts', () => {
 })
 
 describe('presentRow bucket/removable', () => {
-  it('marks done and failed rows removable; in-progress and needs-you rows are not', () => {
+  it('marks done, failed and stoppable rows removable; rows being checked or filed are not', () => {
     expect(presentRow(bundle({ state: 'done' }), opts)).toMatchObject({ bucket: 'done', removable: true })
     expect(presentRow(bundle({ state: 'rejected' }), opts)).toMatchObject({ bucket: 'failed', removable: true })
-    expect(presentRow(bundle({ state: 'queued' }), opts)).toMatchObject({ bucket: 'progress', removable: false })
-    expect(presentRow(bundle({ state: 'awaiting_review' }), opts)).toMatchObject({ bucket: 'needs', removable: false })
+    // Live rows the worker can stop: Remove stops them and forgets them in one press.
+    for (const state of ['queued', 'identifying', 'fetching'] as const) {
+      expect(presentRow(bundle({ state }), opts)).toMatchObject({ bucket: 'progress', removable: true })
+    }
+    expect(presentRow(bundle({ state: 'awaiting_review' }), opts)).toMatchObject({ bucket: 'needs', removable: true })
+    for (const state of ['verifying', 'filing'] as const) {
+      expect(presentRow(bundle({ state }), opts)).toMatchObject({ bucket: 'progress', removable: false })
+    }
+  })
+})
+
+describe('Remove these', () => {
+  it('takes the removable rows the filter shows, and counts the live ones it will stop', () => {
+    const bundles = [
+      bundle({ id: 1, retry_after: '2026-09-06T16:00:00Z', flag_reason: 'waiting for Soulseek: x' }),
+      bundle({ id: 2, retry_after: '2026-09-06T16:00:00Z', flag_reason: 'waiting for Soulseek: x' }),
+      bundle({ id: 3, state: 'fetching' }),
+      bundle({ id: 4, state: 'verifying' }),
+    ]
+    expect(bulkRemoveOf(groupRows(bundles, [], opts, 'waiting'))).toEqual({ ids: [1, 2], live: 2 })
+    // Verifying is on screen under All but is not taken: its file is moving into the library.
+    expect(bulkRemoveOf(groupRows(bundles, [], opts, 'all'))).toEqual({ ids: [3, 2, 1], live: 3 })
+    expect(bulkRemoveOf(groupRows([bundle({ id: 5, state: 'error' }), bundle({ id: 6, state: 'done' })], [], opts))).toEqual({ ids: [6, 5], live: 0 })
+  })
+
+  it('says how many it removes, which it stops, and that library files stay', () => {
+    expect(removeConfirmText({ ids: [1, 2, 3, 4], live: 4 }))
+      .toBe('Remove these 4 tracks from the list? They will be stopped first. Files already in your library stay where they are.')
+    expect(removeConfirmText({ ids: [1, 2, 3], live: 1 }))
+      .toBe('Remove these 3 tracks from the list? 1 still in progress will be stopped first. Files already in your library stay where they are.')
+    expect(removeConfirmText({ ids: [1], live: 0 }))
+      .toBe('Remove this track from the list? Files already in your library stay where they are.')
   })
 })
 
@@ -564,11 +594,13 @@ describe('a queued track', () => {
     expect(presentRow(bundle({ id: 2 }), opts).action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
 
-  it('keeps its countdown when it is on a retry backoff, and offers no Stop over it', () => {
+  it('keeps its countdown when it is on a retry backoff, and can be stopped there', () => {
     const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
       flag_reason: 'Beatport unreachable, will retry' }), opts)
     expect(v.status).toBe('Previous attempt: Beatport unreachable')
     expect(v.retryInSeconds).toBe(60)
+    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.removable).toBe(true)
   })
 
   it('shortens the verbose Soulseek fallback warning without losing its meaning', () => {
@@ -586,6 +618,16 @@ describe('a queued track', () => {
     expect(v.status).toBe('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')
     expect(v.statusTone).toBe('amber')
     expect(v.retryInSeconds).toBe(21600)
+    // A user had four of these, six hours each, with no Stop and no Remove anywhere on the row.
+    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.removable).toBe(true)
+  })
+
+  it('offers Stop on a waiting row even while its source is disconnected', () => {
+    const v = presentRow(bundle({ retry_after: '2026-09-06T16:00:00Z', flag_reason: 'waiting for Soulseek: x' }),
+      { ...opts, telegramAuthorized: false, soulseekConnected: false })
+    expect(v.status).toBe('Paused — connect a source to start')
+    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
 })
 

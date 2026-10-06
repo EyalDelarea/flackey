@@ -41,9 +41,14 @@ interface Props {
    *  Failed tab holds its chips and its "Retry all" sentence in one block; two filter bars stacked on one
    *  tab is what this row of chips exists to avoid. */
   bare?: boolean
+  /** "Remove these": how many of the rows on screen it would take, and the press that opens the confirm.
+   *  Disabled while the confirm is open, so the strip below is the only way forward from there. */
+  removeCount: number
+  onRemoveThese: () => void
+  confirming?: boolean
 }
 
-export default function FilterBar({ filter, counts, onFilter, onClearFailed, view, bare }: Props) {
+export default function FilterBar({ filter, counts, onFilter, onClearFailed, view, bare, removeCount, onRemoveThese, confirming }: Props) {
   const chips = CHIPS.filter(c => c.views.includes(view) && !(c.hideAtZero && counts[c.key] === 0 && filter !== c.key))
   return (
     <div className={bare ? 'filterbar-row' : 'filterbar'}>
@@ -62,6 +67,9 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed, vie
         )
       })}
       </div>
+      <button className="btn-secondary bulk-remove" disabled={removeCount === 0 || confirming} onClick={onRemoveThese}>
+        Remove these {removeCount}
+      </button>
       {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>}
     </div>
   )

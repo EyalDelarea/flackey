@@ -146,6 +146,7 @@ export const api = {
   accept: (rid: number) => post<Request>(`/api/requests/${rid}/accept`),
   retryFailed: (ids: number[]) => post<{ retried: number[]; skipped: number[] }>('/api/requests/retry-failed', { ids }),
   removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
+  removeRequests: (ids: number[]) => post<{ removed: number[]; skipped: number[] }>('/api/requests/remove', { ids }),
   clearFailed: () => post<{ removed: number[] }>('/api/requests/clear-failed'),
   library: (q?: string, playlistId?: number | null) => {
     const p = new URLSearchParams()

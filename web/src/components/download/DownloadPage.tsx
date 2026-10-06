@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { bucketCounts, bucketOf, failedSummary, groupRows, matchesFilter } from '../../presentation'
+import { bucketCounts, bucketOf, bulkRemoveOf, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
@@ -51,6 +51,10 @@ export default function DownloadPage({ live }: { live: Live }) {
   // playlist, because each group owns a bar and a summary that nesting would break.
   const [filter, setFilter] = useState<Filter>('all')
   const [retryingAll, setRetryingAll] = useState(false)
+  // The ids "Remove these" will take, snapshotted at the first press: the list keeps changing under a live
+  // queue, and the confirm must remove exactly the rows it counted. Null when no confirm is open.
+  const [confirmRemove, setConfirmRemove] = useState<{ ids: number[]; live: number } | null>(null)
+  const [removing, setRemoving] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
   // One element for the whole page, and the key it is playing: two rows can sit in `awaiting_review` at
   // once, and starting a sample in one has to stop the one already running in the other.
@@ -104,6 +108,9 @@ export default function DownloadPage({ live }: { live: Live }) {
   // retry the 12 the chip had left. One predicate, so the two cannot drift apart again.
   const visible = scoped.filter(b => matchesFilter(b.request, filter))
   const summary = failedSummary(visible)
+  const removable = bulkRemoveOf(groups)
+  // A confirm counted against one tab or filter is not a question about the next one.
+  useEffect(() => { setConfirmRemove(null) }, [view, filter])
   const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
   const retryAll = () => {
@@ -117,6 +124,20 @@ export default function DownloadPage({ live }: { live: Live }) {
       })
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRetryingAll(false))
+  }
+  const removeThese = (ids: number[]) => {
+    setRemoving(true)
+    api.removeRequests(ids)
+      .then(async ({ removed, skipped }) => {
+        removed.forEach(id => live.dropBundle(id))
+        // Skipped is a row that moved into verify or filing since the page counted it, or is already gone.
+        setActionError(skipped.length === 0 ? null
+          : `${skipped.length === 1 ? 'One track was' : `${skipped.length} tracks were`} not removed — a file was being checked or filed. Try again in a moment.`)
+        setConfirmRemove(null)
+        await live.refresh()
+      })
+      .catch(err => setActionError(failMessage(err)))
+      .finally(() => setRemoving(false))
   }
   // Nothing on screen needs the clip once it has stopped, so the element does not keep it. Clearing the
   // attribute and re-running the load drops the decoded buffer; the next press re-resolves the sample
@@ -177,7 +198,13 @@ export default function DownloadPage({ live }: { live: Live }) {
     // is about to be redrawn as a finished track with no player on it at all.
     else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
     else if (kind === 'cancel') run(api.cancel(id))
-    else if (kind === 'remove') run(api.removeRequest(id).then(() => live.dropBundle(id)))
+    // A finished row goes through DELETE as it always has. A live one -- parked, queued, downloading --
+    // has to be stopped first, which only the batch route does, so it goes there as a batch of one.
+    else if (kind === 'remove') {
+      const b = live.bundles.get(id)
+      if (!b || isFinished(b)) run(api.removeRequest(id).then(() => live.dropBundle(id)))
+      else removeThese([id])
+    }
   }
   return (
     <>
@@ -200,7 +227,8 @@ export default function DownloadPage({ live }: { live: Live }) {
       </div>
       <div className="download-panel" role="tabpanel" id="download-panel" aria-labelledby={`download-tab-${view}`} tabIndex={0}>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
-      {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view} />}
+      {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view}
+        removeCount={removable.ids.length} onRemoveThese={() => setConfirmRemove(removable)} confirming={confirmRemove != null} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
           rows are all rejected needs a disabled "Retry all 0" to answer why, where an absent button
           just looks like the feature is missing.
@@ -211,13 +239,22 @@ export default function DownloadPage({ live }: { live: Live }) {
           single-line chrome elsewhere; the wide modifier lets this one grow to hold a sentence. */}
       {view === 'failed' && scoped.length > 0 && (
         <div className="filterbar wide stacked">
-          <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view="failed" bare />
+          <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view="failed" bare
+            removeCount={removable.ids.length} onRemoveThese={() => setConfirmRemove(removable)} confirming={confirmRemove != null} />
           <div className="filterbar-row">
           {summary && <p className="failed-summary">{summary}</p>}
           <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
             {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
           </button>
           </div>
+        </div>
+      )}
+      {confirmRemove && (
+        <div className="banner amber confirm" role="group" aria-label="Confirm removal"><span className="dot" />
+          <span className="text">{removeConfirmText(confirmRemove)}</span>
+          <button className="btn-primary" disabled={removing} onClick={() => removeThese(confirmRemove.ids)}>
+            {removing ? 'Removing…' : `Remove ${confirmRemove.ids.length}`}</button>
+          <button className="btn-link" disabled={removing} onClick={() => setConfirmRemove(null)}>Cancel</button>
         </div>
       )}
       <div className="scroll">
