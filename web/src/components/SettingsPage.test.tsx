@@ -589,7 +589,7 @@ describe('the Soulseek panel', () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'flat' }))
     show(lossless())
     const library = section('Library')
-    expect(within(library).getByText(/stay put, so Rekordbox keeps finding them/)).toBeInTheDocument()
+    expect(within(library).getByText(/Filed tracks stay put for Rekordbox/)).toBeInTheDocument()
     expect(within(library).getByText('Bicep/Bicep - Glue.aiff')).toBeInTheDocument()
     expect(within(library).getByRole('radio', { name: 'By artist' })).toHaveAttribute('aria-checked', 'true')
     expect(within(library).queryByRole('radiogroup', { name: 'New folder every' })).not.toBeInTheDocument()

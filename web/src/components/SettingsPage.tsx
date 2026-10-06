@@ -306,8 +306,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
         {/* Only new downloads follow the layout. Rekordbox finds a track by its full path, so moving the
             ones already filed would leave every one of them "missing" there until relocated by hand. */}
         <div className="srow"><div className="srow-body"><div className="k">Folder layout</div>
-          <div className="v">Where new downloads go. Tracks already filed stay put, so Rekordbox keeps finding them.</div>
-          <LayoutOptions value={currentLayout} onChange={saveLayout} disabled={layoutBusy} />
+          <div className="v">For new downloads. Filed tracks stay put for Rekordbox.</div>
+          <LayoutOptions value={currentLayout} onChange={saveLayout} busy={layoutBusy} />
           {layoutError && <div className="err">{layoutError}</div>}</div></div>
         <div className="srow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">{shortFormatNote(currentFormat, defaultFormat)}</div>
