@@ -28,7 +28,7 @@ export default function SharingPanel({ state, onCheck, compact = false }: { stat
     <div className={`sharing${compact ? ' compact' : ''}`}>
       <div className={`hint-row${tone}`}>{sentence}</div>
       {closed && s && (compact
-        ? <div className="hint-row">You can open it later from Settings › Sharing.</div>
+        ? <div className="hint-row">You can open it later from Settings › Advanced › Sharing.</div>
         // No port number, nothing to tell them to forward -- so the instructions wait for one rather
         // than printing a sentence with a hole in it.
         : s.port !== null && <div className="sharing-how">

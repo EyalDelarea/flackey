@@ -195,7 +195,7 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
     {!connected && <div className="hint-row"><span>While Flackey is running, other Soulseek users can download
       files from your DJ Library folder{libraryRoot ? <> (<span className="mono">{libraryRoot}</span>)</> : ''}.
       Changing that folder later changes what's shared too. Review or turn this off any time from
-      Settings › Sharing.</span></div>}
+      Settings › Advanced › Sharing.</span></div>}
     <div className="row-gap">
       <button className="btn-primary lg" onClick={connected ? () => onDone(true) : save}
         disabled={!connected && (busy || installing || !username || !password)}>{saveLabel}</button>

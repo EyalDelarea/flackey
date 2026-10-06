@@ -300,7 +300,7 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     await fillAndSave()
     await settle(POLL_MS * 2)
     await waitFor(() => expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument())
-    expect(screen.getByText(/Settings › Sharing/)).toBeInTheDocument()
+    expect(screen.getByText(/Settings › Advanced › Sharing/)).toBeInTheDocument()
     const after = shared.mock.calls.length
     await settle(POLL_MS * 5)
     expect(shared.mock.calls.length).toBe(after)

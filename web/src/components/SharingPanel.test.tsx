@@ -28,7 +28,7 @@ it('leaves out the addresses it does not know rather than printing a gap', () =>
 it('compact mode keeps the sentence and points at Settings', () => {
   render(<SharingPanel state={state({ reachable: false })} onCheck={vi.fn()} compact />)
   expect(screen.getByText(/Your Soulseek port is closed/)).toBeInTheDocument()
-  expect(screen.getByText(/Settings › Sharing/)).toBeInTheDocument()
+  expect(screen.getByText(/Settings › Advanced › Sharing/)).toBeInTheDocument()
   expect(screen.queryByText(/forward TCP port/)).not.toBeInTheDocument()
   expect(screen.queryByText('Check again')).not.toBeInTheDocument()
 })
