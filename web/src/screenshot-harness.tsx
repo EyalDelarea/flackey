@@ -247,7 +247,8 @@ const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
-  vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist] : scenario === 'stages' ? [goaPlaylist] : [])
+  vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist]
+    : scenario === 'many-playlists' ? manyPlaylists : scenario === 'stages' ? [goaPlaylist] : [])
   vi_spy(api, 'stats', async () => stats)
   vi_spy(api, 'queue', async () => scenario === 'failed' ? failures
     : scenario === 'stages' ? staged
@@ -364,6 +365,17 @@ function scenarioSetup() {
 
 const playlist: Playlist = { id: 1, source_url: 'https://open.spotify.com/playlist/x', name: 'Goa Set',
   created_at: '', updated_at: '', track_ids: [1], track_positions: [1], file: '/lib/Playlists/Goa Set.m3u8' }
+
+/* The owner's real sidebar after a run of album links: enough rows to overflow a laptop window. */
+const albumNames = ['Macrophage', 'Secret Original Sounds', 'Paranormal', 'Drosophila', 'Nothing But a Dream', 'Multimoods',
+  'Eternal Freedom', 'Astral Experience', 'Dancing Galaxy', 'Trust In Trance', 'Another World', 'Music for the Rising',
+  'Earth Moving The Sun', 'From Other Space', 'Goasia - Dancing', 'Dancing With The Moon', 'Brand New Download']
+const manyPlaylists: Playlist[] = [
+  ...['Goa for good mood', 'My Playlist #14', 'Old Goa Trance', 'Filteria Boom 2016'].map((name, i) => ({ ...playlist, id: 100 + i, name,
+    source_url: `https://open.spotify.com/playlist/${i}`, file: `/lib/Playlists/${name}.m3u8` })),
+  ...albumNames.map((name, i) => ({ ...playlist, id: 200 + i, name: `Album - ${name}`, source_url: `https://open.spotify.com/album/${i}`,
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T12:00:00`, file: `/lib/Playlists/Album - ${name}.m3u8` })),
+]
 
 function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K]) {
   ;(obj as any)[key] = impl
