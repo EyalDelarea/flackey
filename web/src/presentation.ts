@@ -265,6 +265,10 @@ function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): Progres
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
 /** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
 const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
+/** The live states the worker will stop (`CANCELLABLE` less the terminal `error`), and so the live rows
+ *  that carry Remove: `POST /api/requests/remove` stops them and forgets them in one press. Verify and
+ *  filing are absent for the reason Stop is. `test_stoppable_states_match_the_worker` pins this list. */
+const STOPPABLE: RequestState[] = ['queued', 'identifying', 'fetching', 'awaiting_review']
 // No "step N of 6" here any more: the stepper itself says which rung we are on, and two places saying it
 // disagreed the moment the map changed. Each line describes what is happening, nothing else.
 const PROGRESS_TEXT: Partial<Record<RequestState, string>> = {
@@ -451,7 +455,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
-    bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed', sweepable: sweptByRetryAll(r.state),
+    bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed' || STOPPABLE.includes(r.state), sweepable: sweptByRetryAll(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
@@ -473,12 +477,15 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     // second conditional rung one day and this still names correctly, but do not turn it back into "of N".
     v.tag = r.state === 'queued' ? 'queued' : `paused at ${STEPS[step ?? 0]}`
     v.dimmed = true
-    if (r.state === 'identifying' || r.state === 'fetching') v.action = STOP
+    if (r.state === 'identifying' || r.state === 'fetching' || r.state === 'queued') v.action = STOP
     return v
   }
   switch (r.state) {
     case 'queued':
       if (r.retry_after) {
+        // A wait of up to six hours is the last place to leave without a way out: the worker has always
+        // been able to stop a parked row, the row just never offered it.
+        v.action = STOP
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
         const waiting = soulseekWait(r.flag_reason)
@@ -662,4 +669,23 @@ export function bucketCounts(bundles: Bundle[]): Record<Filter, number> {
     if (s) counts[s]++
   }
   return counts
+}
+
+/** What "Remove these" acts on: the removable rows on screen, so it honours the filter the way "Retry all"
+ *  does. `live` counts the ones the press will also stop, which the confirm has to say out loud -- removing
+ *  a finished row forgets history, removing a live one ends a download. */
+export function bulkRemoveOf(groups: GroupView[]): { ids: number[]; live: number } {
+  const rows = groups.flatMap(g => g.rows).filter(r => r.removable)
+  return { ids: rows.map(r => r.id), live: rows.filter(r => r.bucket !== 'done' && r.bucket !== 'failed').length }
+}
+
+/** The in-app confirm before a bulk removal. The last sentence is there because "remove" beside a track
+ *  name reads as "delete the file", and it never does: only request rows go. */
+export function removeConfirmText({ ids, live }: { ids: number[]; live: number }): string {
+  const n = ids.length
+  const head = n === 1 ? 'Remove this track from the list?' : `Remove these ${n} tracks from the list?`
+  const stops = live === 0 ? ''
+    : live === n ? (n === 1 ? ' It will be stopped first.' : ' They will be stopped first.')
+    : ` ${live} still in progress will be stopped first.`
+  return `${head}${stops} Files already in your library stay where they are.`
 }

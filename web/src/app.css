@@ -147,6 +147,11 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .filterbar.wide.stacked { flex-direction: column; align-items: stretch; gap: 7px; }
 .filterbar-row { display: flex; align-items: center; gap: 6px; }
 .filterbar-row .btn-secondary { margin-left: auto; }
+/* "Remove these" takes the auto margin and "Clear failed" sits right beside it, rather than the two
+   splitting the free space between them. */
+.filterbar .bulk-remove + .btn-secondary, .filterbar-row .bulk-remove + .btn-secondary { margin-left: 0; }
+/* The confirm under the bar: the same amber strip as the other page notices, holding two buttons. */
+.banner.confirm .btn-link { margin-left: 4px; }
 /* Waiting is not a rung of the pipeline, it is "not working right now", so it reads behind a rule instead
    of in line with the stages it would otherwise look like a continuation of. */
 .chip-divider { width: 1px; height: 14px; margin: 0 5px; background: var(--sep); flex: none; }
@@ -164,7 +169,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row.washed { background: var(--orange-wash); } .row.dimmed { opacity: .6; }
 /* After `.washed` on purpose: a row cannot be both, and if the rules ever overlap the louder wash wins. */
 .row.parked { background: var(--orange-wash-soft); }
-.row-main { display: grid; grid-template-columns: 36px minmax(260px, 1fr) minmax(240px, 340px) 112px;
+.row-main { display: grid; grid-template-columns: 36px minmax(260px, 1fr) minmax(240px, 340px) 128px;
   align-items: center; gap: 12px; min-height: 54px; padding: 8px 12px; }
 .row-text { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .row-steps { grid-column: 3; min-width: 0; display: flex; justify-content: center; }
@@ -207,6 +212,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    step to secondary is what stops that emptiness reading as a row that simply has not loaded yet. */
 .row .outcome.final { color: var(--secondary); }
 .row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+/* A live row can carry a pill or tag, Stop and Remove at once, which is more than the rail holds; on a row
+   with a ladder the overflow would land on top of it, so those rows wrap the buttons onto a second line.
+   Rows without a ladder have an empty column to spill into and keep their single line. */
+.row-main:has(.row-steps) .row-right { flex-wrap: wrap; row-gap: 6px; }
 .verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green-text); white-space: nowrap; }
 .tag { font-size: 11px; color: var(--tertiary); }
 /* One ladder: name and state together, so nothing has to be paired up by counting. */
@@ -284,7 +293,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .group-seg.tone-unknown, .legend-dot.tone-unknown { background: color-mix(in srgb, var(--tertiary) 60%, var(--content)); }
 
 @media (max-width: 980px) {
-  .row-main { grid-template-columns: 36px minmax(0, 1fr) 112px; }
+  .row-main { grid-template-columns: 36px minmax(0, 1fr) 128px; }
   .row-steps { grid-column: 2 / 4; justify-content: flex-start; margin-top: 2px; }
   .row-right { grid-column: 3; }
 }

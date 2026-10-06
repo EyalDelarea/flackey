@@ -66,6 +66,27 @@ async def test_track_link_queues_one_request(inbox):
     assert r.source_url == "https://www.youtube.com/watch?v=abc"
 
 
+async def test_the_same_track_link_twice_queues_it_once(inbox):
+    """A user's list held five rows of one track, four of them parked for six hours. A second paste of a
+    link that is still open answers "Already queued" and adds nothing."""
+    ib, store = inbox
+    first = await ib.submit("https://youtu.be/abc")
+    again = await ib.submit("https://www.youtube.com/watch?v=abc")
+    assert again.summary() == "Already queued" and again.request_ids == [] and again.already_queued == 1
+    assert [r.id for r in store.list_requests()] == first.request_ids
+    spotify = await ib.submit("https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl")
+    assert (await ib.submit("https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl")).summary() == "Already queued"
+    assert len(store.list_requests()) == 2 and spotify.request_ids
+
+
+async def test_a_stopped_track_can_be_pasted_again(inbox):
+    ib, store = inbox
+    first = await ib.submit("https://youtu.be/abc")
+    store.set_state(first.request_ids[0], RequestState.CANCELLED)
+    again = await ib.submit("https://youtu.be/abc")
+    assert again.summary() == "Queued" and again.request_ids != first.request_ids
+
+
 async def test_spotify_track_link_queues_one_request(inbox):
     ib, store = inbox
     s = await ib.submit("https://open.spotify.com/intl-de/track/11dFghVXANMlKmJXsNCbNl?si=abc")

@@ -966,6 +966,93 @@ def test_delete_request_refuses_an_in_flight_one_and_unknown_ones(client):
     assert c.delete("/api/requests/999").status_code == 404
 
 
+def test_remove_stops_live_rows_and_forgets_them_but_skips_verifying_filing_and_gone(client, tmp_path):
+    """"Remove these": a parked row and a downloading one are stopped and then deleted in one press. A row
+    whose file is moving into the library is refused like Stop refuses it, and a filed track keeps its
+    library entry -- only the request row goes."""
+    c, store, settings = client
+    parked = store.add_request("parked", RequestKind.TEXT)
+    store.update_request(parked, retry_after="2099-01-01T00:00:00+00:00", flag_reason="waiting for Soulseek")
+    fetching = store.add_request("fetching", RequestKind.TEXT)
+    store.set_state(fetching, RequestState.FETCHING)
+    verifying = store.add_request("verifying", RequestKind.TEXT)
+    store.set_state(verifying, RequestState.VERIFYING)
+    filing = store.add_request("filing", RequestKind.TEXT)
+    store.set_state(filing, RequestState.FILING)
+    errored = store.add_request("errored", RequestKind.TEXT)
+    store.set_state(errored, RequestState.ERROR, error_message="x")
+    settings.spectrogram_dir.mkdir(parents=True, exist_ok=True)
+    png = settings.spectrogram_dir / "rj.png"
+    png.write_bytes(b"png")
+    rejected = store.add_request("rejected", RequestKind.TEXT)
+    store.add_rejection(rejected, "cutoff", 320, 16000, png)
+    store.set_state(rejected, RequestState.REJECTED)
+    done = store.add_request("done", RequestKind.TEXT)
+    tid = store.add_track(path=tmp_path / "a.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800, file_size=5,
+                          artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
+                          catalog_track_id=None, request_id=done)
+    store.update_request(done, state=RequestState.DONE, track_id=tid)
+
+    ids = [parked, fetching, verifying, filing, errored, rejected, done, 999]
+    r = c.post("/api/requests/remove", json={"ids": ids})
+
+    assert r.status_code == 200
+    assert r.json() == {"removed": [parked, fetching, errored, rejected, done], "skipped": [verifying, filing, 999]}
+    left = {b["request"]["id"] for b in c.get("/api/queue").json()}
+    assert left == {verifying, filing}
+    assert not png.exists()
+    assert tid in [t["id"] for t in c.get("/api/library").json()]
+
+
+def test_remove_waits_for_a_running_task_to_unwind_before_deleting(tmp_path):
+    """The stop and the delete are one press, so the task the stop cancelled must be finished with the row
+    before it goes -- its unwind still writes."""
+    app, store, _ = make(tmp_path)
+    c = AppClient(app)
+    worker = app.state.worker if hasattr(app.state, "worker") else None
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.set_state(rid, RequestState.FETCHING)
+    seen: list[str] = []
+
+    async def long_fetch():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen.append("unwound")
+            store.update_request(rid, fetch_source=None)
+            raise
+
+    async def run():
+        task = asyncio.ensure_future(long_fetch())
+        w._tasks[rid] = task
+        await asyncio.sleep(0)
+        await w.cancel_and_settle(rid)
+        assert task.done() and seen == ["unwound"]
+
+    w = worker or Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), Settings(
+        _env_file=None, telegram_api_id=1, telegram_api_hash="h",
+        library_root=tmp_path / "lib", data_dir=tmp_path / "data"))
+    asyncio.run(run())
+    assert store.get_request(rid).state == RequestState.CANCELLED
+    assert c.post("/api/requests/remove", json={"ids": [rid]}).json() == {"removed": [rid], "skipped": []}
+
+
+def test_remove_rejects_a_body_that_is_not_a_list_of_ids(client):
+    c, _, _ = client
+    assert c.post("/api/requests/remove", json={}).status_code == 400
+    assert c.post("/api/requests/remove", json={"ids": [True]}).status_code == 400
+    assert c.post("/api/requests/remove", json={"ids": []}).json() == {"removed": [], "skipped": []}
+
+
+def test_pasting_an_open_track_again_says_already_queued(client):
+    c, store, _ = client
+    assert c.post("/api/requests", json={"url": "https://youtu.be/abc"}).json()["summary"] == "Queued"
+    again = c.post("/api/requests", json={"url": "https://youtu.be/abc"})
+    assert again.status_code == 200
+    assert again.json()["summary"] == "Already queued" and again.json()["request_ids"] == []
+    assert len(store.list_requests()) == 1
+
+
 def test_delete_request_unlinks_a_spectrogram_under_spectrogram_dir_but_leaves_others_alone(client, tmp_path):
     c, store, settings = client
     settings.spectrogram_dir.mkdir(parents=True, exist_ok=True)
