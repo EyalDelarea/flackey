@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 from .match import candidate_version
@@ -82,13 +83,35 @@ def _fit_windows_path(folder: Path, artist: str, title: str, ext: str) -> str:
     return f"{artist} - {cut}{tag}.{ext}"
 
 
-def final_path(root: Path, catalog: CatalogTrack, ext: str) -> Path:
-    """One folder per artist (the first credited one for a collaboration), whatever playlist asked for
-    the track: playlists reach the file through their M3U8. Genre and label live in the tags only.
+# The date layouts of `config.LIBRARY_LAYOUTS` name the folder after the day the track was filed, in ISO form so
+# Finder and Explorer list the folders in order.
+_DATE_FOLDER = {"month": "%Y-%m", "day": "%Y-%m-%d"}
+
+
+def final_path(root: Path, catalog: CatalogTrack, ext: str, layout: str = "artist",
+               when: date | None = None) -> Path:
+    """Where a newly filed track goes. `layout` picks the folder: one per artist (the first credited one
+    for a collaboration), one per month or day the track was filed (`when`, today if not given), or the
+    library folder itself. Whatever playlist asked for the track, playlists reach the file through their
+    M3U8; genre and label live in the tags only.
 
     On Windows the title is shortened when it has to be, so the whole path stays under MAX_PATH; see
     `_fit_windows_path`."""
-    folder = root / sanitize(catalog.artist.split(",")[0])
+    if layout == "artist":
+        folder = root / sanitize(catalog.artist.split(",")[0])
+    elif layout in _DATE_FOLDER:
+        folder = root / (when or datetime.now().astimezone().date()).strftime(_DATE_FOLDER[layout])
+    elif layout == "flat":
+        folder = root
+    else:
+        raise ValueError(f"unknown library layout {layout!r}")
+    return refile_path(folder, catalog, ext)
+
+
+def refile_path(folder: Path, catalog: CatalogTrack, ext: str) -> Path:
+    """The track's file name inside `folder`. A lossless upgrade calls this with the folder the track
+    is already in, so a replaced file stays where the owner put it -- or where an earlier layout put it --
+    rather than moving into this month's folder."""
     artist, title, ext = sanitize(catalog.artist), sanitize(catalog.display_title), ext.lstrip(".")
     if sys.platform == "win32":
         return folder / _fit_windows_path(folder, artist, title, ext)

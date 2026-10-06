@@ -22,7 +22,7 @@ from .export import write_playlist
 from .fingerprint import FPS, AcousticReference, FingerprintError, FingerprintResult
 from .fingerprint import check as fingerprint_check
 from .identify import parse_text
-from .library import file_track, final_path, find_duplicate, prune_missing_tracks
+from .library import file_track, final_path, find_duplicate, prune_missing_tracks, refile_path
 from .lossless import (
     Reference,
     pick,
@@ -1013,7 +1013,8 @@ class Worker:
             self.store.update_request(req.id, catalog_track_id=catalog.id)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
-        dest = final_path(self.settings.library_root, catalog, tmp.suffix.lstrip("."))
+        dest = final_path(self.settings.library_root, catalog, tmp.suffix.lstrip("."),
+                          layout=self.settings.library_layout)
         if dest.exists():
             existing = self.store.find_track_by_path(dest)  # None if the file was put there by hand
             await self._mark_duplicate(req, existing.id if existing else None, dest)
@@ -1118,7 +1119,9 @@ class Worker:
             self.store.upsert_catalog_track(catalog)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, hit.path, catalog, hit.verdict, artwork, source=hit.provider)
-        dest = final_path(self.settings.library_root, catalog, hit.path.suffix.lstrip("."))
+        # The replacement goes where the track already is: under a date layout, recomputing the path
+        # would move a track filed months ago into today's folder.
+        dest = refile_path(t.path.parent, catalog, hit.path.suffix.lstrip("."))
         if dest != t.path and self.store.find_track_by_path(dest) is not None:
             raise ValueError(f"another track is already filed at {dest.name}")
 

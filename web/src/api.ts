@@ -78,6 +78,8 @@ export interface AppSettings { library_root:string; data_dir:string; version:str
   lossless_filing_format?:string; filing_formats?:string[];
   /** AIFF on the Mac, FLAC on Windows (its window cannot play AIFF). Absent from an older server: AIFF. */
   default_filing_format?:string; auto_update_check?:boolean;
+  /** How new tracks are foldered: 'artist', 'month', 'day' or 'flat'. Absent from an older server: by artist. */
+  library_layout?:string; library_layouts?:string[];
   ports?:{ app:PortInfo; sidecar:PortInfo; soulseek_listen:PortInfo }; ranking?:Ranking }
 export interface Submission { summary:string; request_ids:number[]; playlist_id:number|null; name:string; total:number; already_in_library:number; already_queued:number }
 export interface Tools { ffmpeg:boolean; ffprobe:boolean; yt_dlp:boolean }
@@ -171,7 +173,7 @@ export const api = {
   bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
   sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => post<BugSent>('/api/bug-report', body),
   revealBugReport: () => post<{ ok: boolean }>('/api/bug-report/reveal'),
-  saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; auto_update_check: boolean }> = {}) =>
+  saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; library_layout: string; auto_update_check: boolean }> = {}) =>
     call<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify({ library_root, ...extra }) }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/reveal', { path }),
   pickFolder: (initial: string | null) => post<{ path: string | null }>('/api/pick-folder', { initial }),

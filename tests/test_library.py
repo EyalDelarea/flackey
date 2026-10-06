@@ -1,9 +1,17 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from flackey.library import WINDOWS_MAX_PATH, file_track, final_path, find_duplicate, sanitize
+from flackey.library import (
+    WINDOWS_MAX_PATH,
+    file_track,
+    final_path,
+    find_duplicate,
+    refile_path,
+    sanitize,
+)
 from flackey.models import Candidate, CatalogTrack
 from flackey.store import Store
 
@@ -32,6 +40,33 @@ def test_final_path_files_a_collaboration_under_the_first_artist(tmp_path: Path)
     ct = CatalogTrack(**{**CT.__dict__, "artist": "Abeber Project, Filteria", "mix_name": "Abeber Project Remix"})
     p = final_path(tmp_path, ct, "mp3")
     assert p == tmp_path / "Abeber Project" / "Abeber Project, Filteria - Into the Void (Abeber Project Remix).mp3"
+
+
+@pytest.mark.parametrize("layout,folder", [
+    ("artist", "Astral Projection"),
+    ("month", "2026-10"),
+    ("day", "2026-10-06"),
+])
+def test_final_path_folder_follows_the_layout(tmp_path: Path, layout, folder):
+    p = final_path(tmp_path, CT, "aiff", layout=layout, when=date(2026, 10, 6))
+    assert p == tmp_path / folder / "Astral Projection - Into the Void.aiff"
+
+
+def test_final_path_one_folder_files_straight_into_the_library(tmp_path: Path):
+    p = final_path(tmp_path, CT, "aiff", layout="flat", when=date(2026, 10, 6))
+    assert p == tmp_path / "Astral Projection - Into the Void.aiff"
+
+
+def test_final_path_rejects_an_unknown_layout(tmp_path: Path):
+    with pytest.raises(ValueError):
+        final_path(tmp_path, CT, "aiff", layout="genre")
+
+
+def test_refile_path_keeps_the_folder_the_track_is_already_in(tmp_path: Path):
+    """A lossless upgrade replaces the file where it is: a track filed in 2026-09 must not move into this
+    month's folder, and one filed under an artist must not leave it when the layout changed since."""
+    folder = tmp_path / "2026-09"
+    assert refile_path(folder, CT, "flac") == folder / "Astral Projection - Into the Void.flac"
 
 
 def test_final_path_includes_remix(tmp_path: Path):
@@ -166,3 +201,16 @@ def test_the_mac_never_cuts_a_long_title(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     root = Path("/Users/someone/Music/" + "deep/" * 20)
     assert final_path(root, _long("D" * 120), "flac").name == "Astral Projection - " + "D" * 120 + ".flac"
+
+
+@pytest.mark.parametrize("layout", ["month", "day", "flat"])
+def test_every_layout_fits_a_windows_path_to_max_path(on_windows, layout):
+    root = Path("C:/Users/someone/Music/" + "deep/" * 20)
+    p = final_path(root, _long("E" * 120), "flac", layout=layout, when=date(2026, 10, 6))
+    assert len(str(p)) <= WINDOWS_MAX_PATH
+
+
+def test_a_refiled_windows_path_is_cut_to_fit_its_folder(on_windows):
+    folder = Path("C:/Users/someone/Music/" + "deep/" * 20 + "2026-09")
+    p = refile_path(folder, _long("F" * 120), "flac")
+    assert p.parent == folder and len(str(p)) <= WINDOWS_MAX_PATH

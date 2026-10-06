@@ -611,6 +611,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .format-name { font-size: 13px; font-weight: 650; }
 .format-badge { align-self: flex-start; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green-text); font-size: 10px; font-weight: 600; }
 .format-note { color: var(--secondary); font-size: 11px; line-height: 1.35; }
+.format-note.mono { overflow-wrap: anywhere; }
+.layout-period { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.layout-period-label { margin-right: 6px; color: var(--secondary); font-size: 12px; }
 .row-gap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .tg { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: center; width: 100%; text-align: left; }
 .tg .lead { max-width: none; }

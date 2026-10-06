@@ -570,6 +570,36 @@ describe('the Soulseek panel', () => {
     expect(mockSetSettings).toHaveBeenCalledWith(expect.objectContaining({ lossless_filing_format: 'wav' }))
   })
 
+  it('lets the owner choose how new tracks are foldered, and says old ones stay put', async () => {
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'flat' }))
+    show(lossless())
+    const library = section('Library')
+    expect(within(library).getByText(/folder named after the artist/)).toBeInTheDocument()
+    expect(within(library).getByText(/stay where they are, so Rekordbox keeps finding them/)).toBeInTheDocument()
+    expect(within(library).getByRole('button', { name: /By artist/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(library).queryByRole('group', { name: 'New folder every' })).not.toBeInTheDocument()
+    fireEvent.click(within(library).getByRole('button', { name: /One folder/ }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { library_layout: 'flat' }))
+    expect(mockSetSettings).toHaveBeenCalledWith(expect.objectContaining({ library_layout: 'flat' }))
+  })
+
+  it('picks By date per month first, then lets the owner switch to per day', async () => {
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'month' }))
+    show(lossless())
+    fireEvent.click(screen.getByRole('button', { name: /By date/ }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { library_layout: 'month' }))
+  })
+
+  it('shows the month/day choice once the layout is by date', async () => {
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'day' }))
+    show(lossless(), settings({ library_layout: 'month' }))
+    expect(screen.getByRole('button', { name: /By date/ })).toHaveAttribute('aria-pressed', 'true')
+    const period = screen.getByRole('group', { name: 'New folder every' })
+    expect(within(period).getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(period).getByRole('button', { name: 'Day' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { library_layout: 'day' }))
+  })
+
   it('does not fetch the saved password until it is asked for, and hides it again', async () => {
     // Soulseek cannot reset a password, so the owner has to be able to get this one back -- but a secret
     // printed in the panel is a secret over their shoulder. It is fetched on the press, not on render.

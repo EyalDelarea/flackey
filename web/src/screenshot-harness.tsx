@@ -281,6 +281,8 @@ function scenarioSetup() {
     case 'settings-telegram-signed-out': {
       const signedOut = scenario === 'settings-telegram-signed-out'
       vi_spy(api, 'settings', async () => settingsPanel)
+      // Echoes what was saved, so the folder layout and format choices can be clicked through for a picture.
+      vi_spy(api, 'saveSettings', async (library_root: string, extra = {}) => ({ ...settingsPanel, library_root, ...extra }))
       vi_spy(api, 'health', async () => health({ telegram_authorized: !signedOut,
         lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'saffrontempo0147' },
           fpcalc: true, attempts_24h: {}, raw_mb: 0 },

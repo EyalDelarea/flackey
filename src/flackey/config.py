@@ -15,10 +15,14 @@ log = logging.getLogger(__name__)
 XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
-             "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format",
+             "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
              "source_enabled", "auto_update_check", "window_size")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
+# How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
+# month or per day they were filed, or none at all. Changing it never moves a track already filed:
+# Rekordbox finds a track by its full path, and a moved file shows up there as missing.
+LIBRARY_LAYOUTS = ("artist", "month", "day", "flat")
 
 
 def default_filing_format() -> str:
@@ -79,6 +83,7 @@ class Settings(BaseSettings):
     # window is gone by the time the next launch needs to know how big it was.
     window_size: tuple[int, int] | None = None
     library_root: Path = Path("~/Music/DJ Library")
+    library_layout: str = "artist"
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
@@ -140,6 +145,13 @@ class Settings(BaseSettings):
     def _filing_format(cls, v: str) -> str:
         if v not in FILING_FORMATS:
             raise ValueError(f"lossless_filing_format must be one of {FILING_FORMATS}")
+        return v
+
+    @field_validator("library_layout", mode="after")
+    @classmethod
+    def _library_layout(cls, v: str) -> str:
+        if v not in LIBRARY_LAYOUTS:
+            raise ValueError(f"library_layout must be one of {LIBRARY_LAYOUTS}")
         return v
 
     @property
