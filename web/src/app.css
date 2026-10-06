@@ -527,7 +527,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .settings h2 { margin: 4px 2px -7px; font-size: 12px; font-weight: 600; color: var(--secondary); }
 /* Advanced is a heading that folds its box away. The whole heading line is the button, with the same
    chevron the in-row disclosures use. */
-.settings h2.disclosure button { display: flex; align-items: center; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.settings h2.disclosure button { display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
 .settings h2.disclosure button::before { content: "›"; display: inline-block; width: 12px; font-size: 13px; transition: transform 120ms; }
 .settings h2.disclosure button[aria-expanded="true"]::before { transform: rotate(90deg); }
 .settings h2.disclosure button:hover { color: var(--text); }
@@ -535,8 +535,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* 28px, not the toolbar's 22: these rows are read one at a time, and a small target in a sparse panel
    only makes it harder to hit. Scoped here so the denser screens keep theirs. */
 .settings .btn-secondary, .settings .btn-primary { height: 28px; }
-.settings .segmented button { height: 24px; }
-.btn-secondary.destructive { color: var(--red); }
+.settings .segmented button { height: 28px; }
+.btn-secondary.destructive { color: var(--red-text); }
 .srow { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 14px; border-top: .5px solid var(--sep); }
 .srow:first-child { border-top: 0; }
 .srow-body { flex: 1; min-width: 0; }
@@ -642,6 +642,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* The macOS switch: the thumb travels right and the track fills with the accent when on. */
 .switch { position: relative; flex: none; width: 32px; height: 18px; padding: 0; border: 0; border-radius: 9px; background: color-mix(in srgb, var(--text) 18%, transparent); transition: background 150ms; }
 .switch[aria-checked="true"] { background: var(--accent-fill); }
+/* The track keeps the native 18px; the press target around it is 28px tall. */
+.switch::before { content: ''; position: absolute; inset: -5px -4px; }
 .switch-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform 150ms; }
 .switch[aria-checked="true"] .switch-thumb { transform: translateX(14px); }
 .switch:disabled:not(.busy) { opacity: .45; }

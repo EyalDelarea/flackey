@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { AppSettings, LosslessHealth, Platform, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
@@ -18,15 +18,16 @@ const PORT_ROWS: [keyof NonNullable<AppSettings['ports']>, string][] = [
 ]
 
 /* Same two questions the sidebar keeps apart: `enabled` means credentials are saved, `provider.status`
-   means the helper answered a probe just now. Neither one alone is "connected". The two on-the-way
-   readings get a pulsing grey dot rather than amber: amber beside "Starting…" read as a fault. */
+   means the helper answered a probe just now. Neither one alone is "connected". "Starting…" gets a
+   pulsing grey dot rather than amber, which beside it read as a fault; "Signing in…" stays amber,
+   because a sign-in that never finishes is the fault its hint warns about. */
 type Dot = '' | ' amber' | ' off' | ' pending'
 function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: boolean; dot: Dot; text: string; hint?: string } {
   if (!l?.enabled) return { ok: false, dot: ' amber', text: 'Not set up — run setup again, under Advanced' }
   if (l.provider === null) return { ok: false, dot: ' pending', text: 'Starting…' }
   if (l.provider.status === 'ok') return { ok: true, dot: '', text: `Connected as ${l.provider.username ?? 'your account'}` }
   if (l.provider.status === 'not_logged_in') {
-    return { ok: false, dot: ' pending', text: 'Signing in…', hint: 'If it stays here, the name may already be taken.' }
+    return { ok: false, dot: ' amber', text: 'Signing in…', hint: 'If it stays here, the name may already be taken.' }
   }
   return { ok: false, dot: ' amber', text: 'Not reachable', hint: `The Soulseek helper isn't answering on ${thisComputer(platform)}.` }
 }
@@ -44,7 +45,7 @@ function deezerBotLine(authorized: boolean, enabled: boolean): { dot: Dot; text:
 
 /* A break opportunity after every separator, so a narrow window wraps a path between folders rather
    than in the middle of "Application". */
-const breakablePath = (path: string) => path.split(/(?<=[/\\])/).flatMap((part, i) => i ? [<wbr key={i} />, part] : [part])
+const breakablePath = (path: string) => path.split(/([/\\])/).map((part, i) => i % 2 ? <Fragment key={i}>{part}<wbr /></Fragment> : part)
 
 export default function SettingsPage({ live, onReconnect, focusUpdate, onReport }: { live: Live; onReconnect: () => void; focusUpdate?: number; onReport?: () => void }) {
   const platform = usePlatform()

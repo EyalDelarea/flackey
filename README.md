@@ -174,7 +174,7 @@ got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or `MP3 320 kbps via Deezer`
    The setup screen writes all of this for you, including `shares.directories`, which is the DJ Library:
    sharing is what keeps a Soulseek account in good standing. Flackey also asks your router to open TCP
    50300 (NAT-PMP, then UPnP) every time it starts, and checks from outside whether the port answers;
-   Settings › Sharing shows the result and, when the port is closed, what to forward by hand. Behind a
+   Settings › Advanced › Sharing shows the result and, when the port is closed, what to forward by hand. Behind a
    VPN the forward has to be made on the VPN's side.
 4. `/api/health` shows `lossless.provider.status` (`ok`, `not_logged_in`, `unreachable`), whether `fpcalc` is
    present, the last 24 h of attempt outcomes and the size of the raw attempt folder.

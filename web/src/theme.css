@@ -37,7 +37,7 @@
 
   /* --orange/--green read fine as small dots and icons, but at ~2.2:1 they fail WCAG AA for actual text
      on a light background -- the dot stays vivid, the word beside it needs to be darker to be read. */
-  --orange-text: #B45309; --green-text: #157A32;
+  --orange-text: #B45309; --green-text: #157A32; --red-text: #D70015;
   /* Same hue and saturation as --orange-text, just darker (L 37% -> 32%), so the "Still loading…" note
      still clears 4.5:1 (5.13:1 measured) once it is sitting on --sample-tint instead of plain --group.
      Scoped to that one spot rather than replacing --orange-text everywhere, which already passes elsewhere. */
@@ -73,6 +73,8 @@
     /* Dark mode's vivid orange/green already clear 4.5:1 against the dark window -- the light-mode
        override above exists because white, not the window colour, is what they sit on there. */
     --orange-text: var(--orange); --green-text: var(--green); --purple-text: var(--purple);
+    /* Unlike orange and green, the vivid red is 3.0:1 on a dark button, so its text form is lightened. */
+    --red-text: #FF8F85;
     /* The "Still loading…" note on the dark lit card measures 5.96:1 -- already comfortably past 4.5:1 --
        so this just tracks --orange-text rather than needing its own darkened value. */
     --orange-text-lit: var(--orange-text);
