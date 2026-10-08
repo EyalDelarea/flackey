@@ -1,9 +1,10 @@
 # Seamless in-place update (issue #58)
 
-Status: approved 2026-09-19; built 2026-09-19. Supersedes nothing; extends the download path added in
-#56. [As built](#as-built) records where the code differs from what is written below, and
-[Turning it on](#turning-it-on) is the owner's remaining step — until it is done, every build takes the
-installer path exactly as it did before.
+Status: approved 2026-09-19; built 2026-09-19; **turned on** — release builds carry the public key and
+sign every archive and installer, so installed copies update in place. Kept as the design record the
+code points at (`src/flackey/selfupdate/`, `packaging/update_helper.c`); [As built](#as-built) records
+where the code differs from what is written below, and [Turning it on](#turning-it-on) describes the
+one-time setup that has since been done.
 
 ## The problem
 
@@ -14,7 +15,7 @@ replaces that with a swap the app performs on itself.
 Removing Installer.app removes the last checkpoint between bytes off the network and code running as
 the user, so the payload has to carry its own proof. That proof is an Ed25519 signature verified
 against a public key committed in the source — not Apple Developer ID, which was declined and would
-cost $99/yr (see `packaging/README.txt`).
+cost $99/yr (see `packaging/README-for-friends.md`).
 
 ## Decisions
 
