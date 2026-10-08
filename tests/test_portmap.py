@@ -262,7 +262,6 @@ async def test_map_port_hands_the_gateway_to_upnp():
 
     async def upnp(port, lease_s, http, **kw):
         seen.update(kw)
-        return None
 
     await map_port(50300, 3600, gateway="10.0.0.1", natpmp=natpmp, upnp=upnp)
     assert seen.get("gateway") == "10.0.0.1"

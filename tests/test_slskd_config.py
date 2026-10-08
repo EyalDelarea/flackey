@@ -261,7 +261,7 @@ def test_a_network_path_is_never_shared(raw):
     assert unsafe_share_reason(Path(raw), Path("/nowhere/data"))
 
 
-@pytest.mark.parametrize("raw", [r"\\nas\music", "//nas/music", "\\\\nas\\music"])
+@pytest.mark.parametrize("raw", [r"\\nas\music", "//nas/music", r"\\?\UNC\nas\music"])
 def test_is_network_path_reads_both_spellings(raw):
     from flackey.slskd_config import is_network_path
     assert is_network_path(raw)

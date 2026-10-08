@@ -136,7 +136,7 @@ class Redactor:
         # string as `s3cr3tP%40ss%21` is the same password. Longest first, so a password that contains the
         # username is not left half-replaced.
         spellings = {v for s in known for v in _spellings(s)}
-        self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])", 0 if s in known else re.I)
+        self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])", 0 if s in known else re.IGNORECASE)
                        for s in sorted(spellings, key=len, reverse=True)]
         names = sorted({u.strip() for u in users if u and len(u.strip()) >= 3}, key=len, reverse=True)
         # Windows account names are case-insensitive, and a log prints whichever case the API returned.
