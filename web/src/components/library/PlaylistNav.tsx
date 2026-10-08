@@ -5,7 +5,7 @@ import type { Playlist } from '../../api'
 /* Every album link becomes its own playlist, so a few downloads bury the hand-made playlists under a
    wall of "Album - …" rows. The link says which kind it is; the name is only a fallback. */
 const ALBUM_PREFIX = /^album\s*[-–—]\s*/i
-export const isAlbum = (p: Playlist) => /\/album\//.test(p.source_url) || ALBUM_PREFIX.test(p.name)
+const isAlbum = (p: Playlist) => /\/album\//.test(p.source_url) || ALBUM_PREFIX.test(p.name)
 /* The search box earns its place only once the list is long enough to scroll. */
 const SEARCH_FROM = 8
 const COLLAPSED_KEY = 'flackey.albumsCollapsed'

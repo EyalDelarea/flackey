@@ -2,7 +2,7 @@ export const FORMAT_LABELS: Record<string, string> = { aiff: 'AIFF', wav: 'WAV',
 
 /** `defaultFormat` is the server's `default_filing_format`: AIFF on the Mac, FLAC on Windows, whose
  *  window (Chromium) cannot play AIFF. "Recommended" follows it, so the two never disagree. */
-export function formatNote(format: string, defaultFormat = 'aiff'): string {
+function formatNote(format: string, defaultFormat = 'aiff'): string {
   if (format === 'aiff') return defaultFormat === 'aiff'
     ? 'Recommended for Rekordbox: uncompressed audio, rich tags, and artwork.'
     : 'Uncompressed audio with rich tags and artwork for Rekordbox.'
