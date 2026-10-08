@@ -692,6 +692,25 @@ def test_a_network_library_folder_is_refused(client, raw):
     assert c.get("/api/settings").json()["library_root"] == before
 
 
+@pytest.mark.parametrize("saved", ["dot-folder", "library", "unc"])
+def test_an_unchanged_risky_library_folder_does_not_block_other_settings(client, tmp_path, monkeypatch, saved):
+    """The page sends the library folder with every save. A folder chosen before the share rules existed
+    must not turn every unrelated toggle into a 400."""
+    c, _, settings = client
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    folder = {"dot-folder": home / ".music", "library": home / "Library" / "DJ",
+              "unc": Path(r"\\nas\music")}[saved]
+    settings.library_root = folder
+
+    r = c.put("/api/settings", json={"library_root": str(folder), "auto_update_check": False})
+
+    assert r.status_code == 200
+    assert r.json()["auto_update_check"] is False and r.json()["library_root"] == str(folder)
+
+
 def test_queue_bundles(client, tmp_path):
     c, store, _ = client
     rid = store.add_request("q", RequestKind.TEXT)

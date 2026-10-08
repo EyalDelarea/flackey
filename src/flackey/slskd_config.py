@@ -308,7 +308,14 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
     if not path.exists():
         return False
     config = _load_config(path)
-    _set_share(config, path, library_root, data_dir, previous)
+    try:
+        _set_share(config, path, library_root, data_dir, previous)
+    except SlskdConfigError:
+        # A refused folder leaves the share as it was, but the listener and key are still pinned: the
+        # startup repair is often the only write a config gets.
+        _pin_to_this_machine(config, path)
+        _atomic_write(path, config)
+        raise
     _pin_to_this_machine(config, path)
     _atomic_write(path, config)
     log.info("slskd share now %s", library_root)

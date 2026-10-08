@@ -344,6 +344,25 @@ def test_the_listener_and_api_key_are_pinned_to_this_machine_on_every_write(tmp_
     assert data["web"]["https"]["disabled"] is True
 
 
+def test_a_refused_share_still_pins_the_listener_and_key(tmp_path: Path, fake_home: Path):
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
+    path = config_path(data)
+    config = yaml.safe_load(path.read_text())
+    config["web"]["ip_address"] = "0.0.0.0"
+    config["web"]["authentication"]["api_keys"]["flackey"]["cidr"] = "0.0.0.0/0"
+    config["remote_configuration"] = True
+    path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(SlskdConfigError):
+        write_share(data, fake_home / ".ssh")
+
+    after = yaml.safe_load(path.read_text())
+    assert after["shares"]["directories"] == [str(fake_home / "Music")]
+    assert after["web"]["ip_address"] == "127.0.0.1" and after["remote_configuration"] is False
+    assert after["web"]["authentication"]["api_keys"]["flackey"]["cidr"] == "127.0.0.1/32"
+
+
 def test_a_share_write_adds_no_api_key_to_a_file_without_one(tmp_path: Path):
     path = config_path(tmp_path)
     path.parent.mkdir(parents=True)

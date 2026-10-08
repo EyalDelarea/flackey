@@ -244,19 +244,25 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.put("/settings")
     async def put_settings(body: dict) -> dict:
         raw = (body.get("library_root") or "").strip()
-        if is_network_path(raw):
-            # Before anything touches it: `mkdir` and `resolve` on an unreachable server can hang.
-            raise HTTPException(400, unsafe_share_reason(Path(raw), settings.data_dir))
         path = Path(raw).expanduser() if raw else None
-        if path is None or not path.is_absolute():
-            raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")
-        reason = unsafe_share_reason(path, settings.data_dir)
-        if reason:
-            raise HTTPException(400, reason)
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise HTTPException(400, f"That folder cannot be used: {e.strerror or e}")
+        # The page sends the library folder with every save. The folder rules are checked only when it
+        # changes: an owner whose folder was chosen before a rule existed must still be able to flip an
+        # unrelated toggle. (The share itself is still refused for such a folder; see `write_share`.)
+        unchanged = path is not None and path == settings.library_root
+        if not unchanged:
+            if is_network_path(raw):
+                # Before anything touches it: `mkdir` and `resolve` on an unreachable server can hang.
+                raise HTTPException(400, unsafe_share_reason(Path(raw), settings.data_dir))
+            if path is None or not path.is_absolute():
+                raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")
+            reason = unsafe_share_reason(path, settings.data_dir)
+            if reason:
+                raise HTTPException(400, reason)
+        if not is_network_path(raw):
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise HTTPException(400, f"That folder cannot be used: {e.strerror or e}")
         extra: dict = {}
         if "lossless_filing_format" in body:
             if body["lossless_filing_format"] not in FILING_FORMATS:
