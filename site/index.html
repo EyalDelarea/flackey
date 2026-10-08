@@ -9,8 +9,10 @@
       name="description"
       content="Paste a YouTube, YouTube Music or Spotify link. Flackey finds and verifies the best-quality download available, with lossless FLAC whenever possible."
     />
+    <link rel="icon" href="img/icon.png" type="image/png" sizes="256x256" />
     <link rel="icon" href="img/logo.svg" type="image/svg+xml" />
-    <link rel="preload" as="image" href="img/silver-vinyl-branded.png" />
+    <link rel="apple-touch-icon" href="img/apple-touch-icon.png" />
+    <link rel="preload" as="image" href="img/silver-vinyl-branded.webp" type="image/webp" />
     <link rel="stylesheet" href="site.css" />
     <script src="site.js" defer></script>
   </head>
@@ -49,7 +51,7 @@
               <div class="vinyl">
                 <img
                   class="vinyl-photo"
-                  src="img/silver-vinyl-branded.png"
+                  src="img/silver-vinyl-branded.webp"
                   width="1536"
                   height="1024"
                   alt="A silver vinyl record emerging from a translucent Flackey sleeve"
@@ -77,7 +79,7 @@
                       <g clip-path="url(#record-edge)">
                         <g class="vinyl-disc-spin">
                           <image
-                            href="img/silver-record-spin.png"
+                            href="img/silver-record-spin.webp"
                             x="-398.4"
                             y="-398.4"
                             width="796.8"
@@ -96,6 +98,75 @@
       <div class="track-wave wrap" aria-hidden="true">
         <canvas id="track-wave"></canvas>
       </div>
+      <!-- What the current release can do, newest first. Each tile carries a small
+           drawing of the app's own control rather than a screenshot, like the
+           demos below it. The drawings are decorative; the text says it all. -->
+      <section class="whats-new wrap" id="whats-new" aria-labelledby="whats-new-title">
+        <div class="wn-head">
+          <p class="eyebrow">What’s new</p>
+          <h2 id="whats-new-title">Recently added to Flackey.</h2>
+        </div>
+        <ul class="wn-grid">
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-sidebar">
+                <span class="wn-search">Find a playlist</span>
+                <span class="wn-pl">Warm-up</span>
+                <span class="wn-pl">Peak time</span>
+                <span class="wn-pl wn-albums">Albums<b>12</b></span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.2.2</span>
+            <h3>A tidier Playlists sidebar</h3>
+            <p>Search your playlists, and albums group under their own heading so they don’t bury the ones you made.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-layout" id="wn-layout">
+                <span class="wn-seg"><i class="on">By artist</i><i>By date</i><i>One folder</i></span>
+                <code class="wn-path">Bicep/Bicep - Glue.aiff</code>
+              </div>
+            </div>
+            <span class="wn-tag">v0.2.2</span>
+            <h3>Your folders, your way</h3>
+            <p>File new tracks by artist, by date or all in one folder. Settings shows where the next one will land.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-windows">
+                <span class="wn-win wn-mac"><i></i><i></i><i></i></span>
+                <span class="wn-win wn-pc"><b>–</b><b>□</b><b>×</b></span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.2.0</span>
+            <h3>Now on Windows</h3>
+            <p>The same app on Windows 10 and 11, with its own installer next to the Mac one.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-update">
+                <span class="wn-banner">Flackey 0.2.2 is available.<b>Update</b></span>
+                <span class="wn-verified"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Signature checked</span>
+              </div>
+            </div>
+            <span class="wn-tag">Built in</span>
+            <h3>Updates from inside the app</h3>
+            <p>Flackey tells you when a new version is out and installs it for you. Each update is checked against Flackey’s own signing key before it runs.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-report">
+                <span class="wn-report-title">Report a problem</span>
+                <span class="wn-file">flackey-bug-report.zip</span>
+                <span class="wn-send">Send</span>
+              </div>
+            </div>
+            <span class="wn-tag">Built in</span>
+            <h3>Report a problem in one step</h3>
+            <p>The app writes the email and gathers a diagnostics file for you. Nothing is sent until you press Send.</p>
+          </li>
+        </ul>
+      </section>
       <section class="preview wrap" id="preview" aria-label="App showcase">
         <div class="preview-card">
           <p class="eyebrow">See it in action</p>
@@ -547,7 +618,10 @@
           >.
         </p>
         <div class="release-notes-list" id="release-notes-list" aria-live="polite">
-          <p class="release-notes-status">Loading release notes…</p>
+          <p class="release-notes-status">
+            Loading release notes… They’re also on
+            <a href="https://github.com/EyalDelarea/flackey/releases" target="_blank" rel="noopener">GitHub releases</a>.
+          </p>
         </div>
       </section>
       <section
@@ -564,14 +638,25 @@
             <button type="button" role="tab" id="os-tab-mac" aria-controls="os-mac" aria-selected="true">Mac</button>
             <button type="button" role="tab" id="os-tab-windows" aria-controls="os-windows" aria-selected="false" tabindex="-1">Windows</button>
           </div>
-          <p class="release" id="release-line">Checking for a release…</p>
+          <p class="release" id="release-line">The latest release, straight from GitHub.</p>
+          <p class="platform-note" id="platform-note" hidden>
+            Flackey is a desktop app for <strong>Mac</strong> and
+            <strong>Windows</strong>. Open this page on your computer to download
+            it, or pick one above to read how it installs.
+          </p>
         </div>
         <div class="os-panel" id="os-mac" role="tabpanel" aria-labelledby="os-tab-mac">
           <div class="download-option">
-            <a class="button unavailable" id="download-mac" aria-disabled="true"
-              >Mac installer coming soon</a
+            <a class="button" id="download-mac" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg"
+              >Download for Mac <span aria-hidden="true">↓</span></a
             >
-            <p class="download-req">Apple Silicon Mac · macOS 12 or newer<span class="download-size"></span></p>
+            <p class="download-req"><strong>Apple Silicon only</strong> (M1 or newer) · macOS 12 or newer<span class="download-size"></span></p>
+            <p class="download-req download-intel">Intel Macs are not supported.</p>
+            <p class="download-trust">
+              The installer isn’t signed with an Apple certificate, so macOS warns
+              you once. <a href="#mac-unsigned">Here’s the 30-second fix</a>.
+              <a href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg.sha256">SHA-256 checksum</a>
+            </p>
           </div>
           <div class="install">
             <p class="install-head"><span class="install-eyebrow">Please read</span> Installing on a Mac</p>
@@ -583,7 +668,7 @@
               <li>Follow the macOS Installer steps. Flackey is placed in Applications.</li>
               <li>Open Flackey and connect Telegram, Soulseek, or both.</li>
             </ol>
-            <div class="gatekeeper">
+            <div class="gatekeeper" id="mac-unsigned">
               <h3>macOS will say it can’t verify Flackey</h3>
               <p>
                 Flackey isn’t notarized yet, which needs a paid Apple Developer
@@ -651,10 +736,15 @@
         </div>
         <div class="os-panel" id="os-windows" role="tabpanel" aria-labelledby="os-tab-windows" hidden>
           <div class="download-option">
-            <a class="button unavailable" id="download-windows" aria-disabled="true"
-              >Windows installer coming soon</a
+            <a class="button" id="download-windows" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey-Setup.exe"
+              >Download for Windows <span aria-hidden="true">↓</span></a
             >
             <p class="download-req">Windows 10 or 11 · 64-bit PC<span class="download-size"></span></p>
+            <p class="download-trust">
+              The installer isn’t signed with a Microsoft certificate, so Windows
+              warns you once. <a href="#windows-unsigned">Here’s the 30-second fix</a>.
+              <a href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey-Setup.exe.sha256">SHA-256 checksum</a>
+            </p>
           </div>
           <div class="install">
             <p class="install-head"><span class="install-eyebrow">Please read</span> Installing on Windows</p>
@@ -674,7 +764,7 @@
                 you share.
               </li>
             </ol>
-            <div class="gatekeeper">
+            <div class="gatekeeper" id="windows-unsigned">
               <h3>Windows will say it protected your PC</h3>
               <p>
                 Flackey isn’t code-signed yet, so Microsoft Defender SmartScreen
