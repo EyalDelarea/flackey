@@ -48,6 +48,10 @@ def free_bytes(path: Path) -> int:
     return 0
 
 
+# How much shorter than the download a lossless conversion may come out: container rounding only.
+CONVERT_SLACK_S = 1.0
+
+
 def duration_agrees(advertised_s: float | None, probed_s: float) -> bool:
     if advertised_s is None:
         return False
@@ -287,6 +291,10 @@ class LosslessMixin:
                 # always be cleaned up -- at most one temp file from here on (spec §9)
                 tmp.unlink(missing_ok=True)
                 pr = await asyncio.to_thread(probe, out)
+            if pr.duration_s < probed.duration_s - CONVERT_SLACK_S:
+                # ffmpeg exits 0 when its `-t` ceiling ends the output early: a cut-off track, not a copy.
+                raise ConvertError(f"the converted file is {pr.duration_s:.1f} s, shorter than the "
+                                   f"{probed.duration_s:.1f} s download")
             verdict = replace(verdict, fmt=pr.fmt, bitrate_kbps=pr.bitrate_kbps, bit_depth=pr.bit_depth,
                               sample_rate=pr.sample_rate)
         except (ConvertError, VerifyError) as e:

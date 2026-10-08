@@ -13,8 +13,10 @@ from .tools import no_window, tool_path
 log = logging.getLogger(__name__)
 RUN_TIMEOUT_S = 300
 # The output is bounded whatever the input claims (lossless.py already refuses a track past 1 GB or
-# 30 minutes before it downloads): 31 minutes of 24-bit 48 kHz stereo PCM is about 536 MB.
-MAX_OUTPUT_S = 31 * 60
+# 30 minutes before it downloads). The time ceiling sits above that cap plus the worker's duration slack,
+# so no accepted track reaches it, and the worker refuses an output shorter than its input should one
+# ever do so: 32 minutes of 24-bit 48 kHz stereo PCM is about 553 MB.
+MAX_OUTPUT_S = 32 * 60
 MAX_OUTPUT_BYTES = 1_000_000_000
 CODECS = {("aiff", 16): "pcm_s16be", ("aiff", 24): "pcm_s24be", ("wav", 16): "pcm_s16le", ("wav", 24): "pcm_s24le"}
 
