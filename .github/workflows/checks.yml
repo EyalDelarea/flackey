@@ -323,7 +323,9 @@ jobs:
           fi
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          enable-cache: true
+          # No cache in the job that holds the signing key: a cache is written by every other job and
+          # every pull request, and nothing it restores should reach the step that signs a release.
+          enable-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Flackey.installer
@@ -340,22 +342,23 @@ jobs:
         # that verifies against this key, so an unsigned release must never be published.
         env:
           FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
-        # --no-project: the script reads the signed-message format straight out of src/, so none of
-        # the app's macOS-shaped dependencies need to resolve on this runner. cryptography is pinned to
-        # the version uv.lock resolves, read from the lock so the two cannot drift, since this step
-        # holds the private key.
+        # The script reads the signed-message format straight out of src/, so it needs only cryptography,
+        # not the app's macOS-shaped dependencies. Since this step holds the private key, cryptography and
+        # what it depends on are installed by hash, exactly as uv.lock resolved them: `uv export --hashes`
+        # cut down to that closure by signing_requirements.py, then `--require-hashes`, wheels only.
         run: |
           set -euo pipefail
           if [[ -z "${FLACKEY_UPDATE_SIGNING_KEY// /}" ]]; then
             echo "::error title=No signing key::FLACKEY_UPDATE_SIGNING_KEY is empty; refusing to publish an unsigned release."
             exit 1
           fi
-          crypto="$(python3 -c 'import tomllib; print(*[p["version"] for p in tomllib.load(open("uv.lock", "rb"))["package"] if p["name"] == "cryptography"])')"
-          if [[ ! "$crypto" =~ ^[0-9][0-9.]*$ ]]; then
-            echo "::error title=No cryptography in uv.lock::expected one version, got '$crypto'."
-            exit 1
-          fi
-          sign() { uv run --no-project --with "cryptography==$crypto" packaging/sign_archive.py "$@"; }
+          venv="$RUNNER_TEMP/signing-venv"
+          reqs="$RUNNER_TEMP/signing-requirements.txt"
+          uv venv --quiet --python 3.12 "$venv"
+          uv export --frozen --no-emit-project --no-dev --format requirements-txt \
+            | "$venv/bin/python" -I packaging/signing_requirements.py uv.lock cryptography > "$reqs"
+          uv pip install --quiet --python "$venv/bin/python" --require-hashes --no-deps --only-binary :all: -r "$reqs"
+          sign() { "$venv/bin/python" packaging/sign_archive.py "$@"; }
           sign dist/Flackey-"${GITHUB_REF_NAME#v}".zip
           sign dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
           sign dist/Flackey-Setup.exe "${GITHUB_REF_NAME#v}"
