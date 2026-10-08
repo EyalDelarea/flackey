@@ -24,6 +24,9 @@ from flackey.reference import Identification
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
 from flackey.worker import Worker, catalog_candidate
+from flackey.worker import acoustic as acoustic_mod
+from flackey.worker import filing as filing_mod
+from flackey.worker import pipeline as pipeline_mod
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 
@@ -99,7 +102,7 @@ def env(tmp_path: Path, monkeypatch):
     async def fake_deezer(deezer_id, http, tmp_dir):
         return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
 
-    monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
+    monkeypatch.setattr(acoustic_mod, "deezer_reference", fake_deezer)
 
     # Since issue #68 every YT_TRACK request with a source_url fetches its video before choosing a record,
     # so without this the suite would run yt-dlp. A permanent failure on purpose: Task 15 makes transient
@@ -108,7 +111,7 @@ def env(tmp_path: Path, monkeypatch):
     async def fake_youtube(url, tmp_dir, *, duration_s=None):
         raise FingerprintError("no video audio in tests")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
 
     # Since issue #68 the lossy copy is fingerprinted before it is filed, and every request in this file
     # files the lossy copy. Without this the suite would run fpcalc against the fake reference above --
@@ -123,7 +126,7 @@ def env(tmp_path: Path, monkeypatch):
         return FingerprintResult("matched", 0.98, 12.3, f"{reference.label} found at 12.3 s, score 0.98",
                                  [1, 2, 3], [4, 5, 6], reference.label)
 
-    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", fake_check)
     return settings, store, notifier
 
 
@@ -417,8 +420,8 @@ async def test_a_youtube_request_files_the_candidate_whose_preview_is_the_video(
         return Identification(chosen, 0.97, [(1, 0.41), (2, 0.97)],
                               "deezer:2 preview matches the video, score 0.97")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make_worker(env, FakeSource([wrong, right]), FakeCatalog([CT]))
     # #70's real mistake: the video is titled after the record it is not. Text reads the title and agrees
     # with itself; only the audio knows better.
@@ -443,8 +446,8 @@ async def test_a_youtube_request_with_no_matching_preview_does_not_file_the_text
         return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
                               "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CT]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -467,8 +470,8 @@ async def test_no_record_and_no_soulseek_errors_instead_of_filing_the_deezer_cop
         return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
                               "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     source = FakeSource([good_cand()])
     w = make_worker(env, source, FakeCatalog([CT]))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
@@ -487,8 +490,8 @@ async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypa
     async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
         return Identification(None, None, [(1754956977, 0.31)], "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", _video_ref)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -505,7 +508,7 @@ async def test_without_a_video_reference_text_still_decides(env, monkeypatch):
     async def fake_identify(*a, **kw):
         called.append(1)
 
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)   # env's fake_youtube already fails
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)   # env's fake_youtube already fails
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -523,7 +526,7 @@ async def test_video_audio_failure_retries_before_the_text_path(env, monkeypatch
         calls.append(url)
         raise YouTubeError("HTTP Error 429: Too Many Requests")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", flaky_youtube)
     w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -608,7 +611,7 @@ async def _rejected_as_a_different_recording(env, monkeypatch):
         return FingerprintResult("failed", 0.77, None, f"best score 0.77 below {minimum:.2f}",
                                  None, [4, 5, 6], reference.label if reference else None)
 
-    monkeypatch.setattr(worker_mod, "fingerprint_check", wrong_recording)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_recording)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.REJECTED
     return rid, w
@@ -874,7 +877,7 @@ async def test_a_failure_while_verifying_is_stamped_verify(env, monkeypatch):
     async def unverifiable(path, reference, *, minimum, missing=""):
         return FingerprintResult("skipped", None, None, "video: yt-dlp timed out")
 
-    monkeypatch.setattr(worker_mod, "fingerprint_check", unverifiable)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", unverifiable)
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
@@ -893,7 +896,7 @@ async def test_the_last_resort_except_stamps_the_stage_the_row_was_in(env, monke
     def boom(*args, **kw):
         raise RuntimeError("the tagger fell over")
 
-    monkeypatch.setattr(worker_mod, "write_tags", boom)
+    monkeypatch.setattr(filing_mod, "write_tags", boom)
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.TEXT)

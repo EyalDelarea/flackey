@@ -43,7 +43,7 @@ def _no_public_deezer_lookup(monkeypatch):
     async def none(cand, http):
         return None, "no deezer lookup in tests"
 
-    monkeypatch.setattr("flackey.worker.find_deezer_record", none)
+    monkeypatch.setattr("flackey.worker.acoustic.find_deezer_record", none)
 
 
 @pytest.fixture(autouse=True)
