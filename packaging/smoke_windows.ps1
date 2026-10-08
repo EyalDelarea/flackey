@@ -14,6 +14,8 @@ $ProgressPreference = 'SilentlyContinue'
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
 $Port = if ($env:SMOKE_PORT) { [int]$env:SMOKE_PORT } else { 8797 }
 $Health = "http://127.0.0.1:$Port/api/health"
+# Every /api/ call needs the app's access key; the smoke run fixes it rather than reading it off stdout.
+$Token = "smoke-" + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
 $S = Join-Path ([IO.Path]::GetTempPath()) ("flackey-smoke-" + [guid]::NewGuid().ToString('N'))
 $Data = Join-Path $S 'data'
 $Log = Join-Path $Data 'flackey.log'
@@ -21,7 +23,8 @@ New-Item -ItemType Directory -Force -Path $Data, (Join-Path $S 'lib') | Out-Null
 
 function Get-Health {
     # -UseBasicParsing: 5.1 otherwise wants Internet Explorer's engine, which Server Core does not have.
-    try { return Invoke-RestMethod -Uri $Health -TimeoutSec 2 -UseBasicParsing } catch { return $null }
+    try { return Invoke-RestMethod -Uri $Health -TimeoutSec 2 -UseBasicParsing -Headers @{ 'x-flackey-token' = $Token } }
+    catch { return $null }
 }
 
 function Show-LogTail {
@@ -40,6 +43,7 @@ if (Get-Health) {
 $env:DATA_DIR = $Data
 $env:LIBRARY_ROOT = Join-Path $S 'lib'
 $env:WEB_PORT = "$Port"
+$env:FLACKEY_API_TOKEN = $Token
 
 $proc = $null
 $failed = $true
