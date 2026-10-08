@@ -32,6 +32,53 @@ def is_queued(state: str) -> bool:
     return state.startswith(QUEUED_STATES)
 
 
+@dataclass
+class TransferBudget:
+    """The four timeouts of one download, as a pure function of the clock (see `SlskdProvider.download`
+    for why there are four). Fed every poll with what slskd reported; answers with the LosslessError that
+    ends the transfer, or None while it may go on. Cancelling the transfer is the caller's job."""
+    t0: float
+    first_byte_s: float
+    total_s: float
+    queue_wait_s: float
+    stall_s: float
+    active_at: float | None = None       # left the peer's queue
+    first_byte_at: float | None = None
+    last_done: int = 0
+    moved_at: float | None = None        # the last poll that saw a new byte
+
+    def never_appeared(self, now: float) -> LosslessError | None:
+        # Never even acknowledged: no queue to be in, so this is the peer, not their popularity.
+        if now - self.t0 > self.first_byte_s:
+            return LosslessError("transfer never appeared in slskd", "first_byte_timeout")
+        return None
+
+    def observe(self, now: float, done: int, state: str) -> None:
+        if self.active_at is None and (done > 0 or not is_queued(state)):
+            self.active_at = now
+        if done > 0 and self.first_byte_at is None:
+            self.first_byte_at = now
+        if done > self.last_done:
+            self.last_done, self.moved_at = done, now
+
+    @property
+    def first_byte_ms(self) -> int | None:
+        return None if self.first_byte_at is None else int((self.first_byte_at - self.t0) * 1000)
+
+    def expired(self, now: float, state: str, done: int, size: int) -> LosslessError | None:
+        if self.active_at is None:
+            if now - self.t0 > self.queue_wait_s:
+                return LosslessError(f"still {state.lower() or 'queued'} after {self.queue_wait_s:.0f} s", "queued")
+            return None
+        if self.first_byte_at is None and now - self.active_at > self.first_byte_s:
+            return LosslessError(f"no bytes within {self.first_byte_s:.0f} s", "first_byte_timeout")
+        if self.moved_at is not None and now - self.moved_at > self.stall_s:
+            return LosslessError(f"stopped sending after {done} of {size} bytes", "transfer_timeout")
+        if now - self.active_at > self.total_s:
+            return LosslessError(f"not finished within {self.total_s:.0f} s", "transfer_timeout")
+        return None
+
+
 class SlskdClient:
     def __init__(self, base_url: str, api_key: str, http: httpx.AsyncClient, *,
                  sleep=asyncio.sleep, clock: Callable[[], float] = time.monotonic):
@@ -296,10 +343,10 @@ class SoulseekProvider:
                              on_raw: RawSink | None = None) -> Path:
         _remove_stale_file(dest)                        # so a leftover file can't be mistaken for the fresh one
         await self.client.enqueue(file.username, file.path, file.size)
-        queue_wait_s = first_byte_s if queue_wait_s is None else queue_wait_s
-        stall_s = first_byte_s if stall_s is None else stall_s
-        t0, active_at, first_byte_at, last_state, n = self.clock(), None, None, None, 0
-        last_done, moved_at = 0, None
+        budget = TransferBudget(self.clock(), first_byte_s=first_byte_s, total_s=total_s,
+                                queue_wait_s=first_byte_s if queue_wait_s is None else queue_wait_s,
+                                stall_s=first_byte_s if stall_s is None else stall_s)
+        last_state, n = None, 0
         # Only for the cancel path: the id slskd gave this transfer, once we have seen it. Stopping a
         # download the owner cancelled means telling the sidecar too -- otherwise the bytes keep arriving
         # from the peer long after the row has gone, and the next run's `cancel_all` is what finally
@@ -311,25 +358,19 @@ class SoulseekProvider:
                 tr = await self._find(file)
                 now = self.clock()
                 if tr is None:
-                    # Never even acknowledged: no queue to be in, so this is the peer, not their popularity.
-                    if now - t0 > first_byte_s:
-                        raise LosslessError("transfer never appeared in slskd", "first_byte_timeout")
+                    if (err := budget.never_appeared(now)) is not None:
+                        raise err
                     continue
                 transfer_id = tr.get("id")
                 done, state = int(tr.get("bytesTransferred") or 0), str(tr.get("state") or "")
-                if active_at is None and (done > 0 or not is_queued(state)):
-                    active_at = now
-                if done > 0 and first_byte_at is None:
-                    first_byte_at = now
-                if done > last_done:
-                    last_done, moved_at = done, now
-                first_byte_ms = None if first_byte_at is None else int((first_byte_at - t0) * 1000)
+                budget.observe(now, done, state)
                 if state != last_state:
                     if on_raw:
                         on_raw(f"transfer-{n}", tr)
                     n, last_state = n + 1, state
                 if on_progress:
-                    on_progress(TransferProgress(state, done, file.size, float(tr.get("averageSpeed") or 0), first_byte_ms))
+                    on_progress(TransferProgress(state, done, file.size, float(tr.get("averageSpeed") or 0),
+                                                 budget.first_byte_ms))
                 if done > file.size:
                     await self.client.cancel_download(file.username, tr["id"])
                     raise LosslessError(f"peer sent {done} bytes for a {file.size} byte file", "transfer_failed")
@@ -351,20 +392,9 @@ class SoulseekProvider:
                         return _claim(dest)
                     raise LosslessError(f"transfer ended {state}" if "Succeeded" not in state
                                         else "completed but no file at the derived path", "transfer_failed")
-                if active_at is None:
-                    if now - t0 > queue_wait_s:
-                        await self.client.cancel_download(file.username, tr["id"])
-                        raise LosslessError(f"still {state.lower() or 'queued'} after {queue_wait_s:.0f} s", "queued")
-                    continue
-                if first_byte_at is None and now - active_at > first_byte_s:
+                if (err := budget.expired(now, state, done, file.size)) is not None:
                     await self.client.cancel_download(file.username, tr["id"])
-                    raise LosslessError(f"no bytes within {first_byte_s:.0f} s", "first_byte_timeout")
-                if moved_at is not None and now - moved_at > stall_s:
-                    await self.client.cancel_download(file.username, tr["id"])
-                    raise LosslessError(f"stopped sending after {done} of {file.size} bytes", "transfer_timeout")
-                if now - active_at > total_s:
-                    await self.client.cancel_download(file.username, tr["id"])
-                    raise LosslessError(f"not finished within {total_s:.0f} s", "transfer_timeout")
+                    raise err
         except asyncio.CancelledError:
             # The owner stopped this download. Tell slskd so the peer stops sending, and take the partial
             # file with it: nothing else will ever look at it, and leaving it at the derived path would be
