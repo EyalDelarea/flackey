@@ -300,7 +300,13 @@ jobs:
     # The test jobs no installer waits on, too: python-mac is the one that proves the update helper
     # still refuses what it should.
     needs: [mac, windows, python-audio, python-mac, python-windows]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # `mac` needs `changes`, which is skipped on a push; a skipped job anywhere upstream makes the
+    # default rule skip this one too, so the expression restates "every need succeeded".
+    if: >-
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.mac.result == 'success' && needs.windows.result == 'success' &&
+      needs.python-audio.result == 'success' && needs.python-mac.result == 'success' &&
+      needs.python-windows.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
