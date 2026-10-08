@@ -32,6 +32,18 @@ def test_sanitize(raw, expected):
     assert sanitize(raw) == expected
 
 
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+@pytest.mark.parametrize("raw,expected", [
+    ("tab\x01bed", "tabbed"), ("nul\x00byte", "nulbyte"), ("bell\x07\x7f", "bell"),
+    ("line\nbreak", "line break"), ("esc\x1b[31mred", "esc[31mred"), ("\x00\x01", "Unknown"),
+])
+def test_sanitize_strips_control_characters_everywhere(monkeypatch, platform, raw, expected):
+    """A control character in a tag is never wanted in a file name: a NUL ends the name early in C, and an
+    escape sequence repaints the terminal of whoever lists the folder."""
+    monkeypatch.setattr(sys, "platform", platform)
+    assert sanitize(raw) == expected
+
+
 def test_final_path_files_under_the_artist(tmp_path: Path):
     assert final_path(tmp_path, CT, "mp3") == tmp_path / "Astral Projection" / "Astral Projection - Into the Void.mp3"
 
@@ -143,14 +155,16 @@ def on_windows(monkeypatch):
 @pytest.mark.parametrize("raw,expected", [
     ("Aux", "Aux_"), ("con", "con_"), ("NUL.remix", "NUL_.remix"), ("COM1", "COM1_"), ("lpt9 ", "lpt9_"),
     ("Auxiliary", "Auxiliary"), ("Con Brio", "Con Brio"), ("COM10", "COM10"),
-    ("tab\x01bed", "tab-bed"),
+    ("tab\x01bed", "tabbed"),
+    ("COM\u00b9", "COM\u00b9_"), ("lpt\u00b3.flac", "lpt\u00b3_.flac"), ("COM\u00b2 ", "COM\u00b2_"),
+    ("CONIN$", "CONIN$_"), ("conout$.mp3", "conout$_.mp3"), ("CONIN$ Dub", "CONIN$ Dub"),
     ("x" * 119 + " y", "x" * 119),  # the cut lands on the space, which Windows would drop by itself
 ])
 def test_sanitize_on_windows_avoids_device_names_and_trailing_spaces(on_windows, raw, expected):
     assert sanitize(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["Aux", "x" * 119 + " y", "tab\x01bed"])
+@pytest.mark.parametrize("raw", ["Aux", "x" * 119 + " y", "COM\u00b9", "CONIN$"])
 def test_sanitize_on_the_mac_keeps_the_names_it_always_gave(monkeypatch, raw):
     monkeypatch.setattr(sys, "platform", "darwin")
     assert sanitize(raw) == " ".join(raw.split())[:120]
