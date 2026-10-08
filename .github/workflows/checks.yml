@@ -1,6 +1,7 @@
-# Every push and pull request: the four checks the README lists for development (pytest with real
-# ffmpeg, ffprobe and fpcalc, so the audio tests run instead of skipping), a type-checked build of the
-# web UI, and the test suite again on macOS and on Windows. The green checks gate two installer builds:
+# Every push and pull request: the four checks the README lists for development, a type-checked build
+# of the web UI, and the test suite again on macOS, on Windows, and with real ffmpeg/ffprobe/fpcalc
+# (the audio tests skip without them). The ruff/pytest and web jobs gate two installer builds; the
+# other test jobs run alongside them and gate the release:
 #   - macOS (Flackey.pkg), on a push to main or a version tag, and on a pull request that touches what
 #     the build is made of (packaging/, pyproject.toml, uv.lock, this file);
 #   - Windows (Flackey-Setup.exe), on every push *and* pull request -- nobody on the project has a
@@ -56,6 +57,26 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: ruff
+        run: uv run ruff check src tests
+      - name: lint-imports
+        run: uv run lint-imports
+      - name: pytest
+        run: uv run pytest -q
+
+  python-audio:
+    name: pytest with ffmpeg and fpcalc
+    # The audio tests skip wherever ffmpeg/ffprobe/fpcalc are missing, which is every other job. They
+    # get their own job because running them inside the job above added about 55s to it, and the
+    # installer builds wait on that one. Here they run alongside the rest, off the critical path.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
       - name: ffmpeg, ffprobe, fpcalc
         # Static builds from GitHub releases, checked against pinned digests: a few seconds, where apt
         # takes tens of them. Without these every requires_ffmpeg / requires_fpcalc test skips.
@@ -81,13 +102,16 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
       - name: Install
         run: uv sync --frozen
-      - name: ruff
-        run: uv run ruff check src tests
-      - name: lint-imports
-        run: uv run lint-imports
-      - name: pytest
-        # -rs lists every skip, so a log shows the audio tests ran rather than skipped.
-        run: uv run pytest -q -rs
+      - name: pytest (files that use the audio tools)
+        # Every test file that gates on the tools (conftest's requires_ffmpeg / requires_fpcalc, or the
+        # has_* checks), found at run time so a new one is picked up without editing this. -rs lists
+        # every skip, so the log shows the audio tests ran rather than skipped.
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(grep -rlE --include='test_*.py' 'requires_(ffmpeg|fpcalc)|has_(ffmpeg|fpcalc)' tests | sort)
+          (( ${#files[@]} )) || { echo "::error::no test file uses the audio tools; this job selects nothing"; exit 1; }
+          echo "${files[@]}"
+          uv run pytest -q -rs "${files[@]}"
 
   python-mac:
     name: pytest (macOS)
@@ -273,8 +297,9 @@ jobs:
 
   release:
     name: GitHub release
-    # python-mac too: it is the job that proves the update helper still refuses what it should.
-    needs: [mac, windows, python-mac, python-windows]
+    # The test jobs no installer waits on, too: python-mac is the one that proves the update helper
+    # still refuses what it should.
+    needs: [mac, windows, python-audio, python-mac, python-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -360,16 +385,3 @@ jobs:
           [[ "$PRERELEASE" == "true" ]] && channel=(--prerelease --latest=false)
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${channel[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes
-
-  bench-apt-audio:
-    # TEMPORARY: measures apt against the static download above; removed before review.
-    name: bench apt ffmpeg (temporary)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: apt ffmpeg + chromaprint
-        run: |
-          start=$(date +%s)
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ffmpeg libchromaprint-tools
-          echo "apt took $(( $(date +%s) - start ))s"
