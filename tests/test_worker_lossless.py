@@ -328,12 +328,14 @@ async def test_a_transfer_is_not_enqueued_without_room_for_it(lenv, monkeypatch)
         seen.append(path)
         return 1_000
     monkeypatch.setattr(lossless_attempt_mod, "free_bytes", no_room)
+    provider.files = [lf("a"), lf("b", queue_length=1)]
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert provider.downloaded == []
     a = attempt_of(store, rid)
-    assert any(e["event"] == "disk_full" for e in a.timeline)
+    # A full disk is not this peer's fault, so the next pick is not tried against it.
+    assert [e["detail"]["pick"] for e in a.timeline if e["event"] == "disk_full"] == [1]
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
     assert settings.slskd_downloads in seen
 

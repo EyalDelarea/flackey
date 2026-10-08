@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .audiofile import WrongFormat, input_args
+from .audiofile import DEMUXERS, WrongFormat, input_args
 from .models import Verdict
 from .tools import no_window, tool_path
 
@@ -145,6 +145,11 @@ def spectrogram_png(path: Path, out: Path, window_s: int = 60, duration_s: float
 
 
 def verify(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+    if path.suffix.lower() not in DEMUXERS:
+        # Nothing to check the bytes against, so no tool reads them with its own probing: only the formats
+        # verify can pass have an extension listed there.
+        fmt = path.suffix.lstrip(".").lower() or "unknown"
+        return Verdict(False, fmt, 0, 0, f"unsupported format {fmt}", None)
     pr = probe(path)
     if pr.fmt != "mp3" and pr.fmt not in LOSSLESS:
         return Verdict(False, pr.fmt, pr.bitrate_kbps, 0, f"unsupported format {pr.fmt}", None,

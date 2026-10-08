@@ -112,6 +112,19 @@ def test_verify_refuses_a_mismatched_file_before_running_anything(tmp_path: Path
     assert ran.cmds == []
 
 
+@pytest.mark.parametrize("name", ["x.bin", "x.m4a", "x"])
+def test_verify_refuses_an_extension_that_claims_no_format_without_running_anything(tmp_path: Path, monkeypatch,
+                                                                                    name: str):
+    """Only reference audio (probed by `reference.py`, never verified) keeps the tools' own probing; a
+    file offered for filing must name a format its bytes can be checked against."""
+    ran = Ran(PROBE_JSON)
+    monkeypatch.setattr(verify, "tool_path", lambda tool: f"/bin/{tool}")
+    monkeypatch.setattr(verify.subprocess, "run", ran)
+    v = verify.verify(put(tmp_path, name, FLAC), tmp_path)
+    assert not v.passed and "unsupported" in v.reason and v.spectrogram_path is None
+    assert ran.cmds == []
+
+
 def test_convert_pins_the_demuxer_and_refuses_a_mismatch(tmp_path: Path, monkeypatch):
     ran = Ran()
     monkeypatch.setattr(convert, "tool_path", lambda name: f"/bin/{name}")

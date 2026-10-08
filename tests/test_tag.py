@@ -1,5 +1,6 @@
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -429,6 +430,7 @@ def test_the_wav_rewrite_never_reads_the_audio_in_one_go(tmp_path: Path, monkeyp
     assert audio in p.read_bytes()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no mode bits to keep")
 def test_the_wav_rewrite_keeps_the_file_s_permissions(tmp_path: Path):
     import os
     import stat

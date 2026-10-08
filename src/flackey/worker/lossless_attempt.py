@@ -177,6 +177,15 @@ class LosslessMixin:
             if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
+            # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there:
+            # room for all three on each, so either folder may share the other's disk. A full disk is no
+            # fact about this peer, so no later pick is tried either.
+            need = 3 * file.size + DISK_MARGIN_BYTES
+            short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
+            if short:
+                rec.event("disk_full", pick=n, need_bytes=need, folders=short)
+                outcome = "transfer_failed"
+                break
             hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
             if hit is not None:
                 try:
@@ -194,13 +203,6 @@ class LosslessMixin:
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
                                   file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
-        # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there: room
-        # for all three on each, so either folder may share the other's disk.
-        need = 3 * file.size + DISK_MARGIN_BYTES
-        short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
-        if short:
-            rec.event("disk_full", pick=n, need_bytes=need, folders=short)
-            return None, "transfer_failed"
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
 
