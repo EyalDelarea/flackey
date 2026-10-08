@@ -260,9 +260,9 @@ def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
     is caught too."""
     if is_network_path(str(library_root)):
         return "That folder is on another computer. Choose a folder on this computer or a drive plugged into it."
+    # Only the path as given: a folder on a mapped drive (Z:\) resolves to its UNC path, and an owner
+    # who already chose one must not be locked out of every settings save by this check.
     root = library_root.expanduser().resolve()
-    if is_network_path(str(root)):  # a mapped network drive resolves to its UNC path
-        return "That folder is on another computer. Choose a folder on this computer or a drive plugged into it."
     home = Path.home().resolve()
     if root == Path(root.anchor) or root == home or home.is_relative_to(root):
         return "That folder holds your whole home folder. Choose a folder just for your music."

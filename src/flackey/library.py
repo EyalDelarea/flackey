@@ -23,8 +23,8 @@ _BAD = re.compile(r'[\\/:*?"<>|]')
 #
 # The list is Microsoft's ("Naming Files, Paths, and Namespaces"), including the superscript ¹ ² ³ that
 # Windows reads as digits in COM# and LPT#. CONIN$ and CONOUT$ are not on that page; they are the console
-# names CreateFile opens (its own reference page), and Windows 11 treats them as devices too, so they are
-# kept out the same way.
+# names CreateFile documents opening, and Python's own `os.path.isreserved` counts them among the DOS
+# device names, so they are kept out the same way.
 _WINDOWS_DIGITS = "123456789¹²³"
 _WINDOWS_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
                                *(f"COM{d}" for d in _WINDOWS_DIGITS), *(f"LPT{d}" for d in _WINDOWS_DIGITS)})

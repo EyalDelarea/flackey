@@ -298,7 +298,7 @@ class Pending:
             launch_helper(staged, log_path=log_path)
         except StagingError:
             log.error("the update was staged at %s but the helper could not be started; Flackey is "
-                      "unchanged and the staged copy is still there", staged.path)
+                      "unchanged", staged.path)
             return False
         except Exception:
             log.exception("unexpected failure starting the update helper")
