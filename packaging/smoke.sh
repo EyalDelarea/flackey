@@ -15,15 +15,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Every /api/ call needs the app's access key; the smoke run fixes it rather than reading it off stdout.
+TOKEN="smoke-$(openssl rand -hex 24)"
+
 if curl -s -m 1 "http://127.0.0.1:$PORT/api/health" >/dev/null; then
   echo "smoke port $PORT is already in use; set SMOKE_PORT to a free port" >&2
   exit 1
 fi
 
-open --env DATA_DIR="$S/data" --env LIBRARY_ROOT="$S/lib" --env WEB_PORT="$PORT" "$APP"
+open --env DATA_DIR="$S/data" --env LIBRARY_ROOT="$S/lib" --env WEB_PORT="$PORT" \
+  --env FLACKEY_API_TOKEN="$TOKEN" "$APP"
 health=""
 for _ in $(seq 1 45); do
-  health="$(curl -s -m 2 "http://127.0.0.1:$PORT/api/health" || true)"
+  health="$(curl -s -f -m 2 -H "x-flackey-token: $TOKEN" "http://127.0.0.1:$PORT/api/health" || true)"
   [[ -n "$health" ]] && break
   sleep 2
 done

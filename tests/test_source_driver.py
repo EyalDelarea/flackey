@@ -184,6 +184,84 @@ async def test_the_bot_conversation_is_held_by_one_track_at_a_time(tmp_path: Pat
     assert sorted(p.name for p in tmp_path.iterdir()) == ["1.mp3", "2.mp3"]
 
 
+# ---- what the bot's document is allowed to be -----------------------------
+# The document's size, MIME type and file name are all the peer's to choose. A single track is tens of
+# megabytes; a file name is the sender's text and must never become part of a path on this disk.
+
+
+class _Doc:
+    def __init__(self, mime_type: str | None = None, size: int | None = None):
+        self.mime_type, self.size = mime_type, size
+
+
+class _File:
+    def __init__(self, name: str | None):
+        self.name = name
+
+
+class _Reply:
+    def __init__(self, mime_type=None, size=None, name=None):
+        self.document = _Doc(mime_type, size)
+        self.file = _File(name)
+
+
+async def _fetch_reply(tmp_path: Path, reply) -> tuple[Path | None, list]:
+    downloads: list = []
+
+    async def download(msg, file):
+        downloads.append(file)
+        Path(file).write_bytes(b"audio")
+
+    source = DeezerBotSource(FakeClient(reply, download), "bot", deezer=None, fetch_timeout=1)
+    cand = _candidate()
+    source._menus[cand.source_ref] = FakeMenuMessage()
+    return await source.fetch(cand, tmp_path / "req1"), downloads
+
+
+async def test_a_document_larger_than_any_track_is_refused_before_it_is_downloaded(tmp_path: Path):
+    from flackey.source.base import SourceError
+    from flackey.source.deezer_bot import MAX_DOCUMENT_BYTES
+
+    downloads: list = []
+
+    async def download(msg, file):
+        downloads.append(file)
+
+    reply = _Reply("audio/flac", size=MAX_DOCUMENT_BYTES + 1)
+    source = DeezerBotSource(FakeClient(reply, download), "bot", deezer=None, fetch_timeout=1)
+    cand = _candidate()
+    source._menus[cand.source_ref] = FakeMenuMessage()
+    with pytest.raises(SourceError, match="too large"):
+        await source.fetch(cand, tmp_path)
+    assert downloads == [], "the size is declared up front; nothing is pulled to find out"
+
+
+async def test_a_document_of_a_track_s_size_is_downloaded(tmp_path: Path):
+    got, downloads = await _fetch_reply(tmp_path, _Reply("audio/flac", size=40 * 1024 * 1024))
+    assert got == tmp_path / "req1" / "1.flac" and len(downloads) == 1
+
+
+async def test_the_extension_comes_from_the_mime_type_first(tmp_path: Path):
+    got, _ = await _fetch_reply(tmp_path, _Reply("audio/mpeg", name="track.flac"))
+    assert got.name == "1.mp3"
+
+
+async def test_a_file_name_extension_is_used_only_when_it_is_a_known_audio_type(tmp_path: Path):
+    got, _ = await _fetch_reply(tmp_path, _Reply("application/octet-stream", name="Track.FLAC"))
+    assert got.name == "1.flac"
+    got, _ = await _fetch_reply(tmp_path, _Reply("application/octet-stream", name="track.exe"))
+    assert got.name == "1.bin"
+
+
+async def test_a_file_name_cannot_steer_the_download_out_of_its_folder(tmp_path: Path):
+    """The old fallback took everything after the last dot, so `x./../../evil` named a file two folders
+    up. The extension is now picked from a fixed set, never copied from the sender's text."""
+    got, downloads = await _fetch_reply(tmp_path, _Reply(None, name="x./../../evil"))
+    assert got == tmp_path / "req1" / "1.bin"
+    assert [Path(f).parent for f in downloads] == [tmp_path / "req1"]
+    assert not (tmp_path / "evil").exists()
+
+
 # ---- enrichment -----------------------------------------------------------
 # `_enrich` already fetches the Deezer record for every candidate's metadata, so whether Deezer has a
 # 30 s sample costs nothing extra to remember -- and the page needs it before it renders, to decide

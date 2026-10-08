@@ -5,10 +5,13 @@ import datetime as dt
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import webbrowser
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -25,9 +28,21 @@ log = logging.getLogger(__name__)
 RELEASES_URL = "https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10"
 # Where a release's files and page may live. The feed is trusted to name the release, not to send the app
 # anywhere it likes: an asset or page link outside the repo is treated as missing. Checked on the link
-# the feed gives; GitHub then redirects the download to its CDN, which is expected.
-ASSET_PREFIX = "https://github.com/EyalDelarea/flackey/releases/download/"
-RELEASE_PAGE_PREFIX = "https://github.com/EyalDelarea/flackey/releases/"
+# the feed gives, after decoding, so `..` cannot walk it out of the folder.
+RELEASE_PATH = "/EyalDelarea/flackey/releases/"
+ASSET_PATH = RELEASE_PATH + "download/"
+# Every hop of every fetch, redirects included, must be HTTPS to one of these. GitHub answers an asset
+# link with a 302 to its CDN: release-assets.githubusercontent.com today, objects.githubusercontent.com
+# before that.
+FEED_HOSTS = frozenset({"api.github.com"})
+DOWNLOAD_HOSTS = frozenset({"github.com", "objects.githubusercontent.com",
+                            "release-assets.githubusercontent.com"})
+MAX_REDIRECTS = 5
+# Whatever the feed declares, nothing larger is fetched: a real installer is about a tenth of this.
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+# The private folder each installer is opened from (see `private_copy`).
+INSTALLER_COPY_PREFIX = "installer-"
+_VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)", re.ASCII)
 INSTALLER_NAME = "Flackey.pkg"
 # The Windows installer, under the same name on every release so this lookup never has to guess a
 # version into it. Inno Setup builds it; there is no seamless path on Windows yet, so it is the only one.
@@ -44,11 +59,62 @@ class ShortDownload(Exception):
     """The body did not match the size the release declared -- too few bytes or too many."""
 
 
-def _version_tuple(v: str) -> tuple[int, int, int]:
-    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", v.strip())
-    if not m:
-        return (0, 0, 0)
-    return tuple(int(p) for p in m.groups())
+class RefusedHost(httpx.HTTPError):
+    """A fetch, or a redirect it was sent on, that leaves GitHub or HTTPS. An `HTTPError` so every caller
+    already words it as the failed download it is."""
+
+
+class Unverified(Exception):
+    """The installer on disk is not the one the release signed, or this copy cannot tell."""
+
+
+def parse_version(v: object) -> tuple[int, int, int] | None:
+    """`1.2.3` or `v1.2.3` and nothing else: no padding, no suffix, no digits from other scripts."""
+    m = _VERSION.fullmatch(v) if isinstance(v, str) else None
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def github_link(url: object, path_prefix: str) -> str | None:
+    """`url` when it is a plain https://github.com link under `path_prefix`, else None."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme != "https" or parts.netloc != "github.com" or parts.query or parts.fragment:
+        return None
+    path = unquote(parts.path)
+    if not path.startswith(path_prefix) or "\\" in path or any(ord(c) < 0x21 or ord(c) == 0x7F for c in path):
+        return None
+    if any(segment in (".", "..") for segment in path.split("/")):
+        return None
+    return url
+
+
+def _only(hosts: frozenset[str]):
+    async def check(request: httpx.Request) -> None:
+        url = request.url
+        if url.scheme != "https" or url.host not in hosts or url.port not in (None, 443) or url.userinfo:
+            raise RefusedHost(f"refused to fetch from {url.scheme}://{url.host}")
+    return check
+
+
+def github_client(hosts: frozenset[str], timeout) -> httpx.AsyncClient:
+    """Follows redirects, but only a few, and each one is checked against `hosts` before it is sent."""
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=True, max_redirects=MAX_REDIRECTS,
+                             event_hooks={"request": [_only(hosts)]})
+
+
+def can_verify() -> bool:
+    return signature.seamless_updates_configured()
+
+
+def must_verify() -> bool:
+    """A build that carries the release key checks every installer against it. A packaged build always
+    must: one whose key is missing or malformed is broken, and opening unchecked installers is the last
+    thing it should fall back to. Only a source checkout without a key opens what it downloads as is."""
+    return can_verify() or bool(getattr(sys, "frozen", False))
 
 
 def _size_mb(size: int | None) -> str | None:
@@ -62,8 +128,7 @@ def archive_name(version: str) -> str:
 
 
 def _release_page(latest: dict | None) -> str | None:
-    url = str(latest.get("html_url") or "") if latest else ""
-    return url if url.startswith(RELEASE_PAGE_PREFIX) else None
+    return github_link(latest.get("html_url"), RELEASE_PATH) if latest else None
 
 
 def installer_name() -> str:
@@ -91,7 +156,7 @@ async def latest_release() -> dict:
     """The download runs this lookup again for itself: the client never says what to fetch, so a
     stale page cannot talk the app into downloading something else."""
     try:
-        async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
+        async with github_client(FEED_HOSTS, 5) as client:
             res = await client.get(RELEASES_URL)
             res.raise_for_status()
         releases = res.json()
@@ -101,13 +166,19 @@ async def latest_release() -> dict:
     if not isinstance(releases, list):
         return {"ok": False, "current": __version__, "newer": False, "available": False,
                 "error": "Release feed did not look right."}
-    latest = next((item for item in releases
-                    if isinstance(item, dict) and not item.get("draft") and not item.get("prerelease")), None)
+    # The highest version, not the first listed: the feed is in creation order, and a fix for an older
+    # line can be published after a newer release. A tag that is not a plain version is not a release.
+    releases_by_version = [(version, item) for item in releases
+                           if isinstance(item, dict) and not item.get("draft") and not item.get("prerelease")
+                           and (version := parse_version(item.get("tag_name"))) is not None]
+    latest = max(releases_by_version, key=lambda pair: pair[0])[1] if releases_by_version else None
     assets = latest.get("assets", []) if latest else []
+    if not isinstance(assets, list):
+        assets = []
 
     def asset(name: str) -> dict | None:
         return next((a for a in assets if isinstance(a, dict) and a.get("name") == name
-                     and str(a.get("browser_download_url") or "").startswith(ASSET_PREFIX)), None)
+                     and github_link(a.get("browser_download_url"), ASSET_PATH)), None)
 
     installer = asset(installer_name())
     installer_sig = asset(installer_name() + SIGNATURE_SUFFIX)
@@ -117,17 +188,21 @@ async def latest_release() -> dict:
     archive_sig = asset(archive_name(latest_version) + SIGNATURE_SUFFIX) if latest_version else None
     # A newer tag can exist before its installer is built, so "newer" and "downloadable" are
     # separate; conflating them made a broken release read back as "up to date".
-    newer = bool(latest and _version_tuple(latest_version) > _version_tuple(__version__))
+    newer = bool(latest and (parse_version(latest_version) or (0, 0, 0))
+                 > (parse_version(__version__) or (0, 0, 0)))
+
     def declared_size(a: dict | None) -> int | None:
         """The only thing bounding the download and the only thing that can say it arrived whole."""
         raw = a.get("size") if a else None
-        return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else None
+        return (raw if isinstance(raw, int) and not isinstance(raw, bool) and 0 < raw <= MAX_DOWNLOAD_BYTES
+                else None)
 
     size = declared_size(installer)
-    # A build that carries the release key only opens an installer that verifies against it: otherwise
-    # a release stripped of its signed zip would walk every copy onto the unchecked installer path.
-    installer_verified = signature.seamless_updates_configured()
-    available = size is not None and newer and (installer_sig is not None or not installer_verified)
+    # A build that must verify only opens an installer that verifies: otherwise a release stripped of its
+    # signed files would walk every copy onto the unchecked installer path.
+    verifiable = not must_verify() or can_verify()
+    available = (size is not None and newer and verifiable
+                 and (installer_sig is not None or not must_verify()))
     archive_size = declared_size(archive)
     # Will pressing Update replace the app in place, or open an installer? A release missing either
     # half of the signed pair is not one to install seamlessly, and nor is a build that cannot
@@ -144,6 +219,7 @@ async def latest_release() -> dict:
         except ValueError:
             date = published
     return {"ok": True, "current": __version__, "newer": newer, "available": available,
+            "verifiable": verifiable,
             "latest": latest_version or None,
             "url": installer.get("browser_download_url") if installer else None,
             "installer_signature_url": installer_sig.get("browser_download_url") if installer_sig else None,
@@ -155,6 +231,42 @@ async def latest_release() -> dict:
             "archive_url": archive.get("browser_download_url") if seamless else None,
             "archive_size": archive_size if seamless else None,
             "signature_url": archive_sig.get("browser_download_url") if seamless else None}
+
+
+def private_copy(root: Path, name: str, payload: bytes) -> Path:
+    """Write `payload` to a file nobody else has had a chance to touch, and return it.
+
+    Checking the bytes and then opening a path is two reads of that path, and anything that can write to
+    it in between swaps what gets opened. So what is opened is never the download: it is a new file,
+    created exclusively (`O_EXCL`, so not a file or link planted in advance) inside a folder `mkdtemp`
+    has just made for this user alone, holding the very bytes that were checked."""
+    root.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix=INSTALLER_COPY_PREFIX, dir=root))
+    path = folder / name
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(payload)
+    return path
+
+
+def remove_private_copies(root: Path) -> None:
+    """The folders earlier presses opened installers from. Only swept when a new download starts: an
+    installer may still be reading the latest one."""
+    for old in root.glob(INSTALLER_COPY_PREFIX + "*") if root.is_dir() else ():
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def read_checked(path: Path, version: str, sig: bytes | None) -> bytes:
+    """The installer's bytes, read once, and verified when this build must verify. Raises Unverified
+    when it does not check out (or cannot be checked), OSError when it cannot be read."""
+    if path.stat().st_size > MAX_DOWNLOAD_BYTES:
+        raise Unverified(f"{path} is larger than any installer")
+    payload = path.read_bytes()
+    if must_verify() and not (can_verify() and sig is not None and signature.verify_archive(
+            version, payload, sig, domain=signature.INSTALLER_DOMAIN)):
+        raise Unverified(f"{path} did not match its signature")
+    return payload
 
 
 def router(status: Status | dict | None = None, settings: Settings | None = None,
@@ -169,6 +281,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
     # Held only so the running download is not garbage collected: asyncio keeps a bare task weakly.
     task: asyncio.Task | None = None
     staged: selfupdate.StagedUpdate | None = None
+    # What the installer on disk was checked against, kept here rather than in `state` (which the page
+    # sees) so the "Open installer" button can check it again before every open.
+    checked: dict = {"version": None, "sig": None}
 
     def publish(**fields) -> None:
         state.update({"percent": 0, "received": 0, "total": None, "version": None, "path": None,
@@ -219,7 +334,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         try:
             with partial.open("wb") as fh:
                 async with (
-                    httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client,
+                    github_client(DOWNLOAD_HOSTS, DOWNLOAD_TIMEOUT) as client,
                     client.stream("GET", url) as res,
                 ):
                     res.raise_for_status()
@@ -227,8 +342,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                     async for chunk in res.aiter_bytes():
                         received += len(chunk)
                         # Anything past the declared size is not the download.
-                        if total and received > total:
-                            raise ShortDownload(f"body ran past the {total} bytes the release declared")
+                        if received > (total or MAX_DOWNLOAD_BYTES):
+                            raise ShortDownload(f"body ran past the {total or MAX_DOWNLOAD_BYTES} bytes "
+                                                "it may have")
                         fh.write(chunk)
                         percent = int(received * 100 / total) if total else 0
                         # Only on a whole-number move: per-chunk is thousands of SSE frames.
@@ -253,7 +369,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         stream is an out-of-memory kill before there is anything to measure."""
         body = bytearray()
         try:
-            async with (httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client,
+            async with (github_client(DOWNLOAD_HOSTS, DOWNLOAD_TIMEOUT) as client,
                         client.stream("GET", url) as res):
                 res.raise_for_status()
                 async for chunk in res.aiter_bytes():
@@ -285,17 +401,16 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="error", version=version, seamless=seamless, error=save_error)
         return None
 
-    async def signed(path: Path, version: str, sig_url: str | None,
-                     domain: bytes = signature.DOMAIN) -> bool | None:
-        """Whether the download at `path` matches its detached signature; None when it cannot be read
-        back. The signature is fetched first, as both callers always did."""
+    async def signed(path: Path, version: str, sig_url: str | None) -> bool | None:
+        """Whether the archive matches its detached signature; None when it cannot be read back. A pass
+        records the bytes' hash, and `selfupdate.stage` unpacks nothing else."""
         sig = await fetch_signature(sig_url) if sig_url else None
         try:
             payload = path.read_bytes()
         except OSError:
             log.exception("could not read back the download at %s", path)
             return None
-        return sig is not None and signature.verify_archive(version, payload, sig, domain=domain)
+        return sig is not None and signature.verify_archive(version, payload, sig)
 
     async def download_archive(url: str, total: int | None, sig_url: str, version: str) -> None:
         """Fetch the bundle, prove it, stage it, and stop -- nothing is swapped until the owner
@@ -328,6 +443,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return
 
         try:
+            # `stage` reads the archive once more and unpacks only bytes whose hash verified above.
             new = selfupdate.stage(archive, version, relaunch=True)
         except selfupdate.StagingError as exc:
             log.error("could not stage the verified update for %s: %s", version, exc)
@@ -379,22 +495,44 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return
         if received is None:
             return
-        if signature.seamless_updates_configured():
+        sig = None
+        if must_verify():
             # Installer.app runs the package's scripts as root once the owner types their password, so
             # it is checked like the seamless archive before anything opens it. Setup.exe on Windows is
             # held to the same rule: it is the release job that signs it, alongside the .pkg.
             publish(state="verifying", percent=100, received=received, total=total, version=version)
-            if not await signed(target, version, sig_url, domain=signature.INSTALLER_DOMAIN):
-                log.error("the installer for %s did not match its signature; refusing to open it", version)
-                remove_download(target)
-                publish(state="error", version=version,
-                        error="This update could not be verified, so Flackey did not open it. "
-                              "Download it from the release page instead.")
-                return
+            sig = await fetch_signature(sig_url) if sig_url else None
+        checked.update(version=version, sig=sig)
+        await open_checked(target, version, received, total)
+
+    async def open_checked(target: Path, version: str, received: int, total: int | None) -> None:
+        """Check the installer on disk (again) and open a private copy of exactly the bytes checked.
+        Both the first open and every "Open installer" press come through here."""
+        try:
+            payload = read_checked(target, version, checked["sig"])
+        except Unverified:
+            log.error("the installer for %s did not match its signature; refusing to open it", version)
+            remove_download(target)
+            publish(state="error", version=version,
+                    error="This update could not be verified, so Flackey did not open it. "
+                          "Download it from the release page instead.")
+            return
+        except OSError:
+            log.exception("could not read back the installer at %s", target)
+            remove_download(target)
+            publish(state="error", version=version, error="Could not read the downloaded update. Try again.")
+            return
+        try:
+            copy = private_copy(updates_dir(), installer_name(), payload)
+        except OSError:
+            copy = None
+            log.warning("could not write a private copy of the installer", exc_info=True)
         publish(state="ready", percent=100, received=received, total=total, version=version,
                 path=str(target))
         try:
-            hand_over_to_installer(target)
+            if copy is None:
+                raise OSError("no private copy to open")
+            hand_over_to_installer(copy)
         except Exception:
             log.warning("could not open the downloaded installer at %s", target, exc_info=True)
             # Still ready: the file is there and correct, only the last step needs a hand.
@@ -425,7 +563,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         # Re-open what is already on disk rather than fetching it again. This is also what the
         # "Open installer" button presses, so the two paths stay one endpoint.
         if state["state"] == "ready" and state["path"] and Path(state["path"]).exists():
-            hand_over_to_installer(Path(state["path"]))
+            await open_checked(Path(state["path"]), state["version"], state["received"], state["total"])
             return dict(state)
         # Claimed before the lookup below, which awaits: two presses that both got past the checks
         # while it ran would interleave their writes onto the same part-file.
@@ -440,8 +578,13 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             raise HTTPException(502, info.get("error") or "Could not check for updates.")
         if not info["available"] and not info["seamless"]:
             publish(state="idle")
+            if info["newer"] and not info.get("verifiable", True):
+                raise HTTPException(409, "This copy of Flackey cannot check updates, so it will not install "
+                                         "one. Download it from the release page instead.")
             raise HTTPException(409, f"Version {info['latest']} is out, but its installer isn't published yet."
                                 if info["newer"] else "Flackey is already up to date.")
+        # A new download: the copies earlier presses opened installers from are done with.
+        remove_private_copies(updates_dir())
         # Chosen once, never as a recovery: a failed seamless attempt does not retry as an installer
         # download, because fetching a second payload with less checking answers nothing.
         if info["seamless"]:

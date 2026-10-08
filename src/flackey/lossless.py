@@ -17,6 +17,10 @@ from .models import Candidate, CatalogTrack, is_original, norm
 
 LOSSLESS_EXTENSIONS = frozenset({"flac", "wav", "aiff", "aif"})
 MAX_SAMPLE_RATE = 48_000                       # CDJs play 44.1 and 48 kHz; nothing higher gets downloaded
+# Absolute caps, whatever the bitrate: no track worth filing is this large or this long, and a peer that
+# advertises one would fill the disk or hold the worker for the whole transfer ceiling.
+MAX_FILE_BYTES = 1_000_000_000
+MAX_LENGTH_S = 30 * 60
 SIZE_KBPS = {"flac": (400, 2500), "wav": (1400, 4700), "aiff": (1400, 4700), "aif": (1400, 4700)}
 VERSION_WORDS = frozenset({"remix", "rmx", "mix", "edit", "version", "dub", "rework", "bootleg", "mashup",
                            "live", "instrumental", "acoustic", "vip", "remixed"})
@@ -161,6 +165,14 @@ def rule_has_length(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | Non
     return "no length reported" if f.length_s is None else None
 
 
+def rule_limits(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    if f.size >= MAX_FILE_BYTES:
+        return f"{f.size} bytes is past the {MAX_FILE_BYTES} a track may be"
+    if f.length_s is not None and f.length_s > MAX_LENGTH_S:
+        return f"{f.length_s} s is past the {MAX_LENGTH_S} s a track may be"
+    return None
+
+
 def rule_plausible_size(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
     if f.sample_rate and f.sample_rate > MAX_SAMPLE_RATE:
         return f"sample rate {f.sample_rate} above {MAX_SAMPLE_RATE}"
@@ -225,7 +237,8 @@ def rank_artist(f: LosslessFile, ref: Reference) -> int:
 # survivors instead. `flackey replay-picks` measured this order against the 216 stored no-pick reports
 # (docs/research/2026-09-21-no-pick-replay.md) before it became the live default.
 HARD_RULES: list[tuple[str, Rule]] = [
-    ("extension", rule_extension), ("has_length", rule_has_length), ("plausible_size", rule_plausible_size),
+    ("extension", rule_extension), ("has_length", rule_has_length), ("limits", rule_limits),
+    ("plausible_size", rule_plausible_size),
     ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
 IDENTITY_RANKERS: list[tuple[str, Ranker]] = [

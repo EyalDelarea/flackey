@@ -108,9 +108,14 @@ npm --prefix web run build   # builds web/dist, which flackey start serves
 ### 🎚️ Usage
 
 ```bash
-uv run flackey start          # worker + web UI, until Ctrl-C; opens the UI in a browser
-uv run flackey start --no-browser
+uv run flackey start          # worker + web UI in the Flackey window, until Ctrl-C
+uv run flackey start --browser    # the same, in your browser instead
+uv run flackey start --no-browser # serve only; open the printed link yourself
 ```
+
+The API only answers requests that carry a key made fresh at each launch. The app window gets it
+automatically; in browser mode, `flackey start` prints a link with the key in it
+(`http://127.0.0.1:8765/#t=...`). Open that link, not the bare address.
 
 The first launch walks you through a short setup: pick the library folder,
 then sign in to Telegram (scan a QR code with the Telegram app, or use a
@@ -247,12 +252,21 @@ docker build -t flackey .
 docker run --env-file .env -v flackey-data:/data -v /path/to/library:/library -p 127.0.0.1:8765:8765 flackey
 ```
 
-The API has no login, so publish the port on `127.0.0.1` as above unless you mean to reach Flackey from
-other machines. If you do (`-p 8765:8765`), anyone on your network can use it. Open it by the host's IP
-address, or list the host names you use in `WEB_ALLOWED_HOSTS` (comma-separated, e.g.
-`WEB_ALLOWED_HOSTS=nas.local`); any other name is refused.
+Every API request must carry an access key. The container prints a link with it on start
+(`docker logs <container>` shows it again): open `http://localhost:8765/#t=<key>`, not the bare address.
+The key changes on every restart unless you fix one in `.env`:
 
-Open `http://localhost:8765` and sign in to Telegram from the setup screen
+```bash
+FLACKEY_API_TOKEN=<at least 32 letters, digits, - or _; python3 -c 'import secrets; print(secrets.token_urlsafe(32))'>
+```
+
+Treat that key like a password. Still publish the port on `127.0.0.1` as above unless you mean to reach
+Flackey from other machines: the key travels over plain HTTP, so anyone who can watch your network can
+read it. To use it from another machine (`-p 8765:8765`), open it by the host's IP address, or list the
+host names you use in `WEB_ALLOWED_HOSTS` (comma-separated, e.g. `WEB_ALLOWED_HOSTS=nas.local`); any
+other name is refused.
+
+Open the printed link and sign in to Telegram from the setup screen
 (QR code or phone number). The Telethon session is stored in the `/data`
 volume, so this only needs to happen once. `uv run flackey login` also works
 as a terminal-only alternative, run once beforehand:
@@ -274,7 +288,7 @@ uv run ruff check src tests
 uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.toml for the exact contract
 ```
 
-`flackey start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`.
+`flackey start` serves `web/dist` when present; otherwise the UI stays up but shows a 404. During development, run `npm --prefix web run dev` to start Vite on `:5173` proxying to `:8765`, and open `http://localhost:5173/#t=<key>` with the key `flackey start` printed.
 
 </details>
 

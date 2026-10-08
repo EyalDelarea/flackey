@@ -169,6 +169,17 @@ it('says a newer version exists without offering a dead-end download when the in
   expect(screen.getByText('View release')).toBeInTheDocument()
 })
 
+it('sends a copy that cannot check updates to the release page instead', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.2', newer: true, available: false,
+    verifiable: false, latest: '0.1.3', url: null, release_url: 'https://example.test/releases/v0.1.3',
+    size: 8, size_label: null, published_at: null, published_date: null, prerelease: false })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/can't check updates are genuine/)).toBeInTheDocument())
+  expect(screen.queryByText(/isn't published yet/)).not.toBeInTheDocument()
+  expect(screen.queryByText('Download update')).not.toBeInTheDocument()
+  expect(screen.getByText('View release')).toBeInTheDocument()
+})
+
 it('says when the app is up to date', async () => {
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   await waitFor(() => expect(screen.getByText('Up to date.')).toBeInTheDocument())

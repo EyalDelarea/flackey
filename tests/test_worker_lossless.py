@@ -10,6 +10,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from flackey import convert as convert_mod
+from flackey import lossless as lossless_mod
 from flackey import worker as worker_mod
 from flackey.config import Settings
 from flackey.convert import ConvertError
@@ -303,6 +305,43 @@ async def test_verify_failure_tries_the_second_pick(lenv, tmp_path: Path):
     assert not list(settings.tmp_dir.iterdir())
 
 
+async def test_a_file_much_longer_than_the_peer_said_is_refused_and_the_next_pick_tried(lenv, tmp_path: Path):
+    """What arrived is checked against what was advertised: the size and length caps were applied to the
+    peer's word, so a file that is not what the peer said it was is never converted."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = _flac(tmp_path / "long.flac", seconds=40)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    mismatch = [e["detail"] for e in a.timeline if e["event"] == "duration_mismatch"]
+    assert len(mismatch) == 1 and mismatch[0]["advertised_s"] == 3 and mismatch[0]["probed_s"] >= 39
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_transfer_is_not_enqueued_without_room_for_it(lenv, monkeypatch):
+    settings, store, _, provider, _, _ = lenv
+    seen: list[Path] = []
+
+    def no_room(path: Path) -> int:
+        seen.append(path)
+        return 1_000
+    monkeypatch.setattr(lossless_attempt_mod, "free_bytes", no_room)
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert provider.downloaded == []
+    a = attempt_of(store, rid)
+    # A full disk is not this peer's fault, so the next pick is not tried against it.
+    assert [e["detail"]["pick"] for e in a.timeline if e["event"] == "disk_full"] == [1]
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
+    assert settings.slskd_downloads in seen
+
+
 async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
     fake = _fake_flac(tmp_path / "fake.flac")
@@ -449,6 +488,27 @@ async def test_convert_failure_falls_back(lenv, monkeypatch):
     r = await w.process(rid)
     assert attempt_of(store, rid).outcome == "convert_failed" and store.get_track(r.track_id).source == "deezer_bot"
     assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_conversion_cut_short_is_a_failure_not_a_shorter_track(lenv, monkeypatch):
+    """ffmpeg's `-t` ceiling ends the output early and still exits 0; a converted file shorter than the
+    download it came from is refused rather than filed."""
+    settings, store, _, _, _, _ = lenv
+    monkeypatch.setattr(convert_mod, "MAX_OUTPUT_S", 1)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "convert_failed" and store.get_track(r.track_id).source == "deezer_bot"
+    failed = [e["detail"]["error"] for e in a.timeline if e["event"] == "convert_failed"]
+    assert len(failed) == 1 and "shorter" in failed[0]
+    assert not list(settings.tmp_dir.iterdir())
+
+
+def test_the_output_ceiling_sits_above_every_length_the_worker_accepts():
+    """A track at the length cap that probes at the far edge of the slack still converts whole."""
+    longest = lossless_mod.MAX_LENGTH_S * (1 + lossless_attempt_mod.DURATION_SLACK_FRACTION)
+    assert convert_mod.MAX_OUTPUT_S > longest + lossless_attempt_mod.DURATION_SLACK_S
 
 
 async def test_flac_filing_format_keeps_the_file(lenv):

@@ -32,6 +32,30 @@ from .records import (
 )
 
 log = logging.getLogger(__name__)
+# Kept free on top of what a pick needs, so filing it never fills the disk the library and database are on.
+DISK_MARGIN_BYTES = 256 * 1024 * 1024
+# How far the length a file probes at may sit from the length its peer advertised. Encoders round, and a
+# peer's client reports whole seconds; a gap past this is a different file than the one the caps passed.
+DURATION_SLACK_S = 10
+DURATION_SLACK_FRACTION = 0.05
+
+
+def free_bytes(path: Path) -> int:
+    """Free space on the volume `path` is on, or will be on once it is created."""
+    for p in (path, *path.parents):
+        if p.exists():
+            return shutil.disk_usage(p).free
+    return 0
+
+
+# How much shorter than the download a lossless conversion may come out: container rounding only.
+CONVERT_SLACK_S = 1.0
+
+
+def duration_agrees(advertised_s: float | None, probed_s: float) -> bool:
+    if advertised_s is None:
+        return False
+    return abs(probed_s - advertised_s) <= max(DURATION_SLACK_S, advertised_s * DURATION_SLACK_FRACTION)
 
 
 class LosslessMixin:
@@ -157,6 +181,15 @@ class LosslessMixin:
             if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
                 rec.event("budget_exhausted", pick=n)
                 break
+            # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there:
+            # room for all three on each, so either folder may share the other's disk. A full disk is no
+            # fact about this peer, so no later pick is tried either.
+            need = 3 * file.size + DISK_MARGIN_BYTES
+            short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
+            if short:
+                rec.event("disk_full", pick=n, need_bytes=need, folders=short)
+                outcome = "transfer_failed"
+                break
             hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
             if hit is not None:
                 try:
@@ -223,6 +256,11 @@ class LosslessMixin:
         self._publish_phase(req.id, "verifying")
         try:
             async with self._cpu:
+                probed = await asyncio.to_thread(probe, tmp)
+                if not duration_agrees(file.length_s, probed.duration_s):
+                    # The caps in lossless.py judged the peer's word; this is the file that came.
+                    rec.event("duration_mismatch", advertised_s=file.length_s, probed_s=round(probed.duration_s, 1))
+                    return None, "verify_failed"
                 verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
         except VerifyError as e:
             rec.event("verify_failed", error=str(e))
@@ -253,6 +291,10 @@ class LosslessMixin:
                 # always be cleaned up -- at most one temp file from here on (spec §9)
                 tmp.unlink(missing_ok=True)
                 pr = await asyncio.to_thread(probe, out)
+            if pr.duration_s < probed.duration_s - CONVERT_SLACK_S:
+                # ffmpeg exits 0 when its `-t` ceiling ends the output early: a cut-off track, not a copy.
+                raise ConvertError(f"the converted file is {pr.duration_s:.1f} s, shorter than the "
+                                   f"{probed.duration_s:.1f} s download")
             verdict = replace(verdict, fmt=pr.fmt, bitrate_kbps=pr.bitrate_kbps, bit_depth=pr.bit_depth,
                               sample_rate=pr.sample_rate)
         except (ConvertError, VerifyError) as e:

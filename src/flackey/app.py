@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import uvicorn
@@ -33,6 +36,7 @@ from .store import Store
 from .telegram import TelegramLogin, probe_authorized
 from .tools import resource_dir
 from .web import create_app
+from .web.guard import MIN_TOKEN_CHARS, new_token
 from .web.pick import Picker, native_picker
 from .worker import Worker
 
@@ -47,6 +51,25 @@ WEB_SERVER_START_TIMEOUT_S = 30
 # Telegram every few seconds for as long as it stays off.
 SESSION_POLL_S = 5.0
 SESSION_UNREACHABLE_FACTOR = 6
+# A fixed API token for a server nobody launches a window for: Docker, where the printed address changes
+# with every restart otherwise. Unset, each launch makes its own.
+TOKEN_ENV = "FLACKEY_API_TOKEN"
+# What `secrets.token_urlsafe` makes: nothing a URL or a form decoder would change on the way.
+_TOKEN_CHARS = re.compile(r"[A-Za-z0-9_-]+", re.ASCII)
+
+
+def api_token_from_env(environ=os.environ) -> str:
+    """The token every `/api/` request must carry (see `web.guard`). Refuses to start on a fixed one that
+    is short, because a guessable token reads as protection and is none, or that holds anything but
+    letters, digits, `-` and `_`, because `+`, `%` or `&` can change in the link and lock the owner out."""
+    fixed = (environ.get(TOKEN_ENV) or "").strip()
+    if not fixed:
+        return new_token()
+    if len(fixed) < MIN_TOKEN_CHARS or not _TOKEN_CHARS.fullmatch(fixed):
+        raise SystemExit(f"{TOKEN_ENV} must be at least {MIN_TOKEN_CHARS} characters, using only letters, "
+                         "digits, - and _; `python -c 'import secrets; print(secrets.token_urlsafe(32))'` "
+                         "makes one.")
+    return fixed
 
 
 @dataclass
@@ -66,6 +89,14 @@ class ServerHandle:
     # its AppleScript dialog, which needs no window. A slot for the same reason as `on_quit`: the window
     # that owns the dialog is created after the server that serves `/api/pick-folder`.
     pick_folder: Callable[[Path | None], Path | None] | None = None
+    # What every `/api/` request must carry. Kept apart from `url` on purpose: `url` is logged, and the log
+    # ends up in bug reports.
+    token: str | None = None
+
+    def app_url(self, query: str = "") -> str:
+        """The address that opens the UI already holding the token: in the fragment, which the browser
+        never sends anywhere, and which the page reads and then strips from the address bar."""
+        return f"{self.url}/{query}#t={quote(self.token or '', safe='')}"
 
     def find_picker(self) -> Picker | None:
         """The folder dialog a request should open right now: the window's, once there is one, and
@@ -114,6 +145,15 @@ async def serve(server: uvicorn.Server, url: str, handle: ServerHandle,
     if handle.on_started is not None:
         handle.on_started(url)
     await task
+
+
+def announce(handle: ServerHandle, open_browser: bool) -> None:
+    """Browser mode's way in: there is no window to hand the token to, so whoever started the server gets
+    the address on stdout -- never through the log -- and, when asked, in their browser."""
+    address = handle.app_url()
+    print(f"Flackey is running. Open it at:\n  {address}", flush=True)
+    if open_browser:
+        webbrowser.open(address)
 
 
 async def supervise_worker(worker, status: dict, poll_s: float = 1.0,
@@ -307,7 +347,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     link.adopt(slskd_process)
     api = create_app(store, worker, inbox, settings, ui_dir=UI_DIR, status=status, bus=bus, login=login,
                      link=link, sharing=sharing, quit_app=handle.quit_app,
-                     find_picker=handle.find_picker)
+                     find_picker=handle.find_picker, api_token=handle.token)
     # No `loop=` choice matters here: uvicorn's loop factory is only consulted by `Server.run()`, and this
     # awaits `Server.serve()` inside the loop the caller's `asyncio.run` already made -- which on Windows
     # is the Proactor loop that the slskd subprocess needs (a selector loop cannot spawn one there).
@@ -345,9 +385,14 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
 
 
 async def run(settings: Settings, open_browser: bool = True, handle: ServerHandle | None = None) -> None:
+    """With no `handle` this is browser mode, which prints the address with the token in it; the desktop
+    window passes its own handle and opens that address itself."""
     if handle is None:
-        handle = ServerHandle(on_started=webbrowser.open if open_browser else None)
+        handle = ServerHandle()
+        handle.on_started = lambda _url: announce(handle, open_browser)
     try:
+        if handle.token is None:
+            handle.token = api_token_from_env()
         await _run(settings, handle)
     finally:
         handle.started.set()  # wakes a waiting thread even when startup died before the server existed

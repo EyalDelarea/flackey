@@ -20,6 +20,7 @@ from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
 from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
+from flackey.selfupdate import signature as _signature
 from flackey.store import Store
 from flackey.web import create_app
 from flackey.web.update import RELEASES_URL
@@ -123,7 +124,7 @@ def test_update_reports_new_installer(client):
                     "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
-        "ok": True, "current": __version__, "newer": True, "available": True, "latest": "9.9.9",
+        "ok": True, "current": __version__, "newer": True, "available": True, "verifiable": True, "latest": "9.9.9",
         "url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg", "release_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
         "published_date": "2026-09-15", "prerelease": False, "installer_signature_url": None,
@@ -200,6 +201,7 @@ def _release_feed(size: int | None = 8, assets: bool = True):
 
 
 REAL_INSTALLER_NAME = flackey.web.update.installer_name
+REAL_BAKED_PUBLIC_KEY = _signature.baked_public_key
 # Taken at import, before conftest swaps it for a tripwire on every test.
 REAL_OPEN_INSTALLER = flackey.web.update.open_installer
 
@@ -336,7 +338,9 @@ def test_update_install_downloads_the_installer_then_opens_it(client, monkeypatc
     assert body["percent"] == 100 and body["version"] == "9.9.9" and body["error"] is None
     target = settings.data_dir / "updates" / "Flackey.pkg"
     assert target.read_bytes() == b"PKG-DATA"
-    assert opened == [target]
+    # Opened from a private copy of the bytes it read, not from the download itself.
+    [copy] = opened
+    assert copy.name == "Flackey.pkg" and copy != target and copy.read_bytes() == b"PKG-DATA"
 
 
 @respx.mock
@@ -605,6 +609,183 @@ def test_update_release_says_so_when_github_cannot_be_reached(client, monkeypatc
     assert r.status_code == 502 and r.json()["detail"] == "Could not check for updates."
 
 
+# ---- update hardening -----------------------------------------------------------------------------------
+def _release(tag: str, *, draft: bool = False, prerelease: bool = False) -> dict:
+    base = f"https://github.com/EyalDelarea/flackey/releases/download/{tag}/"
+    return {"draft": draft, "prerelease": prerelease, "tag_name": tag,
+            "html_url": f"https://github.com/EyalDelarea/flackey/releases/tag/{tag}",
+            "assets": [{"name": "Flackey.pkg", "size": 8, "browser_download_url": base + "Flackey.pkg"}]}
+
+
+@respx.mock
+def test_update_offers_the_highest_version_not_the_first_listed():
+    """The feed is ordered by creation, not by version: a hotfix for an older line can come first."""
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[
+        _release("v9.9.8"), _release("v9.10.0"), _release("v9.9.10"),
+        _release("v99.0.0", prerelease=True), _release("v50.0.0", draft=True),
+        _release("v60.0.0-rc1"), _release("v70.0.0 "), _release("v８０.0.0"),
+    ]))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["latest"] == "9.10.0"
+    assert info["url"] == "https://github.com/EyalDelarea/flackey/releases/download/v9.10.0/Flackey.pkg"
+
+
+@pytest.mark.parametrize("text, parsed", [
+    ("1.2.3", (1, 2, 3)), ("v1.2.3", (1, 2, 3)), ("v10.0.12", (10, 0, 12)),
+    (" 1.2.3", None), ("1.2.3\n", None), ("1.2.3 ", None), ("1.2", None), ("1.2.3.4", None),
+    ("1.2.3-rc1", None), ("V1.2.3", None), ("１.2.3", None), ("1.٢.3", None), ("", None),
+])
+def test_versions_are_read_strictly(text, parsed):
+    assert flackey.web.update.parse_version(text) == parsed
+
+
+@respx.mock
+@pytest.mark.parametrize("url", [
+    "https://github.com/EyalDelarea/flackey/releases/download/../../../evil/x/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/%2e%2e/%2E%2E/evil/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/..%2f..%2fevil/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9\\..\\Flackey.pkg",
+    "https://github.com:444/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg",
+    "http://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg?x=1",
+])
+def test_an_asset_link_that_leaves_the_release_folder_is_treated_as_missing(url):
+    feed = _release_feed(size=8)
+    feed[0]["assets"][0]["browser_download_url"] = url
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["url"] is None and info["available"] is False
+
+
+@respx.mock
+def test_an_installer_larger_than_any_real_one_is_not_offered():
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(
+        200, json=_release_feed(size=flackey.web.update.MAX_DOWNLOAD_BYTES + 1)))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["newer"] is True and info["available"] is False and info["size"] is None
+
+
+@respx.mock
+def test_the_download_follows_github_to_its_own_cdn(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    c, _, _ = client
+    cdn = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc"
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(302, headers={"location": cdn}))
+    respx.get(cdn).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert len(opened) == 1 and opened[0].read_bytes() == b"PKG-DATA"
+
+
+@respx.mock
+@pytest.mark.parametrize("where", ["https://evil.test/Flackey.pkg", "http://objects.githubusercontent.com/x",
+                                   "https://github.com.evil.test/x"])
+def test_the_download_will_not_follow_a_redirect_off_github(client, monkeypatch, where):
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(302, headers={"location": where}))
+    elsewhere = respx.get(where).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    assert _settle(c, "error")["state"] == "error"
+    assert elsewhere.call_count == 0
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+
+
+@respx.mock
+def test_the_release_feed_is_only_read_from_github():
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(302, headers={"location": "https://evil.test/feed"}))
+    evil = respx.get("https://evil.test/feed").mock(return_value=httpx.Response(200, json=_release_feed()))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["ok"] is False and evil.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("key", ["missing", "malformed"])
+def test_a_packaged_build_without_a_usable_key_opens_no_installer(client, monkeypatch, key):
+    """A packaged copy whose release key is gone or mangled cannot verify anything, so it must not fall
+    back to opening an unchecked installer -- that is exactly what a broken build would otherwise do."""
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin", frozen=True))
+    monkeypatch.setattr("flackey.selfupdate.signature.PUBLIC_KEY_HEX", "" if key == "missing" else "zz12")
+    # The autouse keyless stub, swapped back for the real reader of the (now broken) constant.
+    monkeypatch.setattr("flackey.selfupdate.signature.baked_public_key", REAL_BAKED_PUBLIC_KEY)
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    pkg = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    body = c.get("/api/update").json()
+    assert body["newer"] is True and body["available"] is False
+    r = c.post("/api/update/install", headers=FROM_APP)
+    assert r.status_code == 409 and "cannot check" in r.json()["detail"]
+    assert pkg.call_count == 0
+
+
+def _keyed(monkeypatch):
+    """A build carrying a release key the test holds the private half of."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from flackey.selfupdate import signature as sig_module
+    private = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(sig_module, "baked_public_key", lambda: sig_module.encode_public_key(private.public_key()))
+    monkeypatch.setattr("flackey.selfupdate.install.seamless_available", lambda *a, **k: False)
+
+    def sign_pkg(payload: bytes, version: str = "9.9.9") -> bytes:
+        return private.sign(sig_module.signing_message(version, payload, sig_module.INSTALLER_DOMAIN)).hex().encode()
+    return sign_pkg
+
+
+def _signed_feed() -> list[dict]:
+    feed = _release_feed(size=8)
+    feed[0]["assets"].append({"name": "Flackey.pkg.sig", "size": 129, "browser_download_url": INSTALLER_URL + ".sig"})
+    return feed
+
+
+@respx.mock
+def test_the_installer_opened_is_a_private_copy_of_the_verified_bytes(client, monkeypatch):
+    """Verified in memory, then opened from disk, is two reads -- and the file can change between them.
+    What gets opened is a fresh file in a folder only this user can enter, written from the bytes that
+    were checked."""
+    sign_pkg = _keyed(monkeypatch)
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: opened.append((p, p.read_bytes())))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_signed_feed()))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    respx.get(INSTALLER_URL + ".sig").mock(return_value=httpx.Response(200, content=sign_pkg(b"PKG-DATA")))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    [(path, data)] = opened
+    assert data == b"PKG-DATA" and path.name == "Flackey.pkg"
+    assert path != settings.data_dir / "updates" / "Flackey.pkg"
+    if sys.platform != "win32":
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert path.stat().st_mode & 0o077 == 0
+
+
+@respx.mock
+def test_open_installer_again_checks_the_file_again(client, monkeypatch):
+    """The "Open installer" button reopens what is on disk, and that file may not be the one verified."""
+    sign_pkg = _keyed(monkeypatch)
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: opened.append(p.read_bytes()))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_signed_feed()))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    respx.get(INSTALLER_URL + ".sig").mock(return_value=httpx.Response(200, content=sign_pkg(b"PKG-DATA")))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "ready"
+    assert opened == [b"PKG-DATA", b"PKG-DATA"]
+
+    (settings.data_dir / "updates" / "Flackey.pkg").write_bytes(b"EVILDATA")
+    body = c.post("/api/update/install", headers=FROM_APP).json()
+    assert body["state"] == "error" and "could not be verified" in body["error"]
+    assert opened == [b"PKG-DATA", b"PKG-DATA"]
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+
+
 def test_no_other_origin_is_granted_cors(client):
     """The UI is served from this origin and the Vite dev server proxies `/api`, so nobody else gets a pass."""
     c, _, _ = client
@@ -659,6 +840,131 @@ def test_a_secret_is_only_read_with_the_app_header(client, path):
     c, _, _ = client
     assert c.get(path, headers=NOT_FROM_APP).status_code == 403
     assert c.get(path).status_code == 404  # with the header it gets as far as "nothing saved"
+
+
+# ---- the per-launch API token ---------------------------------------------------------------------------
+NO_TOKEN = {"x-flackey-token": ""}
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/api/health"), ("GET", "/api/setup/soulseek/password"), ("POST", "/api/telegram/qr"),
+    ("POST", "/api/telegram/logout"), ("PUT", "/api/settings"), ("POST", "/api/update/install"),
+    ("GET", "/api/events"), ("GET", "/api/rejections/1/audio"), ("OPTIONS", "/api/health"),
+])
+@pytest.mark.parametrize("token", ["", "wrong", "x" * 43, "ünïcødé".encode("latin-1")])
+def test_every_api_request_needs_the_launch_token(client, method, path, token):
+    """Another program on this machine, another account on it, or a LAN host in Docker can reach the
+    port; only whoever was handed the token can use it. A token that is not even ASCII is a 401, never a
+    500 from the comparison."""
+    c, _, _ = client
+    r = c.request(method, path, headers={"x-flackey-token": token})
+    assert r.status_code == 401 and r.json()["detail"].startswith("Flackey needs its access key"), (method, path)
+
+
+def test_the_page_itself_is_served_without_the_token_and_never_carries_it(tmp_path):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text("<!doctype html><div id=root></div>")
+    app, _, _ = make(tmp_path, ui_dir=ui)
+    c = AppClient(app, headers=NO_TOKEN)
+    r = c.get("/")
+    assert r.status_code == 200 and app.state.api_token not in r.text
+
+
+def test_a_given_token_is_the_one_asked_for(tmp_path):
+    app, _, _ = make(tmp_path, api_token="t" * 40)
+    assert app.state.api_token == "t" * 40
+    c = AppClient(app, headers=NO_TOKEN)
+    assert c.get("/api/health", headers={"x-flackey-token": "t" * 40}).status_code == 200
+
+
+def test_without_a_given_token_each_app_makes_its_own(tmp_path):
+    first, _, _ = make(tmp_path)
+    second, _, _ = make(tmp_path / "two")
+    assert len(first.state.api_token) >= 43 and first.state.api_token != second.state.api_token
+
+
+def test_the_session_cookie_lets_media_elements_read_but_not_act(client):
+    """`<audio>`, `<img>` and `EventSource` cannot send a header. The cookie they ride on is set only by
+    a request that had the token, and opens reads -- never a state change and never a saved secret."""
+    c, _, _ = client
+    assert c.post("/api/session", headers=NO_TOKEN).status_code == 401
+    r = c.post("/api/session")
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"]
+    assert "flackey_session=" in cookie and "HttpOnly" in cookie and "samesite=strict" in cookie.lower()
+    assert "Path=/api" in cookie
+    value = c.cookies.get("flackey_session")
+    assert value and c.app.state.api_token not in value
+    # The cookie alone, as the media elements send it.
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 200
+    assert c.get("/api/rejections/999/audio", headers=NO_TOKEN).status_code == 404
+    assert c.post("/api/setup/reset", headers=NO_TOKEN).status_code == 401
+    assert c.put("/api/settings", headers=NO_TOKEN, json={}).status_code == 401
+    assert c.get("/api/setup/soulseek/password", headers=NO_TOKEN).status_code == 403
+
+
+def test_a_forged_session_cookie_is_refused(client):
+    c, _, _ = client
+    c.cookies.set("flackey_session", "forged")
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 401
+
+
+def _cookie_only(c):
+    """The client as a media element is: the session cookie, no token header."""
+    assert c.post("/api/session").status_code == 200
+    return lambda method, path: c.request(method, path, headers=NO_TOKEN)
+
+
+@pytest.mark.parametrize("path, status", [
+    ("/api/rejections/999/spectrogram.png", 404),   # <img>
+    ("/api/candidates/999/preview", 404),           # <audio>, before Deezer is asked
+    ("/api/telegram/qr/nope", 503),                 # the QR login's polled state (no Telegram here)
+])
+def test_the_session_cookie_opens_what_the_media_elements_read(client, path, status):
+    """Past the guard, so whatever the route itself answers -- never the guard's 401 or 403."""
+    c, _, _ = client
+    r = _cookie_only(c)("GET", path)
+    assert r.status_code not in (401, 403), (path, r.status_code)
+    if status is not None:
+        assert r.status_code == status, path
+
+
+def test_the_session_cookie_opens_the_event_stream(client, monkeypatch):
+    """`EventSource` cannot send a header either. The stream is cut short so the test can read it."""
+    async def one(bus, initial, heartbeat_s=0):
+        yield "event: status\ndata: {}\n\n"
+    monkeypatch.setattr("flackey.web.stream.event_stream", one)
+    c, _, _ = client
+    r = _cookie_only(c)("GET", "/api/events")
+    assert r.status_code == 200 and r.text.startswith("event: status")
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/api/setup/slskd/credentials"), ("GET", "/api/setup/soulseek/password"),
+    ("POST", "/api/update/install"), ("POST", "/api/update/restart"), ("POST", "/api/update/release"),
+    ("POST", "/api/bug-report"), ("POST", "/api/bug-report/reveal"),
+])
+def test_the_session_cookie_never_opens_a_route_that_must_come_from_the_app(client, method, path):
+    """A saved secret, an install, a restart or an email sent: the token itself, never the cookie."""
+    c, _, _ = client
+    assert _cookie_only(c)(method, path).status_code in (401, 403), (method, path)
+
+
+def test_the_session_route_still_needs_the_app_header(client):
+    c, _, _ = client
+    assert c.post("/api/session", headers=NOT_FROM_APP).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/", "/api/health", "/api/nope"])
+def test_no_page_can_frame_the_app(client, path):
+    """Clickjacking: a site that frames the UI could steer the owner's clicks on it."""
+    c, _, _ = client
+    for headers in ({}, NO_TOKEN):
+        r = c.get(path, headers=headers)
+        assert r.headers["x-frame-options"] == "DENY", path
+        assert r.headers["content-security-policy"] == "frame-ancestors 'none'", path
+        assert r.headers["x-content-type-options"] == "nosniff", path
 
 
 @pytest.mark.parametrize("where", ["home", "above-home", "root", "data-dir", "symlink-to-home"])

@@ -1,3 +1,5 @@
+import { apiToken } from './session'
+
 export type RequestState = 'queued'|'identifying'|'awaiting_review'|'fetching'|'verifying'|'filing'|'done'|'duplicate'|'rejected'|'cancelled'|'not_found'|'error'
 export interface Request { id:number; created_at:string; updated_at:string; raw_text:string; kind:string; state:RequestState;
   playlist_id:number|null; playlist_position:number|null; source_url:string|null; query_artist:string|null; query_title:string|null;
@@ -98,6 +100,8 @@ export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 
 export interface SlskdSetup { installed: boolean; running: boolean; version: string }
 export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 'done' | 'error'; done: number; total: number; error: string | null }
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
+  /** False on a packaged copy whose release key is missing: it opens no installer at all. */
+  verifiable?:boolean;
   url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
   published_date:string|null; prerelease:boolean; error?:string
   /** Update replaces the app in place rather than opening the installer. False is the old flow. */
@@ -122,7 +126,10 @@ export class ApiError extends Error {
 const APP_HEADERS = { 'content-type': 'application/json', 'x-flackey-app': '1' }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { ...init, headers: { ...APP_HEADERS, ...(init?.headers as Record<string, string> | undefined) } })
+  // The launch token (see session.ts) is what actually opens the API; read on every call, so a page that
+  // adopted it after this module loaded still sends it.
+  const headers = { ...APP_HEADERS, 'x-flackey-token': apiToken() ?? '', ...(init?.headers as Record<string, string> | undefined) }
+  const res = await fetch(path, { ...init, headers })
   const body = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(res.status, (body && body.detail) || res.statusText)
   return body as T
@@ -139,6 +146,8 @@ export interface BugPreview { summary: [string, string][]; files: { name: string
 export interface BugSent { file: string; to: string; subject: string; body: string }
 
 export const api = {
+  // Sets the cookie `<audio>`, `<img>` and the event stream ride on, since none of them can send the token.
+  session: () => post<{ ok: boolean }>('/api/session'),
   health: () => call<Health>('/api/health'),
   queue: () => call<Bundle[]>('/api/queue'),
   submit: (url: string) => post<Submission>('/api/requests', { url }),

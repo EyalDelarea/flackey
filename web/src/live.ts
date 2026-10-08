@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { api, ApiError } from './api'
 import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHealth, Stats, UpdateDownload, UpdateStatus } from './api'
 
 const UNREACHABLE = "Can't reach Flackey. Is `flackey start` running?"
@@ -54,7 +54,8 @@ export function useLive(): Live {
       await refreshLibrary()
       setLoadError(null)
     } catch (e) {
-      setLoadError(UNREACHABLE)
+      // A 401 is a page opened without the launch token, not a server that is down: say how to get in.
+      setLoadError(e instanceof ApiError && e.status === 401 ? e.message : UNREACHABLE)
       throw e
     } finally {
       setLoading(false)

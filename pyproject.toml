@@ -70,7 +70,7 @@ layers = [
   "lossless",
   "match : identify",
   "notify : config : models : logsetup",
-  "tools",
+  "tools : audiofile",
   "slskd_process",
   "slskd_binary",
   "slskd_config",

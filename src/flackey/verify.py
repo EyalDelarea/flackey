@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audiofile import DEMUXERS, WrongFormat, input_args
 from .models import Verdict
 from .tools import no_window, tool_path
 
@@ -59,8 +60,21 @@ def _run(cmd: list[str]) -> bytes:
     return p.stdout
 
 
+def _input(path: Path, tool: str) -> list[str]:
+    """The options that pin `path`'s demuxer and protocols (see `audiofile`), checked before any tool runs.
+    A missing `tool` is still the first thing reported: it is what a machine without the helpers needs
+    to hear, whatever the file is."""
+    if tool_path(tool) is None:
+        raise VerifyError(f"{tool} is not installed")
+    try:
+        return input_args(path)
+    except (WrongFormat, OSError) as e:
+        raise VerifyError(str(e)) from e
+
+
 def probe(path: Path) -> Probe:
-    out = _run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)])
+    out = _run(["ffprobe", "-v", "error", *_input(path, "ffprobe"), "-print_format", "json", "-show_format", "-show_streams",
+                str(path)])
     data = json.loads(out)
     audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), None)
     if audio is None:
@@ -87,7 +101,7 @@ def _window(path: Path, window_s: int, duration_s: float | None) -> tuple[float,
 def band_levels_db(path: Path, window_s: int = 60, duration_s: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Average power per 250 Hz band over the middle window. Returns (band start Hz, level dB)."""
     start, length = _window(path, window_s, duration_s)
-    pcm = _run(["ffmpeg", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", str(path),
+    pcm = _run(["ffmpeg", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", *_input(path, "ffmpeg"), "-i", str(path),
                 "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"])
     x = np.frombuffer(pcm, dtype=np.int16).astype(np.float64) / 32768.0
     n = (len(x) // FRAME) * FRAME
@@ -123,13 +137,19 @@ def spectral_cutoff_hz(path: Path, window_s: int = 60, duration_s: float | None 
 def spectrogram_png(path: Path, out: Path, window_s: int = 60, duration_s: float | None = None) -> Path:
     start, length = _window(path, window_s, duration_s)
     out.parent.mkdir(parents=True, exist_ok=True)
-    _run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", str(path),
+    _run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", *_input(path, "ffmpeg"),
+          "-i", str(path),
           "-filter_complex", "[0:a]showspectrumpic=s=1200x400:legend=1:scale=log:color=intensity[o]",
           "-map", "[o]", "-frames:v", "1", str(out)])
     return out
 
 
 def verify(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+    if path.suffix.lower() not in DEMUXERS:
+        # Nothing to check the bytes against, so no tool reads them with its own probing: only the formats
+        # verify can pass have an extension listed there.
+        fmt = path.suffix.lstrip(".").lower() or "unknown"
+        return Verdict(False, fmt, 0, 0, f"unsupported format {fmt}", None)
     pr = probe(path)
     if pr.fmt != "mp3" and pr.fmt not in LOSSLESS:
         return Verdict(False, pr.fmt, pr.bitrate_kbps, 0, f"unsupported format {pr.fmt}", None,

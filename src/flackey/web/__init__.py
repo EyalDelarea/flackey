@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
@@ -20,7 +20,7 @@ from ..models import Verdict
 from ..store import Store
 from ..telegram import TelegramLogin
 from ..worker import Worker, format_line
-from .guard import GuardMiddleware
+from .guard import SESSION_COOKIE, GuardMiddleware, from_the_app, new_token, session_cookie_value
 
 log = logging.getLogger(__name__)
 SETUP_DONE_KEY = "setup_done"
@@ -94,10 +94,14 @@ class Bundles:
 def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, ui_dir: Path | None = None,
                status: Status | dict | None = None, bus: EventBus | None = None, opener=None, picker=None,
                login: TelegramLogin | None = None, link=None, sharing=None,
-               quit_app=None, find_picker=None) -> FastAPI:
+               quit_app=None, find_picker=None, api_token: str | None = None) -> FastAPI:
     """`picker` is one fixed folder dialog (the tests hand in a fake); `find_picker` is asked on every
     request instead, which is how the desktop window's dialog reaches a server that was built before the
-    window existed. With neither, the platform's own: AppleScript on macOS, none elsewhere."""
+    window existed. With neither, the platform's own: AppleScript on macOS, none elsewhere.
+
+    `api_token` is what every `/api/` request must present (see `web.guard`); without one the app makes
+    its own, which nothing outside this process can then know. It is kept on `app.state.api_token` for
+    the code that started the server, and is never part of any response."""
     # here, not at module top: the routers import `Bundles` from this module
     from . import library, lossless, pick, report, requests, stream, telegram, update
     from . import sharing as sharing_web  # aliased: `sharing` here is the service, not the module
@@ -121,9 +125,11 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     store.listeners.append(on_change)
 
     app = FastAPI(title="flackey", version=__version__)
+    token = api_token or new_token()
+    app.state.api_token = token
     # No CORS middleware on purpose: the UI is served from this origin, and the Vite dev server proxies
     # `/api`, so no other origin has a reason to read or drive the API.
-    app.add_middleware(GuardMiddleware, allowed_hosts=settings.allowed_hosts)
+    app.add_middleware(GuardMiddleware, token=token, allowed_hosts=settings.allowed_hosts)
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
@@ -135,6 +141,16 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         log.exception("unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse(status_code=500, content={"detail": "Something went wrong. The log has the details."})
+
+    @app.post("/api/session")
+    async def session(request: Request, response: Response) -> dict:
+        """Give the page's media elements a way in: `<audio>`, `<img>` and `EventSource` cannot send the
+        token header, so the page calls this once with it and they ride on the cookie it sets. Strict and
+        HttpOnly, so no other site sends it and no script reads it; the guard lets it open reads only."""
+        from_the_app(request)
+        response.set_cookie(SESSION_COOKIE, session_cookie_value(token), httponly=True, samesite="strict",
+                            path="/api")
+        return {"ok": True}
 
     @app.get("/api/health")
     async def health() -> dict:
