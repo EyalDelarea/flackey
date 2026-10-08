@@ -1,75 +1,89 @@
 # Releasing Flackey
 
-## Label every PR
+## Label and title every PR
 
-Each PR should carry exactly one release-category label so the notes generator
-can group it:
+Release notes come from `gh release create --generate-notes`, grouped by
+`.github/release.yml` using each merged PR's **label** and its **title,
+verbatim**. Give every PR one of:
 
-- `enhancement` — new feature or user-facing improvement
-- `bug` — bug fix
-- `documentation` — docs, site, README changes
-- `chore` — everything else worth a line in the changelog (refactor with
-  user-visible effect, dependency bump, CI change worth noting)
-- `ignore-for-release` — merges that shouldn't appear in release notes at all
-  (typo fixes, WIP follow-ups, docs-for-contributors, anything with zero
-  user-facing meaning). Excluded outright by `.github/release.yml`.
+- `enhancement` (Features), `bug` (Bug Fixes), `documentation`, `chore`
+- `dependencies` (Dependabot sets it; gets its own bucket)
+- `ignore-for-release`: left out of the notes entirely
 
-`enhancement` and `bug` are already auto-applied by the feature-request and
-bug-report issue templates, so PRs fixing/implementing those issues usually
-just need the same label carried over. The `pr-labels` workflow
-(`.github/workflows/pr-labels.yml`) flags a PR with none of these labels; it's
-advisory and doesn't block merging. An unlabeled PR still shows up in release
-notes, just under "Other Changes" instead of its own section.
+An unlabeled PR still appears, under "Other Changes". The `pr-labels`
+workflow flags a PR with no label but does not block it. Titles of
+`enhancement`, `bug` and `documentation` PRs are read by users, so write them
+as what changed for them ("Added X for Y"), not the mechanism.
 
-### Title PRs for the changelog, not for yourself
+## Cut a release
 
-The release notes generator pulls the **PR title verbatim** into the
-changelog. If a PR is labeled `enhancement`, `bug`, or `documentation`, its
-title becomes a line a user reads under "what's new" — so title it as what
-changed for them ("Fix downloads silently failing when Soulseek disconnects"),
-not the internal mechanism ("Fix race in retry queue") or a file/module name.
-The PR template (`.github/pull_request_template.md`) repeats this reminder.
-`chore` and `ignore-for-release` PRs aren't held to this — nobody outside the
-project reads those lines the same way.
+1. Actions tab, workflow **`release`** (`.github/workflows/release-tag.yml`),
+   **Run workflow**, `version` = `0.2.3` or `v0.2.3`. There is no `ref`
+   input: it always releases `main`.
+2. The workflow, authenticated entirely with the **`RELEASE_PAT`** secret
+   (a `GITHUB_TOKEN` push would not trigger the checks the release needs):
+   - refuses an invalid version or one whose tag already exists;
+   - sets the version in `pyproject.toml` and `src/flackey/__init__.py`
+     (`packaging/check_version.sh` confirms both match);
+   - opens `release/vX.Y.Z` as a PR labeled `ignore-for-release` and turns
+     on auto-merge (squash), then waits up to 20 minutes for it to merge
+     once its checks pass;
+   - tags the merged commit on `main` and pushes `vX.Y.Z`.
+   If the tree already has the version, it skips the PR and tags `main`.
+3. The tag push runs **`checks`** (`.github/workflows/checks.yml`). After the
+   test jobs (ubuntu, macOS, Windows) and the web build pass:
+   - `mac` builds `Flackey.app`, smoke-launches it, and packs `Flackey.pkg`
+     plus the seamless-update archive `Flackey-X.Y.Z.zip`;
+   - `windows` builds and smoke-launches `Flackey-Setup.exe`;
+   - `release` signs and publishes them.
 
-## Decide the version bump
+## Secrets
 
-Flackey uses semver (`MAJOR.MINOR.PATCH`). The bump is a manual call — whether
-a change is major, minor, or patch is decided by judgment, not automation.
+| Secret | Used by | For |
+| --- | --- | --- |
+| `RELEASE_PAT` | `release` | pushing the bump branch and tag, opening and auto-merging the PR |
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | `checks`, build steps of `mac` and `windows` | baked into the app's `build.json` **on tag builds only**; main and PR builds are keyless and ask for keys at setup |
+| `FLACKEY_UPDATE_SIGNING_KEY` | `checks`, `release` job | Ed25519 private key (64 hex chars) that signs the release |
 
-1. Update the version in **both**:
-   - `pyproject.toml` (`version = "X.Y.Z"`)
-   - `src/flackey/__init__.py` (`__version__ = "X.Y.Z"`)
-   `packaging/check_version.sh` compares both against the release tag and
-   fails the build if they disagree.
-2. Commit the bump to `main`.
+## Signing and what the app downloads
 
-## Cut the release
+`packaging/sign_archive.py` writes a detached Ed25519 signature (`.sig`, hex)
+for `Flackey-X.Y.Z.zip`, `Flackey.pkg` and `Flackey-Setup.exe`. It signs a
+message naming the version and file, so a signature can't be replayed onto
+another release or file. `cryptography` is pinned to the version in `uv.lock`.
+A missing key or `.sig` fails the release: installed copies refuse unsigned
+updates.
 
-1. Run the `release tag` workflow from the GitHub Actions tab.
-   - Set `version` to the version you just landed, like `0.1.3` or `v0.1.3`.
-   - Leave `ref` as `main` unless you intentionally need to tag another ref.
-2. The workflow checks out that ref, runs `packaging/check_version.sh` against
-   the requested tag, and only then creates and pushes `vX.Y.Z`.
-3. The `checks` workflow (`.github/workflows/checks.yml`) builds and
-   smoke-tests the macOS installer (`Flackey.pkg`) and the Windows installer
-   (`Flackey-Setup.exe`, built by `packaging/build_windows.ps1`), then its
-   `release` job publishes both, with their `.sha256` files, as one GitHub
-   Release for the tag with `gh release create --generate-notes`. A failed
-   Windows build blocks the release just like a failed Mac build.
-   `latest.json` still describes the Mac installer only.
-4. GitHub groups the generated notes using `.github/release.yml` —
-   `enhancement`-labeled PRs under "🚀 Features", `bug` under "🐛 Bug Fixes",
-   `documentation` under "📝 Documentation", `chore` under "🧹 Chores", and
-   anything unlabeled under "Other Changes" — pulled straight from merged PR
-   titles and labels since the previous tag.
+Release assets: `Flackey.pkg`, `Flackey.pkg.sha256`, `Flackey.pkg.sig`,
+`Flackey-X.Y.Z.zip`, `Flackey-X.Y.Z.zip.sig`, `Flackey-Setup.exe`,
+`Flackey-Setup.exe.sha256`, `Flackey-Setup.exe.sig`.
 
-Because `.github/release.yml` only affects notes for tags created *after* it
-lands on `main`, land this file (and label your PRs) before cutting the next
-tag, or that release's notes will still come out flat.
+The in-app updater (`src/flackey/web/update.py`) reads the GitHub releases
+API, takes the newest release that is neither a draft nor a pre-release, and
+downloads only assets under this repo's releases URL:
 
-The workflow will not move a tag that already points at another commit. If a
-bad tag was pushed, delete it intentionally, then rerun `release tag`:
+- **macOS**: `Flackey-X.Y.Z.zip` and its `.sig` for a seamless in-place
+  swap; otherwise `Flackey.pkg`, which it opens only if `Flackey.pkg.sig`
+  verifies.
+- **Windows**: `Flackey-Setup.exe` and its `.sig`.
+
+## Pre-releases
+
+A tag on a commit that is **not on `main`** (say, a branch build for a tester)
+is published as a pre-release, not marked latest. The app and the download
+site skip pre-releases, so no installed copy is offered code that hasn't
+reached `main`.
+
+## Download site
+
+`site/` is deployed to GitHub Pages by the **`pages`** workflow whenever
+`site/**` changes on `main`, or on manual dispatch. Releases do not redeploy
+it: the site reads the latest release from the GitHub API.
+
+## A bad tag
+
+The `release` workflow never moves an existing tag. Delete it deliberately,
+then run `release` again:
 
 ```bash
 git push origin :refs/tags/vX.Y.Z
