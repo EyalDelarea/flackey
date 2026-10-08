@@ -12,6 +12,7 @@ that leave -- not a description of them."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -22,7 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePath, PureWindowsPath
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -90,6 +91,20 @@ _OTHER_HOME = re.compile(r"/Users/[^/\s]+")
 # drive and any case, because Windows paths are case-insensitive and nothing normalises them first.
 _OTHER_WINDOWS_HOME = re.compile(r"(?i)(?<![\w])([a-z]:)(\\{1,2}|/)users\2[^\\/\s\"'<>|:*?]+")
 _ANY_SEPARATOR = r"(?:\\{1,2}|/)"
+# A Telegram bot token, `<bot id>:<35-odd characters>`, alone or in the `/bot<token>/method` path of a Bot
+# API URL -- where nothing in front of it says "token", so `_KEY_VALUE` would never see it.
+_BOT_TOKEN = re.compile(r"(?<![A-Za-z0-9])(bot)?\d{5,}:[\w-]{30,}")
+# A cookie header carries every cookie on one line, separated by `; `, so the whole rest of it goes.
+_COOKIE = re.compile(r"(?i)(?<![\w-])((?:set-)?cookie)(\s*:\s*)([^\n]+)")
+# A bare `session=` / `sessionid=` / `sid=` value, as a query string or a cookie carries it. Only the bare
+# name: `telegram_session=` names a file, not a secret.
+_SESSION = re.compile(r"(?i)(?<![\w-])(session(?:[_-]?id)?|sid)(\s*=\s*)([^\s&;,\"']+)")
+
+
+def _spellings(secret: str) -> set[str]:
+    """`secret` as itself and as it would read inside a URL or a JSON string."""
+    return {secret, quote(secret, safe=""), quote(secret), quote_plus(secret),
+            json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
 
 
 class Redactor:
@@ -117,9 +132,12 @@ class Redactor:
         if users is None:
             users = [home.name, os.environ.get("USERNAME")] if self._windows else [home.name]
         known = {s.strip() for s in secrets if s and len(s.strip()) >= MIN_SECRET_CHARS}
-        # Longest first, so a password that contains the username is not left half-replaced.
-        self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])")
-                       for s in sorted(known, key=len, reverse=True)]
+        # Each secret also as a URL or a JSON string would carry it: a password that lands in a query
+        # string as `s3cr3tP%40ss%21` is the same password. Longest first, so a password that contains the
+        # username is not left half-replaced.
+        spellings = {v for s in known for v in _spellings(s)}
+        self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])", 0 if s in known else re.I)
+                       for s in sorted(spellings, key=len, reverse=True)]
         names = sorted({u.strip() for u in users if u and len(u.strip()) >= 3}, key=len, reverse=True)
         # Windows account names are case-insensitive, and a log prints whichever case the API returned.
         flags = re.IGNORECASE if self._windows else 0
@@ -146,6 +164,9 @@ class Redactor:
             text = pattern.sub("<redacted>", text)
         for pattern in self._users:
             text = pattern.sub("<user>", text)
+        text = _BOT_TOKEN.sub(lambda m: f"{m.group(1) or ''}<redacted>", text)
+        text = _COOKIE.sub(_redact_value, text)
+        text = _SESSION.sub(_redact_value, text)
         text = _URL_USERINFO.sub(r"\1<redacted>@", text)
         text = _PASSWORD_REST.sub(_redact_value, text)
         text = _KEY_VALUE.sub(_redact_value, text)
