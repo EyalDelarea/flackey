@@ -33,130 +33,133 @@ class PipelineMixin:
         if req.chosen_candidate_id is not None:
             cand = self.store.get_candidate(req.chosen_candidate_id)
             catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
-            try:
-                catalog = await self._catalog_for(req, cand, catalog)
-            except CatalogUnavailable as e:
-                await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
-                return
         else:
-            self._set_state(req, RequestState.IDENTIFYING)
-            try:
-                catalog_tracks = await self.catalog.search(query)
-                catalog = best_match(query, catalog_tracks)
-            except CatalogUnavailable as e:
-                await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
+            picked = await self._identify(req, query)
+            if picked is None:
                 return
-            if catalog:
-                self.store.upsert_catalog_track(catalog)
-                self.store.update_request(req.id, catalog_track_id=catalog.id)
-
-            cands: list[Candidate] = []
-            # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
-            # different situations and the row used to say which, so it still does: a bot that is switched
-            # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
-            source_why = "the Deezer bot is switched off"
-            if self.settings.source_enabled:
-                source_why = "no Deezer candidates"
-                try:
-                    cands = await self.source.search(query)
-                except SourceUnauthorized:
-                    raise  # handled in process(): subclass of SourceError, so it must be caught before it
-                except SourceNotFound as e:
-                    # Not a verdict any more: the request's own words can still reach Soulseek below.
-                    source_why = f"the Deezer bot found nothing ({e})"
-                    log.info("req#%d not found at source: %s", req.id, e)
-                except (SourceTimeout, SourceError) as e:
-                    if catalog is None:
-                        # The source may be back in an hour and would offer a lossy fallback the query-only
-                        # path does not have; a retry is worth more than a Soulseek-or-nothing pass now.
-                        await self._retry_or_fail(req, f"source error: {e}")
-                        return
-                    # Beatport knows the track, so the request is still actionable: fall through to the
-                    # catalog-only path rather than retrying a source that may be down for hours.
-                    log.info("req#%d source gave nothing (%s); trying the lossless providers on the "
-                             "Beatport match alone", req.id, e)
-
-            if not cands:
-                # Either the source is switched off, or it found nothing, or it failed with a Beatport
-                # match already in hand.
-                if catalog is not None:
-                    # `catalog_candidate` explains what this costs; the short version is that the pick
-                    # rules still run entirely on Beatport data, but a request with no video of its own
-                    # then has nothing to fingerprint against and the attempt ends `fingerprint_unavailable`.
-                    if not self._lossless_allowed(req):
-                        # Beatport knows the track, so it exists -- there is just no route to a file now.
-                        await self._no_route(req)
-                        return
-                    await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
-                    return
-                await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
-                return
-
-            # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
-            # `decide` runs either way: it scores every candidate (the order the previews are tried in,
-            # and what the Choose window shows), and its verdict only counts without a video.
-            video, why = await self._video_reference(req)
-            if video is None and why.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
-                # yt-dlp fails for a minute (429, a network blip) far more often than for good, and the
-                # video's audio is what identifies the record: a short wait beats choosing by text. After the
-                # ladder the pass goes on without it, so a removed video cannot block the request.
-                await self._retry_or_fail(req, f"could not fetch the video's audio: {why[7:]}",
-                                          flag="video audio unavailable, will retry")
-                return
-            decision = decide(query, cands, catalog)
-            ident: Identification | None = None
-            if video is not None:
-                ordered = sorted(cands, key=lambda c: -(c.score or 0))
-                async with self._cpu:
-                    ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
-                                                  minimum=self.settings.lossless_fingerprint_min)
-                log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
-            chosen_obj = ident.chosen if ident is not None else decision.chosen
-            if chosen_obj is not None and chosen_obj.isrc:
-                # The source's recording ID disambiguates equally named Beatport releases. Never
-                # substitute a loosely matched release: require the normal search score first.
-                matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
-                if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
-                    catalog = matched_catalog
-                    self.store.upsert_catalog_track(catalog)
-                    self.store.update_request(req.id, catalog_track_id=catalog.id)
-                    if ident is None:
-                        decision = decide(query, cands, catalog)
-                        chosen_obj = decision.chosen
-            saved = self.store.add_candidates(req.id, cands)
-            confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
-                          else (chosen_obj.score if chosen_obj else None))
-            self.store.update_request(req.id, confidence=confidence)
-            if chosen_obj is None:
-                reason = ident.reason if ident is not None else decision.reason
-                log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
-                await self._search_on_the_request(req, query, catalog, reason)
-                return
-            # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
-            # (the bot can list the same Deezer id twice)
-            chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
-
-            dup = find_duplicate(self.store, catalog, chosen)
-            if dup:
-                await self._mark_duplicate(req, dup.id, dup.path)
-                return
-
-            if ident is None and not decision.auto:
-                self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=decision.reason,
-                                chosen_candidate_id=chosen.id)
-                await self._ask_review(req, saved, decision.reason)
-                return
-            # persist the choice so a fetch failure resumes here instead of searching (and saving candidates) again
-            self.store.update_request(req.id, chosen_candidate_id=chosen.id)
-            cand = chosen
-            try:
-                catalog = await self._catalog_for(req, cand, catalog)
-            except CatalogUnavailable as e:
-                await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
-                return
+            cand, catalog = picked
+        try:
+            catalog = await self._catalog_for(req, cand, catalog)
+        except CatalogUnavailable as e:
+            await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
+            return
 
         await self._fetch_verify_file(req, cand, catalog)
 
+    async def _identify(self, req: Request, query: Query) -> tuple[Candidate, CatalogTrack | None] | None:
+        """Search Beatport and the source, choose the record, and persist the choice. Answers with the
+        candidate and catalog match to fetch, or None when this pass has already been settled here --
+        retried, parked for review, a duplicate, or handed to the search on the request's own words."""
+        self._set_state(req, RequestState.IDENTIFYING)
+        try:
+            catalog_tracks = await self.catalog.search(query)
+            catalog = best_match(query, catalog_tracks)
+        except CatalogUnavailable as e:
+            await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
+            return None
+        if catalog:
+            self.store.upsert_catalog_track(catalog)
+            self.store.update_request(req.id, catalog_track_id=catalog.id)
+
+        cands: list[Candidate] = []
+        # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
+        # different situations and the row used to say which, so it still does: a bot that is switched
+        # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
+        source_why = "the Deezer bot is switched off"
+        if self.settings.source_enabled:
+            source_why = "no Deezer candidates"
+            try:
+                cands = await self.source.search(query)
+            except SourceUnauthorized:
+                raise  # handled in process(): subclass of SourceError, so it must be caught before it
+            except SourceNotFound as e:
+                # Not a verdict any more: the request's own words can still reach Soulseek below.
+                source_why = f"the Deezer bot found nothing ({e})"
+                log.info("req#%d not found at source: %s", req.id, e)
+            except (SourceTimeout, SourceError) as e:
+                if catalog is None:
+                    # The source may be back in an hour and would offer a lossy fallback the query-only
+                    # path does not have; a retry is worth more than a Soulseek-or-nothing pass now.
+                    await self._retry_or_fail(req, f"source error: {e}")
+                    return None
+                # Beatport knows the track, so the request is still actionable: fall through to the
+                # catalog-only path rather than retrying a source that may be down for hours.
+                log.info("req#%d source gave nothing (%s); trying the lossless providers on the "
+                         "Beatport match alone", req.id, e)
+
+        if not cands:
+            # Either the source is switched off, or it found nothing, or it failed with a Beatport
+            # match already in hand.
+            if catalog is not None:
+                # `catalog_candidate` explains what this costs; the short version is that the pick
+                # rules still run entirely on Beatport data, but a request with no video of its own
+                # then has nothing to fingerprint against and the attempt ends `fingerprint_unavailable`.
+                if not self._lossless_allowed(req):
+                    # Beatport knows the track, so it exists -- there is just no route to a file now.
+                    await self._no_route(req)
+                    return None
+                await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
+                return None
+            await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
+            return None
+
+        # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
+        # `decide` runs either way: it scores every candidate (the order the previews are tried in,
+        # and what the Choose window shows), and its verdict only counts without a video.
+        video, why = await self._video_reference(req)
+        if video is None and why.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
+            # yt-dlp fails for a minute (429, a network blip) far more often than for good, and the
+            # video's audio is what identifies the record: a short wait beats choosing by text. After the
+            # ladder the pass goes on without it, so a removed video cannot block the request.
+            await self._retry_or_fail(req, f"could not fetch the video's audio: {why[7:]}",
+                                      flag="video audio unavailable, will retry")
+            return None
+        decision = decide(query, cands, catalog)
+        ident: Identification | None = None
+        if video is not None:
+            ordered = sorted(cands, key=lambda c: -(c.score or 0))
+            async with self._cpu:
+                ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
+                                              minimum=self.settings.lossless_fingerprint_min)
+            log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
+        chosen_obj = ident.chosen if ident is not None else decision.chosen
+        if chosen_obj is not None and chosen_obj.isrc:
+            # The source's recording ID disambiguates equally named Beatport releases. Never
+            # substitute a loosely matched release: require the normal search score first.
+            matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
+            if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
+                catalog = matched_catalog
+                self.store.upsert_catalog_track(catalog)
+                self.store.update_request(req.id, catalog_track_id=catalog.id)
+                if ident is None:
+                    decision = decide(query, cands, catalog)
+                    chosen_obj = decision.chosen
+        saved = self.store.add_candidates(req.id, cands)
+        confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
+                      else (chosen_obj.score if chosen_obj else None))
+        self.store.update_request(req.id, confidence=confidence)
+        if chosen_obj is None:
+            reason = ident.reason if ident is not None else decision.reason
+            log.info("req#%d: no acceptable candidate among %d: %s", req.id, len(cands), reason)
+            await self._search_on_the_request(req, query, catalog, reason)
+            return None
+        # the chooser returns one of the objects in `cands`; match by identity, not by source_ref
+        # (the bot can list the same Deezer id twice)
+        chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
+
+        dup = find_duplicate(self.store, catalog, chosen)
+        if dup:
+            await self._mark_duplicate(req, dup.id, dup.path)
+            return None
+
+        if ident is None and not decision.auto:
+            self._set_state(req, RequestState.AWAITING_REVIEW, flag_reason=decision.reason,
+                            chosen_candidate_id=chosen.id)
+            await self._ask_review(req, saved, decision.reason)
+            return None
+        # persist the choice so a fetch failure resumes here instead of searching (and saving candidates) again
+        self.store.update_request(req.id, chosen_candidate_id=chosen.id)
+        return chosen, catalog
 
     async def _catalog_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack | None:
         """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
