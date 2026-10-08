@@ -222,12 +222,19 @@ def _router_host(url: str) -> str | None:
     router's UPnP service has -- else None."""
     try:
         parts = urlsplit(url)
-        address = ipaddress.ip_address(parts.hostname or "")
     except ValueError:
         return None
-    if parts.scheme != "http" or address.version != 4 or not address.is_private or address.is_loopback:
-        return None
-    return str(address)
+    host = parts.hostname or ""
+    return host if parts.scheme == "http" and _lan_ipv4(host) else None
+
+
+def _lan_ipv4(host: str) -> bool:
+    """A private, non-loopback IPv4 address, written as one."""
+    try:
+        address = ipaddress.IPv4Address(host)
+    except ValueError:
+        return False
+    return address.is_private and not address.is_loopback
 
 
 def _trusted_location(location: str, source: str, gateway: str | None) -> str | None:
