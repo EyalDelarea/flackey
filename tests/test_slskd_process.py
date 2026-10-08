@@ -10,6 +10,31 @@ from flackey.slskd_binary import SlskdBinaryError
 from flackey.slskd_process import SlskdProcess, SlskdStartTimeout
 
 BASE = "http://slskd.test/api/v0"
+# The part of slskd's `GET /application` answer the health check reads (the full one is
+# tests/fixtures/slskd/application.json).
+APPLICATION = {"version": {"current": "0.22.5"}, "server": {"state": "Connected, LoggedIn", "isLoggedIn": True}}
+
+
+@respx.mock
+@pytest.mark.parametrize("answer", [
+    httpx.Response(401), httpx.Response(403), httpx.Response(404), httpx.Response(200, json={"ok": True}),
+    httpx.Response(200, text="<html>some other web app</html>"), httpx.Response(200, json=["server"]),
+    httpx.Response(200, json={"server": "up"})])
+async def test_only_a_real_slskd_answer_counts_as_healthy(tmp_path: Path, answer):
+    """Anything else on the port -- another program, or a slskd that refuses our key -- is not the sidecar
+    flackey can use, and must not be mistaken for one."""
+    respx.get(f"{BASE}/application").mock(return_value=answer)
+    assert await SlskdProcess(tmp_path, "http://slskd.test", "key").probe() is False
+
+
+@respx.mock
+async def test_a_slskd_that_refuses_the_key_is_logged_as_such(tmp_path: Path, caplog):
+    respx.get(f"{BASE}/application").mock(return_value=httpx.Response(401))
+    clock = Clock()
+    proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
+    with caplog.at_level("WARNING"):
+        assert await proc.wait_healthy(timeout_s=1) is False
+    assert "API key" in caplog.text
 
 
 class Clock:
@@ -46,7 +71,7 @@ async def test_stop_on_never_started_supervisor_is_safe(tmp_path: Path):
 
 @respx.mock
 async def test_start_returns_quietly_when_something_already_answers(tmp_path: Path, monkeypatch):
-    respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json={"ok": True}))
+    respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=APPLICATION))
     proc = SlskdProcess(tmp_path, "http://slskd.test", "key")
 
     async def unexpected_spawn(*args, **kwargs):
@@ -88,7 +113,7 @@ async def test_wait_healthy_returns_false_on_timeout_without_real_sleep(tmp_path
 async def test_wait_healthy_reuses_one_client_for_every_poll(tmp_path: Path, monkeypatch):
     """A client per poll meant a TLS setup per poll, which a slow PC busy starting slskd could not keep up with."""
     route = respx.get(f"{BASE}/application")
-    route.side_effect = [httpx.ConnectError("refused"), httpx.ConnectError("refused"), httpx.Response(401)]
+    route.side_effect = [httpx.ConnectError("refused"), httpx.ConnectError("refused"), httpx.Response(200, json=APPLICATION)]
     built = []
     real = httpx.AsyncClient
 
@@ -106,7 +131,7 @@ async def test_wait_healthy_reuses_one_client_for_every_poll(tmp_path: Path, mon
 
 @respx.mock
 async def test_wait_healthy_returns_true_once_something_answers(tmp_path: Path):
-    respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json={"ok": True}))
+    respx.get(f"{BASE}/application").mock(return_value=httpx.Response(200, json=APPLICATION))
     clock = Clock()
     proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
 
