@@ -401,16 +401,16 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="error", version=version, seamless=seamless, error=save_error)
         return None
 
-    async def signed(path: Path, version: str, sig_url: str | None) -> bytes | bool | None:
-        """The archive's bytes when they match the detached signature, False when they do not, None
-        when they cannot be read back. Read once: whatever is used next is these bytes, not the file."""
+    async def signed(path: Path, version: str, sig_url: str | None) -> bool | None:
+        """Whether the archive matches its detached signature; None when it cannot be read back. A pass
+        records the bytes' hash, and `selfupdate.stage` unpacks nothing else."""
         sig = await fetch_signature(sig_url) if sig_url else None
         try:
             payload = path.read_bytes()
         except OSError:
             log.exception("could not read back the download at %s", path)
             return None
-        return payload if sig is not None and signature.verify_archive(version, payload, sig) else False
+        return sig is not None and signature.verify_archive(version, payload, sig)
 
     async def download_archive(url: str, total: int | None, sig_url: str, version: str) -> None:
         """Fetch the bundle, prove it, stage it, and stop -- nothing is swapped until the owner
@@ -443,16 +443,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return
 
         try:
-            # Staged from a private copy of the verified bytes, never from the download a second time.
-            copy = private_copy(updates_dir(), archive.name, ok)
-        except OSError:
-            log.exception("could not write the verified update for %s", version)
-            remove_download(archive)
-            publish(state="error", version=version, seamless=True,
-                    error="Could not save the update. The disk may be full.")
-            return
-        try:
-            new = selfupdate.stage(copy, version, relaunch=True)
+            # `stage` reads the archive once more and unpacks only bytes whose hash verified above.
+            new = selfupdate.stage(archive, version, relaunch=True)
         except selfupdate.StagingError as exc:
             log.error("could not stage the verified update for %s: %s", version, exc)
             remove_download(archive)
@@ -464,8 +456,6 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             publish(state="error", version=version, seamless=True,
                     error="The update could not be prepared. The log has the details.")
             return
-        finally:
-            shutil.rmtree(copy.parent, ignore_errors=True)
         remove_download(archive)
         staged = new
         publish(state="staged", percent=100, received=received, total=total, version=version,
