@@ -537,6 +537,32 @@ async def test_recovery_write_failure_inside_the_except_handler_still_falls_back
     assert "MP3 320 kbps via Deezer" in notifier.sent[-1][0]
 
 
+async def test_a_failed_error_event_still_closes_the_crashed_attempt(lenv):
+    """A transient store fault: the recorder's raw_dir write fails (it swallows that), the write that
+    crashes the attempt fails, so does the "error" event the handler writes next, and then the store
+    recovers. The event is a detail; the outcome is the record `_lossless_allowed`, `_no_route` and the
+    miss line read back, so it must still be written rather than left NULL until the next restart marks
+    it interrupted."""
+    _, store, _, provider, _, _ = lenv
+    real = store.update_attempt
+    failures = {"left": 3}
+
+    def flaky(*args, **kwargs):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RuntimeError("database is locked")
+        return real(*args, **kwargs)
+
+    store.update_attempt = flaky
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert failures["left"] == 0                         # all three injected failures fired
+    assert provider.searches == []                       # crashed on search_started, before searching
+    assert r.state == RequestState.DONE                  # fell back to Deezer
+    assert attempt_of(store, rid).outcome == "transfer_failed"   # closed, not left NULL
+
+
 async def test_finish_write_failure_after_a_hit_does_not_orphan_the_converted_file(lenv):
     """Found by the final whole-branch review: rec.finish("filed") in _attempt writes to the store. If
     that write fails, the exception unwinds to _try_lossless's except handler, which only has `rec` in

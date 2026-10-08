@@ -1293,8 +1293,13 @@ class Worker:
                 except Exception as e:  # the worker must survive any bug in the lossless path
                     log.exception("req#%d lossless attempt %s crashed", req.id, rec.id if rec else "?")
                     if rec is not None:
+                        # Two writes, two tries: the event is a detail, the outcome is what the next pass
+                        # reads back, so a failed event must not skip closing the row.
                         try:
                             rec.event("error", type=type(e).__name__, message=str(e)[:300])
+                        except Exception:
+                            log.exception("req#%d could not record the lossless attempt's error", req.id)
+                        try:
                             rec.finish("transfer_failed")
                         except Exception:  # the recovery write can fail too; the row may stay NULL, we still fall back
                             log.exception("req#%d could not record the failed lossless attempt", req.id)
