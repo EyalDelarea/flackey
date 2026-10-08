@@ -7,8 +7,10 @@ on:
         description: "Version to release, for example 0.1.4 or v0.1.4"
         required: true
 
+# Read-only on purpose: every write (pushing the bump branch and the tag, opening and auto-merging the
+# PR) goes through RELEASE_PAT, never GITHUB_TOKEN. See the checkout step for why.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.version }}

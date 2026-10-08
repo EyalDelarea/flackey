@@ -1,6 +1,8 @@
-# Every push and pull request: the four checks the README lists for development, a type-checked build
-# of the web UI, and the test suite again on Windows. The green checks gate two installer builds:
-#   - macOS (Flackey.pkg), on a push to main or a version tag;
+# Every push and pull request: the four checks the README lists for development (pytest with real
+# ffmpeg, ffprobe and fpcalc, so the audio tests run instead of skipping), a type-checked build of the
+# web UI, and the test suite again on macOS and on Windows. The green checks gate two installer builds:
+#   - macOS (Flackey.pkg), on a push to main or a version tag, and on a pull request that touches what
+#     the build is made of (packaging/, pyproject.toml, uv.lock, this file);
 #   - Windows (Flackey-Setup.exe), on every push *and* pull request -- nobody on the project has a
 #     Windows machine, so a PR's artifact, installed in a VM, is how a Windows change gets tried.
 # On a version tag both installers are published together as one GitHub Release: a release when the
@@ -18,9 +20,34 @@ permissions:
 
 concurrency:
   group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR replaces the older run. On main and on tags every run finishes: cancelling one
+  # there once threw away the run a release bump was waiting on. (GitHub still keeps only one *pending*
+  # run per group, so a burst of merges can drop a queued main run; the next one covers it.)
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    # Which parts of the tree a pull request touches, so the Mac installer is built on a PR only when
+    # its ingredients changed. Pull requests only: a push builds it unconditionally.
+    name: changed paths
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mac_installer: ${{ steps.filter.outputs.mac_installer }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            mac_installer:
+              - "packaging/**"
+              - "pyproject.toml"
+              - "uv.lock"
+              - ".github/workflows/checks.yml"
+
   python:
     name: ruff, lint-imports, pytest
     runs-on: ubuntu-latest
@@ -29,12 +56,51 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
+      - name: ffmpeg, ffprobe, fpcalc
+        # Static builds from GitHub releases, checked against pinned digests: a few seconds, where apt
+        # takes tens of them. Without these every requires_ffmpeg / requires_fpcalc test skips.
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/audio-tools"
+          mkdir -p "$bin" && cd "$bin"
+          ff=https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1
+          curl -fsSL --retry 3 -o ffmpeg.gz "$ff/ffmpeg-linux-x64.gz" &
+          curl -fsSL --retry 3 -o ffprobe.gz "$ff/ffprobe-linux-x64.gz" &
+          curl -fsSL --retry 3 -o fpcalc.tar.gz \
+            https://github.com/acoustid/chromaprint/releases/download/v1.6.1/chromaprint-fpcalc-1.6.1-linux-x86_64.tar.gz &
+          wait
+          sha256sum -c - <<'SUMS'
+          bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa  ffmpeg.gz
+          25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067  ffprobe.gz
+          fc16cd37a70168040bc9ceb45f1d4d1216f5a75bc4c9cf8564bea70ac6a45733  fpcalc.tar.gz
+          SUMS
+          gunzip ffmpeg.gz ffprobe.gz
+          tar -xzf fpcalc.tar.gz --strip-components=1 && rm fpcalc.tar.gz
+          chmod +x ffmpeg ffprobe fpcalc
+          ./ffmpeg -hide_banner -version | head -1 && ./fpcalc -version
+          echo "$bin" >> "$GITHUB_PATH"
       - name: Install
         run: uv sync --frozen
       - name: ruff
         run: uv run ruff check src tests
       - name: lint-imports
         run: uv run lint-imports
+      - name: pytest
+        # -rs lists every skip, so a log shows the audio tests ran rather than skipped.
+        run: uv run pytest -q -rs
+
+  python-mac:
+    name: pytest (macOS)
+    # The primary platform, and the only runner that can compile and exercise the update helper
+    # (tests/test_update_helper.py). Runs alongside the other test jobs, off the critical path.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
       - name: pytest
         run: uv run pytest -q
 
@@ -80,8 +146,12 @@ jobs:
 
   mac:
     name: Flackey installer (Apple Silicon)
-    needs: [python, web]
-    if: github.event_name == 'push'
+    needs: [changes, python, web]
+    # `changes` is skipped on a push, so the default "every need succeeded" rule would skip this too;
+    # the expression restates it for the jobs that do gate the build.
+    if: >-
+      !cancelled() && needs.python.result == 'success' && needs.web.result == 'success' &&
+      (github.event_name == 'push' || needs.changes.outputs.mac_installer == 'true')
     runs-on: macos-14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -122,10 +192,6 @@ jobs:
         run: |
           test -x packaging/build/dist/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
           codesign --verify --deep --strict packaging/build/dist/Flackey.app
-      - name: Helper refuses what it should
-        # The only job on a Mac, so the only one that can compile the helper; the python job runs on
-        # ubuntu and skips these.
-        run: uv run pytest tests/test_update_helper.py -q
       - name: Installer
         run: |
           packaging/build_installer.sh
@@ -207,7 +273,8 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [mac, windows, python-windows]
+    # python-mac too: it is the job that proves the update helper still refuses what it should.
+    needs: [mac, windows, python-mac, python-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -240,10 +307,6 @@ jobs:
         with:
           name: Flackey.windows
           path: dist
-      - name: latest.json
-        # Mac only, as before: installed Mac copies and the site read it. Windows copies find
-        # Flackey-Setup.exe among the release's assets instead.
-        run: packaging/latest_json.sh "$GITHUB_REF_NAME" dist/Flackey.pkg dist/Flackey.pkg.sha256 | tee dist/latest.json
       - name: Sign the update archive
         # Here rather than in the mac job: this is the only step that needs the private key, and it
         # should not run alongside npm install and PyInstaller.
@@ -253,17 +316,25 @@ jobs:
         env:
           FLACKEY_UPDATE_SIGNING_KEY: ${{ secrets.FLACKEY_UPDATE_SIGNING_KEY }}
         # --no-project: the script reads the signed-message format straight out of src/, so none of
-        # the app's macOS-shaped dependencies need to resolve on this runner. Pinned to the version in
-        # uv.lock since this step holds the private key.
+        # the app's macOS-shaped dependencies need to resolve on this runner. cryptography is pinned to
+        # the version uv.lock resolves, read from the lock so the two cannot drift, since this step
+        # holds the private key.
         run: |
+          set -euo pipefail
           if [[ -z "${FLACKEY_UPDATE_SIGNING_KEY// /}" ]]; then
             echo "::error title=No signing key::FLACKEY_UPDATE_SIGNING_KEY is empty; refusing to publish an unsigned release."
             exit 1
           fi
-          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey-"${GITHUB_REF_NAME#v}".zip
-          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
+          crypto="$(python3 -c 'import tomllib; print(*[p["version"] for p in tomllib.load(open("uv.lock", "rb"))["package"] if p["name"] == "cryptography"])')"
+          if [[ ! "$crypto" =~ ^[0-9][0-9.]*$ ]]; then
+            echo "::error title=No cryptography in uv.lock::expected one version, got '$crypto'."
+            exit 1
+          fi
+          sign() { uv run --no-project --with "cryptography==$crypto" packaging/sign_archive.py "$@"; }
+          sign dist/Flackey-"${GITHUB_REF_NAME#v}".zip
+          sign dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
+          sign dist/Flackey-Setup.exe "${GITHUB_REF_NAME#v}"
           test -s dist/Flackey-"${GITHUB_REF_NAME#v}".zip.sig
-          uv run --no-project --with cryptography==50.0.1 packaging/sign_archive.py dist/Flackey-Setup.exe "${GITHUB_REF_NAME#v}"
           test -s dist/Flackey.pkg.sig
           test -s dist/Flackey-Setup.exe.sig
         shell: bash
@@ -278,7 +349,7 @@ jobs:
           zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
           # Flackey-Setup.exe keeps the same name every release, like Flackey.pkg: it is the name the
           # Windows update check looks for.
-          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256 dist/latest.json
+          assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256
                   dist/Flackey-Setup.exe dist/Flackey-Setup.exe.sha256)
           # Every signed file is mandatory: installed copies refuse an update or installer without one.
           for f in "$zip" "$zip.sig" dist/Flackey.pkg.sig dist/Flackey-Setup.exe.sig; do
@@ -289,3 +360,16 @@ jobs:
           [[ "$PRERELEASE" == "true" ]] && channel=(--prerelease --latest=false)
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${channel[@]}" \
             --verify-tag --title "Flackey ${GITHUB_REF_NAME#v}" --generate-notes
+
+  bench-apt-audio:
+    # TEMPORARY: measures apt against the static download above; removed before review.
+    name: bench apt ffmpeg (temporary)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: apt ffmpeg + chromaprint
+        run: |
+          start=$(date +%s)
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg libchromaprint-tools
+          echo "apt took $(( $(date +%s) - start ))s"
