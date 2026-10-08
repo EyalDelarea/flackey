@@ -267,42 +267,58 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return None
         return signature.decode_signature(bytes(body))
 
+    async def fetch(url: str, total: int | None, target: Path, version: str, *, seamless: bool,
+                    noun: str, written: str, save_error: str) -> int | None:
+        """`stream_to`, with its three expected failures logged and published. None when one of them
+        happened; anything else propagates to the caller."""
+        try:
+            return await stream_to(url, total, target, version, seamless=seamless)
+        except ShortDownload:
+            log.warning("%s from %s was incomplete", noun, url, exc_info=True)
+            publish(state="error", version=version, seamless=seamless, error=INCOMPLETE)
+        except httpx.HTTPError:
+            log.warning("%s from %s failed", noun, url, exc_info=True)
+            publish(state="error", version=version, seamless=seamless,
+                    error="The download stopped before it finished. Check your connection and try again.")
+        except OSError:
+            log.warning("could not write %s to %s", written, target, exc_info=True)
+            publish(state="error", version=version, seamless=seamless, error=save_error)
+        return None
+
+    async def signed(path: Path, version: str, sig_url: str | None,
+                     domain: bytes = signature.DOMAIN) -> bool | None:
+        """Whether the download at `path` matches its detached signature; None when it cannot be read
+        back. The signature is fetched first, as both callers always did."""
+        sig = await fetch_signature(sig_url) if sig_url else None
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            log.exception("could not read back the download at %s", path)
+            return None
+        return sig is not None and signature.verify_archive(version, payload, sig, domain=domain)
+
     async def download_archive(url: str, total: int | None, sig_url: str, version: str) -> None:
         """Fetch the bundle, prove it, stage it, and stop -- nothing is swapped until the owner
         answers. No failure here falls back to the installer."""
         nonlocal staged
         archive = updates_dir() / archive_name(version)
-        try:
-            received = await stream_to(url, total, archive, version, seamless=True)
-        except ShortDownload:
-            log.warning("update archive from %s was incomplete", url, exc_info=True)
-            publish(state="error", version=version, seamless=True, error=INCOMPLETE)
-            return
-        except httpx.HTTPError:
-            log.warning("update archive from %s failed", url, exc_info=True)
-            publish(state="error", version=version, seamless=True,
-                    error="The download stopped before it finished. Check your connection and try again.")
-            return
-        except OSError:
-            log.warning("could not write the update archive to %s", archive, exc_info=True)
-            publish(state="error", version=version, seamless=True,
-                    error="Could not save the update. The disk may be full.")
+        received = await fetch(url, total, archive, version, seamless=True, noun="update archive",
+                               written="the update archive",
+                               save_error="Could not save the update. The disk may be full.")
+        if received is None:
             return
 
         publish(state="verifying", percent=100, received=received, total=total, version=version,
                 seamless=True)
-        sig = await fetch_signature(sig_url)
-        try:
-            payload = archive.read_bytes()
-        except OSError:
-            log.exception("could not read back the downloaded archive at %s", archive)
+        ok = await signed(archive, version, sig_url)
+        if ok is None:
             remove_download(archive)
             publish(state="error", version=version, seamless=True,
                     error="Could not read the downloaded update. Try again.")
             return
         # Below this line the bytes get unpacked into /Applications and then executed. The version is
         # part of what was signed, so an older archive re-published under this tag fails here.
-        if sig is None or not signature.verify_archive(version, payload, sig):
+        if not ok:
             log.error("the update archive for %s did not match its signature; refusing to install it",
                       version)
             remove_download(archive)
@@ -310,7 +326,6 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                     error="This update could not be verified, so Flackey did not install it. "
                           "Download it from the release page instead.")
             return
-        del payload
 
         try:
             new = selfupdate.stage(archive, version, relaunch=True)
@@ -351,42 +366,25 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                 log.exception("could not close Flackey after opening the installer")
 
     async def download(url: str, total: int | None, version: str, sig_url: str | None) -> None:
-        received = 0
         target = target_path()
         try:
-            received = await stream_to(url, total, target, version)
-        except ShortDownload:
-            log.warning("update download from %s was incomplete", url, exc_info=True)
-            publish(state="error", version=version, error=INCOMPLETE)
-            return
-        except httpx.HTTPError:
-            log.warning("update download from %s failed", url, exc_info=True)
-            publish(state="error", version=version,
-                    error="The download stopped before it finished. Check your connection and try again.")
-            return
-        except OSError:
-            log.warning("could not write the update to %s", target, exc_info=True)
-            publish(state="error", version=version,
-                    error="Could not save the installer. The disk may be full.")
-            return
+            received = await fetch(url, total, target, version, seamless=False, noun="update download",
+                                   written="the update",
+                                   save_error="Could not save the installer. The disk may be full.")
         except Exception:
             # "downloading" is what blocks the next attempt, so it must never be the last word.
             log.exception("update download from %s failed unexpectedly", url)
             publish(state="error", version=version,
                     error="The download failed. The log has the details.")
             return
+        if received is None:
+            return
         if signature.seamless_updates_configured():
             # Installer.app runs the package's scripts as root once the owner types their password, so
             # it is checked like the seamless archive before anything opens it. Setup.exe on Windows is
             # held to the same rule: it is the release job that signs it, alongside the .pkg.
             publish(state="verifying", percent=100, received=received, total=total, version=version)
-            sig = await fetch_signature(sig_url) if sig_url else None
-            try:
-                payload = target.read_bytes()
-            except OSError:
-                payload = None
-            if (sig is None or payload is None
-                    or not signature.verify_archive(version, payload, sig, domain=signature.INSTALLER_DOMAIN)):
+            if not await signed(target, version, sig_url, domain=signature.INSTALLER_DOMAIN):
                 log.error("the installer for %s did not match its signature; refusing to open it", version)
                 remove_download(target)
                 publish(state="error", version=version,
