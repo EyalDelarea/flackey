@@ -3,3 +3,6 @@ contact_links:
   - name: Explore the Flackey project
     url: https://github.com/EyalDelarea/flackey
     about: Read about the project and see what is being built.
+  - name: Report a security vulnerability
+    url: https://github.com/EyalDelarea/flackey/security/advisories/new
+    about: Please report security issues privately here, not in a public issue. See SECURITY.md.

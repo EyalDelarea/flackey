@@ -11,6 +11,11 @@ something that doesn't fit the project's direction.
 
 ## Setup
 
+Prerequisites: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 and
+pulls in yt-dlp with the other Python dependencies), Node.js 22 with npm (the
+version CI uses), and `ffmpeg`/`ffprobe` plus Chromaprint's `fpcalc` on your
+PATH (`brew install ffmpeg chromaprint` on a Mac).
+
 ```bash
 cp .env.example .env   # optional: TELEGRAM_API_ID, TELEGRAM_API_HASH
 uv sync
@@ -18,7 +23,14 @@ npm --prefix web install
 npm --prefix web run build
 ```
 
-See the [README](README.md) for requirements and running the app locally.
+See the [README](README.md#-run-from-a-checkout) for running the app locally.
+
+**Windows.** A Windows checkout works with the same commands (run them in
+PowerShell). CI runs `pytest` on Windows as well as Linux, and builds and
+smoke-tests the Windows installer, so keep paths and subprocess calls
+platform-neutral. Platform branches live behind `sys.platform` checks (see
+`src/flackey/config.py` and `src/flackey/tools.py`). Building the installer
+yourself is `packaging/build_windows.ps1`.
 
 ## Checks
 

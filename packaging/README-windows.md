@@ -1,6 +1,6 @@
-# Flackey for Windows — a test build
+# Installing Flackey on Windows
 
-This is an early Windows build of Flackey. It needs 64-bit Windows 10 or 11. On an ARM PC (a Snapdragon
+Flackey for Windows needs 64-bit Windows 10 or 11. On an ARM PC (a Snapdragon
 laptop, say) it runs through Windows' built-in x64 emulation.
 
 ## Installing it
@@ -11,7 +11,7 @@ laptop, say) it runs through Windows' built-in x64 emulation.
 3. Click through the installer. It installs just for you, so it does not ask for an administrator password.
 4. Flackey opens when the installer finishes. Afterwards it is in the Start menu.
 
-**Why the warning?** The installer is not code-signed yet, and Windows SmartScreen warns about any
+**Why the warning?** The installer is not code-signed, and Windows SmartScreen warns about any
 download it has not seen many times before. Only click Run anyway for a `Flackey-Setup.exe` you downloaded
 from the releases page above. To check you have the real file, compare its checksum with the
 `Flackey-Setup.exe.sha256` file next to it on the release:
@@ -25,15 +25,16 @@ certutil -hashfile Flackey-Setup.exe SHA256
 | | |
 |---|---|
 | The app | `%LOCALAPPDATA%\Programs\Flackey` |
-| Your music | `Music\DJ Library` in your user folder |
+| Your music | `Music\DJ Library` in your user folder — one folder per artist by default (Settings › Library › Folder layout) |
 | Settings and database | `%APPDATA%\Flackey` |
 | The log | `%APPDATA%\Flackey\flackey.log` |
 
-If something goes wrong, that log file is the useful thing to send back.
+If something goes wrong, use **Report a bug** (in the sidebar, or Settings › Help): it opens an email to the
+developer with a redacted zip of the log and system details. If the app will not start, send that log file.
 
 ## Updating and uninstalling
 
-When a new version is out, **Update** in the app downloads the new `Flackey-Setup.exe` and runs it. Click
+When a new version is out, **Update** in the app downloads the new `Flackey-Setup.exe`, checks its signature, and runs it. Click
 through the installer again. Flackey closes while it installs, and the installer's last page starts it
 again.
 

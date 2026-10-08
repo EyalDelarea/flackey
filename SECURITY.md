@@ -17,10 +17,14 @@ security fixes — there are no maintained older branches.
 
 ## Scope
 
-Flackey runs locally on your own Mac (or your own Docker host) and talks to
+Flackey runs locally on your own Mac, Windows PC or Docker host and talks to
 Telegram, Deezer, Beatport, and (optionally) Soulseek using your own
 credentials. Things worth reporting: anything that could leak your Telegram
 session, Soulseek password, or library data to someone who shouldn't have it;
 remote code execution via a crafted link, filename, or matched track's
-metadata; or a packaged build's baked-in Telegram API keys being exposed
-beyond what `docs/RELEASING.md`'s build process intends.
+metadata; a way to get the self-update (`src/flackey/selfupdate/`,
+`packaging/update_helper.c`) to install something that isn't a release signed
+with Flackey's Ed25519 key, such as a bypass of the signature check or a
+tampered archive or installer that still gets installed; private data left
+unredacted in an in-app bug report; or a packaged build's baked-in Telegram API
+keys being exposed beyond what `docs/RELEASING.md`'s build process intends.

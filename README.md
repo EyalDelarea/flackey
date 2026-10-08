@@ -1,15 +1,15 @@
 # 🎧 Flackey
 
 **Paste a link. Get the FLAC.** Flackey is a dark, pro-audio-style desktop app
-for Mac that turns a YouTube or YouTube Music link into a tagged, Rekordbox-ready
-track in your DJ library — automatically.
+for Mac and Windows that turns a YouTube, YouTube Music or Spotify link into a
+tagged, Rekordbox-ready track in your DJ library — automatically.
 
-Paste the link into the app; a worker running on the Mac finds the track
-through a Telegram source bot (using your own Telegram account), matches it
-on Beatport, verifies it is genuine 320 kbps or better (lossless where
-Soulseek has it), tags it and files it under `~/Music/DJ Library/<Artist>/`,
-and writes M3U8 playlists for Rekordbox import. BPM and key are left to
-Rekordbox's analysis; genre and label are in the tags.
+Paste the link into the app; a worker running on your computer matches the track
+on Beatport, fetches it from Soulseek (lossless) or through a Telegram source bot
+(using your own accounts), verifies it is genuine 320 kbps or better, tags it and
+files it in your DJ Library (by default one folder per artist,
+`~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
+BPM and key are left to Rekordbox's analysis; genre and label are in the tags.
 
 <p align="center">
   <a href="https://github.com/EyalDelarea/flackey/actions/workflows/checks.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/EyalDelarea/flackey/checks.yml?branch=main&label=CI"></a>
@@ -17,7 +17,7 @@ Rekordbox's analysis; genre and label are in the tags.
   <a href="https://github.com/EyalDelarea/flackey/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/EyalDelarea/flackey"></a>
   <a href="https://github.com/EyalDelarea/flackey/releases"><img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/EyalDelarea/flackey/total"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)%20%7C%20Windows%20x64-lightgrey">
 </p>
 
 <p align="center">
@@ -26,9 +26,19 @@ Rekordbox's analysis; genre and label are in the tags.
 
 ## ⬇️ Download
 
-Built for Apple Silicon Macs: **[eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)** — one zip,
-one Terminal command to clear the download flag, and the setup screen does the rest. Everything below is
-for running from a checkout.
+Get the latest version from **[eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)** or the
+[releases page](https://github.com/EyalDelarea/flackey/releases). The setup screen does the rest.
+
+- **Mac** (Apple Silicon, macOS 12 or newer): open `Flackey.pkg`. The installer isn't signed with an Apple
+  Developer ID, so macOS may block it the first time. Open **System Settings › Privacy & Security** and
+  click **Open Anyway**, or on macOS 14 and earlier control-click `Flackey.pkg` and choose **Open**.
+  Step-by-step: [`packaging/README-for-friends.md`](packaging/README-for-friends.md).
+- **Windows** (64-bit Windows 10 or 11): run `Flackey-Setup.exe`. SmartScreen will probably say "Windows
+  protected your PC"; click **More info**, then **Run anyway**. Step-by-step:
+  [`packaging/README-windows.md`](packaging/README-windows.md).
+
+Once installed, Flackey updates itself from inside the app. Everything from
+[Run from a checkout](#-run-from-a-checkout) on is for developers.
 
 ## ✨ See it in action
 
@@ -40,18 +50,18 @@ for running from a checkout.
 <table>
 <tr>
 <td width="50%">
-<img src="docs/img/readme/downloads.png" alt="Download queue with a Beatport match to choose">
-<br>Paste a link, pick the right match when there's more than one.
+<img src="docs/img/readme/downloads.png" alt="Download queue asking which version of a track to use">
+<br>Paste a link, pick the right version when more than one matches.
 </td>
 <td width="50%">
-<img src="docs/img/readme/library-dark.png" alt="Library view in dark mode">
-<br>Every track, tagged and filed — dark mode included.
+<img src="docs/img/readme/library-dark.png" alt="Library view in dark mode with the Playlists sidebar">
+<br>Every track, tagged and filed, with your playlists alongside — dark mode included.
 </td>
 </tr>
 <tr>
 <td width="50%">
 <img src="docs/img/readme/settings.png" alt="Settings screen">
-<br>Telegram, Soulseek, and library folder, all in one place.
+<br>Connections, library folder, folder layout and file format, all in one place.
 </td>
 <td width="50%">
 <img src="docs/img/readme/rekordbox-guide.png" alt="In-app Rekordbox import guide">
@@ -60,13 +70,33 @@ for running from a checkout.
 </tr>
 </table>
 
-## 🧰 Requirements
+## 🎛️ Features
 
-- macOS
-- Homebrew `ffmpeg` and `yt-dlp`
-- [uv](https://docs.astral.sh/uv/), Python 3.12
+- **Your folder layout.** Settings › Library › Folder layout files new tracks by artist (the default),
+  by date (a folder per month or per day) or all in one folder. Changing it never moves tracks already
+  filed, so Rekordbox doesn't lose them.
+- **Your file format.** Lossless copies are filed as AIFF, WAV or FLAC (AIFF by default on a Mac, FLAC on
+  Windows).
+- **Playlists sidebar.** The Library page lists every playlist next to your tracks, groups album
+  playlists together, scrolls on its own, and has a search box to find one.
+- **Signed self-update.** Flackey checks for a new version (you can turn the check off) and installs it
+  from inside the app. Every update is checked against an Ed25519 signature before it is installed.
+- **In-app bug reports.** Help › Report a bug (also in the sidebar) opens an email to the developer with
+  your description, plus a zip of the log and system details with personal information redacted.
 
-## ⚙️ Setup
+## 🧰 Run from a checkout
+
+You need:
+
+- [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 and yt-dlp for you)
+- Node.js 22 and npm, to build the web UI
+- `ffmpeg` (with `ffprobe`) and Chromaprint's `fpcalc` on your PATH. On a Mac:
+  `brew install ffmpeg chromaprint`.
+
+macOS is the main development platform. Windows checkouts work too (CI runs the test suite on Windows);
+put `ffmpeg.exe`, `ffprobe.exe` and `fpcalc.exe` on your PATH.
+
+### ⚙️ Setup
 
 ```bash
 cp .env.example .env   # optional: TELEGRAM_API_ID, TELEGRAM_API_HASH (the Telegram step asks for them otherwise)
@@ -75,7 +105,7 @@ npm --prefix web install
 npm --prefix web run build   # builds web/dist, which flackey start serves
 ```
 
-## 🎚️ Usage
+### 🎚️ Usage
 
 ```bash
 uv run flackey start          # worker + web UI, until Ctrl-C; opens the UI in a browser
@@ -91,11 +121,11 @@ checkout, put yours in `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) or
 paste them into the Telegram step, which offers fields whenever this copy
 has none.
 
-Then paste a YouTube or YouTube Music track/playlist link into the UI.
+Then paste a YouTube, YouTube Music or Spotify track or playlist link into the UI.
 Plain text is refused and queues nothing. Useful companions:
 
 ```bash
-uv run flackey add "https://music.youtube.com/watch?v=…"   # enqueue from the Mac, no phone needed
+uv run flackey add "https://music.youtube.com/watch?v=…"   # enqueue from a terminal
 uv run flackey status                                     # queue counts and library size
 uv run flackey export                                     # rewrite every M3U8 playlist file
 ```
@@ -110,13 +140,17 @@ one-way import, and a generated XML carries none of the owner's hot cues,
 memory cues, or ratings, so regenerating it after every track would make one
 careless drag destructive. Instead:
 
-1. Drag `~/Music/DJ Library` (or an artist folder) into the Rekordbox
+1. Drag `~/Music/DJ Library` (or one of its folders) into the Rekordbox
    collection. Rekordbox skips tracks it already knows, so this is safe to
    repeat, and existing tracks' Rekordbox data is never touched. New tracks
    pick up their Beatport tags and artwork from the file itself.
 2. File -> Import -> Playlist, choose `~/Music/DJ Library/Playlists/<name>.m3u8`.
    Re-importing the same file after new tracks are added is also safe: cues
    set on tracks already in the collection are preserved.
+
+The folder layout setting only changes which folders new tracks land in;
+Rekordbox finds tracks by their full path, so tracks already filed are never
+moved. Dragging the whole library folder works with every layout.
 
 The important part is that Flackey writes files and playlists, not Rekordbox's
 database. Rekordbox stays the source of truth for performance metadata.
@@ -141,15 +175,19 @@ database. Rekordbox stays the source of truth for performance metadata.
 Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every request first asks the
 Soulseek network for a FLAC of the matched track. The file is verified (spectral cutoff), proven to be the
 same recording as what you asked for with a Chromaprint fingerprint against the request's own audio (the
-YouTube video, or the matched record's 30 s preview), converted to AIFF (audio untouched, peer tags dropped)
-and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same
+YouTube video, or the matched record's 30 s preview), converted to your filing format (AIFF, WAV or FLAC;
+audio untouched, peer tags dropped) and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same
 reference, so a copy that is a different recording is rejected rather than filed. The Done line says what you
 got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or `MP3 320 kbps via Deezer`.
 
-1. `brew install chromaprint` (for `fpcalc`; without it nothing can be checked, and a request says so
-   instead of filing a copy nothing vouched for).
-2. Download the slskd release for macOS, put it in `~/Library/Application Support/Flackey/slskd/` with a
-   `slskd.yml` like:
+The setup screen does all of this for you: it downloads a pinned,
+checksum-verified slskd into `<data dir>/slskd/`, writes its config and starts it. The manual steps below
+are for running your own slskd from a checkout.
+
+1. Install Chromaprint for `fpcalc` (`brew install chromaprint` on a Mac; the packaged app ships its own).
+   Without it nothing can be checked, and a request says so instead of filing a copy nothing vouched for.
+2. Download the slskd release for your platform, put it in `<data dir>/slskd/` (the data dir is
+   listed under "Where data lives" below) with a `slskd.yml` like:
 
    ```yaml
    web:
@@ -164,10 +202,10 @@ got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or `MP3 320 kbps via Deezer`
    shares:
      directories: ["~/Music/DJ Library"]
    directories:
-     downloads: ~/Library/Application Support/Flackey/slskd/downloads
+     downloads: <data dir>/slskd/downloads
    ```
 
-   Start it with `./slskd --app-dir "~/Library/Application Support/Flackey/slskd"`. Sharing your library is
+   Start it with `./slskd --app-dir "<data dir>/slskd"`. Sharing your library is
    what makes peers serve you.
 3. Put the same key in `.env` as `SLSKD_API_KEY=` (or in `settings.json` as `slskd_api_key`). Restart.
 
@@ -190,11 +228,14 @@ and can be deleted at any time.
 <details>
 <summary><strong>🗂️ Where data lives</strong></summary>
 
-- `~/Library/Application Support/Flackey/` on macOS; `~/.config/flackey/` elsewhere. Contains the sqlite
+- The data dir: `~/Library/Application Support/Flackey/` on macOS, `%APPDATA%\Flackey` on Windows
+  (uninstalling or upgrading leaves it alone), `~/.config/flackey/` elsewhere (Docker uses `/data`). Contains the sqlite
   database, `settings.json` (with the library folder and Telegram api id/hash), the Telethon session, tmp
-  downloads, and spectrogram PNGs. `settings.json` is created from env vars and can be updated via the
+  downloads, spectrogram PNGs, slskd, and the log (`flackey.log`). `settings.json` is created from env vars and can be updated via the
   app; env vars always override it.
-- `~/Music/DJ Library/` — one folder per artist, plus `Playlists/*.m3u8`.
+- The DJ Library (`~/Music/DJ Library/` by default; `Music\DJ Library` in your user folder on Windows) —
+  one folder per artist by default (or per month, per day, or none, from the folder layout setting), plus
+  `Playlists/*.m3u8`.
 
 </details>
 
@@ -258,8 +299,11 @@ transcoding, and audio fingerprinting.
 
 ## 📚 More
 
-- Release process (PR labels, version bump, tagging): `docs/RELEASING.md`
-- Source bot protocol notes: `docs/source-bot-protocol.md`
+- Download page: [eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)
+- Installing on a Mac: [`packaging/README-for-friends.md`](packaging/README-for-friends.md)
+- Installing on Windows: [`packaging/README-windows.md`](packaging/README-windows.md)
+- Release process (PR labels, version bump, tagging): [`docs/RELEASING.md`](docs/RELEASING.md)
+- Source bot protocol notes: [`docs/source-bot-protocol.md`](docs/source-bot-protocol.md)
 
 ## 📄 License
 

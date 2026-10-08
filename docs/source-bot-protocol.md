@@ -1,5 +1,7 @@
 # @DeezerMusicBot interaction protocol (captured 2026-09-03)
 
+> Captured 2026-09-03; the bot may have drifted since. The code and its fixtures are the current truth.
+
 Captured live through the owner's account with Telethon. Used as the basis for
 `source/deezer_bot.py` and its test fixtures.
 
