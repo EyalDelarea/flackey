@@ -257,7 +257,7 @@ Every API request must carry an access key. The container prints a link with it 
 The key changes on every restart unless you fix one in `.env`:
 
 ```bash
-FLACKEY_API_TOKEN=<at least 32 characters; python3 -c 'import secrets; print(secrets.token_urlsafe(32))'>
+FLACKEY_API_TOKEN=<at least 32 letters, digits, - or _; python3 -c 'import secrets; print(secrets.token_urlsafe(32))'>
 ```
 
 Treat that key like a password. Still publish the port on `127.0.0.1` as above unless you mean to reach

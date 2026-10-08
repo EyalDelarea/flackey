@@ -9,6 +9,7 @@ import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 import httpx
@@ -53,18 +54,21 @@ SESSION_UNREACHABLE_FACTOR = 6
 # A fixed API token for a server nobody launches a window for: Docker, where the printed address changes
 # with every restart otherwise. Unset, each launch makes its own.
 TOKEN_ENV = "FLACKEY_API_TOKEN"
-_TOKEN_CHARS = re.compile(r"[\x21-\x7e]+", re.ASCII)
+# What `secrets.token_urlsafe` makes: nothing a URL or a form decoder would change on the way.
+_TOKEN_CHARS = re.compile(r"[A-Za-z0-9_-]+", re.ASCII)
 
 
 def api_token_from_env(environ=os.environ) -> str:
     """The token every `/api/` request must carry (see `web.guard`). Refuses to start on a fixed one that
-    is short or not one plain word: a guessable token reads as protection and is none."""
+    is short, because a guessable token reads as protection and is none, or that holds anything but
+    letters, digits, `-` and `_`, because `+`, `%` or `&` can change in the link and lock the owner out."""
     fixed = (environ.get(TOKEN_ENV) or "").strip()
     if not fixed:
         return new_token()
     if len(fixed) < MIN_TOKEN_CHARS or not _TOKEN_CHARS.fullmatch(fixed):
-        raise SystemExit(f"{TOKEN_ENV} must be at least {MIN_TOKEN_CHARS} characters with no spaces; "
-                         "`python -c 'import secrets; print(secrets.token_urlsafe(32))'` makes one.")
+        raise SystemExit(f"{TOKEN_ENV} must be at least {MIN_TOKEN_CHARS} characters, using only letters, "
+                         "digits, - and _; `python -c 'import secrets; print(secrets.token_urlsafe(32))'` "
+                         "makes one.")
     return fixed
 
 
@@ -92,7 +96,7 @@ class ServerHandle:
     def app_url(self, query: str = "") -> str:
         """The address that opens the UI already holding the token: in the fragment, which the browser
         never sends anywhere, and which the page reads and then strips from the address bar."""
-        return f"{self.url}/{query}#t={self.token}"
+        return f"{self.url}/{query}#t={quote(self.token or '', safe='')}"
 
     def find_picker(self) -> Picker | None:
         """The folder dialog a request should open right now: the window's, once there is one, and

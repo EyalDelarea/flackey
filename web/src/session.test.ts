@@ -14,6 +14,16 @@ describe('the launch token', () => {
     expect(window.location.hash).toBe('')
   })
 
+  it('decodes a percent-encoded token exactly, without form rules turning + into a space', () => {
+    window.history.replaceState(null, '', '/#t=ab%2Bcd%2Fef%3D')
+    adoptToken()
+    expect(apiToken()).toBe('ab+cd/ef=')
+    sessionStorage.clear()
+    window.history.replaceState(null, '', '/#x=1&t=ab+cd')
+    adoptToken()
+    expect(apiToken()).toBe('ab+cd')
+  })
+
   it('survives a reload, when the fragment is already gone', () => {
     sessionStorage.setItem(TOKEN_KEY, 'kept')
     adoptToken()

@@ -8,9 +8,18 @@ function storage(): Storage | null {
   try { return window.sessionStorage } catch { return null }
 }
 
+/* `t` from the fragment, percent-decoded and nothing else: URLSearchParams would also apply form rules
+   and read a `+` as a space, which is a different token. */
+function fragmentToken(): string | null {
+  for (const part of window.location.hash.replace(/^#/, '').split('&')) {
+    if (!part.startsWith('t=')) continue
+    try { return decodeURIComponent(part.slice(2)) || null } catch { return null }
+  }
+  return null
+}
+
 export function adoptToken(): void {
-  const hash = window.location.hash.replace(/^#/, '')
-  const token = new URLSearchParams(hash).get('t')
+  const token = fragmentToken()
   if (!token) return
   try {
     const s = storage()

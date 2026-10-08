@@ -442,7 +442,10 @@ def test_the_launch_token_is_random_unless_the_environment_fixes_one():
     assert api_token_from_env({"FLACKEY_API_TOKEN": "  "}) not in ("", "  ")  # blank is unset
 
 
-@pytest.mark.parametrize("weak", ["short", "x" * 31, "spaces in the middle of it make no token at all!"])
+@pytest.mark.parametrize("weak", ["short", "x" * 31, "spaces in the middle of it make no token at all!",
+                                  # Characters a URL changes in transit: `+` reads back as a space from a
+                                  # form-encoded fragment, `%` starts an escape, `&` ends the field.
+                                  "ab+cd/ef=" + "x" * 32, "ab%2Bcd" + "x" * 32, "ab&t=cd" + "x" * 32])
 def test_a_weak_fixed_token_stops_the_start(weak):
     """A guessable token is worse than none being asked for, because it reads as protection."""
     from flackey.app import api_token_from_env
@@ -458,6 +461,8 @@ def test_the_address_with_the_token_puts_it_in_the_fragment():
     handle = ServerHandle(url="http://127.0.0.1:8765", token="abc")
     assert handle.app_url() == "http://127.0.0.1:8765/#t=abc"
     assert handle.app_url("?titlebar=inset") == "http://127.0.0.1:8765/?titlebar=inset#t=abc"
+    # Percent-encoded, so whatever a token holds the page decodes back to the same string.
+    assert ServerHandle(url="http://h", token="ab+cd/ef=").app_url() == "http://h/#t=ab%2Bcd%2Fef%3D"
 
 
 def test_browser_mode_prints_and_opens_the_address_with_the_token(capsys, monkeypatch):
