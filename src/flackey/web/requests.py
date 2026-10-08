@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +14,7 @@ from ..store import Store
 from ..worker import CANCELLABLE, Worker
 from . import Bundles, to_dict
 
+log = logging.getLogger(__name__)
 RECENT = 500
 
 
@@ -34,8 +36,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         if file.is_relative_to(directory):
             try:
                 file.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                log.debug("could not remove %s: %s", file, e)
 
     def unlink_evidence(rejection) -> None:
         """Both files a rejection can leave behind: the spectrogram PNG, and - on a different-recording
