@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import tempfile
 from pathlib import Path
@@ -189,6 +190,29 @@ def write_credentials(data_dir: Path, username: str, password: str,
     return key_entry["key"]
 
 
+# What slskd must never share out of the library (`shares.filters`: regexes that slskd 0.26.0 matches,
+# unanchored and ignoring case, against the full local path of every folder and file it scans; a folder
+# that matches is not scanned at all). A playlist export names every track by its full path, the owner's
+# user name included, so the M3U files stay off the network wherever they are, and so does the library's
+# own Playlists folder (export.py's PLAYLIST_DIR, which this layer cannot import).
+PLAYLIST_FILE_FILTER = r"\.m3u8?$"
+_PLAYLIST_DIR_TAIL = r"[\\/]Playlists([\\/]|$)"
+
+
+def playlist_dir_filter(library_root: Path) -> str:
+    """Anchored to the library, so a library that itself sits under some folder named Playlists is
+    still shared."""
+    return "^" + re.escape(str(library_root)) + _PLAYLIST_DIR_TAIL
+
+
+def _filters(config: dict, path: Path) -> list[str]:
+    shares = _submapping(config, "shares", path)
+    raw = shares.get("filters")
+    filters = [f for f in raw if isinstance(f, str)] if isinstance(raw, list) else []
+    shares["filters"] = filters
+    return filters
+
+
 def _pin_to_this_machine(config: dict, path: Path) -> None:
     """The settings that keep slskd's web UI and API answering this machine only. Forced on every write
     rather than filled in when missing: a config written by an older build, or edited by hand, must be put
@@ -209,6 +233,10 @@ def _pin_to_this_machine(config: dict, path: Path) -> None:
     entry = keys.get(API_KEY_NAME) if isinstance(keys, dict) else None
     if isinstance(entry, dict):
         entry["cidr"] = API_KEY_CIDR
+    # Not a listener setting, but forced the same way: a config written before the filter existed gets it.
+    filters = _filters(config, path)
+    if PLAYLIST_FILE_FILTER not in filters:
+        filters.append(PLAYLIST_FILE_FILTER)
 
 
 def _atomic_write(path: Path, config: dict) -> None:
@@ -298,6 +326,10 @@ def _set_share(config: dict, path: Path, library_root: Path, data_dir: Path,
     if str(library_root) not in dirs:
         dirs.append(str(library_root))
     shares["directories"] = dirs
+    # One Playlists filter, for the library as it is now: the one written for a previous folder goes.
+    filters = [f for f in _filters(config, path) if not (f.startswith("^") and f.endswith(_PLAYLIST_DIR_TAIL))]
+    filters.append(playlist_dir_filter(library_root))
+    shares["filters"] = filters
 
 
 def write_share(data_dir: Path, library_root: Path, previous: Path | None = None) -> bool:

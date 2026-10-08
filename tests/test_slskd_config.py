@@ -371,3 +371,62 @@ def test_a_share_write_adds_no_api_key_to_a_file_without_one(tmp_path: Path):
     data = yaml.safe_load(path.read_text())
     assert "authentication" not in data["web"]
     assert data["web"]["ip_address"] == "127.0.0.1" and data["remote_configuration"] is False
+
+
+def _hidden(filters: list[str], path: Path) -> bool:
+    """What slskd 0.26.0 does with `shares.filters` (Shares/ShareScanner.cs): each one is a regex, matched
+    unanchored and without regard to case against the full local path of every directory and file."""
+    import re
+    return any(re.search(f, str(path), re.IGNORECASE) for f in filters)
+
+
+def test_playlist_exports_are_never_shared(tmp_path: Path):
+    """A playlist names every track by its full path, the owner's user name included, so it stays off the
+    network: the library's Playlists folder and any .m3u/.m3u8 file are filtered out of the share."""
+    lib = tmp_path / "DJ Library"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=lib)
+    filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
+    assert _hidden(filters, lib / "Playlists")
+    assert _hidden(filters, lib / "Playlists" / "Goa Set.m3u8")
+    assert _hidden(filters, lib / "Artist" / "old.M3U")
+    assert not _hidden(filters, lib / "Artist" / "Artist - Track.flac")
+    assert not _hidden(filters, lib / "Artist")
+    assert not _hidden(filters, lib)
+
+
+def test_the_playlist_folder_filter_is_anchored_to_the_library(tmp_path: Path):
+    """A library that itself sits under some other folder named Playlists is still shared."""
+    lib = tmp_path / "Playlists" / "DJ Library"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=lib)
+    filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
+    assert not _hidden(filters, lib)
+    assert not _hidden(filters, lib / "Artist" / "Artist - Track.flac")
+    assert _hidden(filters, lib / "Playlists" / "Set.m3u8")
+
+
+def test_a_config_written_by_an_older_version_gains_the_filters(tmp_path: Path):
+    lib = tmp_path / "lib"
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump({"soulseek": {"username": "old", "password": "old-fake"},
+                                    "shares": {"directories": [str(lib)], "filters": ["\\.ini$"]}}))
+    assert write_share(tmp_path, lib) is True
+    filters = yaml.safe_load(path.read_text())["shares"]["filters"]
+    assert filters[0] == "\\.ini$"                                  # the owner's own filter stays
+    assert _hidden(filters, lib / "Playlists" / "Set.m3u8") and _hidden(filters, lib / "Playlists")
+
+
+def test_the_filters_are_forced_on_every_write_and_follow_the_library(tmp_path: Path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=old)
+    path = config_path(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data["shares"]["filters"] = []                                  # removed by hand
+    path.write_text(yaml.safe_dump(data))
+    write_credentials(tmp_path, "digger", "not-a-real-password")    # a write with no library named
+    assert _hidden(yaml.safe_load(path.read_text())["shares"]["filters"], old / "a.m3u8")
+    assert write_share(tmp_path, new, previous=old) is True
+    assert write_share(tmp_path, new, previous=old) is True         # idempotent
+    filters = yaml.safe_load(path.read_text())["shares"]["filters"]
+    assert len(filters) == len(set(filters)) == 2
+    assert _hidden(filters, new / "Playlists") and not _hidden(filters, old / "Playlists")
