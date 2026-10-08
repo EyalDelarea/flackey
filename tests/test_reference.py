@@ -55,13 +55,84 @@ async def test_youtube_reference_cuts_the_middle_and_deletes_the_audio(tmp_path:
 async def test_deezer_needles_download_the_preview_once_and_remove_it(tmp_path: Path, fake_fp):
     respx.get("https://api.deezer.com/track/6025986").mock(return_value=httpx.Response(200, json={
         "id": 6025986, "preview": "https://cdn.test/6-preview.mp3"}))
-    respx.get("https://cdn.test/6-preview.mp3").mock(return_value=httpx.Response(200, content=b"mp3"))
+    respx.get("https://cdn.test/6-preview.mp3").mock(return_value=httpx.Response(200, content=ID3_MP3))
     async with httpx.AsyncClient() as http:
         needles = await deezer_needles(6025986, http, tmp_path)
         ref = await deezer_reference(6025986, http, tmp_path)
     assert len(needles) == len(SUBFRAME_TRIMS_S) and needles[0] == list(range(300))
     assert ref.label == "deezer:6025986" and ref.full == ref.needles[0]
     assert not list(tmp_path.glob("preview-*"))
+
+
+# ---- what the preview URL is allowed to hand back ---------------------------
+# The URL comes out of Deezer's JSON and its body goes to ffmpeg and fpcalc. A 30 s preview is ~0.5 MB
+# of MP3; anything else is refused before it is written to disk.
+ID3_MP3 = b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\0" * 64
+FRAME_SYNC_MP3 = b"\xff\xfb\x90\x64" + b"\0" * 64
+
+
+def _preview_at(url: str) -> None:
+    respx.get("https://api.deezer.com/track/5").mock(return_value=httpx.Response(200, json={"id": 5, "preview": url}))
+
+
+@respx.mock
+async def test_a_preview_with_no_id3_header_is_read_from_its_frame_sync(tmp_path: Path, fake_fp):
+    _preview_at("https://cdn.test/5.mp3")
+    respx.get("https://cdn.test/5.mp3").mock(return_value=httpx.Response(200, content=FRAME_SYNC_MP3))
+    async with httpx.AsyncClient() as http:
+        assert len(await deezer_needles(5, http, tmp_path)) == len(SUBFRAME_TRIMS_S)
+
+
+@respx.mock
+async def test_a_preview_that_is_not_mp3_is_refused_before_it_is_fingerprinted(tmp_path: Path, fake_fp):
+    _preview_at("https://cdn.test/5.mp3")
+    respx.get("https://cdn.test/5.mp3").mock(return_value=httpx.Response(200, content=b"<html>error</html>"))
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(FingerprintError, match="not an MP3"):
+            await deezer_needles(5, http, tmp_path)
+    assert fake_fp == [] and not list(tmp_path.glob("preview-*"))
+
+
+@respx.mock
+async def test_a_plain_http_preview_url_is_not_fetched(tmp_path: Path, fake_fp):
+    _preview_at("http://cdn.test/5.mp3")
+    cdn = respx.get("http://cdn.test/5.mp3").mock(return_value=httpx.Response(200, content=ID3_MP3))
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(FingerprintError, match="https"):
+            await deezer_needles(5, http, tmp_path)
+    assert cdn.call_count == 0
+
+
+@respx.mock
+async def test_a_preview_redirected_to_plain_http_is_refused(tmp_path: Path, fake_fp):
+    _preview_at("https://cdn.test/5.mp3")
+    respx.get("https://cdn.test/5.mp3").mock(
+        return_value=httpx.Response(302, headers={"location": "http://cdn.test/plain.mp3"}))
+    respx.get("http://cdn.test/plain.mp3").mock(return_value=httpx.Response(200, content=ID3_MP3))
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(FingerprintError, match="https"):
+            await deezer_needles(5, http, tmp_path)
+    assert fake_fp == []
+
+
+@respx.mock
+async def test_a_preview_past_the_size_cap_is_abandoned(tmp_path: Path, fake_fp, monkeypatch):
+    monkeypatch.setattr(ref_mod, "MAX_PREVIEW_BYTES", 1000)
+    sent = 0
+
+    async def endless():
+        nonlocal sent
+        yield ID3_MP3
+        for _ in range(1000):
+            sent += 1
+            yield b"\0" * 100
+
+    _preview_at("https://cdn.test/5.mp3")
+    respx.get("https://cdn.test/5.mp3").mock(return_value=httpx.Response(200, content=endless()))
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(FingerprintError, match="larger"):
+            await deezer_needles(5, http, tmp_path)
+    assert sent < 20 and fake_fp == [] and not list(tmp_path.glob("preview-*"))
 
 
 @respx.mock

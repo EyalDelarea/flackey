@@ -9,6 +9,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -30,6 +31,8 @@ LOOKUP_LIMIT = 10
 DEEZER_TRIES = 3
 # Previews tried per request: the bot's menu is text-ordered, so the record is in the first few.
 IDENTIFY_MAX = 5
+# A 30 s preview is ~0.5 MB of 128 kbps MP3; ten times that is still nothing, and no more is ever read.
+MAX_PREVIEW_BYTES = 5 * 1024 * 1024
 
 
 def _needles(path: Path, start_s: float, length_s: float | None) -> list[list[int]]:
@@ -75,6 +78,47 @@ async def _preview_url(deezer_id: int, http: httpx.AsyncClient) -> str | None:
     raise FingerprintError(last)
 
 
+def _is_mp3(head: bytes) -> bool:
+    """An ID3v2 tag, or an MPEG audio frame sync (eleven set bits) where the audio starts directly."""
+    return head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+
+
+async def _download_preview(url: str, http: httpx.AsyncClient) -> bytes:
+    """The preview's bytes, streamed and abandoned at MAX_PREVIEW_BYTES. The URL is lifted from Deezer's
+    JSON and the body goes to ffmpeg and fpcalc, so it must be https (before and after any redirect) and
+    look like an MP3 before anything is written."""
+    if urlparse(url).scheme != "https":
+        raise FingerprintError("preview url is not https")
+    try:
+        async with http.stream("GET", url, timeout=30, follow_redirects=True) as r:
+            if r.url.scheme != "https":
+                raise FingerprintError("preview redirected away from https")
+            if r.status_code != 200:
+                raise FingerprintError(f"preview download http {r.status_code}")
+            body = await _read_capped(r)
+    except httpx.HTTPError as e:
+        raise FingerprintError(f"preview download {type(e).__name__}") from e
+    if not body:
+        raise FingerprintError("preview download http 200")   # the message an empty body always had
+    if not _is_mp3(body[:3]):
+        raise FingerprintError("preview is not an MP3")
+    return body
+
+
+async def _read_capped(r: httpx.Response) -> bytes:
+    """The body, refused the moment it passes MAX_PREVIEW_BYTES; the rest is never pulled off the socket."""
+    too_big = FingerprintError(f"preview is larger than {MAX_PREVIEW_BYTES} bytes")
+    declared = r.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_PREVIEW_BYTES:
+        raise too_big
+    body = bytearray()
+    async for block in r.aiter_bytes():
+        body += block
+        if len(body) > MAX_PREVIEW_BYTES:
+            raise too_big
+    return bytes(body)
+
+
 async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path) -> list[list[int]]:
     """The Deezer preview at each sub-frame trim. Unique file name per call: two requests for one
     recording can be here at once. Raises FingerprintError when Deezer has no preview or the download
@@ -85,13 +129,7 @@ async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path)
         url = await _preview_url(deezer_id, http)
         if not url:
             raise FingerprintError("deezer has no preview for this track")
-        try:
-            r = await http.get(url, timeout=30, follow_redirects=True)
-        except httpx.HTTPError as e:
-            raise FingerprintError(f"preview download {type(e).__name__}") from e
-        if r.status_code != 200 or not r.content:
-            raise FingerprintError(f"preview download http {r.status_code}")
-        preview.write_bytes(r.content)
+        preview.write_bytes(await _download_preview(url, http))
         # No length bound: the preview is already 30 s, and asking ffmpeg to cut it would re-encode the
         # trim-0 needle that today's check reads straight off the file.
         return await asyncio.to_thread(_needles, preview, 0.0, None)

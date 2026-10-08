@@ -21,6 +21,13 @@ MAX_CANDIDATES = 7
 MENU_CACHE = 200          # menu messages kept for fetch(); oldest evicted first
 NO_RESULT_GRACE_S = 5.0   # a text reply with no keyboard, then silence this long, means "nothing found"
 EXT_BY_MIME = {"audio/mpeg": "mp3", "audio/flac": "flac", "audio/x-flac": "flac", "audio/wav": "wav"}
+# The only extensions a file name may lend the download when the MIME type names none. The name is the
+# sender's text: taking whatever followed its last dot let `x./../../evil` name a path outside the
+# request's folder. Every one of these is in web/library.py's AUDIO_TYPES.
+EXT_FROM_NAME = {"mp3", "flac", "wav", "aiff", "aif", "m4a"}
+# A ten-minute 24-bit/96 kHz FLAC is ~200 MB; nothing the bot sends for one track comes near this. The
+# size is declared before any byte moves, so a bigger document is refused rather than downloaded.
+MAX_DOCUMENT_BYTES = 1024 * 1024 * 1024
 
 
 @dataclass
@@ -56,6 +63,16 @@ def parse_result_menu(buttons: list[list[ButtonInfo]]) -> ResultMenu:
                 menu.deezer_toggle = ButtonInfo(b.text, b.data, ri, ci)
                 menu.deezer_enabled = "✅" in b.text
     return menu
+
+
+def document_ext(msg: Message) -> str:
+    """The extension to save the bot's document under: from its MIME type, else from its file name when
+    that names a known audio type, else `bin` (which verify then refuses, as it always has)."""
+    ext = EXT_BY_MIME.get(msg.document.mime_type or "")
+    if ext is None and msg.file and msg.file.name and "." in msg.file.name:
+        named = msg.file.name.rsplit(".", 1)[1].lower()
+        ext = named if named in EXT_FROM_NAME else None
+    return ext or "bin"
 
 
 def _buttons(msg: Message) -> list[list[ButtonInfo]]:
@@ -198,10 +215,10 @@ class DeezerBotSource:
             # The download is outside the lock as well as outside the conversation: the document is ours
             # already and pulling its bytes says nothing to the bot. Holding `_bot` across it would put
             # every track's file behind every other track's for no reason at all.
-            ext = EXT_BY_MIME.get(msg.document.mime_type or "", None)
-            if ext is None and msg.file and msg.file.name and "." in msg.file.name:
-                ext = msg.file.name.rsplit(".", 1)[1].lower()
-            dest = dest_dir / f"{cand.deezer_id}.{ext or 'bin'}"
+            size = getattr(msg.document, "size", None)
+            if size is not None and size > MAX_DOCUMENT_BYTES:
+                raise SourceError(f"the bot's file is too large for one track ({size} bytes)")
+            dest = dest_dir / f"{cand.deezer_id}.{document_ext(msg)}"
             # Outside the conversation (the file transfer is not a conversation message), so it needs
             # its own timeout and must stay under the same except clauses: a session expiring mid-download
             # must pause the worker (SourceUnauthorized), not surface as a generic error.

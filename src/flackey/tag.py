@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import shutil
 import struct
+import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from mutagen.aiff import AIFF
@@ -133,54 +137,116 @@ def _info_list(values: dict[str, str]) -> bytes:
     return _riff_chunk(b"LIST", body)
 
 
-def _write_wav_info(path: Path, values: dict[str, str]) -> None:
-    raw = path.read_bytes()
-    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
-        raise TagError(f"{path} is not a RIFF/WAVE file")
-    chunks: list[tuple[bytes, bytes]] = []
+# A lossless WAV runs to hundreds of megabytes, so the RIFF rewrite never holds one in memory: it walks
+# the chunk headers and copies each payload through a buffer this size.
+_COPY_CHUNK = 1024 * 1024
+# A RIFF INFO list is a few hundred bytes of text. One claiming more is read only this far.
+_MAX_INFO_BYTES = 1024 * 1024
+
+
+def _is_riff_wave(head: bytes) -> bool:
+    return len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WAVE"
+
+
+def _riff_chunks(f, total: int):
+    """(kind, size, payload offset) for each chunk header that fits in the file's `total` bytes, walked by
+    seeking from one header to the next. Odd-sized chunks are followed by a pad byte; the RIFF size field
+    is not trusted -- the physical end of the file is."""
     pos = 12
+    while pos + 8 <= total:
+        f.seek(pos)
+        header = f.read(8)
+        kind, size = header[:4], struct.unpack("<I", header[4:8])[0]
+        yield kind, size, pos + 8
+        pos = pos + 8 + size + (size % 2)
+
+
+def _peek(f, offset: int, n: int) -> bytes:
+    f.seek(offset)
+    return f.read(n)
+
+
+def _copy_exact(src, dst, n: int) -> None:
+    """`n` bytes from `src` to `dst`, at most `_COPY_CHUNK` at a time. `shutil.copyfileobj` has no length
+    bound: it copies to the end of the file."""
+    while n > 0:
+        block = src.read(min(n, _COPY_CHUNK))
+        if not block:
+            raise TagError("the file shrank while it was being rewritten")
+        dst.write(block)
+        n -= len(block)
+
+
+def _copy_without_info(src, dst, path: Path, total: int, info: bytes) -> None:
+    """Every chunk but the old INFO lists, with the new one just before the first `data` chunk (or at the
+    end when there is none). Each chunk is re-emitted with a zero pad byte when its size is odd, which is
+    what the in-memory version did."""
     inserted = False
-    info = _info_list(values)
-    while pos + 8 <= len(raw):
-        kind = raw[pos:pos + 4]
-        size = struct.unpack("<I", raw[pos + 4:pos + 8])[0]
-        end = pos + 8 + size
-        if end > len(raw):
+    for kind, size, offset in _riff_chunks(src, total):
+        if offset + size > total:
             raise TagError(f"{path} has a truncated RIFF chunk")
-        payload = raw[pos + 8:end]
-        pos = end + (size % 2)
-        if kind == b"LIST" and payload[:4] == b"INFO":
+        if kind == b"LIST" and _peek(src, offset, min(size, 4)) == b"INFO":
             continue
         if kind == b"data" and not inserted:
-            chunks.append((b"_RAW", info))
+            dst.write(info)
             inserted = True
-        chunks.append((kind, payload))
+        dst.write(kind + struct.pack("<I", size))
+        src.seek(offset)
+        _copy_exact(src, dst, size)
+        if size % 2:
+            dst.write(b"\0")
     if not inserted:
-        chunks.append((b"_RAW", info))
-    body = b"WAVE" + b"".join(payload if kind == b"_RAW" else _riff_chunk(kind, payload) for kind, payload in chunks)
-    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+        dst.write(info)
+
+
+def _write_wav_info(path: Path, values: dict[str, str]) -> None:
+    """Replace the file's RIFF INFO list. Written to a temp file beside it and moved over it, so a failure
+    part-way leaves the original as it was; the source is closed before the move (Windows refuses to
+    replace an open file)."""
+    total = path.stat().st_size
+    info = _info_list(values)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as dst, open(path, "rb") as src:
+            if not _is_riff_wave(src.read(12)):
+                raise TagError(f"{path} is not a RIFF/WAVE file")
+            dst.write(b"RIFF\0\0\0\0WAVE")
+            _copy_without_info(src, dst, path, total, info)
+            body = dst.tell() - 8
+            dst.seek(4)
+            dst.write(struct.pack("<I", body))
+        shutil.copymode(path, tmp)   # mkstemp makes the file 0600; a library file keeps its own mode
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _parse_info(payload: bytes) -> dict[str, str]:
+    out: dict[str, str] = {}
+    sub = 4
+    while sub + 8 <= len(payload):
+        code = payload[sub:sub + 4].decode("ascii", errors="ignore")
+        n = struct.unpack("<I", payload[sub + 4:sub + 8])[0]
+        value = payload[sub + 8:sub + 8 + n].rstrip(b"\0").decode(INFO_TEXT_ENCODING, errors="replace")
+        out[code] = value
+        sub = sub + 8 + n + (n % 2)
+    return out
 
 
 def _read_wav_info(path: Path) -> dict[str, str]:
-    raw = path.read_bytes()
-    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
-        return {}
+    """The RIFF INFO values, reading only the LIST INFO payloads. Never raises on a malformed file: a
+    truncated chunk is read as far as the file goes, as it always was."""
+    total = path.stat().st_size
     out: dict[str, str] = {}
-    pos = 12
-    while pos + 8 <= len(raw):
-        kind = raw[pos:pos + 4]
-        size = struct.unpack("<I", raw[pos + 4:pos + 8])[0]
-        payload = raw[pos + 8:pos + 8 + size]
-        pos = pos + 8 + size + (size % 2)
-        if kind != b"LIST" or payload[:4] != b"INFO":
-            continue
-        sub = 4
-        while sub + 8 <= len(payload):
-            code = payload[sub:sub + 4].decode("ascii", errors="ignore")
-            n = struct.unpack("<I", payload[sub + 4:sub + 8])[0]
-            value = payload[sub + 8:sub + 8 + n].rstrip(b"\0").decode(INFO_TEXT_ENCODING, errors="replace")
-            out[code] = value
-            sub = sub + 8 + n + (n % 2)
+    with open(path, "rb") as f:
+        if not _is_riff_wave(f.read(12)):
+            return {}
+        for kind, size, offset in _riff_chunks(f, total):
+            if kind != b"LIST" or _peek(f, offset, min(size, 4)) != b"INFO":
+                continue
+            out.update(_parse_info(_peek(f, offset, min(size, _MAX_INFO_BYTES))))
     return out
 
 
@@ -277,14 +343,40 @@ def read_tags(path: Path) -> dict[str, str]:
     return out
 
 
+# A catalog cover is a few hundred kilobytes; the URL is another server's to answer, and its body ends up
+# in every tag written, so it is read only this far.
+MAX_ARTWORK_BYTES = 10 * 1024 * 1024
+# JPEG and PNG: what the catalog serves, and the two formats every DJ tool shows. Anything else is
+# refused rather than written under the `image/jpeg` label `write_tags` gives it by default.
+_IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
+
+
+async def _read_capped(r: httpx.Response, cap: int) -> bytes | None:
+    """The body, or None the moment it passes `cap` -- the rest is never pulled off the socket."""
+    declared = r.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > cap:
+        return None
+    body = bytearray()
+    async for block in r.aiter_bytes():
+        body += block
+        if len(body) > cap:
+            return None
+    return bytes(body)
+
+
 async def fetch_artwork(url: str, client: httpx.AsyncClient | None = None) -> bytes | None:
+    """The cover at `url`, or None when there is none worth writing: not https (before the request and
+    after any redirect), not a 200, larger than MAX_ARTWORK_BYTES, or not a JPEG or PNG."""
+    if urlparse(url).scheme != "https":
+        return None
     own = client is None
     c = client or httpx.AsyncClient(timeout=20, follow_redirects=True)
     try:
-        r = await c.get(url)
-        if r.status_code == 200 and r.content:
-            return r.content
-        return None
+        async with c.stream("GET", url) as r:
+            if r.status_code != 200 or r.url.scheme != "https":
+                return None
+            body = await _read_capped(r, MAX_ARTWORK_BYTES)
+        return body if body and body.startswith(_IMAGE_MAGIC) else None
     except httpx.HTTPError:
         return None
     finally:
