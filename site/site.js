@@ -1,10 +1,12 @@
 const release = document.querySelector("#release-line");
-// One button per installer, filled in from the same release.
+// One button per installer. Their hrefs are fixed in the HTML (releases/latest/download/...),
+// so they work without this script; the release lookup below only adds the version and size.
 const downloads = [
-  { link: document.querySelector("#download-mac"), asset: "Flackey.pkg", label: "Download for Mac" },
-  { link: document.querySelector("#download-windows"), asset: "Flackey-Setup.exe", label: "Download for Windows" },
+  { link: document.querySelector("#download-mac"), asset: "Flackey.pkg" },
+  { link: document.querySelector("#download-windows"), asset: "Flackey-Setup.exe" },
 ];
 const notesList = document.querySelector("#release-notes-list");
+const RELEASES_URL = "https://github.com/EyalDelarea/flackey/releases";
 
 const formatReleaseDate = (iso) =>
   new Intl.DateTimeFormat("en-GB", {
@@ -89,83 +91,80 @@ function renderReleaseBody(body) {
 
 // The newest published release that is not a pre-release: a pre-release is a branch build
 // handed to a tester, and the in-app update check skips them for the same reason.
-fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10")
+//
+// Progressive enhancement only. The API allows 60 unauthenticated requests an hour per address,
+// so it can fail or hang; the download buttons already work, and the notes fall back to a link.
+const RELEASE_LOOKUP_MS = 7000;
+const releaseLookup = new AbortController();
+const releaseTimer = setTimeout(() => releaseLookup.abort(), RELEASE_LOOKUP_MS);
+fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10", {
+  signal: releaseLookup.signal,
+})
   .then((response) => {
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error("Release lookup failed");
+    if (!response.ok) throw new Error(`Release lookup failed: ${response.status}`);
     return response.json();
   })
   .then((releases) => {
     const published = Array.isArray(releases)
       ? releases.filter((item) => !item.draft && !item.prerelease)
       : [];
-    const data = published[0] || null;
-    let offered = 0;
-    for (const { link, asset: name, label } of downloads) {
-      const asset = data?.assets?.find((item) => item.name === name);
-      if (!link || !asset?.browser_download_url) continue;
-      link.href = asset.browser_download_url;
-      link.removeAttribute("aria-disabled");
-      link.classList.remove("unavailable");
-      link.innerHTML = `${label} <span aria-hidden="true">↓</span>`;
-      const size = link.parentElement?.querySelector(".download-size");
-      if (size) size.textContent = ` · ${(asset.size / 1e6).toFixed(0)} MB`;
-      offered += 1;
+    const data = published[0];
+    if (!data) throw new Error("No published release");
+    for (const { link, asset: name } of downloads) {
+      const asset = data.assets?.find((item) => item.name === name);
+      const size = link?.parentElement?.querySelector(".download-size");
+      if (size && asset?.size) size.textContent = ` · ${(asset.size / 1e6).toFixed(0)} MB`;
     }
-    if (release) {
-      const version = String(data?.tag_name || "").replace(/^v/, "");
-      release.textContent = offered
-        ? `Version ${version} · ${formatReleaseDate(data.published_at)}`
-        : "The first download is on its way.";
-    }
+    const version = String(data.tag_name || "").replace(/^v/, "");
+    if (release)
+      release.textContent = `Version ${version} · ${formatReleaseDate(data.published_at)}`;
 
     if (notesList) {
-      if (!published.length) {
-        notesList.innerHTML =
-          '<p class="release-notes-status">No releases published yet.</p>';
-      } else {
-        const version = String(data.tag_name || "").replace(/^v/, "");
-        const title = `<span class="release-note-title">
-              <span>v${version}</span>
-              <time datetime="${data.published_at}">${formatReleaseDate(data.published_at)}</time>
-            </span>`;
-        notesList.innerHTML = `<details class="release-note">
-              <summary>
-                ${title}
-                <span class="release-note-toggle" aria-hidden="true"></span>
-              </summary>
-              <div class="release-note-body">
-                ${renderReleaseBody(data.body)}
-                <p class="release-note-link">
-                  <a href="${data.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
-                </p>
-              </div>
-            </details>
-            <p class="release-notes-more">
-              <a href="https://github.com/EyalDelarea/flackey/releases" target="_blank" rel="noopener">View other releases on GitHub</a>
-            </p>`;
-      }
+      const title = `<span class="release-note-title">
+            <span>v${version}</span>
+            <time datetime="${data.published_at}">${formatReleaseDate(data.published_at)}</time>
+          </span>`;
+      notesList.innerHTML = `<details class="release-note">
+            <summary>
+              ${title}
+              <span class="release-note-toggle" aria-hidden="true"></span>
+            </summary>
+            <div class="release-note-body">
+              ${renderReleaseBody(data.body)}
+              <p class="release-note-link">
+                <a href="${data.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
+              </p>
+            </div>
+          </details>
+          <p class="release-notes-more">
+            <a href="${RELEASES_URL}" target="_blank" rel="noopener">View other releases on GitHub</a>
+          </p>`;
     }
   })
   .catch(() => {
-    if (release)
-      release.textContent = "Release details are temporarily unavailable.";
+    // The static line under the picker already reads fine, so it is left as it is.
     if (notesList)
-      notesList.innerHTML =
-        '<p class="release-notes-status">Release notes are temporarily unavailable.</p>';
-  });
+      notesList.innerHTML = `<p class="release-notes-status">Couldn’t load release notes.
+          See <a href="${RELEASES_URL}" target="_blank" rel="noopener">GitHub releases</a>
+          for what changed.</p>`;
+  })
+  .finally(() => clearTimeout(releaseTimer));
 
 // Mac or Windows: the choice shows that OS's download with its install guide.
-// A visitor on Windows starts on Windows; everyone else starts on Mac.
+// A visitor on Windows starts on Windows; a Mac or anything unrecognised starts on Mac.
+// Phones, tablets, Linux and ChromeOS can't run either installer, so they get a note
+// instead of a download, and can still pick a tab to read the install steps.
 const osTabs = [...document.querySelectorAll('.os-picker [role="tab"]')];
+const platformNote = document.querySelector("#platform-note");
 function chooseOs(chosen) {
   for (const tab of osTabs) {
     const selected = tab === chosen;
     tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
+    tab.tabIndex = selected || (!chosen && tab === osTabs[0]) ? 0 : -1;
     const panel = document.getElementById(tab.getAttribute("aria-controls"));
     if (panel) panel.hidden = !selected;
   }
+  if (platformNote) platformNote.hidden = Boolean(chosen);
 }
 for (const tab of osTabs) {
   tab.addEventListener("click", () => chooseOs(tab));
@@ -178,7 +177,33 @@ for (const tab of osTabs) {
     next.focus();
   });
 }
-if (/Windows/.test(navigator.userAgent)) chooseOs(document.querySelector("#os-tab-windows"));
+function visitorPlatform() {
+  const ua = navigator.userAgent;
+  // iPadOS Safari reports itself as a Mac; a touch screen gives it away.
+  const iPad = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  // Android user agents also say Linux, so the mobile checks come first.
+  if (iPad || /Android|iPhone|iPad|iPod|Mobile|CrOS|Linux/.test(ua)) return "other";
+  if (/Windows/.test(ua)) return "windows";
+  return "mac";
+}
+const platform = visitorPlatform();
+if (platform === "windows") chooseOs(document.querySelector("#os-tab-windows"));
+else if (platform === "other") chooseOs(null);
+
+// The folder-layout tile cycles through the three choices, with the path each gives.
+const layoutTile = document.querySelector("#wn-layout");
+if (layoutTile && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const segs = [...layoutTile.querySelectorAll(".wn-seg i")];
+  const path = layoutTile.querySelector(".wn-path");
+  const today = new Date().toISOString().slice(0, 7);
+  const paths = ["Bicep/Bicep - Glue.aiff", `${today}/Bicep - Glue.aiff`, "Bicep - Glue.aiff"];
+  let at = 0;
+  setInterval(() => {
+    at = (at + 1) % segs.length;
+    segs.forEach((seg, i) => seg.classList.toggle("on", i === at));
+    if (path) path.textContent = paths[at];
+  }, 2600);
+}
 
 // The app-walkthrough demo. Every value below is interpolated per frame rather
 // than stepped between a handful of states: the percentage, the arc that draws
