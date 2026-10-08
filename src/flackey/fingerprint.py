@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audiofile import PROTOCOLS, WrongFormat, demuxer
 from .tools import no_window, tool_path
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,11 @@ def fingerprint(path: Path, start_s: float = 0.0, length_s: float | None = None)
     src = path
     tmp = None
     try:
+        fmt = demuxer(path)
+    except (WrongFormat, OSError) as e:
+        raise FingerprintError(str(e)) from e
+    pinned = PROTOCOLS + (["-f", fmt] if fmt else [])
+    try:
         if start_s or length_s:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)  # noqa: SIM115 - path must outlive this block
             tmp.close()
@@ -50,12 +56,15 @@ def fingerprint(path: Path, start_s: float = 0.0, length_s: float | None = None)
             if ffmpeg is None:
                 raise FingerprintError("ffmpeg is not installed")
             trim = ["-ss", f"{start_s}"] + (["-t", f"{length_s}"] if length_s else [])
-            r = subprocess.run([ffmpeg, "-v", "error", "-y", *trim, "-i", str(path), "-vn", "-map", "0:a",
+            r = subprocess.run([ffmpeg, "-v", "error", "-y", *trim, *pinned, "-i", str(path), "-vn", "-map", "0:a",
                                 str(src)], capture_output=True, timeout=FPCALC_TIMEOUT_S, check=False,
                                **no_window())
             if r.returncode != 0:
                 raise FingerprintError(r.stderr.decode(errors="replace")[-300:])
-        r = subprocess.run([fpcalc, "-raw", "-json", "-length", "0", str(src)], capture_output=True,
+        # fpcalc has no protocol whitelist, but it does take the demuxer: the trim above is always a wav
+        # ffmpeg just wrote, and an untrimmed file has been checked against its extension already.
+        named = ["-format", "wav"] if tmp is not None else ["-format", fmt] if fmt else []
+        r = subprocess.run([fpcalc, "-raw", "-json", "-length", "0", *named, str(src)], capture_output=True,
                             timeout=FPCALC_TIMEOUT_S, check=False, **no_window())
         if r.returncode != 0:
             raise FingerprintError(r.stderr.decode(errors="replace")[-300:] or "fpcalc failed")

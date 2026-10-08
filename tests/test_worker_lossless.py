@@ -303,6 +303,41 @@ async def test_verify_failure_tries_the_second_pick(lenv, tmp_path: Path):
     assert not list(settings.tmp_dir.iterdir())
 
 
+async def test_a_file_much_longer_than_the_peer_said_is_refused_and_the_next_pick_tried(lenv, tmp_path: Path):
+    """What arrived is checked against what was advertised: the size and length caps were applied to the
+    peer's word, so a file that is not what the peer said it was is never converted."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = _flac(tmp_path / "long.flac", seconds=40)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    mismatch = [e["detail"] for e in a.timeline if e["event"] == "duration_mismatch"]
+    assert len(mismatch) == 1 and mismatch[0]["advertised_s"] == 3 and mismatch[0]["probed_s"] >= 39
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_transfer_is_not_enqueued_without_room_for_it(lenv, monkeypatch):
+    settings, store, _, provider, _, _ = lenv
+    seen: list[Path] = []
+
+    def no_room(path: Path) -> int:
+        seen.append(path)
+        return 1_000
+    monkeypatch.setattr(lossless_attempt_mod, "free_bytes", no_room)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert provider.downloaded == []
+    a = attempt_of(store, rid)
+    assert any(e["event"] == "disk_full" for e in a.timeline)
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
+    assert settings.slskd_downloads in seen
+
+
 async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
     fake = _fake_flac(tmp_path / "fake.flac")

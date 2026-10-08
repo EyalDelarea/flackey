@@ -7,6 +7,8 @@ from flackey.config import Settings
 from flackey.lossless import (
     HARD_RULES,
     IDENTITY_RANKERS,
+    MAX_FILE_BYTES,
+    MAX_LENGTH_S,
     PEER_RANKERS,
     RANKERS,
     RULES,
@@ -66,6 +68,14 @@ def test_extension_has_length_and_size_rules():
     assert rejected_by(mk(size=400_000_000)) == "plausible_size"                 # 7000 kbps: absurd
     assert rejected_by(mk(sample_rate=96000)) == "plausible_size"                # hi-res: no CDJ plays it
     assert rejected_by(mk(extension="wav", size=78_000_000)) is None             # 1411 kbps wav
+
+
+def test_limits_rule_caps_size_and_length_whatever_the_bitrate():
+    """No track a DJ files is a gigabyte or half an hour long; a peer advertising one would fill the disk
+    and hold the worker for its whole transfer ceiling, so it is never downloaded."""
+    assert rejected_by(mk(size=MAX_FILE_BYTES + 1, length_s=1700, extension="wav")) == "limits"
+    assert rejected_by(mk(length_s=MAX_LENGTH_S + 1, size=60_000_000 * 4)) == "limits"
+    assert rejected_by(mk(length_s=MAX_LENGTH_S, size=MAX_LENGTH_S * 150_000)) is None   # 1200 kbps flac, at the cap
 
 
 def test_queue_and_banned_rules():
@@ -180,7 +190,8 @@ def test_the_default_gate_is_the_hard_rules_then_the_identity_rankers():
     """Bound as `pick`'s defaults, not merely named at module level: rebinding `RULES`/`RANKERS` below the
     `def` would leave the live gate on the old lists while every test that passes them explicitly stayed
     green. `version` leads the identity rankers by the replay measurement (2026-09-21-no-pick-replay.md)."""
-    assert [n for n, _ in RULES] == ["extension", "has_length", "plausible_size", "queue", "banned_user"]
+    assert [n for n, _ in RULES] == ["extension", "has_length", "limits", "plausible_size", "queue",
+                                    "banned_user"]
     assert [n for n, _ in RANKERS][:4] == ["version", "duration", "title", "artist"]
     bound = inspect.signature(pick).parameters
     assert bound["rules"].default is RULES and bound["rankers"].default is RANKERS

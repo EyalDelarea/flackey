@@ -7,10 +7,15 @@ import subprocess
 import time
 from pathlib import Path
 
+from .audiofile import WrongFormat, input_args
 from .tools import no_window, tool_path
 
 log = logging.getLogger(__name__)
 RUN_TIMEOUT_S = 300
+# The output is bounded whatever the input claims (lossless.py already refuses a track past 1 GB or
+# 30 minutes before it downloads): 31 minutes of 24-bit 48 kHz stereo PCM is about 536 MB.
+MAX_OUTPUT_S = 31 * 60
+MAX_OUTPUT_BYTES = 1_000_000_000
 CODECS = {("aiff", 16): "pcm_s16be", ("aiff", 24): "pcm_s24be", ("wav", 16): "pcm_s16le", ("wav", 24): "pcm_s24le"}
 
 
@@ -26,8 +31,12 @@ def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
     ffmpeg = tool_path("ffmpeg")
     if ffmpeg is None:
         raise ConvertError("ffmpeg is not installed")
-    cmd = [ffmpeg, "-v", "error", "-y", "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
-           "-c:a", codec, str(dst)]
+    try:
+        pinned = input_args(src)
+    except (WrongFormat, OSError) as e:
+        raise ConvertError(str(e)) from e
+    cmd = [ffmpeg, "-v", "error", "-y", *pinned, "-i", str(src), "-vn", "-map", "0:a", "-map_metadata", "-1",
+           "-c:a", codec, "-t", str(MAX_OUTPUT_S), "-fs", str(MAX_OUTPUT_BYTES), str(dst)]
     t0 = time.monotonic()
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
@@ -37,6 +46,10 @@ def _run_ffmpeg(src: Path, dst: Path, codec: str) -> Path:
     if p.returncode != 0 or not dst.exists():
         dst.unlink(missing_ok=True)
         raise ConvertError(p.stderr.decode(errors="replace")[-400:] or "ffmpeg produced no file")
+    if dst.stat().st_size >= MAX_OUTPUT_BYTES:
+        # ffmpeg stops at `-fs` and still exits 0: what it wrote is a cut-off track, not a conversion.
+        dst.unlink(missing_ok=True)
+        raise ConvertError(f"the converted file reached the {MAX_OUTPUT_BYTES} byte limit")
     log.info("converted %s -> %s (%s) in %.1f s", src.name, dst.name, codec, time.monotonic() - t0)
     return dst
 

@@ -32,6 +32,26 @@ from .records import (
 )
 
 log = logging.getLogger(__name__)
+# Kept free on top of what a pick needs, so filing it never fills the disk the library and database are on.
+DISK_MARGIN_BYTES = 256 * 1024 * 1024
+# How far the length a file probes at may sit from the length its peer advertised. Encoders round, and a
+# peer's client reports whole seconds; a gap past this is a different file than the one the caps passed.
+DURATION_SLACK_S = 10
+DURATION_SLACK_FRACTION = 0.05
+
+
+def free_bytes(path: Path) -> int:
+    """Free space on the volume `path` is on, or will be on once it is created."""
+    for p in (path, *path.parents):
+        if p.exists():
+            return shutil.disk_usage(p).free
+    return 0
+
+
+def duration_agrees(advertised_s: float | None, probed_s: float) -> bool:
+    if advertised_s is None:
+        return False
+    return abs(probed_s - advertised_s) <= max(DURATION_SLACK_S, advertised_s * DURATION_SLACK_FRACTION)
 
 
 class LosslessMixin:
@@ -174,6 +194,13 @@ class LosslessMixin:
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
                                   file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
         s = self.settings
+        # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there: room
+        # for all three on each, so either folder may share the other's disk.
+        need = 3 * file.size + DISK_MARGIN_BYTES
+        short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
+        if short:
+            rec.event("disk_full", pick=n, need_bytes=need, folders=short)
+            return None, "transfer_failed"
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
 
@@ -223,6 +250,11 @@ class LosslessMixin:
         self._publish_phase(req.id, "verifying")
         try:
             async with self._cpu:
+                probed = await asyncio.to_thread(probe, tmp)
+                if not duration_agrees(file.length_s, probed.duration_s):
+                    # The caps in lossless.py judged the peer's word; this is the file that came.
+                    rec.event("duration_mismatch", advertised_s=file.length_s, probed_s=round(probed.duration_s, 1))
+                    return None, "verify_failed"
                 verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
         except VerifyError as e:
             rec.event("verify_failed", error=str(e))
