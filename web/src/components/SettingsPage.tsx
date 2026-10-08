@@ -324,8 +324,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           {!updateChecking && installable && <div className="v">
             Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
           </div>}
-          {!updateChecking && update?.ok && update.newer && !installable && <div className="v">
+          {!updateChecking && update?.ok && update.newer && !installable && update.verifiable !== false && <div className="v">
             Version {update.latest} is out, but the installer isn't published yet. Check back shortly.
+          </div>}
+          {!updateChecking && update?.ok && update.newer && !installable && update.verifiable === false && <div className="v">
+            Version {update.latest} is out. This copy can't check updates are genuine, so download it from the release page.
           </div>}
           {!updateChecking && update && !update.ok && <div className="err">{update.error || 'Could not check for updates.'}</div>}
           {download?.state === 'verifying' && <div className="v">Checking the update is genuine…</div>}

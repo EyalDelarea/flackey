@@ -20,6 +20,7 @@ from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
 from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
+from flackey.selfupdate import signature as _signature
 from flackey.store import Store
 from flackey.web import create_app
 from flackey.web.update import RELEASES_URL
@@ -123,7 +124,7 @@ def test_update_reports_new_installer(client):
                     "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
-        "ok": True, "current": __version__, "newer": True, "available": True, "latest": "9.9.9",
+        "ok": True, "current": __version__, "newer": True, "available": True, "verifiable": True, "latest": "9.9.9",
         "url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg", "release_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
         "published_date": "2026-09-15", "prerelease": False, "installer_signature_url": None,
@@ -200,6 +201,7 @@ def _release_feed(size: int | None = 8, assets: bool = True):
 
 
 REAL_INSTALLER_NAME = flackey.web.update.installer_name
+REAL_BAKED_PUBLIC_KEY = _signature.baked_public_key
 # Taken at import, before conftest swaps it for a tripwire on every test.
 REAL_OPEN_INSTALLER = flackey.web.update.open_installer
 
@@ -336,7 +338,9 @@ def test_update_install_downloads_the_installer_then_opens_it(client, monkeypatc
     assert body["percent"] == 100 and body["version"] == "9.9.9" and body["error"] is None
     target = settings.data_dir / "updates" / "Flackey.pkg"
     assert target.read_bytes() == b"PKG-DATA"
-    assert opened == [target]
+    # Opened from a private copy of the bytes it read, not from the download itself.
+    [copy] = opened
+    assert copy.name == "Flackey.pkg" and copy != target and copy.read_bytes() == b"PKG-DATA"
 
 
 @respx.mock
@@ -603,6 +607,183 @@ def test_update_release_says_so_when_github_cannot_be_reached(client, monkeypatc
     respx.get(RELEASES_URL).mock(side_effect=httpx.ConnectError("offline"))
     r = c.post("/api/update/release", headers=FROM_APP)
     assert r.status_code == 502 and r.json()["detail"] == "Could not check for updates."
+
+
+# ---- update hardening -----------------------------------------------------------------------------------
+def _release(tag: str, *, draft: bool = False, prerelease: bool = False) -> dict:
+    base = f"https://github.com/EyalDelarea/flackey/releases/download/{tag}/"
+    return {"draft": draft, "prerelease": prerelease, "tag_name": tag,
+            "html_url": f"https://github.com/EyalDelarea/flackey/releases/tag/{tag}",
+            "assets": [{"name": "Flackey.pkg", "size": 8, "browser_download_url": base + "Flackey.pkg"}]}
+
+
+@respx.mock
+def test_update_offers_the_highest_version_not_the_first_listed():
+    """The feed is ordered by creation, not by version: a hotfix for an older line can come first."""
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[
+        _release("v9.9.8"), _release("v9.10.0"), _release("v9.9.10"),
+        _release("v99.0.0", prerelease=True), _release("v50.0.0", draft=True),
+        _release("v60.0.0-rc1"), _release("v70.0.0 "), _release("v８０.0.0"),
+    ]))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["latest"] == "9.10.0"
+    assert info["url"] == "https://github.com/EyalDelarea/flackey/releases/download/v9.10.0/Flackey.pkg"
+
+
+@pytest.mark.parametrize("text, parsed", [
+    ("1.2.3", (1, 2, 3)), ("v1.2.3", (1, 2, 3)), ("v10.0.12", (10, 0, 12)),
+    (" 1.2.3", None), ("1.2.3\n", None), ("1.2.3 ", None), ("1.2", None), ("1.2.3.4", None),
+    ("1.2.3-rc1", None), ("V1.2.3", None), ("１.2.3", None), ("1.٢.3", None), ("", None),
+])
+def test_versions_are_read_strictly(text, parsed):
+    assert flackey.web.update.parse_version(text) == parsed
+
+
+@respx.mock
+@pytest.mark.parametrize("url", [
+    "https://github.com/EyalDelarea/flackey/releases/download/../../../evil/x/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/%2e%2e/%2E%2E/evil/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/..%2f..%2fevil/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9\\..\\Flackey.pkg",
+    "https://github.com:444/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg",
+    "http://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg",
+    "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg?x=1",
+])
+def test_an_asset_link_that_leaves_the_release_folder_is_treated_as_missing(url):
+    feed = _release_feed(size=8)
+    feed[0]["assets"][0]["browser_download_url"] = url
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["url"] is None and info["available"] is False
+
+
+@respx.mock
+def test_an_installer_larger_than_any_real_one_is_not_offered():
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(
+        200, json=_release_feed(size=flackey.web.update.MAX_DOWNLOAD_BYTES + 1)))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["newer"] is True and info["available"] is False and info["size"] is None
+
+
+@respx.mock
+def test_the_download_follows_github_to_its_own_cdn(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    c, _, _ = client
+    cdn = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc"
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(302, headers={"location": cdn}))
+    respx.get(cdn).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert len(opened) == 1 and opened[0].read_bytes() == b"PKG-DATA"
+
+
+@respx.mock
+@pytest.mark.parametrize("where", ["https://evil.test/Flackey.pkg", "http://objects.githubusercontent.com/x",
+                                   "https://github.com.evil.test/x"])
+def test_the_download_will_not_follow_a_redirect_off_github(client, monkeypatch, where):
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(302, headers={"location": where}))
+    elsewhere = respx.get(where).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    c.post("/api/update/install", headers=FROM_APP)
+    assert _settle(c, "error")["state"] == "error"
+    assert elsewhere.call_count == 0
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
+
+
+@respx.mock
+def test_the_release_feed_is_only_read_from_github():
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(302, headers={"location": "https://evil.test/feed"}))
+    evil = respx.get("https://evil.test/feed").mock(return_value=httpx.Response(200, json=_release_feed()))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["ok"] is False and evil.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("key", ["missing", "malformed"])
+def test_a_packaged_build_without_a_usable_key_opens_no_installer(client, monkeypatch, key):
+    """A packaged copy whose release key is gone or mangled cannot verify anything, so it must not fall
+    back to opening an unchecked installer -- that is exactly what a broken build would otherwise do."""
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin", frozen=True))
+    monkeypatch.setattr("flackey.selfupdate.signature.PUBLIC_KEY_HEX", "" if key == "missing" else "zz12")
+    # The autouse keyless stub, swapped back for the real reader of the (now broken) constant.
+    monkeypatch.setattr("flackey.selfupdate.signature.baked_public_key", REAL_BAKED_PUBLIC_KEY)
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: pytest.fail("installer opened"))
+    c, _, _ = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_release_feed(size=8)))
+    pkg = respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    body = c.get("/api/update").json()
+    assert body["newer"] is True and body["available"] is False
+    r = c.post("/api/update/install", headers=FROM_APP)
+    assert r.status_code == 409 and "cannot check" in r.json()["detail"]
+    assert pkg.call_count == 0
+
+
+def _keyed(monkeypatch):
+    """A build carrying a release key the test holds the private half of."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from flackey.selfupdate import signature as sig_module
+    private = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(sig_module, "baked_public_key", lambda: sig_module.encode_public_key(private.public_key()))
+    monkeypatch.setattr("flackey.selfupdate.install.seamless_available", lambda *a, **k: False)
+
+    def sign_pkg(payload: bytes, version: str = "9.9.9") -> bytes:
+        return private.sign(sig_module.signing_message(version, payload, sig_module.INSTALLER_DOMAIN)).hex().encode()
+    return sign_pkg
+
+
+def _signed_feed() -> list[dict]:
+    feed = _release_feed(size=8)
+    feed[0]["assets"].append({"name": "Flackey.pkg.sig", "size": 129, "browser_download_url": INSTALLER_URL + ".sig"})
+    return feed
+
+
+@respx.mock
+def test_the_installer_opened_is_a_private_copy_of_the_verified_bytes(client, monkeypatch):
+    """Verified in memory, then opened from disk, is two reads -- and the file can change between them.
+    What gets opened is a fresh file in a folder only this user can enter, written from the bytes that
+    were checked."""
+    sign_pkg = _keyed(monkeypatch)
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: opened.append((p, p.read_bytes())))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_signed_feed()))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    respx.get(INSTALLER_URL + ".sig").mock(return_value=httpx.Response(200, content=sign_pkg(b"PKG-DATA")))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    [(path, data)] = opened
+    assert data == b"PKG-DATA" and path.name == "Flackey.pkg"
+    assert path != settings.data_dir / "updates" / "Flackey.pkg"
+    if sys.platform != "win32":
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert path.stat().st_mode & 0o077 == 0
+
+
+@respx.mock
+def test_open_installer_again_checks_the_file_again(client, monkeypatch):
+    """The "Open installer" button reopens what is on disk, and that file may not be the one verified."""
+    sign_pkg = _keyed(monkeypatch)
+    opened = []
+    monkeypatch.setattr("flackey.web.update.open_installer", lambda p: opened.append(p.read_bytes()))
+    c, _, settings = client
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=_signed_feed()))
+    respx.get(INSTALLER_URL).mock(return_value=httpx.Response(200, content=b"PKG-DATA"))
+    respx.get(INSTALLER_URL + ".sig").mock(return_value=httpx.Response(200, content=sign_pkg(b"PKG-DATA")))
+    c.post("/api/update/install", headers=FROM_APP)
+    _settle(c, "ready")
+    assert c.post("/api/update/install", headers=FROM_APP).json()["state"] == "ready"
+    assert opened == [b"PKG-DATA", b"PKG-DATA"]
+
+    (settings.data_dir / "updates" / "Flackey.pkg").write_bytes(b"EVILDATA")
+    body = c.post("/api/update/install", headers=FROM_APP).json()
+    assert body["state"] == "error" and "could not be verified" in body["error"]
+    assert opened == [b"PKG-DATA", b"PKG-DATA"]
+    assert not (settings.data_dir / "updates" / "Flackey.pkg").exists()
 
 
 def test_no_other_origin_is_granted_cors(client):
