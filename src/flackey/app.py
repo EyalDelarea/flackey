@@ -9,8 +9,8 @@ import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import uvicorn

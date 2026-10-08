@@ -910,6 +910,47 @@ def test_a_forged_session_cookie_is_refused(client):
     assert c.get("/api/health", headers=NO_TOKEN).status_code == 401
 
 
+def _cookie_only(c):
+    """The client as a media element is: the session cookie, no token header."""
+    assert c.post("/api/session").status_code == 200
+    return lambda method, path: c.request(method, path, headers=NO_TOKEN)
+
+
+@pytest.mark.parametrize("path, status", [
+    ("/api/rejections/999/spectrogram.png", 404),   # <img>
+    ("/api/candidates/999/preview", 404),           # <audio>, before Deezer is asked
+    ("/api/telegram/qr/nope", 503),                 # the QR login's polled state (no Telegram here)
+])
+def test_the_session_cookie_opens_what_the_media_elements_read(client, path, status):
+    """Past the guard, so whatever the route itself answers -- never the guard's 401 or 403."""
+    c, _, _ = client
+    r = _cookie_only(c)("GET", path)
+    assert r.status_code not in (401, 403), (path, r.status_code)
+    if status is not None:
+        assert r.status_code == status, path
+
+
+def test_the_session_cookie_opens_the_event_stream(client, monkeypatch):
+    """`EventSource` cannot send a header either. The stream is cut short so the test can read it."""
+    async def one(bus, initial, heartbeat_s=0):
+        yield "event: status\ndata: {}\n\n"
+    monkeypatch.setattr("flackey.web.stream.event_stream", one)
+    c, _, _ = client
+    r = _cookie_only(c)("GET", "/api/events")
+    assert r.status_code == 200 and r.text.startswith("event: status")
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/api/setup/slskd/credentials"), ("GET", "/api/setup/soulseek/password"),
+    ("POST", "/api/update/install"), ("POST", "/api/update/restart"), ("POST", "/api/update/release"),
+    ("POST", "/api/bug-report"), ("POST", "/api/bug-report/reveal"),
+])
+def test_the_session_cookie_never_opens_a_route_that_must_come_from_the_app(client, method, path):
+    """A saved secret, an install, a restart or an email sent: the token itself, never the cookie."""
+    c, _, _ = client
+    assert _cookie_only(c)(method, path).status_code in (401, 403), (method, path)
+
+
 def test_the_session_route_still_needs_the_app_header(client):
     c, _, _ = client
     assert c.post("/api/session", headers=NOT_FROM_APP).status_code == 403
