@@ -237,7 +237,7 @@ def _lan_ipv4(host: str) -> bool:
     return address.is_private and not address.is_loopback
 
 
-def _trusted_location(location: str, source: str, gateway: str | None) -> str | None:
+def _answering_router(location: str, source: str, gateway: str | None) -> str | None:
     """The router's address when this SSDP answer describes the router, else None. Any machine on the
     network can answer a multicast search, so the description must live on the address the answer came
     from -- and on the default gateway, when that is known."""
@@ -260,7 +260,7 @@ async def upnp_map(port: int, lease_s: int, http: httpx.AsyncClient, *, discover
         log.info("UPnP: no gateway answered")
         return None
     for loc, source in answers:
-        router = _trusted_location(loc, source, gateway)
+        router = _answering_router(loc, source, gateway)
         if router is None:
             log.info("UPnP: ignoring an answer from %s that is not the router", source)
             continue
