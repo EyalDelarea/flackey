@@ -661,6 +661,90 @@ def test_a_secret_is_only_read_with_the_app_header(client, path):
     assert c.get(path).status_code == 404  # with the header it gets as far as "nothing saved"
 
 
+# ---- the per-launch API token ---------------------------------------------------------------------------
+NO_TOKEN = {"x-flackey-token": ""}
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/api/health"), ("GET", "/api/setup/soulseek/password"), ("POST", "/api/telegram/qr"),
+    ("POST", "/api/telegram/logout"), ("PUT", "/api/settings"), ("POST", "/api/update/install"),
+    ("GET", "/api/events"), ("GET", "/api/rejections/1/audio"), ("OPTIONS", "/api/health"),
+])
+@pytest.mark.parametrize("token", ["", "wrong", "x" * 43, "ünïcødé".encode("latin-1")])
+def test_every_api_request_needs_the_launch_token(client, method, path, token):
+    """Another program on this machine, another account on it, or a LAN host in Docker can reach the
+    port; only whoever was handed the token can use it. A token that is not even ASCII is a 401, never a
+    500 from the comparison."""
+    c, _, _ = client
+    r = c.request(method, path, headers={"x-flackey-token": token})
+    assert r.status_code == 401 and r.json()["detail"].startswith("Flackey needs its access key"), (method, path)
+
+
+def test_the_page_itself_is_served_without_the_token_and_never_carries_it(tmp_path):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text("<!doctype html><div id=root></div>")
+    app, _, _ = make(tmp_path, ui_dir=ui)
+    c = AppClient(app, headers=NO_TOKEN)
+    r = c.get("/")
+    assert r.status_code == 200 and app.state.api_token not in r.text
+
+
+def test_a_given_token_is_the_one_asked_for(tmp_path):
+    app, _, _ = make(tmp_path, api_token="t" * 40)
+    assert app.state.api_token == "t" * 40
+    c = AppClient(app, headers=NO_TOKEN)
+    assert c.get("/api/health", headers={"x-flackey-token": "t" * 40}).status_code == 200
+
+
+def test_without_a_given_token_each_app_makes_its_own(tmp_path):
+    first, _, _ = make(tmp_path)
+    second, _, _ = make(tmp_path / "two")
+    assert len(first.state.api_token) >= 43 and first.state.api_token != second.state.api_token
+
+
+def test_the_session_cookie_lets_media_elements_read_but_not_act(client):
+    """`<audio>`, `<img>` and `EventSource` cannot send a header. The cookie they ride on is set only by
+    a request that had the token, and opens reads -- never a state change and never a saved secret."""
+    c, _, _ = client
+    assert c.post("/api/session", headers=NO_TOKEN).status_code == 401
+    r = c.post("/api/session")
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"]
+    assert "flackey_session=" in cookie and "HttpOnly" in cookie and "samesite=strict" in cookie.lower()
+    assert "Path=/api" in cookie
+    value = c.cookies.get("flackey_session")
+    assert value and c.app.state.api_token not in value
+    # The cookie alone, as the media elements send it.
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 200
+    assert c.get("/api/rejections/999/audio", headers=NO_TOKEN).status_code == 404
+    assert c.post("/api/setup/reset", headers=NO_TOKEN).status_code == 401
+    assert c.put("/api/settings", headers=NO_TOKEN, json={}).status_code == 401
+    assert c.get("/api/setup/soulseek/password", headers=NO_TOKEN).status_code == 403
+
+
+def test_a_forged_session_cookie_is_refused(client):
+    c, _, _ = client
+    c.cookies.set("flackey_session", "forged")
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 401
+
+
+def test_the_session_route_still_needs_the_app_header(client):
+    c, _, _ = client
+    assert c.post("/api/session", headers=NOT_FROM_APP).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/", "/api/health", "/api/nope"])
+def test_no_page_can_frame_the_app(client, path):
+    """Clickjacking: a site that frames the UI could steer the owner's clicks on it."""
+    c, _, _ = client
+    for headers in ({}, NO_TOKEN):
+        r = c.get(path, headers=headers)
+        assert r.headers["x-frame-options"] == "DENY", path
+        assert r.headers["content-security-policy"] == "frame-ancestors 'none'", path
+        assert r.headers["x-content-type-options"] == "nosniff", path
+
+
 @pytest.mark.parametrize("where", ["home", "above-home", "root", "data-dir", "symlink-to-home"])
 def test_a_library_folder_that_would_share_home_or_flackeys_data_is_refused(client, tmp_path, monkeypatch,
                                                                              where):

@@ -429,3 +429,72 @@ async def test_a_sidecar_that_will_not_start_leaves_the_server_running(error):
     sidecar = _Sidecar(error)
     await start_sidecar(sidecar)
     assert sidecar.started == 1
+
+
+# ---- the launch token -------------------------------------------------------------------------------
+def test_the_launch_token_is_random_unless_the_environment_fixes_one():
+    from flackey.app import api_token_from_env
+
+    first, second = api_token_from_env({}), api_token_from_env({})
+    assert first != second and len(first) >= 43
+    fixed = "d" * 40
+    assert api_token_from_env({"FLACKEY_API_TOKEN": fixed}) == fixed
+    assert api_token_from_env({"FLACKEY_API_TOKEN": "  "}) not in ("", "  ")  # blank is unset
+
+
+@pytest.mark.parametrize("weak", ["short", "x" * 31, "spaces in the middle of it make no token at all!"])
+def test_a_weak_fixed_token_stops_the_start(weak):
+    """A guessable token is worse than none being asked for, because it reads as protection."""
+    from flackey.app import api_token_from_env
+
+    with pytest.raises(SystemExit, match="FLACKEY_API_TOKEN"):
+        api_token_from_env({"FLACKEY_API_TOKEN": weak})
+
+
+def test_the_address_with_the_token_puts_it_in_the_fragment():
+    """A fragment never leaves the browser: not in a request line, not in a Referer, not in a log."""
+    from flackey.app import ServerHandle
+
+    handle = ServerHandle(url="http://127.0.0.1:8765", token="abc")
+    assert handle.app_url() == "http://127.0.0.1:8765/#t=abc"
+    assert handle.app_url("?titlebar=inset") == "http://127.0.0.1:8765/?titlebar=inset#t=abc"
+
+
+def test_browser_mode_prints_and_opens_the_address_with_the_token(capsys, monkeypatch):
+    from flackey import app as app_module
+
+    opened = []
+    monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
+    handle = app_module.ServerHandle(url="http://localhost:8765", token="tok")
+    app_module.announce(handle, open_browser=True)
+    assert opened == ["http://localhost:8765/#t=tok"]
+    assert "http://localhost:8765/#t=tok" in capsys.readouterr().out
+    app_module.announce(handle, open_browser=False)
+    assert opened == ["http://localhost:8765/#t=tok"]
+    assert "http://localhost:8765/#t=tok" in capsys.readouterr().out
+
+
+async def test_the_running_server_asks_for_the_token_it_was_started_with(tmp_path, caplog, monkeypatch):
+    import httpx
+
+    from flackey.app import ServerHandle, run
+    from flackey.config import Settings
+
+    monkeypatch.setenv("FLACKEY_API_TOKEN", "k" * 40)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        web_host="127.0.0.1", web_port=0, source_enabled=False)
+    handle = ServerHandle()
+    caplog.set_level("DEBUG")
+    task = asyncio.create_task(run(settings, open_browser=False, handle=handle))
+    await asyncio.wait_for(asyncio.to_thread(handle.started.wait, 10.0), 15.0)
+    try:
+        assert handle.error is None and handle.token == "k" * 40
+        port = handle.server.servers[0].sockets[0].getsockname()[1]
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as http:
+            assert (await http.get("/api/health")).status_code == 401
+            assert (await http.get("/api/health", headers={"x-flackey-token": "k" * 40})).status_code == 200
+        # The log ends up in bug reports.
+        assert "k" * 40 not in caplog.text
+    finally:
+        handle.stop()
+        await asyncio.wait_for(task, 5.0)

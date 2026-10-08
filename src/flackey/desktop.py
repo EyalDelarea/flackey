@@ -573,12 +573,13 @@ def run_in_window(settings: Settings) -> None:
     set_app_name()
 
     thread, handle = start_server_thread(settings)
-    url = wait_for_server(handle)
+    wait_for_server(handle)
     inset = sys.platform == "darwin"
     size = startup_size(settings)
     x, y = window_origin(size) or (None, None)
     window = webview.create_window(
-        "Flackey", url + (INSET_FLAG if inset else ""),
+        # The API token rides in the fragment: the page keeps it and strips it from the address.
+        "Flackey", handle.app_url(INSET_FLAG if inset else ""),
         width=size[0], height=size[1], x=x, y=y, min_size=MIN_SIZE,
         # Opaque on purpose: this is what the window shows until `inset_titlebar` turns the background
         # clear on `shown`, and it is what stops a white/black flash before the page paints. Passing

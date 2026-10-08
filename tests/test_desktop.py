@@ -259,7 +259,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
     monkeypatch.setattr(desktop, "UI_DIR", tmp_path)
 
-    handle = ServerHandle(url="http://localhost:1")
+    handle = ServerHandle(url="http://localhost:1", token="launch-token")
     handle.started.set()
     thread = threading.Thread(target=lambda: None)
     thread.start()
@@ -419,7 +419,7 @@ def test_run_in_window_opens_the_native_layout(monkeypatch, tmp_path):
     windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
     desktop.run_in_window(settings=object())
     window = windows["window"]
-    assert window.args[1].endswith("?titlebar=inset")
+    assert window.args[1] == "http://localhost:1/?titlebar=inset#t=launch-token"
     # Small enough to park beside something else. web/src/windowSize.test.ts holds this to the narrow
     # layout's breakpoint from the other side, so neither number can move without the other.
     assert window.kwargs["min_size"] == (560, 420)
@@ -437,7 +437,7 @@ def test_run_in_window_plain_window_off_macos(monkeypatch, tmp_path):
     windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
     desktop.run_in_window(settings=object())
     window = windows["window"]
-    assert "?titlebar=inset" not in window.args[1]
+    assert window.args[1] == "http://localhost:1/#t=launch-token"
     assert "transparent" not in window.kwargs
     assert window.kwargs["vibrancy"] is False
     assert len(window.events.loaded) == 0
