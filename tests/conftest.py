@@ -36,6 +36,13 @@ requires_fpcalc = pytest.mark.skipif(not has_fpcalc(), reason="fpcalc (chromapri
 
 
 @pytest.fixture(autouse=True)
+def _fresh_verified_updates(monkeypatch):
+    """`signature.verify_archive` remembers what it accepted for the rest of the process; each test
+    starts with nothing remembered, so none passes on a payload an earlier test happened to verify."""
+    monkeypatch.setattr("flackey.selfupdate.signature._verified", set())
+
+
+@pytest.fixture(autouse=True)
 def _no_public_deezer_lookup(monkeypatch):
     """The worker asks Deezer's public API for a record when the bot gave none, and the worker tests use a
     real `httpx.AsyncClient`. Without this every such test would reach api.deezer.com. Tests of the lookup

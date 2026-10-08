@@ -168,7 +168,15 @@ int main(int argc, char **argv) {
     const char *dir = argv[2];
     const char *staging = argv[3];
     int want_relaunch = strcmp(argv[4], "1") == 0;
-    if (argc == 6) logfile = fopen(argv[5], "a");
+    if (argc == 6) {
+        /* O_NOFOLLOW: a symlink planted at the log path must not make this append to another file.
+         * Anything that fails here just leaves the log on stderr. */
+        int logfd = open(argv[5], O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (logfd >= 0) {
+            logfile = fdopen(logfd, "a");
+            if (logfile == NULL) close(logfd);
+        }
+    }
 
     char *end = NULL;
     long parent = strtol(argv[1], &end, 10);
@@ -207,6 +215,14 @@ int main(int argc, char **argv) {
     int stagefd = openat(dirfd, staging, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (stagefd < 0) {
         logline("refusing: cannot open %s: %s", staging, strerror(errno));
+        return EXIT_REFUSED;
+    }
+    /* The directory just opened must be the one checked above, not one renamed into its place since. */
+    struct stat opened_st;
+    if (fstat(stagefd, &opened_st) != 0 || opened_st.st_dev != staged_st.st_dev ||
+        opened_st.st_ino != staged_st.st_ino) {
+        logline("refusing: %s changed while it was being checked", staging);
+        close(stagefd);
         return EXIT_REFUSED;
     }
     /* The app strips this after unpacking; still being here means an assumption broke upstream, and

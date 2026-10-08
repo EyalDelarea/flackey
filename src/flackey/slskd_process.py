@@ -88,9 +88,13 @@ class SlskdProcess:
         """
         if self.running:
             return
-        if await self.probe():
+        failure = await self._check()
+        if failure is None:
             log.info("slskd already answering on %s; not starting a second instance", self._url)
             return
+        if "API key" in failure:
+            log.warning("something on %s refuses flackey's API key; starting slskd anyway (%s)",
+                        self._url, failure)
 
         if not is_installed(self._data_dir):
             raise SlskdBinaryError("slskd is not installed; run the setup install step first")
@@ -119,12 +123,17 @@ class SlskdProcess:
             raise SlskdStartTimeout("slskd did not become healthy within the timeout")
 
     async def probe(self, client: httpx.AsyncClient | None = None) -> bool:
-        """A single health check, no polling. True when something answers `GET .../application` with a
-        non-server-error status. Used to detect an already-running slskd without waiting for one."""
+        """A single health check, no polling. True when `GET .../application` answers 200 with slskd's
+        own application state, under our API key. Used to detect an already-running slskd without
+        waiting for one."""
         return await self._check(client) is None
 
     async def _check(self, client: httpx.AsyncClient | None = None) -> str | None:
-        """One health check: None when slskd answered, else why not (for the log)."""
+        """One health check: None when slskd answered, else why not (for the log).
+
+        Only a 200 carrying slskd's application state counts. Another program on the port, or a slskd
+        that refuses our key, is not a sidecar flackey can use, and taking one for it would hand the
+        searches and credentials to whatever answered."""
         try:
             if client is None:
                 async with httpx.AsyncClient(timeout=2.0) as own:
@@ -133,7 +142,17 @@ class SlskdProcess:
                 resp = await self._get_application(client)
         except httpx.HTTPError as exc:
             return f"{type(exc).__name__}: {exc}"
-        return None if resp.status_code < 500 else f"HTTP {resp.status_code}"
+        if resp.status_code in (401, 403):
+            return f"HTTP {resp.status_code}: something on that port refused flackey's API key"
+        if resp.status_code != 200:
+            return f"HTTP {resp.status_code}"
+        try:
+            body = resp.json()
+        except ValueError:
+            return "HTTP 200 but not JSON: not slskd"
+        if not isinstance(body, dict) or not isinstance(body.get("server"), dict):
+            return "HTTP 200 but not slskd's application state"
+        return None
 
     async def _get_application(self, client: httpx.AsyncClient) -> httpx.Response:
         return await client.get(f"{self._url}/api/v0/application", headers={"X-API-Key": self._api_key})

@@ -5,10 +5,12 @@ A process cannot replace the bundle it is executing from. Nothing here touches t
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,9 @@ class StagedUpdate:
     path: Path          # /Applications/.Flackey-staging-XXXXXXXXXX.app
     version: str
     relaunch: bool = True
+    # `manifest(path)` as staging left it; checked again right before the helper is spawned. None only
+    # for one built by hand rather than by `stage`.
+    manifest: bytes | None = None
 
     @property
     def directory(self) -> Path:
@@ -94,12 +99,66 @@ def _run(argv: list[str], what: str, message: str) -> None:
         raise StagingError(message) from exc
 
 
+def manifest(bundle: Path) -> bytes:
+    """A sha256 over every entry in `bundle`: its relative path, type and permission bits, and a file's
+    contents or a symlink's target. Symlinks are never followed."""
+    digest = hashlib.sha256()
+    for root, dirs, files in os.walk(bundle, followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            entry = Path(root) / name
+            st = entry.lstat()
+            digest.update(os.fsencode(entry.relative_to(bundle)) + b"\0" + str(st.st_mode).encode() + b"\0")
+            if stat.S_ISLNK(st.st_mode):
+                digest.update(os.fsencode(os.readlink(entry)))
+            elif stat.S_ISREG(st.st_mode):
+                with entry.open("rb") as f:
+                    digest.update(hashlib.file_digest(f, "sha256").digest())
+            digest.update(b"\0")
+    return digest.digest()
+
+
+def _private_copy(archive: Path, version: str) -> Path:
+    """The verified bytes, written to a file in a fresh 0700 directory, which the caller removes.
+
+    The archive is read once, and those bytes are both the ones checked against what `verify_archive`
+    accepted and the ones written out -- so `ditto` never reads a path anybody could have swapped since."""
+    try:
+        payload = archive.read_bytes()
+    except OSError as exc:
+        log.exception("could not read back the update archive at %s", archive)
+        raise StagingError("The update file could not be unpacked. Download it again.") from exc
+    if not signature.was_verified(version, hashlib.sha256(payload).digest()):
+        log.error("the archive at %s is not the one that was verified; refusing to unpack it", archive)
+        raise StagingError("This update could not be verified, so Flackey did not install it.")
+    private = Path(tempfile.mkdtemp(prefix="flackey-update-"))
+    copy = private / archive.name
+    try:
+        fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except OSError as exc:
+        shutil.rmtree(private, ignore_errors=True)
+        log.exception("could not write a private copy of the update")
+        raise StagingError("Could not prepare the update. The disk may be full.") from exc
+    return copy
+
+
 def stage(archive: Path, version: str, *, applications: Path = APPLICATIONS,
           relaunch: bool = True) -> StagedUpdate:
-    """Unpack a *verified* archive into `applications`. Never call this with unverified bytes.
+    """Unpack a *verified* archive into `applications`. Refused unless these exact bytes passed
+    `signature.verify_archive` for this version.
 
     Inside /Applications because `rename` cannot cross filesystems and the swap is a rename."""
     sweep(applications)
+    copy = _private_copy(archive, version)
+    try:
+        return _unpack(copy, version, applications, relaunch)
+    finally:
+        shutil.rmtree(copy.parent, ignore_errors=True)
+
+
+def _unpack(archive: Path, version: str, applications: Path, relaunch: bool) -> StagedUpdate:
     suffix = secrets.token_hex(STAGING_RANDOM_CHARS // 2)
     unpack = applications / f"{UNPACK_PREFIX}{suffix}"
     staged = applications / f"{STAGING_PREFIX}{suffix}.app"
@@ -129,12 +188,13 @@ def stage(archive: Path, version: str, *, applications: Path = APPLICATIONS,
         _run(["/bin/chmod", "-R", "go-w", str(inner)], "chmod -R go-w",
              "The update could not be prepared for installation.")
         inner.rename(staged)
+        recorded = manifest(staged)
     except Exception:
         shutil.rmtree(unpack, ignore_errors=True)
         shutil.rmtree(staged, ignore_errors=True)
         raise
     shutil.rmtree(unpack, ignore_errors=True)
-    return StagedUpdate(path=staged, version=version, relaunch=relaunch)
+    return StagedUpdate(path=staged, version=version, relaunch=relaunch, manifest=recorded)
 
 
 def discard(staged: StagedUpdate | None) -> None:
@@ -170,6 +230,19 @@ def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None
     helper = helper_path()
     if helper is None:
         raise StagingError("This copy of Flackey cannot install updates by itself.")
+    # The staged bundle has sat in /Applications since it was unpacked, possibly for a whole session:
+    # it is swapped in only if it is still exactly what staging produced.
+    if staged.manifest is not None:
+        try:
+            unchanged = manifest(staged.path) == staged.manifest
+        except OSError:
+            log.exception("could not re-read the staged update at %s", staged.path)
+            unchanged = False
+        if not unchanged:
+            log.error("the staged update at %s changed after it was unpacked; discarding it", staged.path)
+            discard(staged)
+            raise StagingError("The prepared update changed before it could be installed, so Flackey "
+                               "did not install it.")
     try:
         workdir = Path(tempfile.mkdtemp(prefix="flackey-update-"))
         os.chmod(workdir, 0o700)
@@ -225,7 +298,7 @@ class Pending:
             launch_helper(staged, log_path=log_path)
         except StagingError:
             log.error("the update was staged at %s but the helper could not be started; Flackey is "
-                      "unchanged and the staged copy is still there", staged.path)
+                      "unchanged", staged.path)
             return False
         except Exception:
             log.exception("unexpected failure starting the update helper")

@@ -20,9 +20,18 @@ _BAD = re.compile(r'[\\/:*?"<>|]')
 #
 # A name whose part before the first dot is one of these opens a device, not a file -- `NUL.flac` is
 # the null device in any folder -- whatever the case and whatever spaces follow it.
-_WINDOWS_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-                               *(f"LPT{i}" for i in range(1, 10))})
-_WINDOWS_CONTROL = re.compile(r"[\x00-\x1f]")
+#
+# The list is Microsoft's ("Naming Files, Paths, and Namespaces"), including the superscript ¹ ² ³ that
+# Windows reads as digits in COM# and LPT#. CONIN$ and CONOUT$ are not on that page; they are the console
+# names CreateFile documents opening, and Python's own `os.path.isreserved` counts them among the DOS
+# device names, so they are kept out the same way.
+_WINDOWS_DIGITS = "123456789¹²³"
+_WINDOWS_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                               *(f"COM{d}" for d in _WINDOWS_DIGITS), *(f"LPT{d}" for d in _WINDOWS_DIGITS)})
+# Control characters, on every system: a NUL ends a name early in C, and an escape sequence repaints the
+# terminal of whoever lists the folder. The whitespace ones (tab, newline, \x1c-\x1f) are not here: those
+# are turned into a space below, so "A\tB" stays two words.
+_CONTROL = re.compile(r"[\x00-\x08\x0e-\x1b\x7f]")
 # MAX_PATH is 260 UTF-16 units with the terminating NUL. Long paths need a registry switch that is off
 # by default, and Rekordbox and Explorer trip over them even when it is on, so the library stays inside
 # the classic limit rather than depending on it.
@@ -32,7 +41,6 @@ _MIN_TITLE_UNITS = 16
 
 
 def _windows_segment(s: str) -> str:
-    s = _WINDOWS_CONTROL.sub("-", s)
     stem, dot, rest = s.partition(".")
     if stem.rstrip(" ").upper() in _WINDOWS_RESERVED:
         # After the device name rather than in front of it, so the folder still sorts under its letter.
@@ -41,7 +49,7 @@ def _windows_segment(s: str) -> str:
 
 
 def sanitize(segment: str) -> str:
-    s = _BAD.sub("-", segment)
+    s = _BAD.sub("-", _CONTROL.sub("", segment))
     s = " ".join(s.split()).strip(" .")
     if sys.platform != "win32":
         return s[:120] or "Unknown"

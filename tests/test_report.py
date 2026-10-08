@@ -43,6 +43,49 @@ def test_known_secrets_are_removed_wherever_they_appear():
     assert out.count("<redacted>") == 4
 
 
+@pytest.mark.parametrize("line", [
+    "GET /login?user=dj&pw=s3cr3tP%40ss%21 HTTP/1.1",
+    "GET /login?x=s3cr3tP%40ss%21&y=1",
+    "logged s3cr3tP%40ss%21 in a sentence",
+    '{"pw": "s3cr3tP@ss!"}',
+    "plain s3cr3tP@ss! here",
+])
+def test_a_known_secret_is_caught_in_its_encoded_forms(line):
+    out = Redactor(["s3cr3tP@ss!"], home=HOME)(line)
+    assert "s3cr3tP" not in out and "<redacted>" in out
+
+
+def test_a_known_secret_is_caught_with_lower_case_percent_hex_and_json_escapes():
+    r = Redactor(['pa"ss/wörd'], home=HOME)
+    out = r(r'url pa%22ss%2fw%c3%b6rd json "pa\"ss/wörd" raw-json "pa\"ss/wörd"')
+    assert "pa" not in out.replace("<redacted>", "")
+
+
+def test_a_telegram_bot_token_is_removed_even_inside_a_url_path():
+    r = Redactor([], home=HOME)
+    token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+    out = r(f"HTTP Request: GET https://api.telegram.org/bot{token}/getMe \"HTTP/1.1 200 OK\"")
+    assert token not in out and "123456789" not in out and "AAHdqTcv" not in out
+    assert "api.telegram.org/bot<redacted>/getMe" in out
+    assert token not in r(f"token {token} in a sentence")
+
+
+@pytest.mark.parametrize("line, gone", [
+    ("Cookie: session=abc123def456; theme=dark", "abc123def456"),
+    ("set-cookie: sid=zzz999yyy; Path=/; HttpOnly", "zzz999yyy"),
+    ("redirect to /home?session=q1w2e3r4t5y6", "q1w2e3r4t5y6"),
+    ("sessionid=0f9e8d7c6b5a sent", "0f9e8d7c6b5a"),
+])
+def test_cookies_and_session_ids_are_removed(line, gone):
+    assert gone not in Redactor([], home=HOME)(line)
+
+
+def test_a_session_file_name_is_left_alone():
+    """Only a bare `session=` value: the Telegram session *file* is named in logs and is not a secret."""
+    line = "telegram_session=/data/owner.session"
+    assert Redactor([], home=HOME)(line) == line
+
+
 def test_a_secret_is_matched_whole_not_inside_another_word():
     r = Redactor(["beatz"], home=HOME)
     assert r("Beatzone - beatzilla (beatz edit)") == "Beatzone - beatzilla (<redacted> edit)"
