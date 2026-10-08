@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -159,17 +160,8 @@ def write_credentials(data_dir: Path, username: str, password: str,
     path = config_path(data_dir)
     config = _load_config(path)
 
-    config.setdefault("remote_configuration", False)
     web = _submapping(config, "web", path)
     web.setdefault("port", WEB_PORT)
-    web.setdefault("ip_address", WEB_IP_ADDRESS)
-    # `ip_address` binds the HTTP listener only: slskd's HTTPS listener has its own settings and stays on
-    # 0.0.0.0, so with just the two lines above the sidecar's web UI answered from the LAN on 5031
-    # (measured 2026-09-09: HTTP 200 from this machine's own LAN address, while 5030 and flackey's
-    # own 8765 refused). Nothing here needs HTTPS -- the only client is flackey over loopback -- so
-    # the listener is turned off outright. Forced, not setdefault: a config written before this fix must
-    # be corrected on the next credential write, not left as it is.
-    _submapping(web, "https", path)["disabled"] = True
     auth = _submapping(web, "authentication", path)
     auth.setdefault("username", FLACKEY_WEB_USERNAME)
     if not auth.get("password"):
@@ -178,7 +170,7 @@ def write_credentials(data_dir: Path, username: str, password: str,
     key_entry = _submapping(api_keys, API_KEY_NAME, path)
     if not key_entry.get("key"):
         key_entry["key"] = secrets.token_hex(32)  # slskd requires at least 16 characters
-    key_entry.setdefault("cidr", API_KEY_CIDR)
+    _pin_to_this_machine(config, path)
 
     soulseek = _submapping(config, "soulseek", path)
     soulseek["username"] = username
@@ -197,6 +189,28 @@ def write_credentials(data_dir: Path, username: str, password: str,
     return key_entry["key"]
 
 
+def _pin_to_this_machine(config: dict, path: Path) -> None:
+    """The settings that keep slskd's web UI and API answering this machine only. Forced on every write
+    rather than filled in when missing: a config written by an older build, or edited by hand, must be put
+    back the next time flackey writes it, not left as it is.
+
+    `ip_address` binds the HTTP listener only: slskd's HTTPS listener has its own settings and stays on
+    0.0.0.0, so with `ip_address` alone the sidecar's web UI answered from the LAN on 5031 (measured
+    2026-09-09: HTTP 200 from this machine's own LAN address, while 5030 and flackey's own 8765 refused).
+    Nothing here needs HTTPS -- the only client is flackey over loopback -- so that listener is turned off
+    outright. The API key's `cidr` is pinned only when flackey's key is there: a share write on a file
+    without one adds none."""
+    config["remote_configuration"] = False
+    web = _submapping(config, "web", path)
+    web["ip_address"] = WEB_IP_ADDRESS
+    _submapping(web, "https", path)["disabled"] = True
+    auth = web.get("authentication")
+    keys = auth.get("api_keys") if isinstance(auth, dict) else None
+    entry = keys.get(API_KEY_NAME) if isinstance(keys, dict) else None
+    if isinstance(entry, dict):
+        entry["cidr"] = API_KEY_CIDR
+
+
 def _atomic_write(path: Path, config: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f"{path.name}.tmp"
@@ -211,16 +225,56 @@ def _atomic_write(path: Path, config: dict) -> None:
         raise SlskdConfigError(f"could not write {path}: {e.strerror or e}") from e
 
 
+def is_network_path(raw: str) -> bool:
+    """A UNC path (`\\\\server\\share`, `//server/share`, or a `\\\\?\\` device path), read off the string
+    itself: resolving one asks the network, which can hang on a server that is not there."""
+    return raw.startswith(("\\\\", "//"))
+
+
+# Inside the home folder: where every app keeps its sign-ins, tokens and caches. Compared without regard
+# to case, because APFS and NTFS both ignore it.
+_APP_SUPPORT = ("library", "appdata")
+# Under ~/Library, the folders macOS puts cloud drives in (Dropbox, OneDrive and Google Drive in
+# CloudStorage, iCloud Drive in Mobile Documents): a DJ library inside one is an ordinary choice.
+_CLOUD_DRIVES = ("cloudstorage", "mobile documents")
+
+
+def _parts_under(path: Path, base: Path) -> tuple[str, ...] | None:
+    """`path`'s parts below `base`, case-folded, or None when it is not inside it."""
+    p = [s.casefold() for s in path.parts]
+    b = [s.casefold() for s in base.parts]
+    return tuple(p[len(b):]) if p[:len(b)] == b else None
+
+
+def _inside_temp(root: Path, base: Path) -> bool:
+    """Windows keeps the temp folder under AppData\\Local. Nothing there is a sign-in, so a folder inside
+    it is not refused for being inside AppData."""
+    temp = Path(tempfile.gettempdir()).resolve()
+    return _parts_under(temp, base) is not None and _parts_under(root, temp) is not None
+
+
 def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
     """Why this folder must never be the library, or None. The library is shared with the whole Soulseek
-    network, so a folder that holds the home directory or Flackey's own data would hand strangers the
-    Telegram session and every saved password. Resolved first, so a symlink to ~ is caught too."""
+    network, so a folder that holds the home directory, Flackey's own data, or any app's keys and sign-ins
+    would hand strangers the Telegram session and every saved password. Resolved first, so a symlink to ~
+    is caught too."""
+    if is_network_path(str(library_root)):
+        return "That folder is on another computer. Choose a folder on this computer or a drive plugged into it."
     root = library_root.expanduser().resolve()
+    if is_network_path(str(root)):  # a mapped network drive resolves to its UNC path
+        return "That folder is on another computer. Choose a folder on this computer or a drive plugged into it."
     home = Path.home().resolve()
     if root == Path(root.anchor) or root == home or home.is_relative_to(root):
         return "That folder holds your whole home folder. Choose a folder just for your music."
     if data_dir.expanduser().resolve().is_relative_to(root):
         return "That folder holds Flackey's own settings and sign-ins. Choose a folder just for your music."
+    below = _parts_under(root, home)
+    if below and any(part.startswith(".") for part in below):  # ~/.ssh, ~/.config, ~/Music/.secret
+        return "That is a hidden folder, where apps keep keys and settings. Choose a folder just for your music."
+    if below and below[0] in _APP_SUPPORT:
+        cloud = below[0] == "library" and len(below) > 2 and below[1] in _CLOUD_DRIVES
+        if not cloud and not _inside_temp(root, home / below[0]):
+            return "That folder is where apps keep their settings and sign-ins. Choose a folder just for your music."
     return None
 
 
@@ -255,6 +309,7 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
         return False
     config = _load_config(path)
     _set_share(config, path, library_root, data_dir, previous)
+    _pin_to_this_machine(config, path)
     _atomic_write(path, config)
     log.info("slskd share now %s", library_root)
     return True

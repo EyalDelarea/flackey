@@ -682,6 +682,16 @@ def test_a_library_folder_that_would_share_home_or_flackeys_data_is_refused(clie
     assert c.get("/api/settings").json()["library_root"] != str(folder)
 
 
+@pytest.mark.parametrize("raw", [r"\\nas\music", "//nas/music"])
+def test_a_network_library_folder_is_refused(client, raw):
+    """Refused on the string, before `mkdir` could go looking for the server."""
+    c, _, settings = client
+    before = str(settings.library_root)
+    r = c.put("/api/settings", json={"library_root": raw})
+    assert r.status_code == 400 and "another computer" in r.json()["detail"]
+    assert c.get("/api/settings").json()["library_root"] == before
+
+
 def test_queue_bundles(client, tmp_path):
     c, store, _ = client
     rid = store.add_request("q", RequestKind.TEXT)
@@ -1165,14 +1175,53 @@ def test_events_route_is_mounted(client):
 
 
 def test_spectrogram(client, tmp_path: Path):
-    c, store, _ = client
+    c, store, settings = client
     rid = store.add_request("bad one", RequestKind.TEXT)
-    png = tmp_path / "s.png"
+    settings.spectrogram_dir.mkdir(parents=True, exist_ok=True)
+    png = settings.spectrogram_dir / "s.png"
     png.write_bytes(b"\x89PNG\r\n\x1a\n")
     rj = store.add_rejection(rid, "cutoff", 320, 16000, png)
     r = c.get(f"/api/rejections/{rj}/spectrogram.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
     assert c.get("/api/rejections/999/spectrogram.png").status_code == 404
+
+
+def test_spectrogram_is_served_only_from_the_spectrogram_folder(client, tmp_path: Path):
+    """A row whose path points anywhere else -- written by hand, by an older build, or through `..` --
+    is not this route's to read."""
+    c, store, settings = client
+    settings.spectrogram_dir.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\nnot yours")
+    for path in (outside, settings.spectrogram_dir / ".." / ".." / "secret.png"):
+        rj = store.add_rejection(store.add_request("q", RequestKind.TEXT), "cutoff", 320, 16000, path)
+        assert c.get(f"/api/rejections/{rj}/spectrogram.png").status_code == 404
+
+
+def test_rejected_audio_refuses_a_path_that_climbs_out_of_the_folder(client, tmp_path: Path):
+    """`is_relative_to` compares strings, so `rejected/../../secret.mp3` passes it unless both sides are
+    resolved first."""
+    c, store, settings = client
+    settings.rejected_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "secret.mp3").write_bytes(b"not yours")
+    climbing = settings.rejected_dir / ".." / ".." / "secret.mp3"
+    rj = store.add_rejection(store.add_request("q", RequestKind.TEXT), "x", 320, None, None,
+                             kind="different_recording", audio_path=climbing)
+    assert c.get(f"/api/rejections/{rj}/audio").status_code == 404
+
+
+def test_deleting_a_request_never_unlinks_a_path_that_climbs_out_of_the_folder(client, tmp_path: Path):
+    c, store, settings = client
+    settings.rejected_dir.mkdir(parents=True, exist_ok=True)
+    precious = tmp_path / "precious.mp3"
+    precious.write_bytes(b"keep me")
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_rejection(rid, "x", 320, None, None, kind="different_recording",
+                        audio_path=settings.rejected_dir / ".." / ".." / "precious.mp3")
+    store.set_state(rid, RequestState.REJECTED)
+
+    assert c.delete(f"/api/requests/{rid}").status_code == 200
+    assert precious.read_bytes() == b"keep me"
 
 
 def _kept_rejection(store, settings, name="kept.mp3") -> tuple[int, Path]:

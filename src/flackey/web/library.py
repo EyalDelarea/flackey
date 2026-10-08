@@ -20,6 +20,7 @@ from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
 from ..slskd_config import (
     SlskdConfigError,
+    is_network_path,
     read_listen_port,
     read_password,
     read_username,
@@ -84,6 +85,18 @@ def _revealable(settings: Settings, store: Store) -> Iterator[Path]:
         yield settings.library_root / PLAYLIST_DIR / f"{names[pl.id]}.m3u8"
 
 
+def _contained(stored: str | Path | None, directory: Path) -> Path | None:
+    """The file a database row points at, resolved, when it exists inside `directory`; else None. Both
+    sides are resolved before comparing, so neither `..` in the stored path nor a symlink inside the
+    folder can reach a file outside it."""
+    if not stored:
+        return None
+    path = Path(stored).resolve()
+    if not path.is_relative_to(directory.resolve()) or not path.is_file():
+        return None
+    return path
+
+
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
@@ -130,20 +143,23 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
 
     @r.get("/rejections/{rjid}/spectrogram.png")
     async def spectrogram(rjid: int):
+        """Served only from `spectrogram_dir`, the one place `verify` writes them -- the same containment
+        `rejected_audio` makes, for the same reason."""
         try:
             rj = store.get_rejection(rjid)
         except KeyError:
             raise HTTPException(404, "not found")
-        if not rj.spectrogram_path or not Path(rj.spectrogram_path).exists():
+        path = _contained(rj.spectrogram_path, settings.spectrogram_dir)
+        if path is None:
             raise HTTPException(404, "no spectrogram")
-        return FileResponse(rj.spectrogram_path, media_type="image/png")
+        return FileResponse(path, media_type="image/png")
 
     @r.get("/rejections/{rjid}/audio")
     async def rejected_audio(rjid: int):
         """The refused copy itself, so the owner can hear what the fingerprint would not accept (issue #92).
 
-        Kept only for a 'different_recording' verdict and served only from `rejected_dir` -- `is_relative_to`
-        is the same containment check `unlink_spectrogram` makes, and it is what stops a row whose path
+        Kept only for a 'different_recording' verdict and served only from `rejected_dir` -- `_contained`
+        is the same containment check `unlink_under` makes, and it is what stops a row whose path
         column was written by an older build (or by hand) from turning this into a read of any file on the
         disk. The media type comes off the extension the source gave the file; an unknown one is refused
         rather than guessed, because a wrong type is a player that fails silently."""
@@ -151,10 +167,8 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             rj = store.get_rejection(rjid)
         except KeyError:
             raise HTTPException(404, "not found")
-        if not rj.audio_path:
-            raise HTTPException(404, "no copy of this track was kept")
-        path = Path(rj.audio_path)
-        if not path.is_relative_to(settings.rejected_dir) or not path.exists():
+        path = _contained(rj.audio_path, settings.rejected_dir)
+        if path is None:
             raise HTTPException(404, "no copy of this track was kept")
         media_type = AUDIO_TYPES.get(path.suffix.lower())
         if media_type is None:
@@ -230,6 +244,9 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.put("/settings")
     async def put_settings(body: dict) -> dict:
         raw = (body.get("library_root") or "").strip()
+        if is_network_path(raw):
+            # Before anything touches it: `mkdir` and `resolve` on an unreachable server can hang.
+            raise HTTPException(400, unsafe_share_reason(Path(raw), settings.data_dir))
         path = Path(raw).expanduser() if raw else None
         if path is None or not path.is_absolute():
             raise HTTPException(400, "Choose a folder by its full path, for example ~/Music/DJ Library.")

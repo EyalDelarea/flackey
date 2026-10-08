@@ -226,12 +226,15 @@ def test_a_music_folder_is_a_fine_share(tmp_path: Path, monkeypatch):
     assert unsafe_share_reason(tmp_path / "Music" / "DJ Library", tmp_path / "Library" / "Flackey") is None
 
 
-def test_a_windows_library_path_survives_the_yaml_round_trip(tmp_path: Path):
+def test_a_windows_library_path_survives_the_yaml_round_trip(tmp_path: Path, monkeypatch):
     """A Windows path is full of backslashes -- `C:\\Users\\...` holds a `\\U`, which a hand-built
     double-quoted YAML string would read as a unicode escape and reject. The file is written by
     `yaml.safe_dump`, which quotes whatever needs it, so the share slskd reads is the folder that was
     given, character for character, including one outside ASCII."""
     from flackey.slskd_config import read_listen_port, write_share
+    # Off Windows the path is relative and resolves against the working directory, which in a checkout
+    # under a hidden folder (a git worktree in ~/.something) the share guard would rightly refuse.
+    monkeypatch.chdir(tmp_path)
     windows = "C:\\Users\\Ünal\\Music\\DJ Library"
     write_credentials(tmp_path, "digger", "not-a-real-password", library_root=Path(windows))
     assert yaml.safe_load(config_path(tmp_path).read_text(encoding="utf-8"))["shares"]["directories"] == [windows]
@@ -250,3 +253,102 @@ def test_an_undecodable_config_reads_as_absent_rather_than_crashing_startup(tmp_
     path.write_bytes(b"soulseek:\n  listen_port: 1234\n  username: \xff\xfe\x81\n")
     assert read_listen_port(tmp_path) == SOULSEEK_LISTEN_PORT
     assert read_api_key(tmp_path) is None
+
+
+@pytest.mark.parametrize("raw", [r"\\nas\music", "//nas/music", r"\\?\C:\Music", r"\\nas\music\DJ Library"])
+def test_a_network_path_is_never_shared(raw):
+    """Checked on the string, before anything resolves it: resolving an unreachable server can hang."""
+    assert unsafe_share_reason(Path(raw), Path("/nowhere/data"))
+
+
+@pytest.mark.parametrize("raw", [r"\\nas\music", "//nas/music", "\\\\nas\\music"])
+def test_is_network_path_reads_both_spellings(raw):
+    from flackey.slskd_config import is_network_path
+    assert is_network_path(raw)
+
+
+@pytest.mark.parametrize("raw", ["/Volumes/X/Music", "D:\\Music", "~/Music/DJ Library", "/Users/a/Music"])
+def test_local_paths_are_not_network_paths(raw):
+    from flackey.slskd_config import is_network_path
+    assert not is_network_path(raw)
+
+
+@pytest.fixture
+def fake_home(tmp_path: Path, monkeypatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what Path.home() reads on Windows
+    return home
+
+
+@pytest.mark.parametrize("inside", [".ssh", ".config/flackey", ".gnupg/private", "Music/.hidden/stuff",
+                                    "Library", "Library/Keychains", "library/Mail", "AppData",
+                                    "AppData/Roaming/Telegram Desktop", "appdata/Local/Google/Chrome"])
+def test_hidden_and_app_support_folders_are_never_shared(tmp_path: Path, fake_home: Path, inside):
+    """Dot-folders hold keys and tokens; ~/Library and AppData hold every app's sign-ins. Matched without
+    regard to case, because APFS and NTFS both ignore it."""
+    assert unsafe_share_reason(fake_home / inside, tmp_path / "data")
+
+
+@pytest.mark.parametrize("inside", ["Music/DJ Library", "Library/CloudStorage/Dropbox/DJ",
+                                    "Library/Mobile Documents/com~apple~CloudDocs/DJ", "Music.Library",
+                                    "Libraryish/Music"])
+def test_ordinary_music_folders_including_cloud_drives_stay_allowed(tmp_path: Path, fake_home: Path, inside):
+    """Dropbox, OneDrive and Google Drive live under ~/Library/CloudStorage on a Mac, and iCloud Drive
+    under ~/Library/Mobile Documents: a DJ library there is a normal choice."""
+    assert unsafe_share_reason(fake_home / inside, tmp_path / "data") is None
+
+
+def test_an_external_drive_is_a_fine_share(tmp_path: Path, fake_home: Path):
+    assert unsafe_share_reason(tmp_path / "Volumes" / "X" / "Music", tmp_path / "data") is None
+
+
+def test_the_temp_folder_inside_appdata_is_not_refused(tmp_path: Path, fake_home: Path, monkeypatch):
+    """Windows keeps the temp folder under AppData\\Local. Nothing there is a sign-in, and refusing it
+    would refuse every scratch folder a test or a tool hands in."""
+    import tempfile
+    temp = fake_home / "AppData" / "Local" / "Temp"
+    temp.mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    assert unsafe_share_reason(temp / "scratch" / "lib", tmp_path / "data") is None
+    assert unsafe_share_reason(fake_home / "AppData" / "Local" / "Other", tmp_path / "data")
+
+
+def test_the_listener_and_api_key_are_pinned_to_this_machine_on_every_write(tmp_path: Path):
+    """A hand-edited file that opened the web UI to the network, allowed the key from anywhere, or turned
+    remote configuration on is put back on the next write -- forced, like `https.disabled`."""
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump({
+        "remote_configuration": True,
+        "web": {"ip_address": "0.0.0.0", "authentication": {
+            "api_keys": {"flackey": {"key": "k" * 32, "cidr": "0.0.0.0/0,::/0"}}}},
+        "soulseek": {"username": "old", "password": "old-fake"}}))
+
+    write_credentials(tmp_path, "digger", "not-a-real-password")
+    data = yaml.safe_load(path.read_text())
+    assert data["remote_configuration"] is False
+    assert data["web"]["ip_address"] == "127.0.0.1"
+    assert data["web"]["authentication"]["api_keys"]["flackey"] == {"key": "k" * 32, "cidr": "127.0.0.1/32"}
+
+    data["remote_configuration"] = True
+    data["web"]["ip_address"] = "0.0.0.0"
+    data["web"]["authentication"]["api_keys"]["flackey"]["cidr"] = "0.0.0.0/0"
+    path.write_text(yaml.safe_dump(data))
+    assert write_share(tmp_path, tmp_path / "lib") is True
+    data = yaml.safe_load(path.read_text())
+    assert data["remote_configuration"] is False
+    assert data["web"]["ip_address"] == "127.0.0.1"
+    assert data["web"]["authentication"]["api_keys"]["flackey"]["cidr"] == "127.0.0.1/32"
+    assert data["web"]["https"]["disabled"] is True
+
+
+def test_a_share_write_adds_no_api_key_to_a_file_without_one(tmp_path: Path):
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump({"soulseek": {"username": "old", "password": "old-fake"}}))
+    write_share(tmp_path, tmp_path / "lib")
+    data = yaml.safe_load(path.read_text())
+    assert "authentication" not in data["web"]
+    assert data["web"]["ip_address"] == "127.0.0.1" and data["remote_configuration"] is False

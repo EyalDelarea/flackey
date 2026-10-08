@@ -33,7 +33,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         if not path:
             return
         file = Path(path)
-        if file.is_relative_to(directory):
+        # Both sides resolved, or `rejected/../../x` would pass a check that only compares the spelling.
+        if file.resolve().is_relative_to(directory.resolve()):
             try:
                 file.unlink()
             except OSError as e:
