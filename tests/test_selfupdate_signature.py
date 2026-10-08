@@ -119,3 +119,19 @@ def test_the_release_key_is_baked_in_and_well_formed():
     key = signature.baked_public_key()
     assert key is not None and len(key) == signature.PUBLIC_KEY_BYTES
     assert signature.seamless_updates_configured() is True
+
+
+def test_only_a_payload_that_verified_is_remembered_as_verified(keypair):
+    """`install.stage` asks this before it unpacks anything, so the bytes it unpacks are the bytes that
+    were checked -- not whatever sits at the download's path by then."""
+    private, public = keypair
+    digest = hashlib.sha256(PAYLOAD).digest()
+    other = b"another payload" * 50
+    assert signature.verify_archive(VERSION, other, sign(private), public) is False
+    assert signature.was_verified(VERSION, hashlib.sha256(other).digest()) is False
+
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(private), public) is True
+    assert signature.was_verified(VERSION, digest) is True
+    assert signature.was_verified("v" + VERSION, digest) is True
+    assert signature.was_verified("9.9.9", digest) is False
+    assert signature.was_verified(VERSION, digest, domain=signature.INSTALLER_DOMAIN) is False

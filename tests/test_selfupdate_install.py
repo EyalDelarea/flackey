@@ -14,6 +14,15 @@ from flackey.selfupdate import install, signature
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="ditto and xattr are macOS-only")
 
+REAL_WAS_VERIFIED = signature.was_verified
+
+
+@pytest.fixture(autouse=True)
+def _every_archive_counts_as_verified(monkeypatch):
+    """Most tests here are about unpacking, not about the signature; the ones about the signature put
+    the real check back."""
+    monkeypatch.setattr(install.signature, "was_verified", lambda *a, **k: True)
+
 
 @pytest.fixture
 def bundle(tmp_path) -> Path:
@@ -319,3 +328,114 @@ def test_an_unexpected_failure_on_the_way_out_is_also_swallowed(tmp_path, monkey
     pending.arm(install.StagedUpdate(path=tmp_path / f"{install.STAGING_PREFIX}abc123.app", version="9"))
 
     assert pending.run() is False
+
+
+# ---- the bytes unpacked are the bytes verified --------------------------------------------------------
+
+def _verify(archive: Path, version: str = "9.9.9") -> None:
+    private = Ed25519PrivateKey.generate()
+    payload = archive.read_bytes()
+    sig = private.sign(signature.signing_message(version, payload))
+    assert signature.verify_archive(version, payload, sig, signature.encode_public_key(private.public_key()))
+
+
+def test_an_archive_that_never_verified_is_not_unpacked(monkeypatch, archive, applications):
+    monkeypatch.setattr(install.signature, "was_verified", REAL_WAS_VERIFIED)
+
+    with pytest.raises(install.StagingError):
+        install.stage(archive, "9.9.9", applications=applications)
+    assert list(applications.iterdir()) == []
+
+
+def test_a_verified_archive_is_staged(monkeypatch, archive, applications):
+    monkeypatch.setattr(install.signature, "was_verified", REAL_WAS_VERIFIED)
+    _verify(archive)
+
+    staged = install.stage(archive, "9.9.9", applications=applications)
+    assert (staged.path / "Contents" / "MacOS" / "Flackey").is_file()
+
+
+def test_an_archive_changed_after_it_verified_is_refused(monkeypatch, tmp_path, archive, applications):
+    monkeypatch.setattr(install.signature, "was_verified", REAL_WAS_VERIFIED)
+    _verify(archive)
+    swapped = tmp_path / "other.zip"
+    other = tmp_path / "other" / "Flackey.app"
+    (other / "Contents").mkdir(parents=True)
+    subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(other), str(swapped)], check=True)
+    archive.write_bytes(swapped.read_bytes())
+
+    with pytest.raises(install.StagingError):
+        install.stage(archive, "9.9.9", applications=applications)
+    assert list(applications.iterdir()) == []
+
+
+def test_ditto_reads_a_private_copy_not_the_download(monkeypatch, archive, applications):
+    """The download's folder is not ours alone to trust; the copy ditto reads sits in a 0700 folder
+    `mkdtemp` made, and is gone once staging is done."""
+    seen: list[tuple[Path, int]] = []
+    real_run = install._run
+
+    def spy(argv, what, message):
+        if argv[0] == "/usr/bin/ditto":
+            source = Path(argv[3])
+            seen.append((source, source.parent.stat().st_mode & 0o777))
+            assert source.read_bytes() == archive.read_bytes()
+        real_run(argv, what, message)
+
+    monkeypatch.setattr(install, "_run", spy)
+    install.stage(archive, "9.9.9", applications=applications)
+
+    (source, mode), = seen
+    assert source != archive and mode == 0o700
+    assert not source.parent.exists()
+
+
+# ---- the staged bundle is checked again right before the helper runs -------------------------------
+
+@pytest.fixture
+def helper_spawns(tmp_path, monkeypatch) -> list:
+    source = tmp_path / "bin" / "flackey-update-helper"
+    source.parent.mkdir()
+    source.write_text("#!/bin/sh\nexit 0\n")
+    source.chmod(0o755)
+    monkeypatch.setattr(install, "helper_path", lambda: source)
+    spawned: list = []
+    real = subprocess.Popen
+
+    def popen(argv, **kw):
+        # Staging runs ditto through `subprocess.run`, which is Popen underneath: only the helper is faked.
+        if Path(argv[0]).name != install.HELPER_NAME:
+            return real(argv, **kw)
+        spawned.append(argv)
+
+    monkeypatch.setattr(install.subprocess, "Popen", popen)
+    return spawned
+
+
+def test_an_untouched_staged_bundle_is_handed_to_the_helper(archive, applications, helper_spawns):
+    staged = install.stage(archive, "9.9.9", applications=applications)
+    assert staged.manifest
+
+    install.launch_helper(staged)
+    assert len(helper_spawns) == 1
+
+
+@pytest.mark.parametrize("tamper", ["edit", "add", "chmod", "relink"])
+def test_a_staged_bundle_changed_after_staging_is_not_installed(archive, applications, helper_spawns, tamper):
+    staged = install.stage(archive, "9.9.9", applications=applications)
+    exe = staged.path / "Contents" / "MacOS" / "Flackey"
+    if tamper == "edit":
+        exe.write_text("#!/bin/sh\necho changed\n")
+    elif tamper == "add":
+        (staged.path / "Contents" / "MacOS" / "extra").write_text("x")
+    elif tamper == "chmod":
+        exe.chmod(0o777)
+    else:
+        link = staged.path / "Contents" / "Frameworks" / "Current"
+        link.unlink()
+        link.symlink_to("/tmp")
+
+    with pytest.raises(install.StagingError):
+        install.launch_helper(staged)
+    assert helper_spawns == []
+    assert not staged.path.exists()

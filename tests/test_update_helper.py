@@ -203,3 +203,24 @@ def test_bad_arguments_are_a_usage_error_and_touch_nothing(helper, tree):
     assert subprocess.run([str(helper)], capture_output=True, check=False).returncode == 2
     assert run(helper, tree, pid=0).returncode == 2
     assert marker_of(tree / TARGET) == "old"
+
+
+def test_the_log_is_never_written_through_a_symlink(helper, tree, tmp_path):
+    """The log path sits in a folder the app writes; a link planted there must not turn the helper into
+    a way to append to some other file. The update itself still goes ahead, logging to stderr."""
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    log = tmp_path / "helper.log"
+    log.symlink_to(victim)
+
+    result = run(helper, tree, log=log)
+
+    assert victim.read_text() == "untouched"
+    assert result.returncode == 0 and "swapped" in result.stderr
+    assert marker_of(tree / TARGET) == "new"
+
+
+def test_a_new_log_is_private_to_the_owner(helper, tree, tmp_path):
+    log = tmp_path / "helper.log"
+    run(helper, tree, log=log)
+    assert log.stat().st_mode & 0o777 == 0o600

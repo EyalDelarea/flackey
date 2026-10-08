@@ -1,4 +1,7 @@
-"""Ed25519 over `b"flackey-update-v1\n" + version + b"\n" + sha256(zip)`. Pure, nothing here raises.
+"""Ed25519 over `b"flackey-update-v1\n" + version + b"\n" + sha256(zip)`. Nothing here raises.
+
+The one piece of state is the set of payloads that verified (`was_verified`): staging asks it before
+unpacking, so what gets unpacked is what was checked, not whatever is at the download's path by then.
 
 The installer (`Flackey.pkg`) is signed the same way under its own domain, `flackey-installer-v1`, so a
 signature made for one of the two can never be passed off as the other's.
@@ -24,10 +27,22 @@ DOMAIN = b"flackey-update-v1"
 INSTALLER_DOMAIN = b"flackey-installer-v1"
 
 
+# (domain, version, sha256) of every payload `verify_archive` accepted in this process.
+_verified: set[tuple[bytes, str, bytes]] = set()
+
+
 def signing_message(version: str, archive: bytes, domain: bytes = DOMAIN) -> bytes:
     """What the release signs and the app checks: defined once so the two cannot drift apart."""
-    digest = hashlib.sha256(archive).digest()
+    return _message(version, hashlib.sha256(archive).digest(), domain)
+
+
+def _message(version: str, digest: bytes, domain: bytes) -> bytes:
     return domain + b"\n" + normalise_version(version).encode() + b"\n" + digest
+
+
+def was_verified(version: str, digest: bytes, domain: bytes = DOMAIN) -> bool:
+    """Whether a payload with this sha256 passed `verify_archive` for this version, in this process."""
+    return (domain, normalise_version(version), digest) in _verified
 
 
 def normalise_version(version: str) -> str:
@@ -74,8 +89,10 @@ def verify_archive(version: str, archive: bytes, sig: bytes,
     key = public_key if public_key is not None else baked_public_key()
     if key is None or len(key) != PUBLIC_KEY_BYTES or len(sig) != SIGNATURE_BYTES:
         return False
+    digest = hashlib.sha256(archive).digest()
     try:
-        Ed25519PublicKey.from_public_bytes(key).verify(sig, signing_message(version, archive, domain))
+        Ed25519PublicKey.from_public_bytes(key).verify(sig, _message(version, digest, domain))
     except (InvalidSignature, ValueError):
         return False
+    _verified.add((domain, normalise_version(version), digest))
     return True
