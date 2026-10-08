@@ -21,6 +21,10 @@ from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
+from flackey.worker import acoustic as acoustic_mod
+from flackey.worker import filing as filing_mod
+from flackey.worker import lossless_attempt as lossless_attempt_mod
+from flackey.worker import pipeline as pipeline_mod
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
@@ -134,14 +138,14 @@ def lenv(tmp_path: Path, monkeypatch):
         return replace(fake_check.result, reference=reference.label)
 
     fake_check.result = matched
-    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", fake_check)
 
     # These requests have no source_url, so the reference is the candidate's Deezer preview; `good_cand()`
     # carries a real Deezer id and nothing here may reach api.deezer.com.
     async def fake_deezer(deezer_id, http, tmp_dir):
         return AcousticReference("deezer", str(deezer_id), [[1, 2, 3]], [1, 2, 3], 0.0, 30.0)
 
-    monkeypatch.setattr(worker_mod, "deezer_reference", fake_deezer)
+    monkeypatch.setattr(acoustic_mod, "deezer_reference", fake_deezer)
 
     # Since issue #68 a request with a video picks its record by audio, which fetches Deezer previews --
     # the same "nothing here may reach api.deezer.com" rule applies. These requests have no source_url, so
@@ -156,8 +160,8 @@ def lenv(tmp_path: Path, monkeypatch):
         return Identification(top, 0.98, [(top.deezer_id, 0.98)],
                               f"deezer:{top.deezer_id} preview matches the video, score 0.98")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     return settings, store, MemoryNotifier(), provider, fake_check, Clock()
 
 
@@ -349,7 +353,7 @@ async def test_fingerprint_failure_falls_back_and_keeps_the_fingerprints(lenv, m
     settings, store, _, _, fake_check, _ = lenv
     # The peer's FLAC is a different recording; Deezer's copy of the chosen record is not. Both are
     # checked since issue #68, so the fake has to tell them apart.
-    monkeypatch.setattr(worker_mod, "fingerprint_check", _per_file(
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", _per_file(
         fake_check,
         flac=FingerprintResult("failed", 0.61, 40.0, "best score 0.61 below 0.79", [9], [8]),
         mp3=FingerprintResult("matched", 0.98, 12.3, "preview found at 12.3 s, score 0.98", [1], [2])))
@@ -439,7 +443,7 @@ async def test_convert_failure_falls_back(lenv, monkeypatch):
     def boom(src, fmt, bit_depth):
         raise ConvertError("ffmpeg exploded")
 
-    monkeypatch.setattr(worker_mod, "to_format", boom)
+    monkeypatch.setattr(lossless_attempt_mod, "to_format", boom)
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -878,7 +882,7 @@ async def test_upgrade_keeps_the_lossy_file_when_filing_the_new_one_fails(lenv, 
     def boom(src, dest):
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(worker_mod, "file_track", boom)
+    monkeypatch.setattr(filing_mod, "file_track", boom)
     with pytest.raises(OSError, match="no space left"):
         await w.upgrade(before.id)
 
@@ -947,7 +951,7 @@ def _capture_reference(fake_check):
 async def test_source_switched_off_searches_the_providers_on_the_beatport_match_alone(lenv, monkeypatch):
     settings, store, _, _, fake_check, _ = lenv
     seen, check = _capture_reference(fake_check)
-    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     source = FakeSource([good_cand()])
     w = make(lenv, source=source, settings=settings.model_copy(update={"source_enabled": False}))
 
@@ -969,14 +973,14 @@ async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, 
     has the track: its preview is the reference, and the file is checked and filed as with the bot on."""
     settings, store, _, provider, fake_check, _ = lenv
     seen, check = _capture_reference(fake_check)
-    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     looked_up = []
 
     async def lookup(cand, http):
         looked_up.append((cand.source, cand.isrc))
         return 1754956977, "deezer:1754956977 by search"
 
-    monkeypatch.setattr(worker_mod, "find_deezer_record", lookup)
+    monkeypatch.setattr(acoustic_mod, "find_deezer_record", lookup)
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
 
     rid = store.add_request(TEXT, RequestKind.TEXT)
@@ -991,7 +995,7 @@ async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, 
 async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeypatch):
     settings, store, _, _, fake_check, _ = lenv
     _, check = _capture_reference(fake_check)
-    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
 
     rid = store.add_request(TEXT, RequestKind.TEXT)
@@ -1008,7 +1012,7 @@ async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeyp
 async def test_a_silent_source_still_tries_the_providers_before_giving_up(lenv, monkeypatch):
     _, store, notifier, provider, fake_check, _ = lenv
     _, check = _capture_reference(fake_check)
-    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     # Exactly the live failure: `conv.get_response()` times out, so the bot offers no candidate at all.
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
     w = make(lenv, source=source)
@@ -1078,7 +1082,7 @@ async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_o
 async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(lenv, monkeypatch):
     _, store, _, _, fake_check, _ = lenv
     _, check = _capture_reference(fake_check)
-    monkeypatch.setattr(worker_mod, "fingerprint_check", check)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
     empty = FakeProvider(lenv[0].slskd_downloads, [])
     w = make(lenv, provider=empty, source=source)
@@ -1263,7 +1267,7 @@ async def test_the_video_is_the_reference_and_is_kept_beside_the_request(lenv, m
         calls.append(url)
         return AcousticReference("youtube", "abc", [[9, 9, 9]], [9, 9, 9, 9], 10.0, 30.0)
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -1283,7 +1287,7 @@ async def test_a_reference_that_cannot_be_fetched_skips_the_check_instead_of_cra
     async def boom(deezer_id, http, tmp_dir):
         raise ValueError("fpcalc printed nonsense")
 
-    monkeypatch.setattr(worker_mod, "deezer_reference", boom)
+    monkeypatch.setattr(acoustic_mod, "deezer_reference", boom)
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -1312,7 +1316,7 @@ async def test_no_record_anywhere_still_searches_soulseek_on_the_request(lenv, m
     # The request's own audio is the whole safety argument on this path: without a record there is no
     # Deezer preview to fall back on, so a request whose video cannot be fetched has nothing to check the
     # download against and ends `fingerprint_unavailable` (the test below its sibling covers that).
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
     w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc",
@@ -1361,8 +1365,8 @@ async def test_no_matching_preview_sends_the_request_words_to_soulseek(lenv, mon
         return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
                               "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make(lenv, catalog=FakeCatalog([]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
@@ -1384,8 +1388,8 @@ async def test_a_beatport_match_still_tags_and_searches_from_the_record(lenv, mo
         return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
                               "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make(lenv)                                   # FakeCatalog([CT3]): Beatport knows this one
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
@@ -1407,8 +1411,8 @@ async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, m
     async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
         return Identification(None, None, [], "none of 1 Deezer previews is the video's recording")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
-    monkeypatch.setattr(worker_mod, "identify_record", fake_identify)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     w = make(lenv, provider=FakeProvider(lenv[0].slskd_downloads, []), catalog=FakeCatalog([]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
@@ -1437,7 +1441,7 @@ async def test_a_wrong_catalogue_record_is_overruled_by_the_second_search(lenv, 
     async def fake_check_seq(path, reference, *, minimum, missing=""):
         return next(results)
 
-    monkeypatch.setattr(worker_mod, "fingerprint_check", fake_check_seq)
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", fake_check_seq)
     ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
     w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
     rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
@@ -1494,7 +1498,7 @@ async def test_two_spellings_ending_in_a_wrong_recording_wait_instead_of_parking
     async def fake_youtube(url, tmp_dir, *, duration_s=None):
         return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
     ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
     w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
     rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
@@ -1560,7 +1564,7 @@ async def test_a_wrong_recording_everywhere_skips_the_quick_ladder(lenv, monkeyp
     async def fake_youtube(url, tmp_dir, *, duration_s=None):
         return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", fake_youtube)   # else there is nothing to check
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)   # else there is nothing to check
     w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
     rid = store.add_request("A - B", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="A", title="B", duration_s=3))
@@ -1595,7 +1599,7 @@ async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(le
         calls.append(url)
         raise YouTubeError("HTTP Error 429: Too Many Requests")
 
-    monkeypatch.setattr(worker_mod, "youtube_reference", flaky_youtube)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", flaky_youtube)
     w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc",

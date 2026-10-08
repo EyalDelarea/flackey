@@ -8,13 +8,13 @@ import Segmented from './Segmented'
 export type Layout = 'artist' | 'month' | 'day' | 'flat'
 
 /** The folder name a date layout would give a track filed today, in the server's ISO form. */
-export function dateFolder(layout: 'month' | 'day', today = new Date()): string {
+function dateFolder(layout: 'month' | 'day', today = new Date()): string {
   const y = today.getFullYear(), m = String(today.getMonth() + 1).padStart(2, '0'), d = String(today.getDate()).padStart(2, '0')
   return layout === 'month' ? `${y}-${m}` : `${y}-${m}-${d}`
 }
 
 /** Where a track lands under `layout`, as the owner would see it in Finder. */
-export function examplePath(layout: string, today?: Date): string {
+function examplePath(layout: string, today?: Date): string {
   if (layout === 'month' || layout === 'day') return `${dateFolder(layout, today)}/Bicep - Glue.aiff`
   if (layout === 'flat') return 'Bicep - Glue.aiff'
   return 'Bicep/Bicep - Glue.aiff'

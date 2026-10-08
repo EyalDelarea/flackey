@@ -95,7 +95,7 @@ export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)}
 const STEP_OF: Partial<Record<RequestState, number>> = { queued: 0, identifying: 0, awaiting_review: 1, fetching: 2, verifying: 3, filing: 3, done: 4, duplicate: 4 }
 const COMPLETE: RequestState[] = ['done', 'duplicate']
 const SOURCE_LABEL: Record<string, string> = { soulseek: 'Soulseek', deezer: 'Deezer', deezer_bot: 'Deezer' }
-export const sourceLabel = (s: string | null | undefined) => s ? SOURCE_LABEL[s] ?? s : null
+const sourceLabel = (s: string | null | undefined) => s ? SOURCE_LABEL[s] ?? s : null
 export const stepIndex = (state: RequestState): number | null => STEP_OF[state] ?? null
 const BUCKET_OF: Record<RequestState, Bucket> = {
   queued: 'progress', identifying: 'progress', fetching: 'progress', verifying: 'progress', filing: 'progress',

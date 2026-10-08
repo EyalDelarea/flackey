@@ -8,7 +8,13 @@ import pytest
 import respx
 
 from flackey.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
-from flackey.source.slskd import SlskdClient, SoulseekProvider, local_path_for, parse_response
+from flackey.source.slskd import (
+    SlskdClient,
+    SoulseekProvider,
+    TransferBudget,
+    local_path_for,
+    parse_response,
+)
 
 BASE = "http://slskd.test/api/v0"
 
@@ -532,3 +538,55 @@ async def test_a_peer_that_stops_sending_midway_is_cut_at_the_stall_bound(provid
         await p.download(flac_file(), first_byte_s=60, total_s=6000, poll_s=2, stall_s=30)
     assert e.value.outcome == "transfer_timeout" and "stopped" in str(e.value) and cancel.called
     assert 32 <= clock.t <= 38     # 30 s after the last new byte at t=4, not 6000 s after the enqueue
+
+
+# ---- TransferBudget: the four timeouts on their own, against explicit clock readings ----
+
+def budget(**kw) -> TransferBudget:
+    return TransferBudget(t0=100.0, **{"first_byte_s": 60, "total_s": 600, "queue_wait_s": 300, "stall_s": 30, **kw})
+
+
+def test_budget_a_transfer_slskd_never_lists_times_out_at_the_first_byte_bound():
+    b = budget()
+    assert b.never_appeared(160.0) is None
+    err = b.never_appeared(160.5)
+    assert err.outcome == "first_byte_timeout" and "never appeared" in str(err)
+
+
+def test_budget_queue_time_is_its_own_bound_and_says_queued():
+    b = budget()
+    b.observe(110.0, 0, "Queued, Remotely")
+    assert b.active_at is None
+    assert b.expired(399.0, "Queued, Remotely", 0, 1000) is None      # past first_byte_s, still only queued
+    err = b.expired(400.5, "Queued, Remotely", 0, 1000)
+    assert err.outcome == "queued" and str(err) == "still queued, remotely after 300 s"
+
+
+def test_budget_first_byte_counts_from_leaving_the_queue():
+    b = budget()
+    b.observe(350.0, 0, "InProgress")
+    assert b.active_at == 350.0
+    assert b.expired(410.0, "InProgress", 0, 1000) is None
+    err = b.expired(410.5, "InProgress", 0, 1000)
+    assert err.outcome == "first_byte_timeout" and str(err) == "no bytes within 60 s"
+
+
+def test_budget_a_moving_transfer_is_cut_only_when_the_bytes_stop():
+    b = budget()
+    b.observe(110.0, 10, "InProgress")
+    assert b.first_byte_ms == 10_000
+    b.observe(130.0, 20, "InProgress")
+    b.observe(150.0, 20, "InProgress")                                  # no new byte: moved_at stays 130
+    assert b.moved_at == 130.0 and b.expired(160.0, "InProgress", 20, 1000) is None
+    err = b.expired(160.5, "InProgress", 20, 1000)
+    assert err.outcome == "transfer_timeout" and str(err) == "stopped sending after 20 of 1000 bytes"
+
+
+def test_budget_the_total_ceiling_catches_a_peer_that_trickles_forever():
+    b = budget(total_s=100)
+    for t in range(110, 211, 10):
+        b.observe(float(t), t, "InProgress")                           # a new byte every poll: never stalls
+    assert b.expired(210.0, "InProgress", 210, 1000) is None
+    b.observe(210.5, 211, "InProgress")
+    err = b.expired(210.5, "InProgress", 211, 1000)
+    assert err.outcome == "transfer_timeout" and str(err) == "not finished within 100 s"

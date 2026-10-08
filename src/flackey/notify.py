@@ -15,11 +15,6 @@ class Notifier(Protocol):
     async def send(self, text: str, buttons: list[Button] | None = None) -> None: ...
 
 
-class NullNotifier:
-    async def send(self, text: str, buttons: list[Button] | None = None) -> None:
-        return None
-
-
 class MemoryNotifier:
     def __init__(self) -> None:
         self.sent: list[tuple[str, list[Button] | None]] = []
