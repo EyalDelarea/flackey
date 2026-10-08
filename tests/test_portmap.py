@@ -1,6 +1,7 @@
 import struct
 
 import httpx
+import pytest
 import respx
 
 from flackey import portmap
@@ -138,7 +139,7 @@ async def test_upnp_map_finds_the_wan_service_and_posts_add_port_mapping():
     soap = respx.post("http://10.0.0.1:1900/ctl/IPConn").mock(return_value=httpx.Response(200, text="<ok/>"))
 
     async def discover(timeout):
-        return ["http://10.0.0.1:1900/desc.xml"]
+        return [("http://10.0.0.1:1900/desc.xml", "10.0.0.1")]
 
     async with httpx.AsyncClient() as http:
         m = await upnp_map(50300, 3600, http, discover=discover, internal_ip="10.0.0.5")
@@ -157,7 +158,7 @@ async def test_upnp_map_returns_none_when_the_router_refuses():
     respx.post("http://10.0.0.1:1900/ctl/IPConn").mock(return_value=httpx.Response(500, text="<fault/>"))
 
     async def discover(timeout):
-        return ["http://10.0.0.1:1900/desc.xml"]
+        return [("http://10.0.0.1:1900/desc.xml", "10.0.0.1")]
 
     async with httpx.AsyncClient() as http:
         assert await upnp_map(50300, 3600, http, discover=discover, internal_ip="10.0.0.5") is None
@@ -183,12 +184,88 @@ async def test_upnp_map_tries_the_next_gateway_when_lan_ip_fails_for_the_first(m
     monkeypatch.setattr(portmap, "lan_ip", fake_lan_ip)
 
     async def discover(timeout):
-        return ["http://10.0.0.1:1900/desc.xml", "http://10.0.0.2:1900/desc.xml"]
+        return [("http://10.0.0.1:1900/desc.xml", "10.0.0.1"), ("http://10.0.0.2:1900/desc.xml", "10.0.0.2")]
 
     async with httpx.AsyncClient() as http:
         m = await upnp_map(50300, 3600, http, discover=discover, internal_ip=None)
     assert m is not None and m.gateway == "10.0.0.2"
     assert soap.calls[0].request.content.decode().count("<NewInternalClient>10.0.0.5</NewInternalClient>") == 1
+
+
+def _discover(*pairs):
+    async def discover(timeout):
+        return list(pairs)
+    return discover
+
+
+@respx.mock
+async def test_upnp_map_only_talks_to_the_default_gateway_when_it_is_known():
+    """Any machine on the network can answer an SSDP search. With the gateway known, only an answer
+    describing the gateway itself is used -- a second responder is never contacted."""
+    respx.get("http://10.0.0.1:1900/desc.xml").mock(return_value=httpx.Response(200, text=DESC))
+    soap = respx.post("http://10.0.0.1:1900/ctl/IPConn").mock(return_value=httpx.Response(200, text="<ok/>"))
+    other = respx.get("http://10.0.0.77:1900/desc.xml").mock(return_value=httpx.Response(200, text=DESC))
+    discover = _discover(("http://10.0.0.77:1900/desc.xml", "10.0.0.77"),
+                         ("http://10.0.0.1:1900/desc.xml", "10.0.0.1"))
+
+    async with httpx.AsyncClient() as http:
+        m = await upnp_map(50300, 3600, http, discover=discover, internal_ip="10.0.0.5", gateway="10.0.0.1")
+    assert m is not None and m.gateway == "10.0.0.1" and soap.call_count == 1
+    assert other.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("location, source", [
+    ("http://10.0.0.9:1900/desc.xml", "10.0.0.1"),         # points somewhere other than who answered
+    ("http://93.184.216.34:1900/desc.xml", "93.184.216.34"),   # a public address
+    ("https://10.0.0.1:1900/desc.xml", "10.0.0.1"),        # not plain http
+    ("http://router.local:1900/desc.xml", "10.0.0.1"),     # a name, not an address
+    ("http://127.0.0.1:1900/desc.xml", "127.0.0.1"),       # this machine, not a router
+])
+async def test_upnp_map_ignores_a_location_that_is_not_the_responding_router(location, source):
+    route = respx.get(location).mock(return_value=httpx.Response(200, text=DESC))
+    async with httpx.AsyncClient() as http:
+        assert await upnp_map(50300, 3600, http, discover=_discover((location, source)),
+                              internal_ip="10.0.0.5") is None
+    assert route.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("control", ["http://10.0.0.9:1900/ctl/IPConn", "https://10.0.0.1/ctl/IPConn",
+                                     "//evil.example/ctl"])
+async def test_upnp_map_refuses_a_control_url_on_another_host(control):
+    desc = DESC.replace("<controlURL>/ctl/IPConn</controlURL>", f"<controlURL>{control}</controlURL>")
+    respx.get("http://10.0.0.1:1900/desc.xml").mock(return_value=httpx.Response(200, text=desc))
+    posts = respx.post(url__regex=r".*").mock(return_value=httpx.Response(200, text="<ok/>"))
+    async with httpx.AsyncClient() as http:
+        assert await upnp_map(50300, 3600, http, discover=_discover(("http://10.0.0.1:1900/desc.xml", "10.0.0.1")),
+                              internal_ip="10.0.0.5") is None
+    assert posts.call_count == 0
+
+
+@respx.mock
+async def test_upnp_map_does_not_follow_a_redirect(monkeypatch):
+    respx.get("http://10.0.0.1:1900/desc.xml").mock(
+        return_value=httpx.Response(302, headers={"Location": "http://10.0.0.9/desc.xml"}))
+    elsewhere = respx.get("http://10.0.0.9/desc.xml").mock(return_value=httpx.Response(200, text=DESC))
+    async with httpx.AsyncClient(follow_redirects=True) as http:
+        assert await upnp_map(50300, 3600, http, discover=_discover(("http://10.0.0.1:1900/desc.xml", "10.0.0.1")),
+                              internal_ip="10.0.0.5") is None
+    assert elsewhere.call_count == 0
+
+
+async def test_map_port_hands_the_gateway_to_upnp():
+    seen = {}
+
+    async def natpmp(gateway, port, lease_s, **kw):
+        return None
+
+    async def upnp(port, lease_s, http, **kw):
+        seen.update(kw)
+        return None
+
+    await map_port(50300, 3600, gateway="10.0.0.1", natpmp=natpmp, upnp=upnp)
+    assert seen.get("gateway") == "10.0.0.1"
 
 
 async def test_map_port_tries_natpmp_first_then_upnp():

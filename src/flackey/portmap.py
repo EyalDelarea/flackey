@@ -13,6 +13,7 @@ to do by hand. No new dependencies: the two protocols are a few dozen bytes each
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 import socket
@@ -160,10 +161,11 @@ async def natpmp_map(
 
 # ---- UPnP ----------------------------------------------------------------------------------------
 
-async def _ssdp_discover(timeout: float) -> list[str]:
-    """LOCATION URLs of every Internet Gateway Device that answers an M-SEARCH, deduplicated."""
-    def go() -> list[str]:
-        found: list[str] = []
+async def _ssdp_discover(timeout: float) -> list[tuple[str, str]]:
+    """(LOCATION URL, address the answer came from) for every Internet Gateway Device that answers an
+    M-SEARCH, deduplicated."""
+    def go() -> list[tuple[str, str]]:
+        found: list[tuple[str, str]] = []
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as s:
             s.settimeout(timeout)
             for st in IGD_TYPES:
@@ -172,12 +174,12 @@ async def _ssdp_discover(timeout: float) -> list[str]:
                 s.sendto(msg, SSDP_ADDR)
             try:
                 while True:
-                    data, _ = s.recvfrom(2048)
+                    data, (source, *_) = s.recvfrom(2048)
                     m = re.search(rb"(?im)^LOCATION:\s*(\S+)", data)
                     if m:
-                        loc = m.group(1).decode(errors="replace")
-                        if loc not in found:
-                            found.append(loc)
+                        answer = (m.group(1).decode(errors="replace"), source)
+                        if answer not in found:
+                            found.append(answer)
             except (TimeoutError, OSError):
                 pass
         return found
@@ -215,47 +217,81 @@ def _soap(action: str, service_type: str, args: dict[str, str]) -> tuple[dict, s
     return headers, envelope
 
 
-async def upnp_map(port: int, lease_s: int, http: httpx.AsyncClient, *, discover=_ssdp_discover,
-                    internal_ip: str | None = None) -> Mapping | None:
+def _router_host(url: str) -> str | None:
+    """The host of a plain-http URL when it is a private IPv4 literal -- the only kind of address a home
+    router's UPnP service has -- else None."""
     try:
-        locations = await discover(3.0)
+        parts = urlsplit(url)
+        address = ipaddress.ip_address(parts.hostname or "")
+    except ValueError:
+        return None
+    if parts.scheme != "http" or address.version != 4 or not address.is_private or address.is_loopback:
+        return None
+    return str(address)
+
+
+def _trusted_location(location: str, source: str, gateway: str | None) -> str | None:
+    """The router's address when this SSDP answer describes the router, else None. Any machine on the
+    network can answer a multicast search, so the description must live on the address the answer came
+    from -- and on the default gateway, when that is known."""
+    host = _router_host(location)
+    if host is None or host != source or (gateway is not None and host != gateway):
+        return None
+    return host
+
+
+async def upnp_map(port: int, lease_s: int, http: httpx.AsyncClient, *, discover=_ssdp_discover,
+                    internal_ip: str | None = None, gateway: str | None = None) -> Mapping | None:
+    """`gateway` is the default route's next hop when known; only that router is then asked. Redirects
+    are never followed (the client may be the caller's), so every request stays on the router."""
+    try:
+        answers = await discover(3.0)
     except OSError as e:
         log.info("UPnP: discovery failed (%s)", e)
         return None
-    if not locations:
+    if not answers:
         log.info("UPnP: no gateway answered")
         return None
-    for loc in locations:
-        gateway = urlsplit(loc).hostname or ""
+    for loc, source in answers:
+        router = _trusted_location(loc, source, gateway)
+        if router is None:
+            log.info("UPnP: ignoring an answer from %s that is not the router", source)
+            continue
         try:
-            desc = await http.get(loc, timeout=5)
+            desc = await http.get(loc, timeout=5, follow_redirects=False)
             desc.raise_for_status()
         except httpx.HTTPError as e:
             log.info("UPnP: could not read %s (%s)", loc, e.__class__.__name__)
             continue
+        if desc.status_code != 200:
+            log.info("UPnP: %s answered %d for its description", router, desc.status_code)
+            continue
         found = _find_wan_service(desc.text, loc)
         if found is None:
-            log.info("UPnP: %s has no WAN*Connection service", gateway)
+            log.info("UPnP: %s has no WAN*Connection service", router)
             continue
         service_type, control = found
-        client_ip = internal_ip or lan_ip(gateway)
+        if _router_host(control) != router:
+            log.info("UPnP: %s named a control address that is not itself; ignoring it", router)
+            continue
+        client_ip = internal_ip or lan_ip(router)
         if client_ip is None:
-            log.info("UPnP: could not determine this machine's address on %s", gateway)
+            log.info("UPnP: could not determine this machine's address on %s", router)
             continue
         headers, body = _soap("AddPortMapping", service_type, {
             "NewRemoteHost": "", "NewExternalPort": str(port), "NewProtocol": "TCP",
             "NewInternalPort": str(port), "NewInternalClient": client_ip, "NewEnabled": "1",
             "NewPortMappingDescription": DESCRIPTION, "NewLeaseDuration": str(lease_s)})
         try:
-            r = await http.post(control, content=body, headers=headers, timeout=5)
+            r = await http.post(control, content=body, headers=headers, timeout=5, follow_redirects=False)
         except httpx.HTTPError as e:
-            log.info("UPnP: %s did not answer AddPortMapping (%s)", gateway, e.__class__.__name__)
+            log.info("UPnP: %s did not answer AddPortMapping (%s)", router, e.__class__.__name__)
             continue
         if r.status_code != 200:
-            log.info("UPnP: %s refused AddPortMapping (%d)", gateway, r.status_code)
+            log.info("UPnP: %s refused AddPortMapping (%d)", router, r.status_code)
             continue
         return Mapping(
-            "upnp", gateway, port, port, lease_s, control_url=control, service_type=service_type
+            "upnp", router, port, port, lease_s, control_url=control, service_type=service_type
         )
     return None
 
@@ -277,7 +313,7 @@ async def map_port(port: int, lease_s: int = 3600, http: httpx.AsyncClient | Non
     own = http is None
     http = http or httpx.AsyncClient()
     try:
-        m = await upnp(port, lease_s, http)
+        m = await upnp(port, lease_s, http, gateway=gateway)
     finally:
         if own:
             await http.aclose()
@@ -303,7 +339,8 @@ async def unmap_port(
             own = http is None
             http = http or httpx.AsyncClient()
             try:
-                await http.post(mapping.control_url, content=body, headers=headers, timeout=5)
+                await http.post(mapping.control_url, content=body, headers=headers, timeout=5,
+                                follow_redirects=False)
             finally:
                 if own:
                     await http.aclose()
