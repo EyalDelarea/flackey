@@ -30,7 +30,9 @@ PowerShell). CI runs `pytest` on Windows as well as Linux, and builds and
 smoke-tests the Windows installer, so keep paths and subprocess calls
 platform-neutral. Platform branches live behind `sys.platform` checks (see
 `src/flackey/config.py` and `src/flackey/tools.py`). Building the installer
-yourself is `packaging/build_windows.ps1`.
+yourself is `packaging/build_windows.ps1`; it compiles a slim ffmpeg
+(`packaging/build_ffmpeg.sh`) and needs [MSYS2](https://www.msys2.org) for that,
+with the packages listed at the top of `packaging/fetch_helpers_windows.ps1`.
 
 ## Checks
 
