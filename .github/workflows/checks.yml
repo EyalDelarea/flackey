@@ -100,6 +100,22 @@ jobs:
           chmod +x ffmpeg ffprobe fpcalc
           ./ffmpeg -hide_banner -version | head -1 && ./fpcalc -version
           echo "$bin" >> "$GITHUB_PATH"
+      - name: Cache the slim ffmpeg build
+        id: slim-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: packaging/build/helpers
+          key: slim-ffmpeg-linux-${{ hashFiles('packaging/build_ffmpeg.sh') }}
+      - name: Slim ffmpeg, ffprobe
+        # The ones the installers ship (packaging/build_ffmpeg.sh), built for Linux so
+        # tests/test_slim_ffmpeg.py can hold them to the full build above. Two minutes, then cached.
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.slim-cache.outputs.cache-hit }}" != true ]]; then
+            sudo apt-get install -y -qq nasm zlib1g-dev
+          fi
+          packaging/build_ffmpeg.sh "$RUNNER_TEMP/slim-ffmpeg"
+          echo "FLACKEY_SLIM_FFMPEG=$RUNNER_TEMP/slim-ffmpeg" >> "$GITHUB_ENV"
       - name: Install
         run: uv sync --frozen
       - name: pytest (files that use the audio tools)
@@ -197,7 +213,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packaging/build/helpers
-          key: helpers-${{ hashFiles('packaging/fetch_helpers.sh') }}
+          key: helpers-${{ hashFiles('packaging/fetch_helpers.sh', 'packaging/build_ffmpeg.sh') }}
       - name: Build
         # Only baked into the build (by packaging/build_app.sh) on a tagged release; a plain push to
         # main builds a keyless copy whose setup screen asks for keys instead. Never printed.
@@ -271,10 +287,18 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Cache helper downloads
+        id: helpers-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packaging/build/helpers
-          key: helpers-windows-${{ hashFiles('packaging/fetch_helpers_windows.ps1') }}
+          key: helpers-windows-${{ hashFiles('packaging/fetch_helpers_windows.ps1', 'packaging/build_ffmpeg.sh') }}
+      - name: MSYS2 toolchain for the ffmpeg build
+        # MSYS2 is preinstalled at C:\msys64 on windows-latest, without a compiler. Only needed when the
+        # cache above missed: a hit already holds the built ffmpeg.exe and build_ffmpeg.sh reuses it.
+        if: steps.helpers-cache.outputs.cache-hit != 'true'
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build
         # Same gating as the mac job, and on this step only so npm, uv and choco never see them: keys
         # only on a tagged release, never on a push or PR artifact. Never printed.
@@ -287,6 +311,31 @@ jobs:
         env:
           SMOKE_EXPECT_KEYS: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: ./packaging/smoke_windows.ps1 packaging/build/dist/Flackey/Flackey.exe
+      - name: Slim ffmpeg gives the full build's answers
+        # tests/test_slim_ffmpeg.py on the Windows ffmpeg.exe and ffprobe.exe this installer ships,
+        # against gyan.dev's full build (pinned) for the fixtures and the reference answers.
+        run: |
+          $full = Join-Path $env:RUNNER_TEMP 'full-ffmpeg'
+          New-Item -ItemType Directory -Force -Path $full | Out-Null
+          $ff = 'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1'
+          $pins = @{ 'ffmpeg' = '8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77'
+                     'ffprobe' = 'f309e6223ad89d2fe54bccd420a7709b66fd27540674e92309578ed491a43c8d' }
+          foreach ($tool in $pins.Keys) {
+            $gz = Join-Path $full "$tool.gz"
+            curl.exe -fsSL --retry 3 -o $gz "$ff/$tool-win32-x64.gz"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ((Get-FileHash -Algorithm SHA256 $gz).Hash.ToLowerInvariant() -ne $pins[$tool]) { throw "checksum mismatch for $tool" }
+            $in = [IO.File]::OpenRead($gz)
+            $gzs = New-Object IO.Compression.GZipStream($in, [IO.Compression.CompressionMode]::Decompress)
+            $out = [IO.File]::Create((Join-Path $full "$tool.exe"))
+            $gzs.CopyTo($out); $out.Dispose(); $gzs.Dispose(); $in.Dispose()
+          }
+          $slim = (Resolve-Path packaging/build/bin).Path
+          # The full build first, so fixtures are made with it; fpcalc from the slim folder.
+          $env:PATH = "$full;$slim;$env:PATH"
+          $env:FLACKEY_SLIM_FFMPEG = $slim
+          uv run pytest -q -rs tests/test_slim_ffmpeg.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Flackey.windows
