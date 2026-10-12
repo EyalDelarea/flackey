@@ -214,8 +214,7 @@ are for running your own slskd from a checkout.
    what makes peers serve you.
 3. Put the same key in `.env` as `SLSKD_API_KEY=` (or in `settings.json` as `slskd_api_key`). Restart.
 
-   The setup screen writes all of this for you, including `shares.directories`, which is the DJ Library:
-   sharing is what keeps a Soulseek account in good standing. Flackey also asks your router to open TCP
+   Sharing the DJ Library (`shares.directories`) is what keeps a Soulseek account in good standing. Flackey also asks your router to open TCP
    50300 (NAT-PMP, then UPnP) every time it starts, and checks from outside whether the port answers;
    Settings › Advanced › Sharing shows the result and, when the port is closed, what to forward by hand. Behind a
    VPN the forward has to be made on the VPN's side.
@@ -295,7 +294,8 @@ uv run lint-imports   # module layering; see [tool.importlinter] in pyproject.to
 ## 🤝 Contributing
 
 Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for
-setup, checks, and how PRs get labeled and titled for the changelog. Found a
+setup, checks, and how PRs get labeled and titled for the changelog, and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for how we treat each other. Found a
 security issue? See [`SECURITY.md`](SECURITY.md) instead of opening a public
 issue.
 

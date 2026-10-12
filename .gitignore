@@ -38,3 +38,7 @@ docs/reviews/
 
 # Telegram keys baked into a packaged build; written by CI or build_app.sh, never committed
 src/flackey/assets/build.json
+
+# Local Claude Code tooling
+.claude/
+skills-lock.json
