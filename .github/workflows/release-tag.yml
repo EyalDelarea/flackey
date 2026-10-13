@@ -70,6 +70,9 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           sed -i -E "s/^version = \"[^\"]*\"/version = \"$version\"/" pyproject.toml
           sed -i -E "s/^__version__ = \"[^\"]*\"/__version__ = \"$version\"/" src/flackey/__init__.py
+          # uv.lock records the project's own version too; edit just that line so a release
+          # never re-resolves dependencies.
+          sed -i -E "/^name = \"flackey\"$/{n;s/^version = \"[^\"]*\"/version = \"$version\"/}" uv.lock
           packaging/check_version.sh "${{ steps.version.outputs.tag }}"
 
           if git diff --quiet; then
