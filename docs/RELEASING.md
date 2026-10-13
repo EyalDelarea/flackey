@@ -23,8 +23,9 @@ as what changed for them ("Added X for Y"), not the mechanism.
 2. The workflow, authenticated entirely with the **`RELEASE_PAT`** secret
    (a `GITHUB_TOKEN` push would not trigger the checks the release needs):
    - refuses an invalid version or one whose tag already exists;
-   - sets the version in `pyproject.toml` and `src/flackey/__init__.py`
-     (`packaging/check_version.sh` confirms both match);
+   - sets the version in `pyproject.toml`, `src/flackey/__init__.py` and
+     the project's entry in `uv.lock` (`packaging/check_version.sh` confirms
+     all three match);
    - opens `release/vX.Y.Z` as a PR labeled `ignore-for-release` and turns
      on auto-merge (squash), then waits up to 20 minutes for it to merge
      once its checks pass;
