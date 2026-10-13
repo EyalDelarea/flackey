@@ -44,7 +44,7 @@ echo "==> helpers"
 packaging/fetch_helpers.sh
 
 echo "==> bundle"
-uv run --frozen --with pyinstaller==6.22.3 pyinstaller --noconfirm --clean \
+uv run --frozen --group bundle pyinstaller --noconfirm --clean \
   --distpath "$BUILD/dist" --workpath "$BUILD/work" \
   packaging/Flackey.spec
 
