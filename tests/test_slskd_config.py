@@ -291,6 +291,14 @@ def test_hidden_and_app_support_folders_are_never_shared(tmp_path: Path, fake_ho
     assert unsafe_share_reason(fake_home / inside, tmp_path / "data")
 
 
+@pytest.mark.parametrize("inside", ["Desktop", "Documents", "Downloads", "downloads"])
+def test_the_desktop_documents_and_downloads_folders_themselves_are_never_shared(tmp_path: Path,
+                                                                                fake_home: Path, inside):
+    """They hold everything else the owner keeps. A music folder made inside one is fine."""
+    assert unsafe_share_reason(fake_home / inside, tmp_path / "data")
+    assert unsafe_share_reason(fake_home / inside / "DJ Library", tmp_path / "data") is None
+
+
 @pytest.mark.parametrize("inside", ["Music/DJ Library", "Library/CloudStorage/Dropbox/DJ",
                                     "Library/Mobile Documents/com~apple~CloudDocs/DJ", "Music.Library",
                                     "Libraryish/Music"])
@@ -394,6 +402,21 @@ def test_playlist_exports_are_never_shared(tmp_path: Path):
     assert not _hidden(filters, lib)
 
 
+def test_os_and_app_clutter_is_never_shared(tmp_path: Path):
+    """Dot-files carry metadata, not music: an AppleDouble `._x.flac` holds the URL the file came from.
+    Matched on the last part only, so a library under some dot-folder on a drive is still shared."""
+    lib = tmp_path / ".drive" / "DJ Library"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=lib)
+    filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
+    for junk in [".DS_Store", "Artist/._Artist - Track.flac", ".git", ".git/config", "Artist/Thumbs.db",
+                 "Artist/desktop.ini", "Artist/.syncthing.Track.flac.tmp"]:
+        assert _hidden(filters, lib / junk) or _hidden(filters, (lib / junk).parent), junk
+    assert not _hidden(filters, lib)
+    assert not _hidden(filters, lib / "Artist")
+    assert not _hidden(filters, lib / "Artist" / "Artist - Track.flac")
+    assert not _hidden(filters, lib / "Artist" / "Mr. Thumbs.db.flac")
+
+
 def test_the_playlist_folder_filter_is_anchored_to_the_library(tmp_path: Path):
     """A library that itself sits under some other folder named Playlists is still shared."""
     lib = tmp_path / "Playlists" / "DJ Library"
@@ -428,5 +451,5 @@ def test_the_filters_are_forced_on_every_write_and_follow_the_library(tmp_path: 
     assert write_share(tmp_path, new, previous=old) is True
     assert write_share(tmp_path, new, previous=old) is True         # idempotent
     filters = yaml.safe_load(path.read_text())["shares"]["filters"]
-    assert len(filters) == len(set(filters)) == 2
+    assert len(filters) == len(set(filters)) == 4
     assert _hidden(filters, new / "Playlists") and not _hidden(filters, old / "Playlists")

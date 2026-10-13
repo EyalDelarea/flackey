@@ -2294,7 +2294,7 @@ class _Uploader:
         return self.rows
 
 
-def _row(peer="loginty", pct=50, state="InProgress", size=1000):
+def _row(peer="peer-alpha", pct=50, state="InProgress", size=1000):
     return {"id": "u1", "peer": peer, "file": "Dancing Galaxy.aiff", "folder": "DJ Library", "size": size,
             "bytes": size * pct // 100, "pct": pct, "state": state, "speed_bps": 1_500_000.0,
             "started_at": "2026-09-08T02:00:00Z", "ended_at": None}
@@ -2305,7 +2305,7 @@ def test_uploads_endpoint_reports_who_is_pulling_from_the_shared_library(client_
     worker.providers = [_Uploader([_row(), _row(peer="peer2", pct=100, state="Completed, Succeeded", size=400)])]
     body = c.get("/api/lossless/uploads").json()
     assert body["enabled"] is True and body["provider"] == "soulseek" and body["error"] is None
-    assert [u["peer"] for u in body["uploads"]] == ["loginty", "peer2"]
+    assert [u["peer"] for u in body["uploads"]] == ["peer-alpha", "peer2"]
     assert body["summary"] == {"total": 2, "active": 1, "completed": 1, "peers": 2, "bytes": 900}
 
 

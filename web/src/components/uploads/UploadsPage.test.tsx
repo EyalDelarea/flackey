@@ -15,12 +15,12 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 it('lists who is pulling from the shared library, with the totals', async () => {
   serve(feed({
-    uploads: [{ id: 'a', peer: 'loginty', file: 'Orphic Thrench.aiff', folder: 'Hallucinogen', size: 51223918,
+    uploads: [{ id: 'a', peer: 'peer-alpha', file: 'Orphic Thrench.aiff', folder: 'Hallucinogen', size: 51223918,
                 bytes: 25611959, pct: 50, state: 'InProgress', speed_bps: 3400000, started_at: '2026-09-08T01:39:19Z', ended_at: null }],
     summary: { total: 1, active: 1, completed: 0, peers: 1, bytes: 25611959 },
   }))
   render(<UploadsPage />)
-  await waitFor(() => expect(screen.getByText('loginty')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText('peer-alpha')).toBeInTheDocument())
   expect(screen.getByText('Orphic Thrench.aiff')).toBeInTheDocument()
   expect(screen.getByText('Hallucinogen')).toBeInTheDocument()
   expect(screen.getByText('50% · 3.4 MB/s')).toBeInTheDocument()

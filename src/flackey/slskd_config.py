@@ -196,6 +196,13 @@ def write_credentials(data_dir: Path, username: str, password: str,
 # user name included, so the M3U files stay off the network wherever they are, and so does the library's
 # own Playlists folder (export.py's PLAYLIST_DIR, which this layer cannot import).
 PLAYLIST_FILE_FILTER = r"\.m3u8?$"
+# Files the OS or another app drops next to the music, never the music itself: dot-files and dot-folders
+# (.DS_Store; the AppleDouble `._x.flac` an exFAT drive grows, which carries each file's xattrs, the URL it
+# was downloaded from included; .git; sync markers) and Windows' Thumbs.db / desktop.ini. Only the last
+# part of the path is matched, so a library on a drive under some dot-folder is not hidden whole.
+HIDDEN_FILE_FILTER = r"[\\/]\.[^\\/]*$"
+SYSTEM_FILE_FILTER = r"[\\/](thumbs\.db|desktop\.ini)$"
+_FORCED_FILTERS = (PLAYLIST_FILE_FILTER, HIDDEN_FILE_FILTER, SYSTEM_FILE_FILTER)
 _PLAYLIST_DIR_TAIL = r"[\\/]Playlists([\\/]|$)"
 
 
@@ -235,8 +242,7 @@ def _pin_to_this_machine(config: dict, path: Path) -> None:
         entry["cidr"] = API_KEY_CIDR
     # Not a listener setting, but forced the same way: a config written before the filter existed gets it.
     filters = _filters(config, path)
-    if PLAYLIST_FILE_FILTER not in filters:
-        filters.append(PLAYLIST_FILE_FILTER)
+    filters.extend(f for f in _FORCED_FILTERS if f not in filters)
 
 
 def _atomic_write(path: Path, config: dict) -> None:
@@ -265,6 +271,9 @@ _APP_SUPPORT = ("library", "appdata")
 # Under ~/Library, the folders macOS puts cloud drives in (Dropbox, OneDrive and Google Drive in
 # CloudStorage, iCloud Drive in Mobile Documents): a DJ library inside one is an ordinary choice.
 _CLOUD_DRIVES = ("cloudstorage", "mobile documents")
+# Folders that hold everything else the owner keeps. A music folder inside one is fine; the folder itself
+# would share every document in it.
+_EVERYDAY = ("desktop", "documents", "downloads")
 
 
 def _parts_under(path: Path, base: Path) -> tuple[str, ...] | None:
@@ -299,6 +308,8 @@ def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
     below = _parts_under(root, home)
     if below and any(part.startswith(".") for part in below):  # ~/.ssh, ~/.config, ~/Music/.secret
         return "That is a hidden folder, where apps keep keys and settings. Choose a folder just for your music."
+    if below and len(below) == 1 and below[0] in _EVERYDAY:
+        return "That folder holds more than music. Choose a folder just for your music, or make one inside it."
     if below and below[0] in _APP_SUPPORT:
         cloud = below[0] == "library" and len(below) > 2 and below[1] in _CLOUD_DRIVES
         if not cloud and not _inside_temp(root, home / below[0]):

@@ -35,6 +35,11 @@ dev = [
     "respx>=0.21",
     "ruff>=0.6",
 ]
+# Release-build tools, locked with hashes in uv.lock so a build never takes whatever PyPI serves that day.
+# Kept out of `dev` and apart from each other: PyInstaller runs beside the app (`--group bundle`), Pillow
+# in a throwaway env (`--isolated --only-group icon`), since PyInstaller bundles Pillow if it can import it.
+bundle = ["pyinstaller==6.22.3"]
+icon = ["pillow==12.3.0"]
 
 [build-system]
 requires = ["hatchling"]

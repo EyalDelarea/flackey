@@ -330,7 +330,7 @@ def test_evidence_rows(store: Store, tmp_path: Path):
                           artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
                           catalog_track_id=None, request_id=None)
     store.add_evidence(tid, "recording_match", {"score": 0.98, "offset_s": 48.0, "reference": "deezer:6025986"})
-    store.add_evidence(tid, "source", {"provider": "soulseek", "username": "loginty"})
+    store.add_evidence(tid, "source", {"provider": "soulseek", "username": "peer-alpha"})
     rows = store.list_evidence(tid)
     assert [r.kind for r in rows] == ["recording_match", "source"] and rows[0].value["score"] == 0.98
 

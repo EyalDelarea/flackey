@@ -171,7 +171,7 @@ async def test_unreachable_sidecar_raises_unavailable(provider):
         await p.search("x", wait_s=5)
 
 
-def transfer(state: str, done: int, size: int = 51223918, username: str = "loginty",
+def transfer(state: str, done: int, size: int = 51223918, username: str = "peer-alpha",
              filename: str = "Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac") -> dict:
     return {"username": username, "directories": [{"directory": "Musique\\Sorted\\Albums\\Hallucinogen\\Twisted",
             "files": [{"id": "t1", "username": username, "filename": filename, "size": size, "state": state,
@@ -180,7 +180,7 @@ def transfer(state: str, done: int, size: int = 51223918, username: str = "login
 
 def flac_file(size: int = 51223918):
     from flackey.lossless import LosslessFile
-    return LosslessFile(provider="soulseek", username="loginty", extension="flac", size=size, length_s=442,
+    return LosslessFile(provider="soulseek", username="peer-alpha", extension="flac", size=size, length_s=442,
                         path="Musique\\Sorted\\Albums\\Hallucinogen\\Twisted\\02. Hallucinogen - Orphic Thrench.flac",
                         bitrate_kbps=None, sample_rate=44100, bit_depth=16, has_free_slot=True,
                         upload_speed_bps=3_000_000, queue_length=0)
@@ -203,7 +203,7 @@ async def test_enqueue_percent_encodes_a_hostile_username(provider):
 async def test_download_polls_to_completion_and_reports_progress(provider):
     p, _clock, downloads = provider
     f = flac_file(size=1000)   # matches the "InProgress" 1000-bytes-done step below, and what `land` writes
-    enqueue = respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    enqueue = respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
 
     def land(_request):
@@ -211,7 +211,7 @@ async def test_download_polls_to_completion_and_reports_progress(provider):
         dest.write_bytes(b"x" * f.size)
         return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
 
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
         httpx.Response(200, json=transfer("Queued, Remotely", 0)),
         httpx.Response(200, json=transfer("InProgress", 1000)),
         land])
@@ -233,9 +233,9 @@ async def test_download_first_byte_cap_cancels(provider):
     # "Initializing", not "Queued, Remotely": the transfer has left the peer's queue and still sends nothing,
     # which is the peer refusing rather than the peer being busy. See the queue tests at the end of the file.
     p, clock, _ = provider
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("Initializing", 0)))
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(200, json=transfer("Initializing", 0)))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     with pytest.raises(LosslessError) as e:
         await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2)
     assert e.value.outcome == "first_byte_timeout" and cancel.called and cancel.calls[0].request.url.params["remove"] == "true"
@@ -246,17 +246,17 @@ async def test_download_first_byte_cap_cancels(provider):
 async def test_download_total_cap_and_overrun_and_failure(provider):
     p, _clock, _ = provider
     f = flac_file()
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("InProgress", 100)))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(200, json=transfer("InProgress", 100)))
     with pytest.raises(LosslessError) as e:
         await p.download(f, first_byte_s=60, total_s=10, poll_s=2)
     assert e.value.outcome == "transfer_timeout"
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("InProgress", f.size + 1)))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(200, json=transfer("InProgress", f.size + 1)))
     with pytest.raises(LosslessError) as e:
         await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
     assert e.value.outcome == "transfer_failed" and "bytes" in str(e.value)
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(200, json=transfer("Completed, Errored", 100)))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(200, json=transfer("Completed, Errored", 100)))
     with pytest.raises(LosslessError) as e:
         await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
     assert e.value.outcome == "transfer_failed"
@@ -274,13 +274,13 @@ async def test_a_stale_file_at_the_derived_path_is_removed_before_enqueue_so_the
         assert not dest.exists()   # pre-clean already ran before slskd is even asked to start a transfer
         return httpx.Response(201)
 
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(side_effect=enqueue_side_effect)
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=enqueue_side_effect)
 
     def land(_request):
         dest.write_bytes(b"fresh")     # the real transfer lands on the now-empty derived path
         return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
 
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[land])
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[land])
     got = await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
     assert got.read_bytes() == b"fresh"
 
@@ -305,14 +305,14 @@ async def test_a_peer_advertising_a_different_size_than_slskd_wrote_is_not_a_fai
     p, _clock, downloads = provider
     f = flac_file(size=1000)                      # what the peer claimed in its search response
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
 
     def land(_request):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"y" * 999)              # what slskd actually wrote: one byte fewer
         return httpx.Response(200, json=transfer("Completed, Succeeded", 999))
 
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[land])
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[land])
     got = await p.download(f, first_byte_s=5, total_s=10, poll_s=0)
     assert got.read_bytes() == b"y" * 999
 
@@ -322,14 +322,14 @@ async def test_a_completed_transfer_whose_file_is_the_wrong_size_fails_instead_o
     p, _clock, downloads = provider
     f = flac_file(size=10)
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
 
     def land(_request):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"short")     # 5 bytes, not the 10 slskd told us the file should be
         return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
 
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[land])
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[land])
     with pytest.raises(LosslessError) as e:
         await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
     assert e.value.outcome == "transfer_failed"
@@ -341,7 +341,7 @@ async def test_cancel_all_and_rescan(provider):
     p, _, _ = provider
     respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[
         transfer("InProgress", 5), transfer("Completed, Succeeded", 10, username="other")]))
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     assert await p.cancel_all() == 1 and cancel.called
     rescan = respx.put(f"{BASE}/shares").mock(return_value=httpx.Response(200))
     await p.rescan_shares()
@@ -429,7 +429,7 @@ async def test_stopping_a_download_tells_the_sidecar_and_takes_the_partial_file_
     p.sleep = asyncio.sleep                       # a real suspension, so the cancel can land in the loop
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
     dest.parent.mkdir()
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
     polled = asyncio.Event()
 
     def poll(_request):
@@ -437,8 +437,8 @@ async def test_stopping_a_download_tells_the_sidecar_and_takes_the_partial_file_
         polled.set()
         return httpx.Response(200, json=transfer("InProgress", 100))
 
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=poll)
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=poll)
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
 
     task = asyncio.create_task(p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=0.001))
     await asyncio.wait_for(polled.wait(), timeout=2)
@@ -458,7 +458,7 @@ async def test_time_in_the_peers_queue_does_not_count_against_the_first_byte_cap
     whether they will send, so the first-byte cap only starts once the transfer leaves the queue."""
     p, _clock, downloads = provider
     f = flac_file(size=1000)
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
 
     def land(_request):
@@ -467,7 +467,7 @@ async def test_time_in_the_peers_queue_does_not_count_against_the_first_byte_cap
         return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
 
     queued = [httpx.Response(200, json=transfer("Queued, Remotely", 0))] * 60   # 120 s at poll_s=2
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
         *queued, httpx.Response(200, json=transfer("InProgress", 500)), land])
     got = await p.download(f, first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=600)
     # `_claim` moves the finished file off the derived path, so compare on the name, not the path.
@@ -477,10 +477,10 @@ async def test_time_in_the_peers_queue_does_not_count_against_the_first_byte_cap
 @respx.mock
 async def test_a_queue_that_never_reaches_us_is_queued_not_a_refusal(provider):
     p, clock, _ = provider
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(
         return_value=httpx.Response(200, json=transfer("Queued, Remotely", 0)))
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     with pytest.raises(LosslessError) as e:
         await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=300)
     assert e.value.outcome == "queued" and cancel.called
@@ -490,11 +490,11 @@ async def test_a_queue_that_never_reaches_us_is_queued_not_a_refusal(provider):
 @respx.mock
 async def test_a_transfer_that_leaves_the_queue_and_sends_nothing_is_still_a_first_byte_timeout(provider):
     p, clock, _ = provider
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
         httpx.Response(200, json=transfer("Queued, Remotely", 0)),
         *([httpx.Response(200, json=transfer("Initializing", 0))] * 200)])
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     with pytest.raises(LosslessError) as e:
         await p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=2, queue_wait_s=300)
     assert e.value.outcome == "first_byte_timeout" and cancel.called
@@ -508,7 +508,7 @@ async def test_a_peer_still_sending_is_never_cut_off_for_taking_a_long_time(prov
     p, clock, downloads = provider
     f = flac_file(size=1000)
     dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
 
     def land(_request):
         dest.parent.mkdir(exist_ok=True)
@@ -517,7 +517,7 @@ async def test_a_peer_still_sending_is_never_cut_off_for_taking_a_long_time(prov
 
     # 200 polls = 400 s of steady progress: far past the 60 s that would have been the whole budget
     crawling = [httpx.Response(200, json=transfer("InProgress", n)) for n in range(1, 201)]
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[*crawling, land])
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[*crawling, land])
     got = await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=30)
     # `_claim` moves the finished file off the derived path, so compare on the name, not the path.
     assert got.parent == dest.resolve().parent and got.name.endswith(dest.name)
@@ -529,11 +529,11 @@ async def test_a_peer_that_stops_sending_midway_is_cut_at_the_stall_bound(provid
     """The other half: what the flat cap was reaching for is a transfer that died mid-flight, and that is
     now measured from the last byte that arrived rather than from the enqueue."""
     p, clock, _ = provider
-    respx.post(f"{BASE}/transfers/downloads/loginty").mock(return_value=httpx.Response(201))
-    respx.get(f"{BASE}/transfers/downloads/loginty").mock(side_effect=[
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
         httpx.Response(200, json=transfer("InProgress", 1)),
         *([httpx.Response(200, json=transfer("InProgress", 500))] * 200)])
-    cancel = respx.delete(f"{BASE}/transfers/downloads/loginty/t1").mock(return_value=httpx.Response(204))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     with pytest.raises(LosslessError) as e:
         await p.download(flac_file(), first_byte_s=60, total_s=6000, poll_s=2, stall_s=30)
     assert e.value.outcome == "transfer_timeout" and "stopped" in str(e.value) and cancel.called

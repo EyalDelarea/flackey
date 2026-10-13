@@ -67,13 +67,13 @@ Assert-ExitCode 'npm run build'
 
 Write-Host '==> icon'
 # One .ico serves the exe (Flackey-windows.spec), Setup.exe and the uninstall entry (Flackey.iss). Pillow
-# is pulled in for this one command only (--no-project), so it never reaches the app's environment or
-# the bundle. The source asset is a 1024 square PNG; these are the sizes Explorer asks an .ico for.
+# comes from the locked `icon` group in a throwaway environment (--isolated --only-group), so it never
+# reaches the app's environment or the bundle. The source asset is a 1024 square PNG; these are the sizes Explorer asks an .ico for.
 $Ico = Join-Path $Build 'Flackey.ico'
 # One line with no double quotes: 5.1 does not escape embedded quotes when it builds a command line.
 $IcoScript = "import sys; from PIL import Image; " +
     "Image.open(sys.argv[1]).convert('RGBA').save(sys.argv[2], sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])"
-& uv run --no-project --with pillow python -c $IcoScript (Join-Path $Root 'src\flackey\assets\app-icon.png') $Ico
+& uv run --isolated --frozen --only-group icon python -c $IcoScript (Join-Path $Root 'src\flackey\assets\app-icon.png') $Ico
 Assert-ExitCode 'icon conversion'
 
 Write-Host '==> build defaults'
@@ -96,7 +96,7 @@ Write-Host '==> helpers'
 & (Join-Path $PSScriptRoot 'fetch_helpers_windows.ps1')
 
 Write-Host '==> bundle'
-& uv run --with pyinstaller pyinstaller --noconfirm --clean `
+& uv run --frozen --group bundle pyinstaller --noconfirm --clean `
     --distpath (Join-Path $Build 'dist') --workpath (Join-Path $Build 'work') `
     (Join-Path $Root 'packaging\Flackey-windows.spec')
 Assert-ExitCode 'pyinstaller'
