@@ -402,9 +402,10 @@ def test_playlist_exports_are_never_shared(tmp_path: Path):
     assert not _hidden(filters, lib)
 
 
-def test_os_and_app_clutter_is_never_shared(tmp_path: Path):
+def test_os_and_app_clutter_is_never_shared(tmp_path: Path, fake_home: Path):
     """Dot-files carry metadata, not music: an AppleDouble `._x.flac` holds the URL the file came from.
-    Matched on the last part only, so a library under some dot-folder on a drive is still shared."""
+    Matched on the last part only, so a library under some dot-folder on a drive is still shared. (A fake
+    home, because on Windows the real temp folder sits inside it, where a dot-folder is refused.)"""
     lib = tmp_path / ".drive" / "DJ Library"
     write_credentials(tmp_path, "digger", "not-a-real-password", library_root=lib)
     filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
