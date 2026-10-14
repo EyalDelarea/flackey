@@ -21,7 +21,7 @@ from ..lossless import (
 from ..models import Candidate, CatalogTrack, Request, norm
 from ..source import LosslessError, LosslessProvider, TransferProgress
 from ..verify import VerifyError, probe, verify
-from .policy import SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
+from .policy import PEER_STUCK_OUTCOMES, SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
 from .records import (
     CATALOG_SOURCE,
     QUERY_SOURCE,
@@ -173,7 +173,17 @@ class LosslessMixin:
             rec.finish("no_pick")
             return None
         outcome = "no_pick"
-        for n, file in enumerate(report.survivors[:s.lossless_max_picks], start=1):
+        # Peers that held a pick in their queue until it timed out. Their other files would wait in the same
+        # queue, so the next pick goes to someone else: one peer sharing a whole album once took every pick
+        # of a request while another peer had the song with a free slot (2026-10-14).
+        stuck_peers: set[str] = set()
+        n = 0
+        for file in report.survivors:
+            if file.username in stuck_peers:
+                continue
+            if n == s.lossless_max_picks:
+                break
+            n += 1
             # What one pick may cost, for this file: the queue wait is left out because the pick about to
             # start still has its own, and charging it twice is what would close this gate the moment the
             # ceiling grew with the file.
@@ -200,6 +210,8 @@ class LosslessMixin:
                 return hit
             if outcome not in SECOND_PICK_AFTER:
                 break
+            if outcome in PEER_STUCK_OUTCOMES:
+                stuck_peers.add(file.username)
         rec.finish(outcome)
         return None
 

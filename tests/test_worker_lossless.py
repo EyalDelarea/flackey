@@ -1682,3 +1682,24 @@ async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(le
     # video that is really gone still cannot block the request for ever.
     assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
     assert provider.searches and len(calls) == 3
+
+
+async def test_a_peer_that_left_us_queued_is_not_asked_again_in_the_same_attempt(lenv, tmp_path: Path):
+    """2026-10-14: one peer shared a whole album and held every pick in its queue for 300 s. The next pick was
+    the same peer's next file, so a request spent all its picks waiting on one queue while another peer had
+    the song with a free slot. Its queue is a fact about the peer, not about the file."""
+    settings, store, _, _, _, _ = lenv
+
+    class OneBusyPeer(FakeProvider):
+        async def download(self, file, **kw):
+            if file.username == "busy":
+                self.downloaded.append(file.username)
+                raise _queued()
+            return await super().download(file, **kw)
+
+    provider = OneBusyPeer(settings.slskd_downloads, [lf("busy"), lf("busy", queue_length=1), lf("b", queue_length=2)],
+                           audio={"b": _flac(tmp_path / "b.flac")})
+    w = make(lenv, provider=provider)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert provider.downloaded == ["busy", "b"]
