@@ -439,3 +439,27 @@ def test_a_staged_bundle_changed_after_staging_is_not_installed(archive, applica
         install.launch_helper(staged)
     assert helper_spawns == []
     assert not staged.path.exists()
+
+
+def test_a_copy_outside_applications_is_a_stray_when_applications_has_one(tmp_path, monkeypatch):
+    """2026-10-14: Spotlight opened a local build from packaging/build/dist, which could not swap itself and
+    opened the installer instead. With the real app in Applications, the stray copy should point there."""
+    applications = tmp_path / "Applications"
+    (applications / "Flackey.app").mkdir(parents=True)
+    elsewhere = tmp_path / "build" / "Flackey.app"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install, "running_bundle", lambda: elsewhere)
+    assert install.stray_copy(applications=applications) == elsewhere
+
+    monkeypatch.setattr(install, "running_bundle", lambda: applications / "Flackey.app")
+    assert install.stray_copy(applications=applications) is None
+
+
+def test_a_copy_with_nothing_in_applications_is_not_a_stray(tmp_path, monkeypatch):
+    """Run straight from Downloads with nothing installed, the installer is how it gets into Applications."""
+    elsewhere = tmp_path / "Downloads" / "Flackey.app"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install, "running_bundle", lambda: elsewhere)
+    assert install.stray_copy(applications=tmp_path / "Applications") is None

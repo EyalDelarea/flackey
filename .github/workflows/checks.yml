@@ -225,13 +225,13 @@ jobs:
         # Whether the build above baked keys in, without handing the smoke test the keys themselves.
         env:
           SMOKE_EXPECT_KEYS: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: packaging/smoke.sh packaging/build/dist/Flackey.app
+        run: packaging/smoke.sh packaging/build/dist.noindex/Flackey.app
       - name: Update helper is inside the signed bundle
         # A bundle published without the helper looks perfect until someone presses Update months
         # later and nothing can swap it.
         run: |
-          test -x packaging/build/dist/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
-          codesign --verify --deep --strict packaging/build/dist/Flackey.app
+          test -x packaging/build/dist.noindex/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
+          codesign --verify --deep --strict packaging/build/dist.noindex/Flackey.app
       - name: Installer
         run: |
           packaging/build_installer.sh

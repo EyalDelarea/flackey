@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build the macOS installer package from packaging/build/dist/Flackey.app.
+# Build the macOS installer package from packaging/build/dist.noindex/Flackey.app.
 # Run packaging/build_app.sh first, or pass the app path as the first argument.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="${1:-$ROOT/packaging/build/dist/Flackey.app}"
+APP="${1:-$ROOT/packaging/build/dist.noindex/Flackey.app}"
 OUT="$ROOT/packaging/build/Flackey.pkg"
 PKGROOT="$(mktemp -d "$ROOT/packaging/build/pkgroot.XXXXXX")"
 trap 'rm -rf "$PKGROOT"' EXIT

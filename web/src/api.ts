@@ -102,6 +102,8 @@ export interface SlskdProgress { state: 'idle' | 'downloading' | 'extracting' | 
 export interface UpdateStatus { ok:boolean; current:string; newer:boolean; available:boolean; latest:string|null;
   /** False on a packaged copy whose release key is missing: it opens no installer at all. */
   verifiable?:boolean;
+  /** Where this copy runs from, when that is not Applications and Applications has Flackey: no update offered. */
+  elsewhere?:string|null;
   url:string|null; release_url:string|null; size:number|null; size_label:string|null; published_at:string|null;
   published_date:string|null; prerelease:boolean; error?:string
   /** Update replaces the app in place rather than opening the installer. False is the old flow. */

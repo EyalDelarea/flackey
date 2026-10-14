@@ -442,3 +442,23 @@ def test_a_copy_that_cannot_update_in_place_takes_the_signed_installer_path(app,
 
     assert state["state"] == "ready" and state["seamless"] is False
     assert opened and list(applications.iterdir()) == []
+
+
+@respx.mock
+def test_a_stray_copy_points_to_the_app_in_applications_instead_of_opening_the_installer(app, monkeypatch,
+                                                                                        applications):
+    c, _, _, _ = app
+    stray = applications.parent / "build" / "Flackey.app"
+    monkeypatch.setattr(selfupdate, "seamless_available", lambda *a, **k: False)
+    monkeypatch.setattr(selfupdate, "stray_copy", lambda *a, **k: stray)
+    opened: list = []
+    monkeypatch.setattr("flackey.web.update.open_installer", opened.append)
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=feed(installer_sig=True)))
+
+    info = c.get("/api/update", headers=FROM_APP).json()
+    assert info["newer"] and not info["available"] and not info["seamless"]
+    assert info["elsewhere"] == str(stray)
+
+    r = c.post("/api/update/install", headers=FROM_APP)
+    assert r.status_code == 409 and "Applications" in r.json()["detail"]
+    assert opened == []
