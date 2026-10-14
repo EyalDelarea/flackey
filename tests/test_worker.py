@@ -578,12 +578,33 @@ async def test_source_timeout_retries_then_errors(env):
     assert r.state == RequestState.ERROR and r.attempts == 3
 
 
-async def test_beatport_unavailable_requeues(env):
+async def test_beatport_blocked_downloads_without_it(env):
+    """Cloudflare started answering every Beatport lookup with a 403 challenge (2026-10-14), and all 19
+    requests in the queue failed on it. Beatport only adds tags; the file comes from the source and the
+    fingerprint proves it, so a blocked Beatport must not cost the download."""
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()]), FakeCatalog(fail=True))
-    rid = store.add_request("q", RequestKind.TEXT)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
-    assert r.state == RequestState.QUEUED and r.attempts == 1 and "Beatport unreachable" in r.flag_reason
+    assert r.state == RequestState.DONE and r.attempts == 0
+
+
+async def test_beatport_blocked_tells_the_owner_once_per_outage(env):
+    _settings, store, notifier = env
+    catalog = FakeCatalog(fail=True)
+    w = make_worker(env, FakeSource([good_cand()]), catalog)
+
+    def notices():
+        return [m for m, *_ in notifier.sent if m.startswith("Beatport is blocking")]
+
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert len(notices()) == 1
+    catalog.fail = False
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    catalog.fail = True
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert len(notices()) == 2
 
 
 async def test_verification_failure_rejects_and_deletes(env):

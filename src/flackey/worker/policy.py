@@ -46,6 +46,9 @@ SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # already handles, and no_pick, which is about the search rather than any peer.
 SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
                      "transfer_timeout"}
+# Of those, the ones that say the peer never sent anything: its other files are skipped for the rest of the
+# attempt. A failed check or a broken transfer says something about the file, and the peer stays eligible.
+PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout"}
 # After these, the next spelling gets a search of its own (issue #69). Both say this spelling found nothing
 # that is the recording; neither says anything about the other spellings. Everything else is either a fact
 # about the provider (unavailable, interrupted) or a fact that holds for every spelling alike

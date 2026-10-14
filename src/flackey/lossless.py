@@ -224,6 +224,18 @@ def rank_duration(f: LosslessFile, ref: Reference) -> int:
     return min(abs(f.length_s - d) for d in known) // DURATION_BUCKET_S
 
 
+SAME_SONG_MIN = 80             # token_set ratio from which a file's title is taken to name the asked song
+
+
+def rank_same_song(f: LosslessFile, ref: Reference) -> int:
+    """Does the file name the asked song at all? Everything else -- version, length, title closeness -- only
+    orders files of that song. Without this a busy peer sharing a whole album outranked the right song from an
+    idle peer: every track of the album said "remastered 2024" like the request, the right file said
+    "(Remastered)", and version ranked first (2026-10-14). Still a ranker, not a rule: the fingerprint decides."""
+    title, _ = file_title(f.name, ref.artist)
+    return 0 if fuzz.token_set_ratio(norm(ref.title), title) >= SAME_SONG_MIN else 1
+
+
 def rank_title(f: LosslessFile, ref: Reference) -> int:
     title, _ = file_title(f.name, ref.artist)
     return -(int(fuzz.token_set_ratio(norm(ref.title), title)) // 10)
@@ -242,7 +254,8 @@ HARD_RULES: list[tuple[str, Rule]] = [
     ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
 IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
-    ("version", rank_version), ("duration", rank_duration), ("title", rank_title), ("artist", rank_artist),
+    ("same_song", rank_same_song), ("version", rank_version), ("duration", rank_duration), ("title", rank_title),
+    ("artist", rank_artist),
 ]
 PEER_RANKERS: list[tuple[str, Ranker]] = [
     ("free_slot", lambda f, ref: not f.has_free_slot),
