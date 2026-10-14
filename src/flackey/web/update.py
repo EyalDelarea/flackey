@@ -201,7 +201,9 @@ async def latest_release() -> dict:
     # A build that must verify only opens an installer that verifies: otherwise a release stripped of its
     # signed files would walk every copy onto the unchecked installer path.
     verifiable = not must_verify() or can_verify()
-    available = (size is not None and newer and verifiable
+    # A copy outside Applications with the real app there: neither path is offered (`stray_copy`).
+    elsewhere = selfupdate.stray_copy()
+    available = (size is not None and newer and verifiable and elsewhere is None
                  and (installer_sig is not None or not must_verify()))
     archive_size = declared_size(archive)
     # Will pressing Update replace the app in place, or open an installer? A release missing either
@@ -220,6 +222,7 @@ async def latest_release() -> dict:
             date = published
     return {"ok": True, "current": __version__, "newer": newer, "available": available,
             "verifiable": verifiable,
+            "elsewhere": str(elsewhere) if elsewhere else None,
             "latest": latest_version or None,
             "url": installer.get("browser_download_url") if installer else None,
             "installer_signature_url": installer_sig.get("browser_download_url") if installer_sig else None,
@@ -578,6 +581,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             raise HTTPException(502, info.get("error") or "Could not check for updates.")
         if not info["available"] and not info["seamless"]:
             publish(state="idle")
+            if info["newer"] and info.get("elsewhere"):
+                raise HTTPException(409, "This copy of Flackey runs from outside your Applications folder, so it "
+                                         "can't update itself. Open Flackey from Applications to update.")
             if info["newer"] and not info.get("verifiable", True):
                 raise HTTPException(409, "This copy of Flackey cannot check updates, so it will not install "
                                          "one. Download it from the release page instead.")

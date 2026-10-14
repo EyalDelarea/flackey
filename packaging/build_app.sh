@@ -44,8 +44,10 @@ echo "==> helpers"
 packaging/fetch_helpers.sh
 
 echo "==> bundle"
+# `.noindex` keeps Spotlight from listing this build next to the installed app: typing "Flackey" once
+# opened a weeks-old local build, which could not update in place and fell back to the installer.
 uv run --frozen --group bundle pyinstaller --noconfirm --clean \
-  --distpath "$BUILD/dist" --workpath "$BUILD/work" \
+  --distpath "$BUILD/dist.noindex" --workpath "$BUILD/work" \
   packaging/Flackey.spec
 
 echo "==> update helper"
@@ -54,7 +56,7 @@ echo "==> update helper"
 #
 # Not routed through Flackey.spec's `binaries` list: PyInstaller rewrites the load commands of
 # everything in there, and this links nothing but libSystem.
-HELPER_DIR="$BUILD/dist/Flackey.app/Contents/Frameworks/bin"
+HELPER_DIR="$BUILD/dist.noindex/Flackey.app/Contents/Frameworks/bin"
 mkdir -p "$HELPER_DIR"
 clang -O2 -Wall -Wextra -Werror -o "$HELPER_DIR/flackey-update-helper" packaging/update_helper.c
 chmod 755 "$HELPER_DIR/flackey-update-helper"
@@ -62,7 +64,7 @@ chmod 755 "$HELPER_DIR/flackey-update-helper"
 # A bundle assembled file by file carries no signature, and macOS treats an unsigned-but-modified bundle
 # worse than a plainly unsigned one: an ad-hoc signature is free and makes it merely unsigned.
 echo "==> ad-hoc signature"
-codesign --force --deep --sign - "$BUILD/dist/Flackey.app"
+codesign --force --deep --sign - "$BUILD/dist.noindex/Flackey.app"
 
 echo "==> update archive"
 # `ditto` rather than `zip`: the bundle contains symlinks (Python.framework) and the signature written
@@ -72,9 +74,9 @@ echo "==> update archive"
 # After the signature, so the bytes published are the bytes that get signed with the Ed25519 key.
 VERSION="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' src/flackey/__init__.py)"
 rm -f "$BUILD/Flackey-$VERSION.zip"
-ditto -c -k --keepParent "$BUILD/dist/Flackey.app" "$BUILD/Flackey-$VERSION.zip"
+ditto -c -k --keepParent "$BUILD/dist.noindex/Flackey.app" "$BUILD/Flackey-$VERSION.zip"
 echo "    $BUILD/Flackey-$VERSION.zip"
 
 echo
-echo "Built $BUILD/dist/Flackey.app"
+echo "Built $BUILD/dist.noindex/Flackey.app"
 echo "To build the installer: packaging/build_installer.sh"

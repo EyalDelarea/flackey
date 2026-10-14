@@ -124,7 +124,7 @@ def test_update_reports_new_installer(client):
                     "browser_download_url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg"}],
     }]))
     assert c.get("/api/update").json() == {
-        "ok": True, "current": __version__, "newer": True, "available": True, "verifiable": True, "latest": "9.9.9",
+        "ok": True, "current": __version__, "newer": True, "available": True, "verifiable": True, "elsewhere": None, "latest": "9.9.9",
         "url": "https://github.com/EyalDelarea/flackey/releases/download/v9.9.9/Flackey.pkg", "release_url": "https://github.com/EyalDelarea/flackey/releases/tag/v9.9.9",
         "size": 12345678, "size_label": "12.3 MB", "published_at": "2026-09-15T10:00:00Z",
         "published_date": "2026-09-15", "prerelease": False, "installer_signature_url": None,

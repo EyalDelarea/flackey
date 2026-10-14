@@ -88,6 +88,18 @@ def seamless_available(applications: Path = APPLICATIONS) -> bool:
             and helper_path() is not None)
 
 
+def stray_copy(applications: Path = APPLICATIONS) -> Path | None:
+    """The bundle this process runs from, when it is not the one in Applications but Applications has one:
+    a local build or an old copy that Spotlight or a double-click opened instead (2026-10-14). It cannot
+    swap itself, and running the installer from it only reinstalls the copy that was already there, so the
+    owner is sent to that one. With nothing in Applications the installer is how the app gets there."""
+    if sys.platform != "darwin":
+        return None
+    bundle = running_bundle()
+    installed = applications / BUNDLE_NAME
+    return bundle if bundle is not None and bundle != installed and installed.is_dir() else None
+
+
 def _run(argv: list[str], what: str, message: str) -> None:
     try:
         subprocess.run(argv, check=True, capture_output=True, timeout=STEP_TIMEOUT_S)

@@ -192,6 +192,15 @@ it('offers to update in place when the release is signed and this build can veri
   expect(screen.queryByText('Download update')).not.toBeInTheDocument()
 })
 
+it('sends a copy running outside Applications to the installed app instead of offering an update', async () => {
+  vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, available: false, seamless: false,
+    elsewhere: '/Users/me/code/flackey/packaging/build/dist/Flackey.app' })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(screen.getByText(/Open Flackey from your Applications folder to update/)).toBeInTheDocument())
+  expect(screen.queryByText('Download update')).not.toBeInTheDocument()
+  expect(screen.queryByText(/installer isn't published yet/)).not.toBeInTheDocument()
+})
+
 it('still says "Download update" when the update has to go through the installer', async () => {
   vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable, seamless: false })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
