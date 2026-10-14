@@ -69,6 +69,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # finish the playlist any sooner, they just take the machine down with them. Network stages stay
         # unbounded -- this bounds only the part where more parallelism buys nothing.
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
+        # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
+        self._catalog_blocked = False
 
 
     def _set_state(self, req: Request, state: RequestState, **kw) -> None:

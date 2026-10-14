@@ -189,10 +189,11 @@ def test_identity_rankers_order_survivors_instead_of_rejecting_them():
 def test_the_default_gate_is_the_hard_rules_then_the_identity_rankers():
     """Bound as `pick`'s defaults, not merely named at module level: rebinding `RULES`/`RANKERS` below the
     `def` would leave the live gate on the old lists while every test that passes them explicitly stayed
-    green. `version` leads the identity rankers by the replay measurement (2026-09-21-no-pick-replay.md)."""
+    green. `version` leads the title-closeness rankers by the replay measurement (2026-09-21-no-pick-replay.md);
+    `same_song` goes before it so a version match can never lift a different song over the asked one."""
     assert [n for n, _ in RULES] == ["extension", "has_length", "limits", "plausible_size", "queue",
                                     "banned_user"]
-    assert [n for n, _ in RANKERS][:4] == ["version", "duration", "title", "artist"]
+    assert [n for n, _ in RANKERS][:5] == ["same_song", "version", "duration", "title", "artist"]
     bound = inspect.signature(pick).parameters
     assert bound["rules"].default is RULES and bound["rankers"].default is RANKERS
     assert RULES == HARD_RULES and RANKERS == IDENTITY_RANKERS + PEER_RANKERS
@@ -226,3 +227,19 @@ def test_pick_policy_from_dict_ignores_fields_older_reports_carry():
          "max_queue_length": None, "banned_users": [], "some_future_field": 1}
     p = PickPolicy.from_dict(d)
     assert p.lossless_extensions == frozenset({"flac"}) and p.max_queue_length is None
+
+
+def test_the_right_song_from_an_idle_peer_beats_other_songs_that_name_the_version():
+    """2026-10-14, with Beatport blocked: "Alpha Centauri (Remastered 2024)" was asked by its own words, so the
+    reference's version was "Remastered 2024". One peer shared the whole remastered album with a queue of 222;
+    another had Alpha Centauri "(Remastered)" with a free slot. Version ranked before title, so all fifteen
+    other songs from the busy peer came before the right song, and every retry waited out the same queue."""
+    ref = Reference(artist="Hallucinogen", title="Alpha Centauri", mix_name="Remastered 2024", duration_s=617,
+                    deezer_id=None, requested_duration_s=617)
+    busy = {"username": "NuagistTurtleize", "queue_length": 222}
+    files = [mk(path="x\\03-hallucinogen-alpha_centauri_(remastered_2024).flac", length_s=616, **busy),
+             mk(path="x\\05-hallucinogen-shamanix_(remastered_2024).flac", length_s=599, **busy),
+             mk(path="x\\14-hallucinogen-gamma_goblins_pt_2_(remastered_2024).flac", length_s=527, **busy),
+             mk(path="x\\03. Hallucinogen - Alpha Centauri (Remastered).flac", length_s=616, username="Ben_DeRoy")]
+    survivors = pick(files, ref, PickPolicy()).survivors
+    assert all("alpha" in f.name.lower() for f in survivors[:2])

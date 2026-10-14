@@ -38,12 +38,7 @@ class PipelineMixin:
             if picked is None:
                 return
             cand, catalog = picked
-        try:
-            catalog = await self._catalog_for(req, cand, catalog)
-        except CatalogUnavailable as e:
-            await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
-            return
-
+        catalog = await self._catalog_for(req, cand, catalog)
         await self._fetch_verify_file(req, cand, catalog)
 
     async def _identify(self, req: Request, query: Query) -> tuple[Candidate, CatalogTrack | None] | None:
@@ -51,12 +46,8 @@ class PipelineMixin:
         candidate and catalog match to fetch, or None when this pass has already been settled here --
         retried, parked for review, a duplicate, or handed to the search on the request's own words."""
         self._set_state(req, RequestState.IDENTIFYING)
-        try:
-            catalog_tracks = await self.catalog.search(query)
-            catalog = best_match(query, catalog_tracks)
-        except CatalogUnavailable as e:
-            await self._retry_or_fail(req, f"Beatport unreachable: {e}", flag="Beatport unreachable, will retry")
-            return None
+        catalog_tracks = await self._catalog_search(req, query)
+        catalog = best_match(query, catalog_tracks)
         if catalog:
             self.store.upsert_catalog_track(catalog)
             self.store.update_request(req.id, catalog_track_id=catalog.id)
@@ -161,13 +152,30 @@ class PipelineMixin:
         self.store.update_request(req.id, chosen_candidate_id=chosen.id)
         return chosen, catalog
 
+    async def _catalog_search(self, req: Request, query: Query) -> list[CatalogTrack]:
+        """Beatport's search, or nothing when Beatport refuses us. Beatport is a scraped web page and only
+        adds tags -- the file comes from the source and the fingerprint proves it -- so a Cloudflare
+        challenge (every lookup a 403 since 2026-10-14) must not cost the download. The owner hears once
+        per outage, not once per track, and again only after Beatport has answered in between."""
+        try:
+            tracks = await self.catalog.search(query)
+        except CatalogUnavailable as e:
+            log.warning("req#%d: Beatport unavailable (%s); going on without its tags", req.id, e)
+            if not self._catalog_blocked:
+                self._catalog_blocked = True
+                await self.notifier.send(f"Beatport is blocking lookups ({e}). Downloads carry on without "
+                                         f"Beatport tags (genre, label, artwork) until it answers again.")
+            return []
+        self._catalog_blocked = False
+        return tracks
+
     async def _catalog_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack | None:
         """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
         downloading is another version (the owner picked a remix, or the video's length pinned an edit),
         re-match Beatport against that version so the tags describe the recording in the file."""
         if catalog is None or same_version(cand, catalog):
             return catalog
-        catalog = best_match(candidate_query(cand), await self.catalog.search(candidate_query(cand)))
+        catalog = best_match(candidate_query(cand), await self._catalog_search(req, candidate_query(cand)))
         if catalog:
             self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id if catalog else None)
