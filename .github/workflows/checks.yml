@@ -236,7 +236,7 @@ jobs:
         run: |
           packaging/build_installer.sh
           cd packaging/build && shasum -a 256 Flackey.pkg > Flackey.pkg.sha256 && cat Flackey.pkg.sha256
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Flackey.installer
           path: |
@@ -336,7 +336,7 @@ jobs:
           $env:FLACKEY_SLIM_FFMPEG = $slim
           uv run pytest -q -rs tests/test_slim_ffmpeg.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Flackey.windows
           path: |
