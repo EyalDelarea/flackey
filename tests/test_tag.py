@@ -95,6 +95,15 @@ def test_comment_for():
     assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 
 
+def test_comment_names_the_fallback_tag_source():
+    """A stand-in's negative id is Flackey's own, not Beatport's: the comment says where its tags came from
+    (issue #146), or nothing when no catalogue knew the track."""
+    filled = CatalogTrack(**{**CT.__dict__, "id": -42, "tag_source": "deezer+discogs"})
+    assert comment_for(V, filled) == "flackey: verified 320 kbps · cutoff 19.8 kHz · tags Deezer + Discogs · via Deezer"
+    bare = CatalogTrack(**{**CT.__dict__, "id": -42})
+    assert comment_for(V, bare) == "flackey: verified 320 kbps · cutoff 19.8 kHz · via Deezer"
+
+
 @requires_ffmpeg
 def test_read_tags_on_untagged_mp3_returns_empty(tmp_path: Path):
     p = _make(tmp_path, "mp3")

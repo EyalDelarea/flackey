@@ -1,0 +1,88 @@
+{
+ "pagination": {
+  "page": 1,
+  "pages": 1,
+  "per_page": 25,
+  "items": 3,
+  "urls": {}
+ },
+ "results": [
+  {
+   "id": 1002,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Hallucinogen - The Lone Deranger (Remastered)",
+   "year": "2024",
+   "label": [
+    "Twisted Records"
+   ],
+   "catno": "TWSCD4R",
+   "style": [
+    "Trance",
+    "Goa Trance",
+    "Psy-Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Album",
+    "Remastered"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/1002",
+   "cover_image": "https://i.discogs.com/1002.jpg"
+  },
+  {
+   "id": 1003,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Various - Goa Classics",
+   "year": "2001",
+   "label": [
+    "Dragonfly Records"
+   ],
+   "catno": "BFLCD 40",
+   "style": [
+    "Goa Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Compilation"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/1003",
+   "cover_image": "https://i.discogs.com/1003.jpg"
+  },
+  {
+   "id": 1001,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Hallucinogen - The Lone Deranger",
+   "year": "1997",
+   "label": [
+    "Twisted Records"
+   ],
+   "catno": "TWSCD4",
+   "style": [
+    "Trance",
+    "Goa Trance",
+    "Psy-Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Album"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/1001",
+   "cover_image": "https://i.discogs.com/1001.jpg"
+  }
+ ]
+}

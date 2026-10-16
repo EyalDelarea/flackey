@@ -147,6 +147,9 @@ class CatalogTrack:
     key: str | None = None
     duration_ms: int | None = None
     artwork_url: str | None = None
+    # Where the tags came from when Beatport could not supply them (issue #146): "deezer", "discogs" or
+    # "deezer+discogs". None on a Beatport record, and on a stand-in no other catalogue could fill in.
+    tag_source: str | None = None
 
     @property
     def duration_s(self) -> int | None:

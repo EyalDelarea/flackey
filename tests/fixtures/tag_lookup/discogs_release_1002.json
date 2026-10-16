@@ -1,0 +1,72 @@
+{
+ "id": 1002,
+ "status": "Accepted",
+ "year": 2024,
+ "resource_url": "https://api.discogs.com/releases/1002",
+ "uri": "https://www.discogs.com/release/1002",
+ "artists": [
+  {
+   "name": "Hallucinogen",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Hallucinogen",
+ "labels": [
+  {
+   "name": "Twisted Records",
+   "catno": "TWSCD4R",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "CD",
+   "qty": "1",
+   "descriptions": [
+    "Album",
+    "Remastered"
+   ]
+  }
+ ],
+ "title": "The Lone Deranger (Remastered)",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Trance",
+  "Goa Trance",
+  "Psy-Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "1",
+   "type_": "track",
+   "title": "Snarling Black Mabel (Remastered 2024)",
+   "duration": "8:14"
+  },
+  {
+   "position": "2",
+   "type_": "track",
+   "title": "Alpha Centauri (Remastered 2024)",
+   "duration": "10:20"
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/1002.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/1002-150.jpg"
+}

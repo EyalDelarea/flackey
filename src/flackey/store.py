@@ -135,6 +135,7 @@ class Store:
         self._ensure_column("rejections", "audio_path", "TEXT")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("catalog_tracks", "tag_source", "TEXT")
         # Where a request was when it failed. Only `error` needs it: the other three failure states say
         # where they stopped by their own name. Rows written before the column keep NULL -- the stage is
         # genuinely not recorded for them and a guess reads worse than an honest gap.
@@ -359,15 +360,17 @@ class Store:
     def upsert_catalog_track(self, t: CatalogTrack) -> None:
         self.conn.execute(
             "INSERT INTO catalog_tracks (id, isrc, artist, title, mix_name, label, genre, sub_genre, "
-            "catalog_number, release_name, release_date, bpm, key, duration_ms, artwork_url, fetched_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET isrc=excluded.isrc, "
-            "artist=excluded.artist, title=excluded.title, mix_name=excluded.mix_name, label=excluded.label, "
-            "genre=excluded.genre, sub_genre=excluded.sub_genre, catalog_number=excluded.catalog_number, "
-            "release_name=excluded.release_name, release_date=excluded.release_date, bpm=excluded.bpm, "
-            "key=excluded.key, duration_ms=excluded.duration_ms, artwork_url=excluded.artwork_url, "
-            "fetched_at=excluded.fetched_at",
+            "catalog_number, release_name, release_date, bpm, key, duration_ms, artwork_url, tag_source, "
+            "fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "isrc=excluded.isrc, artist=excluded.artist, title=excluded.title, mix_name=excluded.mix_name, "
+            "label=excluded.label, genre=excluded.genre, sub_genre=excluded.sub_genre, "
+            "catalog_number=excluded.catalog_number, release_name=excluded.release_name, "
+            "release_date=excluded.release_date, bpm=excluded.bpm, key=excluded.key, "
+            "duration_ms=excluded.duration_ms, artwork_url=excluded.artwork_url, "
+            "tag_source=excluded.tag_source, fetched_at=excluded.fetched_at",
             (t.id, t.isrc, t.artist, t.title, t.mix_name, t.label, t.genre, t.sub_genre, t.catalog_number,
-             t.release_name, t.release_date, t.bpm, t.key, t.duration_ms, t.artwork_url, _now()))
+             t.release_name, t.release_date, t.bpm, t.key, t.duration_ms, t.artwork_url, t.tag_source,
+             _now()))
         self.conn.commit()
 
     def get_catalog_track(self, track_id: int) -> CatalogTrack | None:

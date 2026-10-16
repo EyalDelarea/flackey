@@ -23,6 +23,8 @@ from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
+from flackey.tag import read_tags
+from flackey.tag_lookup import FoundTags
 from flackey.worker import Worker, catalog_candidate
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -587,6 +589,87 @@ async def test_beatport_blocked_downloads_without_it(env):
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.attempts == 0
+
+
+class FakeTagLookup:
+    """Deezer + Discogs (issue #146) without the network: answers `found` and remembers what it was asked."""
+
+    def __init__(self, found=None):
+        self.found = found if found is not None else FoundTags(
+            label="Sacred Technology", release_date="2022-06-03", catalog_number="STCD012", genre="Psy-Trance",
+            sub_genre="Goa Trance", artwork_url="https://e-cdns-images.dzcdn.net/cover/1400.jpg",
+            sources=["deezer", "discogs"])
+        self.asked: list[tuple[CatalogTrack, int | None]] = []
+
+    async def lookup(self, catalog, deezer_id=None):
+        self.asked.append((catalog, deezer_id))
+        return self.found
+
+
+async def test_beatport_blocked_tags_from_deezer_and_discogs(env):
+    """With Beatport refusing lookups the file used to land as `Unknown / Unknown`; now the stand-in record
+    is filled from Deezer and Discogs, keyed by the Deezer record that was downloaded."""
+    settings, store, notifier = env
+    lookup = FakeTagLookup()
+    art = []
+
+    async def fetch_art(url):
+        art.append(url)
+
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(fail=True), notifier, settings,
+               artwork_fetch=fetch_art, tag_lookup=lookup)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert len(lookup.asked) == 1 and lookup.asked[0][1] == 1754956977
+    assert (lookup.asked[0][0].artist, lookup.asked[0][0].title) == ("Astral Projection", "Into the Void")
+    ct = store.get_catalog_track(r.catalog_track_id)
+    assert ct.id < 0 and ct.tag_source == "deezer+discogs"
+    assert (ct.label, ct.genre, ct.sub_genre, ct.catalog_number) == (
+        "Sacred Technology", "Psy-Trance", "Goa Trance", "STCD012")
+    tags = read_tags(store.get_track(r.track_id).path)
+    assert (tags["label"], tags["genre"], tags["catalognumber"], tags["date"]) == (
+        "Sacred Technology", "Psy-Trance", "STCD012", "2022-06-03")
+    assert "tags Deezer + Discogs" in tags["comment"] and "beatport" not in tags["comment"]
+    assert art == ["https://e-cdns-images.dzcdn.net/cover/1400.jpg"]
+    assert "Psy-Trance / Sacred Technology" in notifier.sent[-1][0]
+
+
+async def test_a_beatport_match_is_never_looked_up_again(env):
+    settings, store, notifier = env
+    lookup = FakeTagLookup()
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings,
+               artwork_fetch=no_art, tag_lookup=lookup)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and lookup.asked == []
+    tags = read_tags(store.get_track(r.track_id).path)
+    assert (tags["label"], tags["genre"]) == ("Sacred Technology", "Psy-Trance")
+    assert "beatport 16552105" in tags["comment"]
+
+
+async def test_nothing_found_files_the_stand_in_as_before(env):
+    settings, store, notifier = env
+    lookup = FakeTagLookup(FoundTags(notes=["discogs: no release found"]))
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(), notifier, settings,
+               artwork_fetch=no_art, tag_lookup=lookup)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and len(lookup.asked) == 1
+    ct = store.get_catalog_track(r.catalog_track_id)
+    assert (ct.label, ct.genre, ct.tag_source) == ("Unknown", "Unknown", None)
+
+
+async def test_a_broken_tag_lookup_still_files_the_track(env):
+    settings, store, notifier = env
+
+    class Broken:
+        async def lookup(self, catalog, deezer_id=None):
+            raise AttributeError("'list' object has no attribute 'get'")
+
+    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(fail=True), notifier, settings,
+               artwork_fetch=no_art, tag_lookup=Broken())
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert store.get_catalog_track(r.catalog_track_id).label == "Unknown"
 
 
 async def test_beatport_blocked_tells_the_owner_once_per_outage(env):

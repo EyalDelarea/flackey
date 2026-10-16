@@ -45,10 +45,26 @@ ID3_VERSION = 3
 INFO_TEXT_ENCODING = "utf-8"
 
 
+# How a fallback tag source is named in the comment (issue #146).
+TAG_SOURCE_LABELS = {"deezer": "Deezer", "discogs": "Discogs"}
+
+
+def _tags_from(catalog: CatalogTrack) -> str | None:
+    """Where the tags came from: the Beatport id for a Beatport record, the catalogues that filled in a
+    stand-in, or None for a stand-in nothing could fill (its negative id is Flackey's own, not Beatport's)."""
+    if catalog.id > 0:
+        return f"beatport {catalog.id}"
+    if catalog.tag_source:
+        names = [TAG_SOURCE_LABELS.get(s, s) for s in catalog.tag_source.split("+")]
+        return "tags " + " + ".join(names)
+    return None
+
+
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
     kind = f"verified {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"verified {verdict.fmt}"
-    return (f"flackey: {kind} · cutoff {verdict.cutoff_hz / 1000:.1f} kHz · beatport {catalog.id}"
-            f" · via {source_label(source)}")
+    parts = [f"flackey: {kind}", f"cutoff {verdict.cutoff_hz / 1000:.1f} kHz", _tags_from(catalog),
+             f"via {source_label(source)}"]
+    return " · ".join(p for p in parts if p)
 
 
 def _values(catalog: CatalogTrack, verdict: Verdict, source: str = "deezer_bot") -> dict[str, str]:

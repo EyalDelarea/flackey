@@ -20,6 +20,7 @@ class DeezerTrack:
     release_date: str | None
     title_version: str | None
     preview_url: str | None = None
+    album_id: int | None = None
 
 
 def parse_track_json(data: dict) -> DeezerTrack:
@@ -37,6 +38,38 @@ def parse_track_json(data: dict) -> DeezerTrack:
         release_date=data.get("release_date"),
         title_version=version,
         preview_url=data.get("preview") or None,
+        album_id=int((data.get("album") or {}).get("id") or 0) or None,
+    )
+
+
+# Deezer serves its covers at any square size from the image's md5; 1400 is what Beatport's art was
+# written at, so a Deezer-tagged file carries the same size of cover as a Beatport-tagged one.
+COVER_PX = 1400
+_COVER_URL = "https://e-cdns-images.dzcdn.net/images/cover/{md5}/{px}x{px}-000000-80-0-0.jpg"
+
+
+@dataclass
+class DeezerAlbum:
+    id: int
+    title: str
+    label: str | None
+    release_date: str | None    # YYYY-MM-DD
+    cover_url: str | None
+
+
+def parse_album_json(data: dict) -> DeezerAlbum:
+    if "error" in data:
+        raise DeezerError(str(data["error"]))
+    md5 = data.get("md5_image")
+    cover = _COVER_URL.format(md5=md5, px=COVER_PX) if md5 else None
+    date = data.get("release_date") or None
+    return DeezerAlbum(
+        id=int(data["id"]),
+        title=data.get("title") or "",
+        label=(data.get("label") or "").strip() or None,
+        # Deezer writes 0000-00-00 for an album it has no date for
+        release_date=date if date and not date.startswith("0000") else None,
+        cover_url=cover,
     )
 
 
@@ -46,10 +79,10 @@ class DeezerApi:
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
 
-    async def track(self, track_id: int) -> DeezerTrack:
+    async def _get(self, path: str) -> dict:
         client = self._client or httpx.AsyncClient(timeout=20)
         try:
-            r = await client.get(f"{self.BASE}/track/{track_id}")
+            r = await client.get(f"{self.BASE}/{path}")
         except httpx.HTTPError as e:
             raise DeezerError(str(e)) from e
         finally:
@@ -57,4 +90,10 @@ class DeezerApi:
                 await client.aclose()
         if r.status_code != 200:
             raise DeezerError(f"deezer http {r.status_code}")
-        return parse_track_json(r.json())
+        return r.json()   # a non-JSON 200 raises ValueError, which callers already treat as a failed lookup
+
+    async def track(self, track_id: int) -> DeezerTrack:
+        return parse_track_json(await self._get(f"track/{track_id}"))
+
+    async def album(self, album_id: int) -> DeezerAlbum:
+        return parse_album_json(await self._get(f"album/{album_id}"))

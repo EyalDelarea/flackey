@@ -112,6 +112,29 @@ def test_catalog_upsert(store: Store):
     assert store.get_catalog_track(1) is None
 
 
+def test_catalog_keeps_where_fallback_tags_came_from(store: Store):
+    ct = _catalog()
+    ct.id, ct.tag_source = -7, "discogs"
+    store.upsert_catalog_track(ct)
+    assert store.get_catalog_track(-7).tag_source == "discogs"
+    assert store.get_catalog_track(-7).label == ct.label
+
+
+def test_tag_source_column_is_added_to_an_old_database(tmp_path: Path):
+    """The column is additive: a database from before issue #146 gains it on open, its rows read as None."""
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE catalog_tracks (id INTEGER PRIMARY KEY, isrc TEXT, artist TEXT NOT NULL, "
+                 "title TEXT NOT NULL, mix_name TEXT NOT NULL, label TEXT NOT NULL, genre TEXT NOT NULL, "
+                 "sub_genre TEXT, catalog_number TEXT, release_name TEXT, release_date TEXT, bpm INTEGER, "
+                 "key TEXT, duration_ms INTEGER, artwork_url TEXT, fetched_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO catalog_tracks (id, artist, title, mix_name, label, genre, fetched_at) "
+                 "VALUES (5, 'A', 'T', 'Original Mix', 'L', 'G', 'now')")
+    conn.commit()
+    conn.close()
+    assert Store(db).get_catalog_track(5).tag_source is None
+
+
 def test_tracks_and_duplicates(store: Store, tmp_path: Path):
     store.upsert_catalog_track(_catalog())
     tid = store.add_track(path=tmp_path / "a.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800,

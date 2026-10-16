@@ -1,0 +1,60 @@
+{
+ "pagination": {
+  "page": 1,
+  "pages": 1,
+  "per_page": 25,
+  "items": 2,
+  "urls": {}
+ },
+ "results": [
+  {
+   "id": 3001,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Astral Projection - Trust In Trance",
+   "year": "1996",
+   "label": [
+    "Trust In Trance Records"
+   ],
+   "catno": "TIT 1001",
+   "style": [
+    "Goa Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Album"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/3001",
+   "cover_image": "https://i.discogs.com/3001.jpg"
+  },
+  {
+   "id": 3002,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Astral Projection - Into the Void",
+   "year": "2022",
+   "label": [
+    "Sacred Technology"
+   ],
+   "catno": "STCD012",
+   "style": [
+    "Psy-Trance",
+    "Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Album"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/3002",
+   "cover_image": "https://i.discogs.com/3002.jpg"
+  }
+ ]
+}

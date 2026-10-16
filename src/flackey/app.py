@@ -33,6 +33,7 @@ from .source.deezer_bot import DeezerBotSource
 from .source.lossless import LosslessProvider
 from .source.slskd import SlskdClient, SoulseekProvider
 from .store import Store
+from .tag_lookup import default_lookup
 from .telegram import TelegramLogin, probe_authorized
 from .tools import resource_dir
 from .web import create_app
@@ -331,7 +332,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
     worker = Worker(store, source, BeatportCatalog(), LogNotifier(), settings, status=status,
-                    providers=providers, http=http)
+                    providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
     inbox = Inbox(store)
 
     if not UI_DIR.exists():
