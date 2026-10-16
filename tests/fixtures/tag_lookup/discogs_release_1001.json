@@ -1,0 +1,71 @@
+{
+ "id": 1001,
+ "status": "Accepted",
+ "year": 1997,
+ "resource_url": "https://api.discogs.com/releases/1001",
+ "uri": "https://www.discogs.com/release/1001",
+ "artists": [
+  {
+   "name": "Hallucinogen",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Hallucinogen",
+ "labels": [
+  {
+   "name": "Twisted Records",
+   "catno": "TWSCD4",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "CD",
+   "qty": "1",
+   "descriptions": [
+    "Album"
+   ]
+  }
+ ],
+ "title": "The Lone Deranger",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Trance",
+  "Goa Trance",
+  "Psy-Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "1",
+   "type_": "track",
+   "title": "Snarling Black Mabel",
+   "duration": "8:12"
+  },
+  {
+   "position": "2",
+   "type_": "track",
+   "title": "Alpha Centauri",
+   "duration": "10:16"
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/1001.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/1001-150.jpg"
+}

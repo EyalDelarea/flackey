@@ -1,0 +1,91 @@
+{
+ "id": 1003,
+ "status": "Accepted",
+ "year": 2001,
+ "resource_url": "https://api.discogs.com/releases/1003",
+ "uri": "https://www.discogs.com/release/1003",
+ "artists": [
+  {
+   "name": "Various",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Various",
+ "labels": [
+  {
+   "name": "Dragonfly Records",
+   "catno": "BFLCD 40",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "CD",
+   "qty": "1",
+   "descriptions": [
+    "Compilation"
+   ]
+  }
+ ],
+ "title": "Goa Classics",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Goa Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "1",
+   "type_": "track",
+   "title": "Alpha Centauri (Edit)",
+   "duration": "6:30",
+   "artists": [
+    {
+     "name": "Hallucinogen",
+     "anv": "",
+     "join": "",
+     "role": "",
+     "tracks": "",
+     "id": 1,
+     "resource_url": "https://api.discogs.com/artists/1"
+    }
+   ]
+  },
+  {
+   "position": "2",
+   "type_": "track",
+   "title": "Rain",
+   "duration": "7:00",
+   "artists": [
+    {
+     "name": "Somebody Else",
+     "anv": "",
+     "join": "",
+     "role": "",
+     "tracks": "",
+     "id": 1,
+     "resource_url": "https://api.discogs.com/artists/1"
+    }
+   ]
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/1003.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/1003-150.jpg"
+}

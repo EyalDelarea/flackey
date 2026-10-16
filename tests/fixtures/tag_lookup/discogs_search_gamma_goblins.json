@@ -1,0 +1,36 @@
+{
+ "pagination": {
+  "page": 1,
+  "pages": 1,
+  "per_page": 25,
+  "items": 1,
+  "urls": {}
+ },
+ "results": [
+  {
+   "id": 2001,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Infected Mushroom - Classical Mushroom",
+   "year": "2000",
+   "label": [
+    "BNE"
+   ],
+   "catno": "BNECD 2",
+   "style": [
+    "Psy-Trance",
+    "Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "CD",
+    "Album"
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/2001",
+   "cover_image": "https://i.discogs.com/2001.jpg"
+  }
+ ]
+}

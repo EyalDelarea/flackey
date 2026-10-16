@@ -1,0 +1,39 @@
+{
+ "id": 1754956977,
+ "readable": true,
+ "title": "Into the Void",
+ "title_short": "Into the Void",
+ "title_version": "",
+ "isrc": "UKU932231081",
+ "link": "https://www.deezer.com/track/1754956977",
+ "duration": 442,
+ "track_position": 1,
+ "disk_number": 1,
+ "rank": 120000,
+ "release_date": "2022-06-03",
+ "explicit_lyrics": false,
+ "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/abc.mp3?hdnea=exp=1",
+ "bpm": 0,
+ "gain": -9.1,
+ "available_countries": [
+  "IL"
+ ],
+ "contributors": [],
+ "md5_image": "2e018122cb56986277102d2041a592c8",
+ "artist": {
+  "id": 5373,
+  "name": "Astral Projection",
+  "link": "https://www.deezer.com/artist/5373",
+  "type": "artist"
+ },
+ "album": {
+  "id": 302127,
+  "title": "Into the Void",
+  "link": "https://www.deezer.com/album/302127",
+  "cover_xl": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/1000x1000-000000-80-0-0.jpg",
+  "md5_image": "2e018122cb56986277102d2041a592c8",
+  "release_date": "2022-06-03",
+  "type": "album"
+ },
+ "type": "track"
+}

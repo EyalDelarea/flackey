@@ -1,0 +1,70 @@
+{
+ "id": 2001,
+ "status": "Accepted",
+ "year": 2000,
+ "resource_url": "https://api.discogs.com/releases/2001",
+ "uri": "https://www.discogs.com/release/2001",
+ "artists": [
+  {
+   "name": "Infected Mushroom",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Infected Mushroom",
+ "labels": [
+  {
+   "name": "BNE",
+   "catno": "BNECD 2",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "CD",
+   "qty": "1",
+   "descriptions": [
+    "Album"
+   ]
+  }
+ ],
+ "title": "Classical Mushroom",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Psy-Trance",
+  "Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "1",
+   "type_": "track",
+   "title": "Bust A Move",
+   "duration": "8:20"
+  },
+  {
+   "position": "2",
+   "type_": "track",
+   "title": "Gamma Goblins Part 2",
+   "duration": "8:02"
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/2001.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/2001-150.jpg"
+}

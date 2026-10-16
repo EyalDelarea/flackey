@@ -1,0 +1,64 @@
+{
+ "id": 3002,
+ "status": "Accepted",
+ "year": 2022,
+ "resource_url": "https://api.discogs.com/releases/3002",
+ "uri": "https://www.discogs.com/release/3002",
+ "artists": [
+  {
+   "name": "Astral Projection",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Astral Projection",
+ "labels": [
+  {
+   "name": "Sacred Technology",
+   "catno": "STCD012",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "CD",
+   "qty": "1",
+   "descriptions": [
+    "Album"
+   ]
+  }
+ ],
+ "title": "Into the Void",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Psy-Trance",
+  "Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "1",
+   "type_": "track",
+   "title": "Into The Void",
+   "duration": "7:22"
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/3002.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/3002-150.jpg"
+}

@@ -155,7 +155,8 @@ class PipelineMixin:
     async def _catalog_search(self, req: Request, query: Query) -> list[CatalogTrack]:
         """Beatport's search, or nothing when Beatport refuses us. Beatport is a scraped web page and only
         adds tags -- the file comes from the source and the fingerprint proves it -- so a Cloudflare
-        challenge (every lookup a 403 since 2026-10-14) must not cost the download. The owner hears once
+        challenge (every lookup a 403 since 2026-10-14) must not cost the download; filing then takes what
+        tags it can from Deezer and Discogs instead (`_tags_for`, issue #146). The owner hears once
         per outage, not once per track, and again only after Beatport has answered in between."""
         try:
             tracks = await self.catalog.search(query)
@@ -163,8 +164,9 @@ class PipelineMixin:
             log.warning("req#%d: Beatport unavailable (%s); going on without its tags", req.id, e)
             if not self._catalog_blocked:
                 self._catalog_blocked = True
-                await self.notifier.send(f"Beatport is blocking lookups ({e}). Downloads carry on without "
-                                         f"Beatport tags (genre, label, artwork) until it answers again.")
+                await self.notifier.send(f"Beatport is blocking lookups ({e}). Downloads carry on, tagged "
+                                         f"from Deezer and Discogs where they know the track, until it "
+                                         f"answers again.")
             return []
         self._catalog_blocked = False
         return tracks

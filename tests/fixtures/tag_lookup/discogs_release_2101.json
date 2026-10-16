@@ -1,0 +1,70 @@
+{
+ "id": 2101,
+ "status": "Accepted",
+ "year": 1996,
+ "resource_url": "https://api.discogs.com/releases/2101",
+ "uri": "https://www.discogs.com/release/2101",
+ "artists": [
+  {
+   "name": "Etnica",
+   "anv": "",
+   "join": "",
+   "role": "",
+   "tracks": "",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/artists/1"
+  }
+ ],
+ "artists_sort": "Etnica",
+ "labels": [
+  {
+   "name": "Flying Rhino Records",
+   "catno": "DAT 012",
+   "entity_type": "1",
+   "entity_type_name": "Label",
+   "id": 1,
+   "resource_url": "https://api.discogs.com/labels/1"
+  }
+ ],
+ "formats": [
+  {
+   "name": "Vinyl",
+   "qty": "1",
+   "descriptions": [
+    "12\"",
+    "33 ⅓ RPM"
+   ]
+  }
+ ],
+ "title": "Snarling",
+ "country": "UK",
+ "genres": [
+  "Electronic"
+ ],
+ "styles": [
+  "Goa Trance"
+ ],
+ "tracklist": [
+  {
+   "position": "A",
+   "type_": "track",
+   "title": "Snarling",
+   "duration": "7:40"
+  },
+  {
+   "position": "B",
+   "type_": "track",
+   "title": "Snarling (Remix)",
+   "duration": "8:10"
+  }
+ ],
+ "images": [
+  {
+   "type": "primary",
+   "uri": "https://i.discogs.com/2101.jpg",
+   "width": 600,
+   "height": 600
+  }
+ ],
+ "thumb": "https://i.discogs.com/2101-150.jpg"
+}

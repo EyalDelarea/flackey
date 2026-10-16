@@ -14,6 +14,7 @@ from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict
 from ..tag import write_tags
+from ..tag_lookup import fill_missing
 from ..verify import verify
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
@@ -160,6 +161,36 @@ class FilingMixin:
         return kept
 
 
+    async def _tags_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack:
+        """The record whose tags go into the file. A Beatport match is used as it is. Without one -- Beatport
+        refused the lookup or found nothing -- the stand-in built from the candidate is filled in from Deezer
+        and Discogs (issue #146), and saved so the row and the library read the same tags.
+
+        A stand-in is any record with a negative id: `_fallback_catalog`'s, built now or on an earlier pass.
+        `fill_missing` only fills empty fields, so Beatport's tags are never touched and a row filled once
+        is not looked up again."""
+        if catalog is not None and catalog.id > 0:
+            return catalog
+        if catalog is None:
+            catalog = _fallback_catalog(cand)
+        if self.tag_lookup is not None and catalog.tag_source is None:
+            try:
+                found = await self.tag_lookup.lookup(catalog, cand.deezer_id)
+            except Exception:
+                # Tags are an extra: a lookup that breaks on an answer nobody foresaw must not cost a file
+                # that has already passed every check.
+                log.exception("req#%d: tag lookup failed; filing with the stand-in's tags", req.id)
+            else:
+                catalog = fill_missing(catalog, found)
+                log.info("req#%d: no Beatport tags; %s", req.id, f"filled from {catalog.tag_source}"
+                         if catalog.tag_source else "Deezer and Discogs had none")
+                for note in found.notes:
+                    log.debug("req#%d tag lookup: %s", req.id, note)
+        self.store.upsert_catalog_track(catalog)
+        self.store.update_request(req.id, catalog_track_id=catalog.id)
+        return catalog
+
+
     async def _file_track(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,
                           verdict: Verdict, fp: FingerprintResult | None, hit: LosslessHit | None,
                           source: str, source_fmt: str | None) -> None:
@@ -172,10 +203,7 @@ class FilingMixin:
         added to its playlist and announced exactly like every other track -- the alternative was a second
         copy of this drifting away from the first."""
         self._set_state(req, RequestState.FILING)
-        if catalog is None:
-            catalog = _fallback_catalog(cand)
-            self.store.upsert_catalog_track(catalog)
-            self.store.update_request(req.id, catalog_track_id=catalog.id)
+        catalog = await self._tags_for(req, cand, catalog)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
         dest = final_path(self.settings.library_root, catalog, tmp.suffix.lstrip("."),
@@ -264,9 +292,7 @@ class FilingMixin:
         membership and the fingerprint evidence follow it across the swap for free -- the .m3u8 files on
         disk are the only things holding the old path, and they are rewritten from the row.
         """
-        if catalog is None:
-            catalog = _fallback_catalog(cand)
-            self.store.upsert_catalog_track(catalog)
+        catalog = await self._tags_for(req, cand, catalog)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, hit.path, catalog, hit.verdict, artwork, source=hit.provider)
         # The replacement goes where the track already is: under a date layout, recomputing the path

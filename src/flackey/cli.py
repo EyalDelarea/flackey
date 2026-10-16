@@ -137,6 +137,30 @@ def replay_picks(out: Path = typer.Option(Path("replay.md"), "--out",  # noqa: B
     typer.echo(f"{len(rows)} attempts replayed; wrote {out}")
 
 
+@app.command("tags-dry-run")
+def tags_dry_run(out: Path = typer.Option(Path("tags-dry-run.md"), "--out",  # noqa: B008
+                                          help="Where to write the markdown table"),
+                 limit: int = typer.Option(500, "--limit", help="At most this many tracks, newest first")) -> None:
+    """Look up every Beatport-tagged track in Deezer and Discogs as if Beatport were down, and compare the
+    tags each would get with Beatport's. Changes nothing in the library; Discogs answers are cached."""
+    import httpx
+
+    from .store import Store
+    from .tag_dryrun import render, run
+    from .tag_lookup import default_lookup
+
+    s = _settings()
+
+    async def go() -> list:
+        async with httpx.AsyncClient(timeout=20) as http:
+            return await run(Store(s.db_path), default_lookup(http, s.data_dir), limit=limit,
+                             progress=typer.echo)
+
+    rows = asyncio.run(go())
+    out.write_text(render(rows), encoding="utf-8")
+    typer.echo(f"{len(rows)} tracks looked up; wrote {out}")
+
+
 lossless_app = typer.Typer(help="Lossless-upgrade tools (Soulseek through slskd)", no_args_is_help=True)
 app.add_typer(lossless_app, name="lossless")
 

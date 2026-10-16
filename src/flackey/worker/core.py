@@ -18,6 +18,7 @@ from ..notify import Notifier
 from ..source import LosslessError, LosslessProvider, Source, SourceUnauthorized
 from ..store import Store
 from ..tag import fetch_artwork
+from ..tag_lookup import TagLookup
 from .acoustic import AcousticMixin
 from .filing import FilingMixin
 from .lossless_attempt import LosslessMixin
@@ -43,9 +44,13 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                  status: dict | None = None,
                  providers: list[LosslessProvider] | None = None,
                  http: httpx.AsyncClient | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 tag_lookup: TagLookup | None = None):
         self.store, self.source, self.catalog, self.notifier, self.settings = store, source, catalog, notifier, settings
         self.artwork_fetch = artwork_fetch
+        # Deezer + Discogs, for the tags of a track Beatport could not describe (issue #146). None files
+        # such a track with the stand-in's own tags, as before.
+        self.tag_lookup = tag_lookup
         # shared with /api/health (Task 14): {"telegram_authorized": bool}; the worker flips it to False
         # when the Telethon session dies and then stops, leaving every request queued for the next run
         self.status = status if status is not None else {"telegram_authorized": True}

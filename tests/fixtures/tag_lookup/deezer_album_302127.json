@@ -1,0 +1,36 @@
+{
+ "id": 302127,
+ "title": "Into the Void",
+ "upc": "5056321623456",
+ "link": "https://www.deezer.com/album/302127",
+ "cover_xl": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/1000x1000-000000-80-0-0.jpg",
+ "md5_image": "2e018122cb56986277102d2041a592c8",
+ "genre_id": 106,
+ "genres": {
+  "data": [
+   {
+    "id": 106,
+    "name": "Electro",
+    "type": "genre"
+   }
+  ]
+ },
+ "label": "Sacred Technology",
+ "nb_tracks": 1,
+ "duration": 442,
+ "fans": 120,
+ "release_date": "2022-06-03",
+ "record_type": "single",
+ "available": true,
+ "explicit_lyrics": false,
+ "contributors": [],
+ "artist": {
+  "id": 5373,
+  "name": "Astral Projection",
+  "type": "artist"
+ },
+ "type": "album",
+ "tracks": {
+  "data": []
+ }
+}

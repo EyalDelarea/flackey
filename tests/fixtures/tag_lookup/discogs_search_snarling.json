@@ -1,0 +1,35 @@
+{
+ "pagination": {
+  "page": 1,
+  "pages": 1,
+  "per_page": 25,
+  "items": 1,
+  "urls": {}
+ },
+ "results": [
+  {
+   "id": 2101,
+   "type": "release",
+   "master_id": 9000,
+   "title": "Etnica - Snarling",
+   "year": "1996",
+   "label": [
+    "Flying Rhino Records"
+   ],
+   "catno": "DAT 012",
+   "style": [
+    "Goa Trance"
+   ],
+   "genre": [
+    "Electronic"
+   ],
+   "format": [
+    "Vinyl",
+    "12\""
+   ],
+   "country": "UK",
+   "resource_url": "https://api.discogs.com/releases/2101",
+   "cover_image": "https://i.discogs.com/2101.jpg"
+  }
+ ]
+}
