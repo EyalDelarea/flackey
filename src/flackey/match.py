@@ -56,8 +56,12 @@ def candidate_query(cand: Candidate) -> Query:
                  version=candidate_version(cand), duration_s=cand.duration_s)
 
 
+def versions_agree(a: str | None, b: str | None) -> bool:
+    return fuzz.token_set_ratio(_norm(a), _norm(b)) >= 80
+
+
 def same_version(cand: Candidate, catalog: CatalogTrack) -> bool:
-    return fuzz.token_set_ratio(_norm(candidate_version(cand)), _norm(catalog.mix_name)) >= 80
+    return versions_agree(candidate_version(cand), catalog.mix_name)
 
 
 def _version_points(query: Query, cand: Candidate) -> int:

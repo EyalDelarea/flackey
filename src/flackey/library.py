@@ -9,7 +9,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from .match import candidate_version
+from .match import candidate_version, versions_agree
 from .models import Candidate, CatalogTrack, Track
 from .store import Store
 
@@ -157,10 +157,13 @@ def _present(store: Store, t: Track | None) -> Track | None:
 
 def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate) -> Track | None:
     isrc = (catalog.isrc if catalog else None) or cand.isrc
+    version = catalog.mix_name if catalog else candidate_version(cand)
     if isrc:
-        t = _present(store, store.find_track_by_isrc(isrc))
-        if t:
-            return t
+        # A label can reissue a remaster under the original's ISRC (Hallucinogen's "LSD (Remastered
+        # 2024)", 2026-10-20), so the ISRC is only the same track when the version agrees too.
+        for t in store.find_tracks_by_isrc(isrc):
+            if (not (t.mix_name and version) or versions_agree(t.mix_name, version)) and _present(store, t):
+                return t
     if catalog:
         return _present(store, store.find_track_by_meta(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s))
     return _present(store, store.find_track_by_meta(cand.artist, cand.title, candidate_version(cand), cand.duration_s))

@@ -112,6 +112,28 @@ def test_find_duplicate_by_isrc_then_meta(tmp_path: Path):
     assert find_duplicate(store, None, Candidate(source="x", source_ref="r", artist="Other", title="Song")) is None
 
 
+def test_find_duplicate_isrc_shared_by_a_remaster_is_not_a_duplicate(tmp_path: Path):
+    # Twisted reissued Hallucinogen's "L.S.D." as "LSD (Remastered 2024)" under the original's ISRC
+    # (2026-10-20): the ISRC alone made the remaster "already in library" every time it was asked for.
+    store = Store(tmp_path / "s.sqlite")
+    (tmp_path / "lsd.aiff").write_bytes(b"x")
+    store.add_track(path=tmp_path / "lsd.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=1,
+                    artist="Hallucinogen", title="L.S.D.", mix_name="Original Mix", duration_s=403,
+                    isrc="USA2P0300457", catalog_track_id=None, request_id=None)
+    remaster = CatalogTrack(id=2, isrc="USA2P0300457", artist="Hallucinogen", title="LSD",
+                            mix_name="Remastered 2024", label="Twisted", genre="Psy-Trance", duration_ms=402987)
+    cand = Candidate(source="catalog", source_ref="r", artist="Hallucinogen", title="LSD",
+                     mix_name="Remastered 2024", duration_s=403)
+    assert find_duplicate(store, remaster, cand) is None
+    (tmp_path / "lsd-2024.aiff").write_bytes(b"x")
+    store.add_track(path=tmp_path / "lsd-2024.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050,
+                    file_size=1, artist="Hallucinogen", title="LSD", mix_name="Remastered 2024",
+                    duration_s=403, isrc="USA2P0300457", catalog_track_id=2, request_id=None)
+    assert find_duplicate(store, remaster, cand).path == tmp_path / "lsd-2024.aiff"
+    original = CatalogTrack(**{**remaster.__dict__, "title": "L.S.D.", "mix_name": "Original Mix"})
+    assert find_duplicate(store, original, cand).path == tmp_path / "lsd.aiff"
+
+
 def _add(store, path, title="Into the Void", duration_s=443):
     return store.add_track(path=path, fmt="mp3", bitrate_kbps=320, cutoff_hz=19800, file_size=1,
                            artist="Hallucinogen", title=title, mix_name="Original Mix", duration_s=duration_s,

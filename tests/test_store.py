@@ -141,8 +141,8 @@ def test_tracks_and_duplicates(store: Store, tmp_path: Path):
                           file_size=100, artist="Astral Projection", title="Into the Void",
                           mix_name="Original Mix", duration_s=443, isrc="UKU932231081",
                           catalog_track_id=16552105, request_id=None)
-    assert store.find_track_by_isrc("UKU932231081").id == tid
-    assert store.find_track_by_isrc("nope") is None
+    assert [t.id for t in store.find_tracks_by_isrc("UKU932231081")] == [tid]
+    assert store.find_tracks_by_isrc("nope") == []
     assert store.find_track_by_meta("astral projection", "into the void", "original mix", 445).id == tid
     assert store.find_track_by_meta("astral projection", "into the void", "original mix", 460) is None
     assert store.find_track_by_meta("astral projection", "into the void", "vini vici remix", 443) is None
