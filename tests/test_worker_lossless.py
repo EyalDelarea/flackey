@@ -405,6 +405,26 @@ async def test_fingerprint_failure_falls_back_and_keeps_the_fingerprints(lenv, m
     assert store.get_track(r.track_id).source == "deezer_bot" and not list(settings.tmp_dir.iterdir())
 
 
+async def test_a_recording_the_fingerprint_refused_is_not_fetched_again_from_another_peer(lenv, tmp_path: Path):
+    """Request #384 (2026-10-20) downloaded "02 LSD (Live Mix).flac", 549 s, from four peers in turn: about
+    450 MB, and the same 0.655 every time. Once the fingerprint has refused a file, the same name at the
+    same length from someone else is the same recording; a different file is still worth a try."""
+    _, store, _, provider, fake_check, _ = lenv
+    good = _flac(tmp_path / "other.flac")
+    live = "The Singles Remastered\\02 LSD (Live Mix).flac"
+    provider.files = [lf("a", path=live), lf("b", path=live.replace("02 ", "02. "), has_free_slot=False),
+                      lf("c", path="x\\01. LSD (Dub).flac", length_s=9, size=1_000_000)]
+    provider.audio = {"a": good, "b": good, "c": good}
+    fake_check.result = FingerprintResult("failed", 0.655, 123.1, "best score 0.65 below 0.79", [9], [8])
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert provider.downloaded[:2] == ["a", "c"] and "b" not in provider.downloaded
+    a = attempt_of(store, rid)
+    skips = [e["detail"] for e in a.timeline if e["event"] == "skip_same_recording"]
+    assert [d["peer"] for d in skips] == ["b"]
+
+
 async def test_fingerprint_unavailable_ends_the_attempt_rather_than_trying_the_next_peer(lenv):
     """Issue #68: a file nothing acoustic vouched for is never filed from Soulseek. The reference is missing
     for every pick alike, so the attempt ends rather than trying the next peer -- and the lossy copy it
