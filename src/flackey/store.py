@@ -460,9 +460,8 @@ class Store:
         rows = self.conn.execute(sql, params + [limit]).fetchall()
         return [self._row_to_track(r) for r in rows]
 
-    def find_track_by_isrc(self, isrc: str) -> Track | None:
-        r = self.conn.execute("SELECT * FROM tracks WHERE isrc=? LIMIT 1", (isrc,)).fetchone()
-        return None if r is None else self._row_to_track(r)
+    def find_tracks_by_isrc(self, isrc: str) -> list[Track]:
+        return [self._row_to_track(r) for r in self.conn.execute("SELECT * FROM tracks WHERE isrc=?", (isrc,))]
 
     def find_track_by_meta(self, artist: str, title: str, mix_name: str, duration_s: int | None,
                            tolerance_s: int = 3) -> Track | None:
