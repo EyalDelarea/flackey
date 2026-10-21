@@ -15,6 +15,7 @@ from ..lossless import (
     pick,
     policy_from_settings,
     reference_for,
+    same_recording,
     search_text,
     transfer_ceiling_s,
 )
@@ -177,9 +178,13 @@ class LosslessMixin:
         # queue, so the next pick goes to someone else: one peer sharing a whole album once took every pick
         # of a request while another peer had the song with a free slot (2026-10-14).
         stuck_peers: set[str] = set()
+        refused = []                                  # files the fingerprint said are another recording
         n = 0
         for file in report.survivors:
             if file.username in stuck_peers:
+                continue
+            if any(same_recording(file, r, ref.artist) for r in refused):
+                rec.event("skip_same_recording", peer=file.username, file=file.name)
                 continue
             if n == s.lossless_max_picks:
                 break
@@ -212,6 +217,8 @@ class LosslessMixin:
                 break
             if outcome in PEER_STUCK_OUTCOMES:
                 stuck_peers.add(file.username)
+            if outcome == "fingerprint_failed":
+                refused.append(file)
         rec.finish(outcome)
         return None
 

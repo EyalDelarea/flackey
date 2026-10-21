@@ -27,6 +27,9 @@ VERSION_WORDS = frozenset({"remix", "rmx", "mix", "edit", "version", "dub", "rew
 _TRACK_NO = re.compile(r"^\s*[\[(]?\d{1,3}[\])]?\s*[.\-_)]?\s*")
 _TRAILING_HASH = re.compile(r"-[0-9a-f]{6,}$")
 _PARENS = re.compile(r"\(.*?\)")
+# A release year in a version ("Remastered 2024") is the label's, not the peers': they file the same remaster
+# under the box set's 2023 (2026-10-20), so it neither goes into the search nor has to be in a file's name.
+_YEAR = re.compile(r"\b(19|20)\d{2}\b")
 
 
 @dataclass(frozen=True)
@@ -101,7 +104,7 @@ def search_text(ref: Reference) -> str:
     real version (the spike: this form found every track once the search was allowed to complete)."""
     text = f"{first_artist(ref.artist)} {_PARENS.sub('', ref.title)}"
     if not ref.is_original:
-        text += f" {ref.mix_name}"
+        text += f" {_YEAR.sub('', ref.mix_name)}"
     return " ".join(text.split())
 
 
@@ -193,6 +196,19 @@ def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | No
     return "banned user" if f.username in p.banned_users else None
 
 
+def _asks_remaster(ref: Reference) -> bool:
+    return "remaster" in norm(ref.mix_name)
+
+
+def rule_remaster_named(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    """The one identity check that rejects. A remaster is the original recording mastered again, so the
+    fingerprint matches both (0.96 each against the 2024 "LSD" video, 2026-10-20) and cannot prove which one
+    came. The peer's folder or file name saying so is the only evidence there is."""
+    if _asks_remaster(ref) and "remaster" not in norm(f.path):
+        return "nothing in its path says remaster"
+    return None
+
+
 Ranker = Callable[[LosslessFile, Reference], object]
 DURATION_BUCKET_S = 5          # encoding slack between releases of one recording; inside it, peer quality decides
 
@@ -205,7 +221,9 @@ def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
     words = set(norm(version or "").split()) | set(extra)
     if ref.is_original:
         return not (words & VERSION_WORDS) or "original" in words
-    want = [w for w in norm(ref.mix_name).split() if w not in VERSION_WORDS]
+    # The remaster rule has already checked the whole path, which is where peers usually say it
+    want = [w for w in norm(_YEAR.sub("", ref.mix_name)).split()
+            if w not in VERSION_WORDS and not w.startswith("remaster")]
     have = set(norm(f"{version or ''} {title}").split())
     return all(w in have for w in want)
 
@@ -222,6 +240,16 @@ def rank_duration(f: LosslessFile, ref: Reference) -> int:
     if not known or f.length_s is None:
         return 10_000
     return min(abs(f.length_s - d) for d in known) // DURATION_BUCKET_S
+
+
+def same_recording(a: LosslessFile, b: LosslessFile, artist: str) -> bool:
+    """The same file name at the same length from another peer: one release's copy of one recording. After
+    the fingerprint refused one, the others would score the same (four Live Mixes at 0.655, 2026-10-20)."""
+    if a.length_s is None or b.length_s is None or abs(a.length_s - b.length_s) > 1:
+        return False
+    title_a, version_a = file_title(a.name, artist)
+    title_b, version_b = file_title(b.name, artist)
+    return (title_a, norm(version_a)) == (title_b, norm(version_b))
 
 
 SAME_SONG_MIN = 80             # token_set ratio from which a file's title is taken to name the asked song
@@ -251,7 +279,7 @@ def rank_artist(f: LosslessFile, ref: Reference) -> int:
 HARD_RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("limits", rule_limits),
     ("plausible_size", rule_plausible_size),
-    ("queue", rule_queue), ("banned_user", rule_banned_user),
+    ("queue", rule_queue), ("banned_user", rule_banned_user), ("remaster_named", rule_remaster_named),
 ]
 IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
     ("same_song", rank_same_song), ("version", rank_version), ("duration", rank_duration), ("title", rank_title),
