@@ -12,6 +12,7 @@ from .models import TITLE_FLOOR, CatalogTrack, Query, norm
 _NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL)
 BROWSER = "chrome"
 DURATION_SLACK_S = 3
+ARTIST_SAME = 90      # token_sort ratio from which a record's artist is the asked one, spelling aside
 
 
 class CatalogError(Exception):
@@ -97,11 +98,26 @@ def _length_pins_a_version(query: Query, tracks: list[CatalogTrack]) -> bool:
     that length. Then the tag is Beatport's filing, not a different recording, and the flat original-mix
     bonus is describing the wrong release: an album cut tagged "Album Edit" loses to a later compilation
     tagged "Original Mix" whose master exists on no other release. `match._pinned_by_length` decides the same
-    question for source candidates; this is that rule where the catalogue itself is being chosen."""
+    question for source candidates; this is that rule where the catalogue itself is being chosen.
+
+    Only a release of the asked song can pin (`_is_the_song`): the rule is about how Beatport filed one
+    recording, and a length is no evidence that some other act's remix is it."""
     if query.duration_s is None or query.version:
         return False
-    return (any(_matches_length(t, query.duration_s) and not _is_original(t.mix_name) for t in tracks)
+    return (any(_matches_length(t, query.duration_s) and not _is_original(t.mix_name) and _is_the_song(query, t)
+                for t in tracks)
             and not any(_matches_length(t, query.duration_s) and _is_original(t.mix_name) for t in tracks))
+
+
+def _is_the_song(query: Query, t: CatalogTrack) -> bool:
+    """The asked artist (token_sort, as `best_match` scores it) under a title that says nothing the asked one
+    does not. A superset title passes the title floor -- "Sandstorm (TML 2025 RMX)" for "Sandstorm" scores
+    100 -- and it is exactly how a remix credit hidden in the title reads; with "D'rude" at 83 for "Darude"
+    that remix, the video's length by chance, pinned itself over Darude's original (2026-10-22)."""
+    if not (query.artist and query.title):
+        return False
+    return (fuzz.token_sort_ratio(_norm(query.artist), _norm(t.artist)) >= ARTIST_SAME
+            and set(_norm(t.title).split()) <= set(_norm(query.title).split()))
 
 
 def _same_isrc(t: CatalogTrack, isrc: str | None) -> bool:
@@ -130,7 +146,8 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
             # token_sort, not token_set: token_set scores 100 for any *subset* of tokens, so
             # "The Void - Into the Void" ties the real record for "astral projection into the void"
             s = fuzz.token_sort_ratio(_norm(query.raw), _norm(f"{t.artist} {t.title}"))
-        if not want_version and not _is_original(t.mix_name) and not (pinned and _matches_length(t, query.duration_s)):
+        if not want_version and not _is_original(t.mix_name) and not (
+                pinned and _matches_length(t, query.duration_s) and _is_the_song(query, t)):
             s -= 25
         if query.duration_s and t.duration_s:
             # the video's length picks the release: 15 s off costs the same as a wrong version; a few
