@@ -211,3 +211,18 @@ def test_only_the_asked_song_by_the_asked_artist_can_pin_a_version_by_length():
     # The same remix credited to the asked artist, under a plain title, is still the one the length singles out
     album = _ct(3, "Darude", title="Sandstorm", mix="Album Edit", dur_s=231)
     assert best_match(q, [original, remix, album]) is album
+
+
+@pytest.mark.parametrize("asked, credited, title", [
+    ("Darude", "Darude, Ashley Wallbridge", "Sandstorm"),             # Beatport credits every act
+    ("Artist ft. Singer", "Artist, Singer", "Sandstorm"),             # the video credits the singer as feat.
+    ("Above & Beyond", "Above & Beyond, Zoë Johnston", "Sandstorm"),  # an act with "&" in its own name
+    ("Tiësto", "Tiesto", "Sandstorm"),                                # an accent one side spells and one not
+    ("Darude", "Darude", "Sandstorm (feat. Singer)"),                 # a feature credit inside the title
+], ids=["co-credit", "feat", "ampersand-act", "accent", "feat-in-title"])
+def test_the_asked_act_among_the_credits_still_pins_its_edit_by_length(asked, credited, title):
+    q = Query(raw="", artist=asked, title="Sandstorm", duration_s=232)
+    original = _ct(1, credited, title=title, dur_s=443, date="2000-01-01")
+    edit = _ct(2, credited, title=title, mix="Radio Edit", dur_s=231, date="2000-01-01")
+    assert _length_pins_a_version(q, [original, edit])
+    assert best_match(q, [original, edit]) is edit

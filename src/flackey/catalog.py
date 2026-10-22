@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import unicodedata
 from urllib.parse import quote
 
 from rapidfuzz import fuzz
@@ -110,14 +111,33 @@ def _length_pins_a_version(query: Query, tracks: list[CatalogTrack]) -> bool:
 
 
 def _is_the_song(query: Query, t: CatalogTrack) -> bool:
-    """The asked artist (token_sort, as `best_match` scores it) under a title that says nothing the asked one
-    does not. A superset title passes the title floor -- "Sandstorm (TML 2025 RMX)" for "Sandstorm" scores
-    100 -- and it is exactly how a remix credit hidden in the title reads; with "D'rude" at 83 for "Darude"
-    that remix, the video's length by chance, pinned itself over Darude's original (2026-10-22)."""
+    """The asked act among the record's credited ones, under a title that says nothing the asked one does
+    not. A superset title passes the title floor -- "Sandstorm (TML 2025 RMX)" for "Sandstorm" scores 100 --
+    and it is exactly how a remix credit hidden in the title reads; with "D'rude" at 83 for "Darude" that
+    remix, the video's length by chance, pinned itself over Darude's original (2026-10-22).
+
+    Credits are compared act by act, accents folded: Beatport lists every act ("Darude, Ashley
+    Wallbridge"), a video credits a singer as "ft." where Beatport adds them as an act, and "Tiësto" is
+    "Tiesto" on one side or the other. A feature credit is not part of a title either."""
     if not (query.artist and query.title):
         return False
-    return (fuzz.token_sort_ratio(_norm(query.artist), _norm(t.artist)) >= ARTIST_SAME
-            and set(_norm(t.title).split()) <= set(_norm(query.title).split()))
+    asked = {_fold(_FEAT_RE.sub(" ", query.artist)), _fold(_CREDIT_SPLIT_RE.split(query.artist)[0])}
+    credited = {_fold(t.artist)} | {_fold(a) for a in t.artist.split(", ")}
+    if not any(a and c and fuzz.token_sort_ratio(a, c) >= ARTIST_SAME for a in asked for c in credited):
+        return False
+    return set(_fold(_FEAT_RE.sub(" ", t.title)).split()) <= set(_fold(_FEAT_RE.sub(" ", query.title)).split())
+
+
+# "feat. X" / "ft X" / "featuring X" to the end of its bracket, or of the text
+_FEAT_RE = re.compile(r"[(\[]?\s*\b(?:feat|ft|featuring)\b\.?[^)\]]*[)\]]?", re.IGNORECASE)
+# Where the asked artist's main act ends: "A & B", "A x B", "A vs B", "A, B", "A feat. B"
+_CREDIT_SPLIT_RE = re.compile(r"\s*(?:,|&|\bx\b|\bvs\b\.?|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b)\s*",
+                              re.IGNORECASE)
+
+
+def _fold(s: str) -> str:
+    """`norm`, after taking the accents off: "Tiësto" and "Zoë" would otherwise lose a letter to it."""
+    return _norm("".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch)))
 
 
 def _same_isrc(t: CatalogTrack, isrc: str | None) -> bool:
