@@ -31,7 +31,7 @@ from urllib.parse import quote, quote_plus, urlencode
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
-from ..config import Settings
+from ..config import Settings, platform_name
 from ..logsetup import BACKUPS, LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
 from ..store import Store
@@ -310,8 +310,15 @@ def os_summary() -> str:
 
 
 def file_browser() -> str:
-    """What the reporter calls the window the zip is shown in."""
-    return "File Explorer" if sys.platform == "win32" else "Finder"
+    """What the reporter calls the window the zip is shown in. Only the Mac and Windows have one name for it."""
+    return {"mac": "Finder", "windows": "File Explorer"}.get(platform_name(), "your file manager")
+
+
+def _drag_hint() -> str:
+    where = file_browser()
+    window = f"the {where} window Flackey opened" if where != "your file manager" \
+        else "the window Flackey opened in your file manager"
+    return f"If it's not attached yet, drag it in from {window}."
 
 
 def _build_label() -> str:
@@ -506,7 +513,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
             parts += ["", "What I was doing just before:", cap(redact(steps), limit)]
         parts += ["", "-- Details from Flackey --", details, "",
                   f"Attached: {zip_name} ({attached}, with personal details removed).",
-                  f"If it's not attached yet, drag it in from the {file_browser()} window Flackey opened."]
+                  _drag_hint()]
         body = "\n".join(parts)
         url = _compose_url(via, subject, body)
         if len(url) <= URL_MAX or limit <= 50:
