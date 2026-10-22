@@ -184,13 +184,10 @@ class Verdict:
 NO_EDGE_HZ = 22_050
 
 
-def edge_text(cutoff_hz: int) -> str:
-    """The spectral check's finding in words: where the content stops, or that no edge was found. 0 is a
-    verdict that never reached the spectrum (a bitrate under the floor), which only a copy the owner kept
-    anyway can carry this far."""
-    if not cutoff_hz:
-        return "edge not measured"
-    return "no edge found" if cutoff_hz >= NO_EDGE_HZ else f"content to {cutoff_hz / 1000:.1f} kHz"
+def edge_text(cutoff_hz: int, measured: str = "content to") -> str:
+    """The spectral check's finding in words: where the content stops (`measured` names it: "content to"
+    in a sentence, "cutoff" in a file's comment tag), or that no edge was found."""
+    return "no edge found" if cutoff_hz >= NO_EDGE_HZ else f"{measured} {cutoff_hz / 1000:.1f} kHz"
 
 
 @dataclass
@@ -290,8 +287,9 @@ class Rejection:
     # Defaulted so a row written before the column existed still loads, and reads as the only kind there
     # was then.
     kind: str = "quality"
-    # The refused file, kept so the owner can hear it before deciding (issues #92, #97). Set on either kind
-    # when the file is a format Flackey can file, and cleared the moment the file leaves -- filed or deleted.
+    # The refused file, kept so the owner can hear it before deciding (issues #92, #97). Set on a different
+    # recording and on a spectral quality refusal (one with a cutoff), never on one for bitrate or format,
+    # and cleared the moment the file leaves -- filed or deleted.
     audio_path: str | None = None
 
 

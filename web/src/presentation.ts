@@ -367,8 +367,8 @@ function titleOf(b: Bundle): { title: string; version: string | null } {
 /* The words below a failed row. Keyed off the state, except for the one row where the state does not say
    enough: a rejection whose refused copy was kept is not the dead end `FAILED_COPY.rejected` describes --
    the file is still here and there is a button that files it. Printing "checked, failed and deleted" over
-   a player would be the row contradicting itself (issue #92). A quality rejection is kept the same way since
-   issue #97, and its note says what the check is worth: evidence, not proof. */
+   a player would be the row contradicting itself (issue #92). A spectral quality rejection is kept the same
+   way since issue #97, and its note says what the check is worth: evidence, not proof. */
 const KEPT_COPY_NOTE = 'The audio is genuine — it just did not match the recording you asked for closely '
   + 'enough. Listen to both below: if this is the take you wanted after all, Keep it anyway files this '
   + 'very copy. Nothing is deleted until you remove the row.'
@@ -376,10 +376,17 @@ const KEPT_QUALITY_NOTE = 'The spectrum looks like a lossy source — that is ev
   + 'it. If it sounds right to you, Keep it anyway files this very copy, marked as unverified. Nothing is '
   + 'deleted until you remove the row.'
 
+/** Whether a rejection has a kept copy to play and file. A quality refusal keeps one only when it was
+ *  spectral, which is when it carries a cutoff; one refused on bitrate or format is a measured fact and is
+ *  deleted (issue #97). Every place that offers the copy asks this, so a row that claims otherwise is not
+ *  drawn a player, an "evidence, not proof" note or a button the worker would refuse. */
+const hasKeptCopy = (rj: Bundle['rejection']): boolean =>
+  !!rj?.audio_path && (rj.kind === 'different_recording' || !!rj.cutoff_hz)
+
 function outcomeOf(b: Bundle): OutcomeView | null {
   const state = b.request.state
-  if (state === 'rejected' && b.rejection?.audio_path) {
-    return { retryable: false, note: b.rejection.kind === 'different_recording' ? KEPT_COPY_NOTE : KEPT_QUALITY_NOTE }
+  if (state === 'rejected' && hasKeptCopy(b.rejection)) {
+    return { retryable: false, note: b.rejection!.kind === 'different_recording' ? KEPT_COPY_NOTE : KEPT_QUALITY_NOTE }
   }
   const copy = FAILED_COPY[state]
   return copy ? { retryable: canRetry(state), note: copy.note } : null
@@ -453,7 +460,7 @@ const sampleFor = (c: Candidate): SampleView | null =>
 function samplesFor(b: Bundle): SamplesView | null {
   const rj = b.rejection
   if (b.request.state !== 'rejected' || !rj) return null
-  const found = rj.audio_path
+  const found = hasKeptCopy(rj)
     ? { key: `found:${rj.id}`, label: 'the copy Flackey found', url: rejectedAudioUrl(rj.id) } : null
   if (rj.kind !== 'different_recording') return found ? { found, reference: null, video: null, kind: 'listen' } : null
   const ref = b.reference ?? null
@@ -571,7 +578,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       // A refused copy is moved aside rather than deleted, so the owner can hear it and overrule (issues
       // #92, #97). The row must not announce a deletion while a play button for that very file sits under
       // it -- nor promise a copy that was never kept (a format Flackey cannot file, an older row).
-      const kept = !!b.rejection?.audio_path
+      const kept = hasKeptCopy(b.rejection)
       v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
       const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null

@@ -80,10 +80,11 @@ CREATE TABLE IF NOT EXISTS rejections (
   -- Where the refused file was kept, so the owner may overrule the verdict. A 'different_recording' verdict
   -- says the audio is genuine and not the track that was asked for, which is a judgement an ear can
   -- overturn -- an old track remastered or re-mixed can score below the floor and still be the copy the
-  -- owner wants (issue #92). A 'quality' verdict is evidence of a lossy source, not proof of one (issue
-  -- #97). So the file is moved aside instead of deleted: this path is what the row plays and what "Keep it
-  -- anyway" files. NULL on a rejection whose format Flackey cannot file, on one written before quality
-  -- rejections were kept, and on one whose file has since been filed or removed.
+  -- owner wants (issue #92). A spectral 'quality' verdict (one with a `cutoff_hz`) is evidence of a lossy
+  -- source, not proof of one (issue #97). So those files are moved aside instead of deleted: this path is
+  -- what the row plays and what "Keep it anyway" files. NULL on a quality rejection for bitrate or format,
+  -- which is a measured fact; on one written before spectral rejections were kept; and on one whose file
+  -- has since been filed or removed.
   audio_path TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);

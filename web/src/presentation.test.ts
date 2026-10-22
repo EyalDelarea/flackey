@@ -210,6 +210,18 @@ describe('presentRow', () => {
     expect(v.rejection?.caption).toMatch(/^Nothing above 16 kHz\. .* still here, so you can hear it and decide\.$/)
     expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('evidence, not proof') })
   })
+  it('a bitrate rejection is a measured fact: no player, no evidence-not-proof note, and the plain wording', () => {
+    // Refused on bitrate, so it never reached the spectrum and carries no cutoff. Even a row that claims a
+    // kept copy is not offered one: the worker would refuse to file it.
+    const rejection = { id: 7, request_id: 1, reason: 'bitrate 128 kbps below 320', bitrate_kbps: 128, cutoff_hz: null,
+      spectrogram_path: '/x.png', created_at: '', kind: 'quality', audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
+    expect(v.samples).toBeNull()
+    expect(v.status).toBe('bitrate 128 kbps below 320. Deleted, not added to your library.')
+    expect(v.outcome?.note).not.toMatch(/evidence, not proof/)
+    expect(v.outcome?.note).toMatch(/checked, failed and deleted/)
+    expect(v.rejection?.caption).toBe('The file did not pass the quality check.')
+  })
   it('a quality rejection with nothing kept has nothing to listen to', () => {
     // A row written before copies were kept, or a format Flackey could not file: no player, no promise.
     const rejection = { id: 7, request_id: 1, reason: 'Sounds like a 128 kbps upscale', bitrate_kbps: 320,

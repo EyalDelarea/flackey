@@ -30,7 +30,7 @@ from mutagen.id3 import (
 )
 from mutagen.wave import WAVE
 
-from .models import NO_EDGE_HZ, CatalogTrack, Verdict, source_label
+from .models import CatalogTrack, Verdict, edge_text, source_label
 
 
 class TagError(Exception):
@@ -67,9 +67,7 @@ def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_b
     kind = f"{status} {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"{status} {verdict.fmt}"
     # "no edge found" rather than "cutoff 22.1 kHz": that number is what the check answers when it found no
     # edge at all, and a player showing it would be quoting a measurement nobody made (issue #97).
-    edge = ("edge not measured" if not verdict.cutoff_hz else "no edge found" if verdict.cutoff_hz >= NO_EDGE_HZ
-            else f"cutoff {verdict.cutoff_hz / 1000:.1f} kHz")
-    parts = [f"flackey: {kind}", edge, _tags_from(catalog),
+    parts = [f"flackey: {kind}", edge_text(verdict.cutoff_hz, "cutoff"), _tags_from(catalog),
              f"via {source_label(source)}"]
     return " · ".join(p for p in parts if p)
 

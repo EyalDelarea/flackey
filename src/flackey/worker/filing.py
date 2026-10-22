@@ -15,7 +15,7 @@ from ..library import file_track, final_path, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import write_tags
 from ..tag_lookup import fill_missing
-from ..verify import LOSSLESS, verify
+from ..verify import verify
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
@@ -60,6 +60,10 @@ class FilingMixin:
             self.store.clear_rejection_audio(rejection.id)
             raise ValueError("the copy of this track is no longer on disk")
         overruling_quality = rejection.kind != "different_recording"
+        if overruling_quality and not rejection.cutoff_hz:
+            # Only a spectral refusal is ever kept; one without a cutoff was refused on a measured fact
+            # (bitrate, format), which no ear overturns.
+            raise ValueError("this copy was refused on its bitrate or format, which cannot be kept anyway")
         cand = (self.store.get_candidate(req.chosen_candidate_id) if req.chosen_candidate_id
                 else query_candidate(req.query(), req.id))
         catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
@@ -104,13 +108,14 @@ class FilingMixin:
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
                                                   f"req{req.id}-{tmp.stem}")
             if not verdict.passed:
-                # Kept, not deleted, like the different recording below (issue #97). This used to be the one
-                # rejection that threw the file away, on the theory that "an MP3 wearing a FLAC extension is
-                # a fact about the file". A sharp edge is evidence of a lossy source, not proof -- a resampler
-                # or a mastering lowpass draws one too -- and the bytes are already here, so the owner gets to
-                # hear them and overrule. Only a format Flackey can tag and file is kept: "Keep it anyway" on
-                # anything else would be a button that fails.
-                kept = self._keep_rejected(req, tmp) if verdict.fmt == "mp3" or verdict.fmt in LOSSLESS else None
+                # A spectral refusal is kept, not deleted, like the different recording below (issue #97). It
+                # used to be thrown away on the theory that "an MP3 wearing a FLAC extension is a fact about
+                # the file"; a sharp edge is evidence of a lossy source, not proof -- a resampler or a
+                # mastering lowpass draws one too -- and the bytes are already here, so the owner gets to hear
+                # them and overrule. Only that one: a bitrate under the floor or a format Flackey cannot file
+                # is a measured fact with nothing to listen for, and those verdicts never reach the spectrum,
+                # which is how they are told apart -- they carry no cutoff.
+                kept = self._keep_rejected(req, tmp) if verdict.cutoff_hz else None
                 self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz,
                                          verdict.spectrogram_path, audio_path=kept)
                 self._set_state(req, RequestState.REJECTED)
