@@ -13,6 +13,12 @@ _NOISE_RE = re.compile(
     r"lyrics?|visualizer|full\s*track|free\s*(download|dl|d/l)|out\s*now|" + _NOT_A_CREDIT + r"premiere)\b\s*[\)\]]?\s*",
     re.IGNORECASE,
 )  # the \b anchors matter: without them "Lyrical Assassin" loses its "Lyric"
+# A bracket of nothing but such words, whole: word by word, "(Official 4K Video)" left "Video)" behind. One of
+# them must be noise on its own, so "(Music Video)" stays as it was.
+_NOISE_WORDS = r"official|music|video|audio|visuali[sz]er|lyrics?|hd|hq|[48]k|1080p|720p"
+_NOISE_BRACKET_RE = re.compile(
+    r"\s*[\(\[【]\s*(?=[^\)\]】]*\b(?:official|visuali[sz]er|lyrics?|hd|hq|[48]k|1080p|720p)\b)"
+    rf"(?:(?:{_NOISE_WORDS})\b\s*)+[\)\]】]\s*", re.IGNORECASE)
 # "TB Premiere: A - T", "[XYZ Premiere] A - T": the whole tag, or _NOISE_RE leaves its "TB :" behind.
 # No dash before "premiere", so "A - T (World Premiere)" is left to _NOISE_RE.
 _PREMIERE_PREFIX_RE = re.compile(
@@ -254,6 +260,7 @@ def _scrub(s: str, channel: str) -> str:
         return " "
 
     s = _UNRELEASED_RE.sub(" ", s)
+    s = _NOISE_BRACKET_RE.sub(" ", s)
     prev = None
     while prev != s:
         prev = s

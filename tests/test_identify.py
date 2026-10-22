@@ -117,6 +117,22 @@ def test_parse_youtube_title_drops_label_and_channel_tags_but_keeps_features():
     assert (q.title, q.version) == ("Into The Void", "Vini Vici Remix")
 
 
+@pytest.mark.parametrize("title,expected", [
+    ("Darude - Sandstorm (Official 4K Video)", ("Darude", "Sandstorm", None)),
+    ("Artist - Track (Official HD Video)", ("Artist", "Track", None)),
+    ("Artist - Track (4K Official Music Video)", ("Artist", "Track", None)),
+    ("Artist - Track [Official 4K Visualizer]", ("Artist", "Track", None)),
+    ("Artist - Track (Official Video 4K)", ("Artist", "Track", None)),
+    ("Artist - Track (HQ Audio)", ("Artist", "Track", None)),
+    ("Artist - Track (Lyric Video)", ("Artist", "Track", None)),
+    ("Artist - Track (Someone Remix) (Official HD Video)", ("Artist", "Track", "Someone Remix")),
+    ("Artist - Track (Music Video)", ("Artist", "Track (Music Video)", None)),  # nothing noise on its own
+])
+def test_a_bracket_of_noise_words_goes_whole(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
 def test_parse_youtube_title_noise_words_need_word_boundaries():
     q = parse_youtube_title("Rusko - Lyrical Assassin", "Rusko", 300)
     assert (q.artist, q.title) == ("Rusko", "Lyrical Assassin")
