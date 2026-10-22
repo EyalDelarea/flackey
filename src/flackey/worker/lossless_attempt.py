@@ -9,8 +9,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..attempts import AttemptRecorder
+from ..config import Settings
 from ..convert import ConvertError, to_format
 from ..lossless import (
+    IDENTITY_RANKERS,
+    LosslessFile,
     Reference,
     pick,
     policy_from_settings,
@@ -20,9 +23,18 @@ from ..lossless import (
     transfer_ceiling_s,
 )
 from ..models import Candidate, CatalogTrack, Request, norm
-from ..source import LosslessError, LosslessProvider, TransferProgress
+from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
 from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
-from .policy import PEER_STUCK_OUTCOMES, SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
+from .policy import (
+    MAX_SLOW_SWITCHES,
+    PEER_STUCK_OUTCOMES,
+    SECOND_PICK_AFTER,
+    SECOND_SEARCH_AFTER,
+    SLOW_FALLBACK_AFTER,
+    SLOW_RATE_FRACTION,
+    SWITCH_ALLOWANCE_S,
+    SWITCH_GAIN,
+)
 from .records import (
     CATALOG_SOURCE,
     QUERY_SOURCE,
@@ -67,6 +79,24 @@ def pass_outcome(outcomes: list[str | None]) -> str | None:
     the owner nothing had matched; as `fingerprint_failed` it waits for the people online to change."""
     last = outcomes[-1] if outcomes else None
     return "fingerprint_failed" if last == "no_pick" and "fingerprint_failed" in outcomes else last
+
+
+def slow_rule_for(nxt: LosslessFile, settings: Settings) -> SlowRule:
+    """When the transfer before `nxt` is slow enough to give up for it: below the absolute rate cap and half
+    what `nxt` advertises, with more time to go than the finish floor and twice `nxt`'s projected time.
+    Only for an `nxt` that advertises a speed (the caller checks)."""
+    projected_s = nxt.size / nxt.upload_speed_bps + SWITCH_ALLOWANCE_S
+    return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
+                    finish_s=max(settings.lossless_slow_finish_s, SWITCH_GAIN * projected_s),
+                    max_rate_bps=min(settings.lossless_slow_rate_bps, SLOW_RATE_FRACTION * nxt.upload_speed_bps))
+
+
+def switch_back_rule_for(dropped: LosslessFile, rate_bps: float, settings: Settings) -> SlowRule:
+    """For the pick a slow copy was given up for: end it, for that copy, once it measures slower than the
+    copy did and its remaining bytes would take longer than fetching that copy again from the first byte
+    (with the same allowance for a queue and first byte as a switch counts)."""
+    return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
+                    finish_s=dropped.size / rate_bps + SWITCH_ALLOWANCE_S, max_rate_bps=rate_bps)
 
 
 class LosslessMixin:
@@ -201,8 +231,49 @@ class LosslessMixin:
         # of a request while another peer had the song with a free slot (2026-10-14).
         stuck_peers: set[str] = set()
         refused = []                                  # files the fingerprint said are another recording
+        # Copies given up as too slow. Each was arriving, so it is what the attempt comes back to when the
+        # pick it was given up for leads nowhere: losing a working lossless copy to a switch that failed is
+        # worse than the wait the switch tried to save.
+        slow_copies: list[tuple[LosslessFile, float]] = []      # with the rate each was measured at
+        promised = None                               # the pick a too-slow switch was made for
+        stopped = False                               # ended on a verdict that no other copy can change
         n = 0
-        for file in report.survivors:
+
+        def budget_s(f) -> float:
+            # What one pick may cost, for this file: the queue wait is left out because the pick about to
+            # start still has its own, and charging it twice is what would close this gate the moment the
+            # ceiling grew with the file.
+            return s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(f.size, s)
+
+        def disk_short(f, pick: int) -> bool:
+            # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there:
+            # room for all three on each, so either folder may share the other's disk.
+            need = 3 * f.size + DISK_MARGIN_BYTES
+            short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
+            if short:
+                rec.event("disk_full", pick=pick, need_bytes=need, folders=short)
+            return bool(short)
+
+        def identity(f) -> tuple:
+            return tuple(fn(f, ref) for _, fn in IDENTITY_RANKERS)
+
+        def slow_rule(i: int, file):
+            """The too-slow rule for the `i`th survivor, and the pick it would be given up for -- or neither.
+            That pick is the one the loop would really try next (the same skips, with this peer among the
+            stuck), and it must be worth the trade on its own word: the same song, version and length by
+            the rankers (never a copy they trust less), a free slot, and an advertised speed to project
+            from. See `Settings.lossless_slow_grace_s` for the numbers."""
+            if len(slow_copies) >= MAX_SLOW_SWITCHES or n >= s.lossless_max_picks:
+                return None, None
+            nxt = next((f for f in report.survivors[i + 1:]
+                        if f.username != file.username and f.username not in stuck_peers
+                        and not any(same_recording(f, r, ref.artist) for r in refused)), None)
+            if (nxt is None or not nxt.has_free_slot or nxt.upload_speed_bps <= 0
+                    or identity(nxt) != identity(file)):
+                return None, None
+            return slow_rule_for(nxt, s), nxt
+
+        for i, file in enumerate(report.survivors):
             if file.username in stuck_peers:
                 continue
             if any(same_recording(file, r, ref.artist) for r in refused):
@@ -211,42 +282,69 @@ class LosslessMixin:
             if n == s.lossless_max_picks:
                 break
             n += 1
-            # What one pick may cost, for this file: the queue wait is left out because the pick about to
-            # start still has its own, and charging it twice is what would close this gate the moment the
-            # ceiling grew with the file.
-            budget_s = s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(file.size, s)
-            if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
+            # The pick a slow transfer was given up for is let through: the switch promised it a turn, and
+            # leaving the slow copy only to stop here would have been the worst of both.
+            if n > 1 and file is not promised and rec.elapsed_ms() / 1000 > budget_s(file):
                 rec.event("budget_exhausted", pick=n)
                 break
-            # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there:
-            # room for all three on each, so either folder may share the other's disk. A full disk is no
-            # fact about this peer, so no later pick is tried either.
-            need = 3 * file.size + DISK_MARGIN_BYTES
-            short = [str(d) for d in (s.slskd_downloads, s.tmp_dir) if free_bytes(d) < need]
-            if short:
-                rec.event("disk_full", pick=n, need_bytes=need, folders=short)
-                outcome = "transfer_failed"
+            # A full disk is no fact about this peer, so no later pick is tried either.
+            if disk_short(file, n):
+                outcome, stopped = "transfer_failed", True
                 break
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
+            if file is promised:
+                # The pick a copy was given up for has only its peer's word to go on, and that word can be
+                # stale. Crawling below the copy it replaced, it would hold the attempt to its own ceiling
+                # (5300 s for 106 MB) with no further switch allowed -- so it goes back to that copy instead.
+                slow, nxt = switch_back_rule_for(*slow_copies[0], s), None
+            else:
+                slow, nxt = slow_rule(i, file)
+            measured: list[TooSlow] = []
+            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow,
+                                                          measured)
             if hit is not None:
-                try:
-                    rec.finish("filed")
-                except Exception:
-                    hit.path.unlink(missing_ok=True)  # spec §13: every outcome leaves tmp_dir empty
-                    raise
-                return hit
+                return self._filed(rec, hit)
             if outcome not in SECOND_PICK_AFTER:
+                stopped = outcome not in SLOW_FALLBACK_AFTER
                 break
             if outcome in PEER_STUCK_OUTCOMES:
                 stuck_peers.add(file.username)
+            if outcome == "too_slow" and file is promised:
+                break                                 # straight back to the copy it replaced, below
+            if outcome == "too_slow":
+                slow_copies.append((file, measured[0].speed_bps))
+                promised = nxt
             if outcome == "fingerprint_failed":
                 refused.append(file)
+        # Out of picks, budget or survivors with a slow copy given up on the way: fetch it again, to the end
+        # this time, whatever the pick limit says -- it is the one copy known to arrive.
+        back = next((f for f, _ in slow_copies if not any(same_recording(f, r, ref.artist) for r in refused)),
+                    None)
+        if back is not None and not stopped:
+            if disk_short(back, n + 1):
+                outcome = "transfer_failed"
+            else:
+                rec.event("slow_fallback", pick=n + 1, peer=back.username, file=back.name)
+                hit, outcome = await self._download_and_check(provider, rec, req, ref, back, n + 1, acoustic)
+                if hit is not None:
+                    return self._filed(rec, hit)
         rec.finish(outcome)
         return None
 
+    @staticmethod
+    def _filed(rec: AttemptRecorder, hit: LosslessHit) -> LosslessHit:
+        try:
+            rec.finish("filed")
+        except Exception:
+            hit.path.unlink(missing_ok=True)  # spec §13: every outcome leaves tmp_dir empty
+            raise
+        return hit
+
 
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                                  file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
+                                  file, n: int, acoustic: Acoustic,
+                                  slow: SlowRule | None = None,
+                                  measured: list[TooSlow] | None = None) -> tuple[LosslessHit | None, str]:
+        """`measured` collects the TooSlow a transfer was given up with, for the rate it was measured at."""
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
@@ -272,7 +370,15 @@ class LosslessMixin:
             landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s,
                                              total_s=transfer_ceiling_s(file.size, s), poll_s=s.lossless_poll_s,
                                              queue_wait_s=s.lossless_queue_wait_s, stall_s=s.lossless_stall_s,
-                                             on_progress=progress, on_raw=rec.raw)
+                                             slow=slow, on_progress=progress, on_raw=rec.raw)
+        except TooSlow as e:
+            # Its own event, not `transfer_failed`: the peer did send, and a failure report or replay reading
+            # this timeline should see a switch, with how slow it was, rather than a refusal.
+            rec.event("too_slow", pick=n, peer=file.username, pct=e.pct, speed_kbps=round(e.speed_bps / 1000),
+                      left_s=round(e.left_s), error=str(e))
+            if measured is not None:
+                measured.append(e)
+            return None, e.outcome
         except LosslessError as e:
             rec.event("transfer_failed", error=str(e))
             return None, e.outcome

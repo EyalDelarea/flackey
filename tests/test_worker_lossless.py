@@ -34,10 +34,13 @@ from flackey.reference import Identification
 from flackey.source import (
     LosslessError,
     LosslessUnavailable,
+    SlowRule,
     SourceNotFound,
     SourceTimeout,
+    TooSlow,
     TransferProgress,
 )
+from flackey.source.slskd import TransferBudget
 from flackey.store import Store
 from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.verify import verify as real_verify
@@ -150,6 +153,11 @@ class FakeProvider:
         # that answers one thing to the record's words and another to the request's own.
         self.files_for = files_for
         self.searches, self.downloaded, self.cancelled, self.rescans = [], [], 0, 0
+        # What each download was told about giving up slow transfers, by peer: None on a last pick.
+        self.slow_rules: list[tuple[str, SlowRule | None]] = []
+        # Peers whose transfer is played out poll by poll against the real `TransferBudget`: (bytes per
+        # second, fraction already there at the first poll). Everyone else sends at once.
+        self.rates: dict[str, tuple[float, float]] = {}
 
     async def health(self):
         return {"status": self.health_status, "username": "flackey-dj"}
@@ -165,12 +173,24 @@ class FakeProvider:
         return list(files)
 
     async def download(self, file, *, first_byte_s, total_s, poll_s, queue_wait_s=None, stall_s=None,
-                       on_progress=None, on_raw=None):
+                       slow=None, on_progress=None, on_raw=None):
         self.downloaded.append(file.username)
+        self.slow_rules.append((file.username, slow))
         if on_progress:
             on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
         if self.download_error:
             raise self.download_error
+        if file.username in self.rates:
+            speed, start = self.rates[file.username]
+            budget = TransferBudget(0.0, first_byte_s=first_byte_s, total_s=total_s,
+                                    queue_wait_s=queue_wait_s or first_byte_s, stall_s=stall_s or first_byte_s,
+                                    slow=slow)
+            t, done = 0.0, int(file.size * start)
+            while done < file.size:
+                t, done = t + 2, min(file.size, done + int(speed * 2))
+                budget.observe(t, done, "InProgress")
+                if (err := budget.expired(t, "InProgress", done, file.size)) is not None:
+                    raise err
         dest = self.downloads / "Void" / file.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(self.audio[file.username], dest)
@@ -2070,6 +2090,251 @@ async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(le
     # video that is really gone still cannot block the request for ever.
     assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
     assert provider.searches and len(calls) == 3
+
+
+# A transfer that keeps moving, but too slowly to be worth it while another copy is untried (2026-10-22: a
+# 106 MB FLAC at 125 kB/s took 14 minutes). The fake plays each transfer out against the real TransferBudget;
+# at 1 kB/s the 320 kB `lf()` file has 288 s to go when its 30 s grace runs out, past the 240 s limit, and
+# below the 200 kB/s cap and half of the 2 MB/s the next `lf()` advertises.
+SLOW, FAST = (1_000, 0.0), (100_000, 0.0)
+OTHER_SONG = "Void\\03. Astral Projection - Mahadeva.flac"
+
+
+async def _slow_case(lenv, files, rates, *, fails=None, on_too_slow=None, **update):
+    """`fails` maps a peer to the error its transfer ends in; `on_too_slow` runs when one is given up."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files, provider.rates = files, rates
+    for f in files:
+        provider.audio.setdefault(f.username, provider.audio["a"])
+    plain = provider.download
+
+    async def download(file, **kw):
+        if file.username in (fails or {}):
+            provider.downloaded.append(file.username)
+            provider.slow_rules.append((file.username, kw.get("slow")))
+            raise fails[file.username]
+        try:
+            return await plain(file, **kw)
+        except TooSlow:
+            if on_too_slow:
+                on_too_slow()
+            raise
+
+    provider.download = download
+    # Room in the ceiling for a 1 kB/s transfer to finish, so only the slow rule can end one early.
+    w = make(lenv, settings=settings.model_copy(update={"lossless_transfer_s": 6000, **update}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir()) and not list(settings.slskd_downloads.rglob("*.flac"))
+    filed_from = [e["detail"]["peer"] for e in a.timeline if e["event"] == "enqueue"][-1]
+    return a, provider, filed_from
+
+
+def _events(a, name: str) -> list[dict]:
+    return [e["detail"] for e in a.timeline if e["event"] == name]
+
+
+async def test_a_slow_transfer_is_given_up_for_the_next_copy(lenv):
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("fast", queue_length=1)],
+                                               {"slow": SLOW, "fast": FAST})
+    assert a.outcome == "filed" and filed_from == "fast"
+    assert provider.downloaded == ["slow", "fast"]
+    [slow] = _events(a, "too_slow")
+    assert (slow["pick"], slow["peer"], slow["pct"], slow["speed_kbps"]) == (1, "slow", 10, 1)
+    assert slow["left_s"] == 288 and "240 s" in slow["error"]
+    assert "transfer_failed" not in {e["event"] for e in a.timeline}     # the peer sent; it was not refused
+    # The second pick could only have been sent back to the first, which measured 1 kB/s.
+    assert [(peer, rule and rule.max_rate_bps) for peer, rule in provider.slow_rules] == [
+        ("slow", 200_000), ("fast", 1000)]
+
+
+@pytest.mark.parametrize("files, update", [
+    ([lf("slow")], {}),
+    ([lf("slow"), lf("slow", queue_length=1)], {}),                    # its other copy comes down the same line
+    ([lf("slow"), lf("fast", queue_length=1)], {"lossless_max_picks": 1}),
+    ([lf("slow"), lf("fast", queue_length=1, upload_speed_bps=1_500)], {}),   # not twice as fast, by its word
+    ([lf("slow"), lf("fast", queue_length=1, upload_speed_bps=0)], {}),       # no word: unknown is no reason
+    ([lf("slow"), lf("fast", has_free_slot=False)], {}),                      # it would queue us
+    ([lf("slow"), lf("fast", path=OTHER_SONG)], {}),                   # a copy the rankers trust less
+], ids=["only-copy", "same-peer", "no-picks-left", "next-not-faster", "next-speed-unknown", "next-no-slot",
+        "next-other-song"])
+async def test_a_slow_transfer_with_nowhere_better_to_go_runs_to_the_end(lenv, files, update):
+    a, provider, filed_from = await _slow_case(lenv, files, {"slow": SLOW, "fast": FAST}, **update)
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow"]
+    assert not _events(a, "too_slow") and not _events(a, "slow_fallback")
+
+
+async def test_a_slow_transfer_that_is_nearly_done_is_finished(lenv):
+    """Three quarters in, the next peer's queue and first byte cost more than the rest of this one."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("fast", queue_length=1)],
+                                               {"slow": (100, 0.8), "fast": FAST})
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow"]
+    assert provider.slow_rules[0][1] is not None                        # it could have; it was too far in
+
+
+async def test_a_fast_transfer_is_never_judged_slow(lenv):
+    a, provider, filed_from = await _slow_case(lenv, [lf("fast"), lf("slow", queue_length=1)],
+                                               {"slow": SLOW, "fast": FAST})
+    assert a.outcome == "filed" and filed_from == "fast" and provider.downloaded == ["fast"]
+
+
+async def test_an_attempt_gives_up_one_slow_copy_and_keeps_the_second(lenv):
+    """Two slow peers in a row say as much about this end of the line as about them."""
+    files = [lf(f"slow{i}", queue_length=i) for i in range(2)] + [lf("fast", queue_length=2)]
+    a, provider, filed_from = await _slow_case(lenv, files, {"slow0": SLOW, "slow1": SLOW, "fast": FAST})
+    assert a.outcome == "filed" and filed_from == "slow1" and provider.downloaded == ["slow0", "slow1"]
+    assert [e["peer"] for e in _events(a, "too_slow")] == ["slow0"]
+
+
+@pytest.mark.parametrize("error", [LosslessError("no bytes within 60 s", "first_byte_timeout"), _queued()],
+                         ids=["never-sends", "queued"])
+async def test_a_switch_that_leads_nowhere_goes_back_to_the_slow_copy(lenv, error):
+    """The review's repro: on main the slow peer's lossless copy is filed. Given up for a peer that then
+    never sends, it was lost for good -- the request went to the lossy copy, or waited six hours."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("dud", queue_length=1)], {"slow": SLOW},
+                                               fails={"dud": error})
+    assert a.outcome == "filed" and filed_from == "slow"
+    assert provider.downloaded == ["slow", "dud", "slow"]
+    assert _events(a, "slow_fallback") == [{"pick": 3, "peer": "slow", "file": lf().name}]
+    assert provider.slow_rules[-1] == ("slow", None)                   # to the end this time
+
+
+async def test_the_fallback_is_outside_the_pick_limit(lenv):
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("dud", queue_length=1)], {"slow": SLOW},
+                                               fails={"dud": _queued()}, lossless_max_picks=2)
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "dud", "slow"]
+
+
+async def test_no_fallback_after_a_verdict_no_copy_can_change(lenv, detector, tmp_path: Path):
+    """ffmpeg missing fails every copy alike, the slow one too: fetching it again would only fail again."""
+    settings, store, _, provider, _, _ = lenv
+    provider.audio["dud"] = detector.fail(_flac(tmp_path / "dud.flac", seed=5), ToolMissing("ffmpeg is not installed"))
+    provider.files, provider.rates = [lf("slow"), lf("dud", queue_length=1)], {"slow": SLOW, "dud": FAST}
+    provider.audio["slow"] = provider.audio["a"]
+    w = make(lenv, settings=settings.model_copy(update={"lossless_transfer_s": 6000}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "verify_unavailable" and provider.downloaded == ["slow", "dud"]
+    assert not _events(a, "slow_fallback")
+
+
+async def test_the_pick_a_slow_copy_was_given_up_for_gets_its_turn_past_the_budget(lenv):
+    """The switch promised the next pick a turn. Stopping at the budget gate right after it -- because the
+    slow transfer ran late into the attempt -- would have left the slow copy for nothing."""
+    clock = lenv[5]
+
+    def late():
+        clock.t += 10_000                    # far past any pick's budget (5 + 10 + 6000 s)
+
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("fast", queue_length=1)],
+                                               {"slow": SLOW, "fast": FAST}, on_too_slow=late)
+    assert a.outcome == "filed" and filed_from == "fast" and provider.downloaded == ["slow", "fast"]
+    assert not _events(a, "budget_exhausted")
+
+
+async def test_a_slow_copy_is_still_the_fallback_when_the_budget_ends_the_attempt(lenv):
+    """Past the promised pick the budget gate is back; the slow copy is what the attempt ends on."""
+    clock = lenv[5]
+    a, provider, filed_from = await _slow_case(
+        lenv, [lf("slow"), lf("dud", queue_length=1), lf("late", queue_length=2)], {"slow": SLOW},
+        fails={"dud": _queued()}, on_too_slow=lambda: setattr(clock, "t", clock.t + 10_000))
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "dud", "slow"]
+    assert _events(a, "budget_exhausted") == [{"pick": 3}]
+
+
+async def test_a_switch_to_a_peer_that_crawls_goes_back_to_the_copy_it_replaced(lenv):
+    """The next peer's advertised speed is its word, and can be stale. At 300 B/s against the dropped copy's
+    1 kB/s it would hold the attempt to its own ceiling -- the dropped copy, fetched again, is sooner."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("crawl", queue_length=1)],
+                                               {"slow": SLOW, "crawl": (300, 0.0)})
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "crawl", "slow"]
+    assert [e["peer"] for e in _events(a, "too_slow")] == ["slow", "crawl"]
+    assert _events(a, "slow_fallback") == [{"pick": 3, "peer": "slow", "file": lf().name}]
+    back = provider.slow_rules[1][1]
+    assert back.max_rate_bps == 1000 and back.finish_s == 320_000 / 1000 + 60   # fetching it again, in full
+
+
+async def test_a_switched_to_peer_a_little_slower_but_sooner_done_is_kept(lenv):
+    """900 B/s is below the dropped copy's 1 kB/s, but its 324 s to go beat fetching that copy again (380 s)."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("crawl", queue_length=1)],
+                                               {"slow": SLOW, "crawl": (900, 0.0)})
+    assert a.outcome == "filed" and filed_from == "crawl" and provider.downloaded == ["slow", "crawl"]
+
+
+async def test_a_conversion_that_fails_on_the_next_copy_goes_back_to_the_slow_one(lenv, monkeypatch, tmp_path):
+    """The converter failing on one file says nothing about another file."""
+    dud = _flac(tmp_path / "dud.flac", seed=5)
+    convert = lossless_attempt_mod.to_format
+
+    def to_format(src, fmt, bit_depth=None):
+        if _digest(src) == _digest(dud):
+            raise ConvertError("ffmpeg exited 1")
+        return convert(src, fmt, bit_depth)
+
+    monkeypatch.setattr(lossless_attempt_mod, "to_format", to_format)
+    lenv[3].audio["dud"] = dud
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("dud", queue_length=1)],
+                                               {"slow": SLOW, "dud": FAST})
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "dud", "slow"]
+    assert "convert_failed" in {e["event"] for e in a.timeline}
+
+
+async def _no_fallback_case(lenv, fails=None):
+    settings, store, _, provider, _, _ = lenv
+    provider.files, provider.rates = [lf("slow"), lf("dud", queue_length=1)], {"slow": SLOW, "dud": FAST}
+    provider.audio.setdefault("slow", provider.audio["a"])
+    provider.audio.setdefault("dud", provider.audio["a"])
+    if fails:
+        plain = provider.download
+
+        async def download(file, **kw):
+            if file.username in fails:
+                provider.downloaded.append(file.username)
+                raise fails[file.username]
+            return await plain(file, **kw)
+
+        provider.download = download
+    w = make(lenv, settings=settings.model_copy(update={"lossless_transfer_s": 6000}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert not list(settings.tmp_dir.iterdir()) and not list(settings.slskd_downloads.rglob("*.flac"))
+    return store.attempts_for_request(rid), provider
+
+
+async def test_no_fallback_to_a_slow_copy_of_a_recording_the_fingerprint_refused(lenv, monkeypatch, tmp_path):
+    """The copy the slow one was given up for is the same file by name and length, and it was the wrong
+    recording: the slow copy would be refused the same way (`same_recording`)."""
+    dud = _flac(tmp_path / "dud.flac", seed=5)
+    lenv[3].audio["dud"] = dud
+    check = acoustic_mod.fingerprint_check
+
+    async def wrong_for_dud(path, reference, *, minimum, missing=""):
+        got = await check(path, reference, minimum=minimum, missing=missing)
+        return replace(got, status="failed", score=0.3) if _digest(path) == _digest(dud) else got
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_for_dud)
+    attempts, provider = await _no_fallback_case(lenv)
+    first = attempts[0]
+    assert first.outcome == "fingerprint_failed" and provider.downloaded[:2] == ["slow", "dud"]
+    assert not any(e["event"] == "slow_fallback" for a in attempts for e in a.timeline)
+
+
+async def test_no_fallback_to_a_slow_copy_on_a_full_disk(lenv, monkeypatch):
+    calls = []
+
+    def free_bytes(path):                    # room for the two picks (two folders each), then none
+        calls.append(path)
+        return 10**12 if len(calls) <= 4 else 0
+
+    monkeypatch.setattr(lossless_attempt_mod, "free_bytes", free_bytes)
+    attempts, provider = await _no_fallback_case(lenv, fails={"dud": _queued()})
+    [a] = attempts
+    assert a.outcome == "transfer_failed" and provider.downloaded == ["slow", "dud"]
+    assert [e["detail"]["pick"] for e in a.timeline if e["event"] == "disk_full"] == [3]
+    assert not _events(a, "slow_fallback")
 
 
 async def test_a_peer_that_left_us_queued_is_not_asked_again_in_the_same_attempt(lenv, tmp_path: Path):
