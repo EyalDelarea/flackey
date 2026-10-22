@@ -519,7 +519,7 @@ async def test_a_missing_ffmpeg_with_nothing_to_fall_back_on_fails_once_instead_
     assert attempt_of(store, rid).outcome == "verify_unavailable"
     assert r.state == RequestState.ERROR and r.retry_after is None
     assert "ffmpeg is missing" in r.error_message
-    assert r.error_message.endswith("Use Try again once it can be checked")
+    assert r.error_message.endswith(". Try again once it can be checked")
 
 
 async def test_a_missing_ffmpeg_ends_the_attempt_instead_of_failing_every_peer(lenv, detector, tmp_path: Path):
@@ -953,7 +953,7 @@ async def test_a_lossy_fallback_says_in_the_notification_why_the_lossless_copy_w
     done = notifier.sent[-1][0]
     assert "No lossless copy this time — nothing on Soulseek matched this track closely enough." in done
     # no_pick is not a retryable outcome, so the line must point at the manual action, not promise a retry
-    assert "Use Try again in the app" in done and "try again on its own" not in done
+    assert "Press Find lossless in your library" in done and "try again on its own" not in done
 
 
 async def test_an_unreachable_provider_promises_the_automatic_retry_instead_of_asking_for_a_click(lenv):
@@ -1525,7 +1525,7 @@ async def test_a_lossy_filing_after_an_empty_search_does_not_promise_a_retry_tha
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
 
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
-    assert "Try again" in notifier.sent[-1][0] and "try again on its own" not in notifier.sent[-1][0]
+    assert "Find lossless" in notifier.sent[-1][0] and "try again on its own" not in notifier.sent[-1][0]
 
 
 async def test_the_video_is_the_reference_and_is_kept_beside_the_request(lenv, monkeypatch):
@@ -1825,7 +1825,7 @@ async def test_the_long_wait_gives_up_after_its_budget(lenv):
                          lossless_retry=1)
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and "looked 12 times over 72 h" in r.error_message
-    assert "Use Try again" in r.error_message and notifier.sent[-1][0].startswith("Gave up")
+    assert "Press Try again" in r.error_message and "in the app" not in r.error_message and notifier.sent[-1][0].startswith("Gave up")
 
 
 @pytest.mark.parametrize("outcomes,expected", [
@@ -1914,13 +1914,13 @@ async def test_a_permanent_miss_still_parks_at_once(lenv):
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and attempt_of(store, rid).outcome == "fingerprint_unavailable"
-    assert r.error_message.endswith("Use Try again once it can be checked")
+    assert r.error_message.endswith(". Try again once it can be checked")
 
 
 async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(lenv, monkeypatch):
     """Measured before the fix: a single 429 from yt-dlp on the catalogue-less route ended the request in
     `error` on its first pass -- attempts 1, no retry_after, outcome `fingerprint_unavailable`, advising
-    "Use Try again once it can be checked" for something that would have been fine a minute later. That
+    "Try again once it can be checked" for something that would have been fine a minute later. That
     route is how a track Beatport has never heard of gets filed at all since issue #69, and on it the
     video's audio is the only reference there is: a stand-in candidate has no Deezer preview behind it."""
     _, store, notifier, provider, _, _ = lenv

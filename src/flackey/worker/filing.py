@@ -163,7 +163,7 @@ class FilingMixin:
                 # Nothing to check against, so nothing to file on, and nothing a retry would change on its
                 # own: the owner is told what is missing and the row waits for them (spec §6).
                 reason = (f"the recording could not be checked acoustically ({fp.reason}). "
-                          "Use Try again once it can be checked")
+                          "Try again once it can be checked")
                 self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
                 await self.notifier.send(f"Could not verify: {req.raw_text}\n{reason}")
                 return

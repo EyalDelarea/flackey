@@ -52,7 +52,7 @@ class RecoveryMixin:
         hours = LONG_RETRY_EVERY_S // 3600
         if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
             reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
-                      f"Use Try again in the app to search once more")
+                      f"Press Try again to search once more")
             self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
             await self.notifier.send(f"Gave up: {req.raw_text}\n{reason}")
             return
@@ -116,9 +116,9 @@ class RecoveryMixin:
         # "Try again" is the right advice for a miss a later search could answer differently -- but not for
         # one that cannot be checked at all: with no reference, or no ffmpeg, the next search reaches the same
         # dead end.
-        reason += (". Use Try again once it can be checked"
+        reason += (". Try again once it can be checked"
                    if outcome in ("fingerprint_unavailable", "verify_unavailable")
-                   else ". Use Try again in the app to search once more")
+                   else ". Press Try again to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
 
@@ -150,6 +150,7 @@ class RecoveryMixin:
         if attempt is None or outcome in (None, "filed"):
             return None
         why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
+        # The track is filed, so its row has no Try again: Find lossless is the button that searches again.
         tail = ("It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES
-                else "Use Try again in the app to search Soulseek once more.")
+                else "Press Find lossless in your library to search Soulseek once more.")
         return f"No lossless copy this time — {why}. {tail}"

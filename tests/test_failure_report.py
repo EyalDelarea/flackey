@@ -88,7 +88,7 @@ def test_the_diagnosis_names_the_failure_the_way_the_app_does(rec, want):
 def no_route(outcome: str) -> str:
     """What `_no_route` writes on the row: MISS_REASON's sentence, inside its own."""
     return (f"no way to fetch this track: {MISS_REASON[outcome]}, Deezer offered nothing to fall back on. "
-            "Use Try again in the app to search once more")
+            "Press Try again to search once more")
 
 
 @pytest.mark.parametrize("a, want", [
@@ -114,7 +114,7 @@ def test_a_soulseek_miss_is_diagnosed_from_its_attempt(a, want):
 
 def test_the_long_wait_giving_up_is_still_a_soulseek_miss():
     """`_wait_for_soulseek` words its last error differently from `_no_route`, around the same sentence."""
-    msg = f"{MISS_REASON['queued']}; looked 12 times over 72 h. Use Try again in the app to search once more"
+    msg = f"{MISS_REASON['queued']}; looked 12 times over 72 h. Press Try again to search once more"
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg),
                         attempts=[attempt("no_pick", seen=0, aid=1),
                                   attempt("queued", survivors=5, events=[("enqueue", {})], aid=2)])
