@@ -2527,15 +2527,19 @@ def test_telegram_source_can_be_enabled_without_signing_in_again(tmp_path: Path)
     assert c.post("/api/telegram/source", json={"enabled": False}).json() == {"source_enabled": False}
 
 
-def test_telegram_source_cannot_be_enabled_without_an_authorized_session(tmp_path: Path):
+def test_telegram_source_can_be_switched_on_while_signed_out_and_reads_as_paused(tmp_path: Path):
+    """Settings shows the bot's switch beside a single Reconnect; on while signed out is the paused bot the
+    worker already handles when Telegram drops, not an error."""
     status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True,
                     source_enabled=False)
     app, _, settings = make(tmp_path, status=status, login=FakeLogin())
     settings.source_enabled = False
     c = AppClient(app)
     r = c.post("/api/telegram/source", json={"enabled": True})
-    assert r.status_code == 409 and "Sign in to Telegram" in r.json()["detail"]
-    assert settings.source_enabled is False
+    assert r.status_code == 200 and r.json() == {"source_enabled": True}
+    assert settings.source_enabled is True
+    health = c.get("/api/health").json()
+    assert health["source_enabled"] is True and health["telegram_authorized"] is False
 
 
 def test_health_takes_the_source_flag_from_the_shared_status(tmp_path: Path):
