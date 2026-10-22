@@ -1,6 +1,6 @@
 import inspect
-from dataclasses import replace
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -17,7 +17,10 @@ from flackey.lossless import (
     PickPolicy,
     PickReport,
     Reference,
+    extended_reference,
     file_title,
+    file_version,
+    own_extended,
     pick,
     policy_from_settings,
     rank_artist,
@@ -28,13 +31,8 @@ from flackey.lossless import (
     search_text,
     transfer_ceiling_s,
 )
-from flackey.lossless import (
-    extended_reference,
-    file_version,
-    own_extended,
-    wants_extended,
-)
 from flackey.models import Candidate, CatalogTrack
+from flackey.version import wants_extended
 
 REF = Reference(artist="Hallucinogen", title="Orphic Thrench", mix_name="Original Mix", duration_s=442, deezer_id=6025986)
 
@@ -400,7 +398,7 @@ def test_preferring_extended_ranks_it_ahead_of_the_radio_edit_at_its_exact_lengt
     extended = ext("Feel So Close (Extended Mix).flac", 330, username="extended", has_free_slot=False)
     remix = ext("Feel So Close (Liquid Soul Extended Remix).flac", 400, username="remix")
     # off: today's order, the radio edit's length first and the extended mix last
-    assert [f.username for f in pick([extended, remix, radio], RADIO, PickPolicy()).survivors][0] == "radio"
+    assert pick([extended, remix, radio], RADIO, PickPolicy()).survivors[0].username == "radio"
     on = pick([remix, radio, extended], replace(RADIO, prefer_extended=True), PickPolicy())
     assert [f.username for f in on.survivors] == ["extended", "radio", "remix"]
     assert rank_version(extended, RADIO) == 1 and rank_version(extended, replace(RADIO, prefer_extended=True)) == -1

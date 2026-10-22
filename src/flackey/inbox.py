@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .identify import classify, interpretations, parse_version
+from .library import find_extended
 from .models import Query, RequestKind, RequestState
 from .spotify import (
     SpotifyError,
@@ -14,6 +15,7 @@ from .spotify import (
     fetch_spotify_track,
 )
 from .store import Store
+from .version import split_version, wants_extended
 from .youtube import YouTubeEntry, YouTubeError, fetch_youtube
 
 log = logging.getLogger(__name__)
@@ -54,8 +56,11 @@ class Inbox:
     def __init__(self, store: Store,
                  youtube: Callable[[str], Awaitable[tuple[str, list[YouTubeEntry]]]] = fetch_youtube,
                  spotify_track: Callable[[str], Awaitable[SpotifyTrack]] = fetch_spotify_track,
-                 spotify_playlist: Callable[[str], Awaitable[SpotifyPlaylist]] = fetch_spotify_playlist):
+                 spotify_playlist: Callable[[str], Awaitable[SpotifyPlaylist]] = fetch_spotify_playlist,
+                 prefer_extended: Callable[[], bool] = lambda: False):
         self.store = store
+        # The setting, read at each paste: owning the radio edit is not owning the track while it is on
+        self.prefer_extended = prefer_extended
         self.youtube = youtube
         self.spotify_track = spotify_track
         self.spotify_playlist = spotify_playlist
@@ -71,9 +76,29 @@ class Inbox:
         rid = self.store.add_request(name, kind, source_url=url, query=query, interpretations=readings)
         return Submission(name=name, request_ids=[rid], total=1)
 
-    def _add_existing_playlist_track(self, playlist_id: int, source_url: str, position: int) -> bool:
+    def _seeks_extended(self, q: Query) -> bool:
+        return self.prefer_extended() and wants_extended(q.version)
+
+    def _owned(self, q: Query):
+        """The track already filed for `q`, if any: by its version and length, or -- preferring extended
+        mixes -- an extended copy at any length, since the request's length is the radio edit's (issue #187)."""
+        if not (q.artist and q.title):
+            return None
+        if self._seeks_extended(q):
+            return find_extended(self.store, q.artist, q.title, q.version or "Original Mix")
+        return self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix", q.duration_s)
+
+    def _add_existing_playlist_track(self, playlist_id: int, source_url: str, position: int,
+                                     q: Query | None = None) -> bool:
         previous = self.store.filed_request_for_url(source_url)
         if previous and previous.track_id is not None:
+            if q is not None and self._seeks_extended(q):
+                try:
+                    mix = self.store.get_track(previous.track_id).mix_name
+                except KeyError:
+                    mix = None
+                if not split_version(mix).cut:
+                    return False      # the link's normal version: the worker looks for its extended mix
             self.store.add_playlist_track(playlist_id, previous.track_id, position)
             return True
         return False
@@ -129,13 +154,10 @@ class Inbox:
             sub = Submission(name=playlist.title, playlist_id=pid, total=len(playlist.tracks))
             for pos, track in enumerate(playlist.tracks, start=1):
                 q = self._spotify_query(track)
-                if self._add_existing_playlist_track(pid, track.source_url, pos):
+                if self._add_existing_playlist_track(pid, track.source_url, pos, q):
                     sub.already_in_library += 1
                     continue
-                existing = None
-                if q.artist and q.title:
-                    existing = self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix",
-                                                             q.duration_s)
+                existing = self._owned(q)
                 if existing:
                     self.store.add_playlist_track(pid, existing.id, pos)
                     sub.already_in_library += 1
@@ -166,12 +188,10 @@ class Inbox:
         sub = Submission(name=name, playlist_id=pid, total=len(entries))
         for pos, e in enumerate(entries, start=1):
             q, readings = self._youtube_readings(e)
-            if self._add_existing_playlist_track(pid, e.url, pos):
+            if self._add_existing_playlist_track(pid, e.url, pos, q):
                 sub.already_in_library += 1
                 continue
-            existing = None
-            if q.artist and q.title:
-                existing = self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix", q.duration_s)
+            existing = self._owned(q)
             if existing:
                 self.store.add_playlist_track(pid, existing.id, pos)
                 sub.already_in_library += 1

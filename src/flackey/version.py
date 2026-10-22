@@ -127,6 +127,27 @@ def with_remaster(mix_name: str | None, remaster: bool) -> str | None:
     return "Remastered" if split_version(mix_name).is_original else f"{mix_name} Remastered"
 
 
+# The short versions an extended mix is the long one of: asked for one of these, the extended mix is the
+# original's (issue #187)
+RADIO_EDITS = frozenset({"radio edit", "radio mix", "radio version", "radio cut", "single version", "single edit",
+                         "short edit", "short version", "edit"})
+
+
+def wants_extended(mix_name: str | None) -> bool:
+    """Whether a request for `mix_name` can be answered with its extended mix when the owner prefers one:
+    not when it already is one, and not for a remaster, which is a question about the release that the
+    extended mix's would only blur."""
+    v = split_version(mix_name)
+    return not v.cut and not v.remaster
+
+
+def extended_target(mix_name: str | None) -> str:
+    """The arrangement whose extended cut is wanted for a request for `mix_name`: the original's for a radio
+    edit ("" either way), the remix's own for a remix."""
+    a = split_version(mix_name).arrangement
+    return "" if a in RADIO_EDITS else a
+
+
 _LAST_VERSION_WORD = re.compile(r"\b(remix|mix|rework|dub|edit|version)\s*$", re.IGNORECASE)
 
 

@@ -581,6 +581,12 @@ class Store:
     def find_tracks_by_isrc(self, isrc: str) -> list[Track]:
         return [self._row_to_track(r) for r in self.conn.execute("SELECT * FROM tracks WHERE isrc=?", (isrc,))]
 
+    def find_tracks_by_title(self, artist: str, title: str) -> list[Track]:
+        """Every version filed of one song, whatever its mix and length."""
+        rows = self.conn.execute("SELECT * FROM tracks WHERE artist_norm=? AND title_norm=?",
+                                 (norm(artist), norm(title))).fetchall()
+        return [self._row_to_track(r) for r in rows]
+
     def find_track_by_meta(self, artist: str, title: str, mix_name: str, duration_s: int | None,
                            tolerance_s: int = 3) -> Track | None:
         rows = self.conn.execute(

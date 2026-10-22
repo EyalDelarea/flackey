@@ -231,6 +231,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "lossless_filing_format": settings.lossless_filing_format,
                 "library_layout": settings.library_layout, "library_layouts": list(LIBRARY_LAYOUTS),
                 "auto_update_check": settings.auto_update_check,
+                "prefer_extended": settings.prefer_extended,
                 "ports": _ports(settings),
                 "ranking": {"max_picks": settings.lossless_max_picks,
                             "max_queue": settings.lossless_max_queue,
@@ -274,6 +275,10 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             extra["library_layout"] = body["library_layout"]
         if "auto_update_check" in body:
             extra["auto_update_check"] = bool(body["auto_update_check"])
+        if "prefer_extended" in body:
+            if not isinstance(body["prefer_extended"], bool):
+                raise HTTPException(400, "Prefer extended mixes is either on or off.")
+            extra["prefer_extended"] = body["prefer_extended"]
         if body.get("slskd_url"):
             extra["slskd_url"] = str(body["slskd_url"]).rstrip("/")
         if body.get("slskd_api_key"):

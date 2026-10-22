@@ -18,6 +18,7 @@ from .models import Candidate, CatalogTrack, is_original, norm
 from .version import (
     EXTENDED,
     Version,
+    extended_target,
     record_version,
     same_arrangement,
     says_extended,
@@ -143,27 +144,6 @@ def search_text(ref: Reference) -> str:
     return " ".join(text.split())
 
 
-# The short versions an extended mix is the long one of: asked for one of these, the extended mix is the
-# original's (issue #187)
-RADIO_EDITS = frozenset({"radio edit", "radio mix", "radio version", "radio cut", "single version", "single edit",
-                         "short edit", "short version", "edit"})
-
-
-def wants_extended(mix_name: str | None) -> bool:
-    """Whether a request for `mix_name` can be answered with its extended mix when the owner prefers one:
-    not when it already is one, and not for a remaster, which is a question about the release that the
-    extended mix's would only blur."""
-    v = split_version(mix_name)
-    return not v.cut and not v.remaster
-
-
-def extended_target(mix_name: str | None) -> str:
-    """The arrangement whose extended cut is wanted for a request for `mix_name`: the original's for a radio
-    edit ("" either way), the remix's own for a remix."""
-    a = split_version(mix_name).arrangement
-    return "" if a in RADIO_EDITS else a
-
-
 def extended_reference(ref: Reference) -> Reference:
     """`ref` as the spelling that looks for its extended mix only."""
     return replace(ref, cut=EXTENDED, prefer_extended=True)
@@ -207,6 +187,21 @@ def own_extended(f: LosslessFile, ref: Reference) -> bool:
     never "(Liquid Soul Extended Remix)", which is Liquid Soul's remix (issue #187)."""
     have = file_version(f, ref)
     return have.cut == EXTENDED and same_arrangement(extended_target(ref.mix_name), have.arrangement)
+
+
+def downloaded_cut(f: LosslessFile, ref: Reference, tags: dict[str, str] | None = None) -> str:
+    """The cut a downloaded file is, as far as the asked arrangement goes: "extended" when its own name, or
+    failing that its mix or title tag, names an extended cut of it (`own_extended`), else "". The
+    fingerprint has proved the recording; this is what says which length of it came (issue #187)."""
+    if own_extended(f, ref):
+        return EXTENDED
+    tags = tags or {}
+    target = extended_target(ref.mix_name)
+    for text in (tags.get("mix"), parse_version(tags.get("title") or "")[1]):
+        v = split_version(text)
+        if v.cut == EXTENDED and same_arrangement(target, v.arrangement):
+            return EXTENDED
+    return ""
 
 
 @dataclass(frozen=True)

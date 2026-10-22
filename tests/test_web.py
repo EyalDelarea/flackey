@@ -1692,7 +1692,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                  "slskd_downloads_dir": str(settings.slskd_downloads),
                  "lossless_filing_format": settings.lossless_filing_format,
                  "library_layout": "artist", "library_layouts": ["artist", "month", "day", "flat"],
-                 "auto_update_check": True,
+                 "auto_update_check": True, "prefer_extended": False,
                  "ports": {"app": {"port": 8765, "host": "127.0.0.1", "public": False},
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
                            "soulseek_listen": {"port": 50300, "host": "0.0.0.0", "public": True}},
@@ -1712,6 +1712,11 @@ def test_settings_get_and_put(client, tmp_path: Path):
     assert r.status_code == 200 and r.json()["auto_update_check"] is False
     assert settings.auto_update_check is False
     assert c.get("/api/settings").json()["auto_update_check"] is False
+    # issue #187: off until the owner turns it on, saved like any other setting, and only a yes or no
+    r = c.put("/api/settings", json={"library_root": str(new), "prefer_extended": True})
+    assert r.status_code == 200 and r.json()["prefer_extended"] is True and settings.prefer_extended is True
+    assert '"prefer_extended": true' in settings.settings_path.read_text()
+    assert c.put("/api/settings", json={"library_root": str(new), "prefer_extended": "yes"}).status_code == 400
 
 
 def test_reveal_only_opens_places_the_app_itself_named(tmp_path: Path):

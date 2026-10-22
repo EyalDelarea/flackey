@@ -203,8 +203,8 @@ def test_real_fpcalc_finds_an_edit_spliced_inside_the_excerpt(tmp_path: Path):
     edit = tmp_path / "edit.wav"
     # 20-45 s and 65-90 s: the edit's middle 30 s (10-40 s of it) holds the splice at 25 s
     subprocess.run(["ffmpeg", "-v", "error", "-i", str(long), "-filter_complex",
-                    "[0:a]atrim=20:45,asetpts=PTS-STARTPTS[a];[0:a]atrim=65:90,asetpts=PTS-STARTPTS[b];"
-                    "[a][b]concat=n=2:v=0:a=1[o]", "-map", "[o]", str(edit)], check=True)
+                    ("[0:a]atrim=20:45,asetpts=PTS-STARTPTS[a];[0:a]atrim=65:90,asetpts=PTS-STARTPTS[b];"
+                     "[a][b]concat=n=2:v=0:a=1[o]"), "-map", "[o]", str(edit)], check=True)
     needles = [fingerprint(edit, 10.0 + t, 30.0) for t in fp.SUBFRAME_TRIMS_S]
     hay = fingerprint(long)
     assert max(compare(n, hay)[0] for n in needles) < 0.79

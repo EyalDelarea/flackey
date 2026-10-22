@@ -12,7 +12,15 @@ from pathlib import Path
 from .match import candidate_release, candidate_version
 from .models import Candidate, CatalogTrack, Track
 from .store import Store
-from .version import Version, agrees, record_version, split_version
+from .version import (
+    EXTENDED,
+    Version,
+    agrees,
+    extended_target,
+    record_version,
+    same_arrangement,
+    split_version,
+)
 
 log = logging.getLogger(__name__)
 _BAD = re.compile(r'[\\/:*?"<>|]')
@@ -177,6 +185,17 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
     # Beatport files some remasters as "Original Mix" on a remastered release, so the mix name alone
     # matches the original already filed; the version has to agree here too.
     return _present(store, t) if t is not None and _same_version(t, version) else None
+
+
+def find_extended(store: Store, artist: str, title: str, mix_name: str | None) -> Track | None:
+    """An extended copy of the `mix_name` version of this song already in the library, at any length: the
+    request's length is the radio edit's, so it says nothing about the extended mix's (issue #187)."""
+    target = extended_target(mix_name)
+    for t in store.find_tracks_by_title(artist, title):
+        v = split_version(t.mix_name)
+        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and _present(store, t):
+            return t
+    return None
 
 
 def _same_version(t: Track, version: Version) -> bool:

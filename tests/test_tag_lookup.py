@@ -19,9 +19,9 @@ from flackey.tag_lookup import (
     fill_missing,
     parse_duration,
     pick_genre,
+    same_version,
     split_title,
     title_key,
-    same_version,
     version_key,
 )
 

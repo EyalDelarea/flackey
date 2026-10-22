@@ -16,7 +16,7 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
-             "source_enabled", "auto_update_check", "window_size")
+             "source_enabled", "auto_update_check", "window_size", "prefer_extended")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     window_size: tuple[int, int] | None = None
     library_root: Path = Path("~/Music/DJ Library")
     library_layout: str = "artist"
+    # Look for each track's extended / club / 12" mix on Soulseek first, and file the normal one when there
+    # is none (issue #187). Off by default: nothing about a download changes until the owner turns it on.
+    prefer_extended: bool = False
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.

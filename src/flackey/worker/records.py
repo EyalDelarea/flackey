@@ -92,6 +92,9 @@ class LosslessHit:
     # What the file's own path and tags said about its version before conversion replaced them (issue #172);
     # None when nothing was in question
     version_check: VersionCheck | None = None
+    # Which cut came, by the file's name and tags: "extended", or "" for the reference's own (issue #187)
+    cut: str = ""
+    duration_s: float | None = None   # the converted file's own length, probed
 
 
 def format_line(verdict: Verdict, source: str, source_fmt: str | None) -> str:

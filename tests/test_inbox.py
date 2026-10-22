@@ -283,3 +283,53 @@ async def test_a_spotify_or_topic_track_has_no_other_readings(inbox):
     yt = (await ib.submit("https://youtu.be/abc")).request_ids[0]           # "- Topic": the channel is the artist
     sp = (await ib.submit("https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl")).request_ids[0]
     assert store.get_interpretations(yt) == [] and store.get_interpretations(sp) == []
+
+
+# ---- issue #187: preferring extended mixes ----------------------------------------------------------
+def _ap(store: Store, tmp_path: Path, mix_name: str, duration_s: int, request_id: int | None = None) -> int:
+    path = tmp_path / f"ap {mix_name}.aiff"
+    path.write_bytes(b"x")
+    return store.add_track(path=path, fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=1,
+                           artist="Astral Projection", title="Into The Void", mix_name=mix_name,
+                           duration_s=duration_s, isrc=None, catalog_track_id=None, request_id=request_id)
+
+
+async def test_preferring_extended_the_radio_edit_in_the_library_does_not_skip_a_playlist_entry(inbox,
+                                                                                                tmp_path: Path):
+    ib, store = inbox
+    ib.prefer_extended = lambda: True
+    _ap(store, tmp_path, "Original Mix", 442)
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    # queued: the worker looks for the extended mix, and stops at the radio edit if there is none
+    assert s.already_in_library == 0 and len(s.request_ids) == 2
+
+
+async def test_preferring_extended_an_extended_copy_at_any_length_is_the_library_hit(inbox, tmp_path: Path):
+    ib, store = inbox
+    ib.prefer_extended = lambda: True
+    tid = _ap(store, tmp_path, "Extended Mix", 611)
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    assert s.already_in_library == 1 and store.get_playlist(s.playlist_id).track_ids == [tid]
+
+
+async def test_off_the_radio_edit_in_the_library_is_the_hit_and_an_extended_copy_is_not(inbox, tmp_path: Path):
+    ib, store = inbox
+    _ap(store, tmp_path, "Extended Mix", 611)
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    assert s.already_in_library == 0
+    tid = _ap(store, tmp_path, "Original Mix", 442)
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    assert s.already_in_library == 1 and store.get_playlist(s.playlist_id).track_ids == [tid]
+
+
+async def test_preferring_extended_a_link_filed_as_the_radio_edit_is_looked_up_again(inbox, tmp_path: Path):
+    ib, store = inbox
+    rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,
+                            source_url="https://open.spotify.com/track/a")
+    tid = _ap(store, tmp_path, "Original Mix", 442, rid)
+    store.update_request(rid, track_id=tid, state=RequestState.DONE)
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    assert s.already_in_library == 1                              # off: as today
+    ib.prefer_extended = lambda: True
+    s = await ib.submit("https://open.spotify.com/playlist/pl1")
+    assert s.already_in_library == 0
