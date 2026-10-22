@@ -452,6 +452,56 @@ describe('the Connections section', () => {
     await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
   })
 
+  describe('when Telegram was never set up', () => {
+    // No API keys, so no account was ever made here: nothing is signed out, and there is nothing to reconnect.
+    const neverSetUp = (over: Partial<Health> = {}) => {
+      const current = live as unknown as { settings: AppSettings; health: Health }
+      vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+      return makeLive({ settings: { ...current.settings, telegram_configured: false },
+        health: { ...current.health, telegram_authorized: false, telegram_configured: false, source_enabled: false, ...over } })
+    }
+
+    it('says "Not set up" in grey and offers to set it up, with the bot plainly off', async () => {
+      const onReconnect = vi.fn()
+      render(<SettingsPage live={neverSetUp()} onReconnect={onReconnect} />)
+      const row = connRow('Telegram')
+      expect(within(row).getByText('Not set up')).toBeInTheDocument()
+      expect(within(row).queryByText('Signed out')).not.toBeInTheDocument()
+      expect(dot(row)).toHaveClass('off')
+      expect(dot(row)).not.toHaveClass('amber')
+      expect(within(connections()).queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()
+      const bot = connRow('Deezer bot')
+      expect(within(bot).getByText('Off — requests use Soulseek only')).toBeInTheDocument()
+      expect(within(bot).queryByText(/signed out/)).not.toBeInTheDocument()
+      expect(dot(bot)).toHaveClass('off')
+      // The same setup step Reconnect opens: with no keys it is the form that asks for them.
+      fireEvent.click(within(row).getByRole('button', { name: 'Set up' }))
+      expect(onReconnect).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(api.telegramStatus).toHaveBeenCalled())
+    })
+
+    it('keeps the row neutral but calls the bot paused when it is switched on regardless', async () => {
+      render(<SettingsPage live={neverSetUp({ source_enabled: true })} onReconnect={() => {}} />)
+      const row = connRow('Telegram')
+      expect(within(row).getByText('Not set up')).toBeInTheDocument()
+      expect(dot(row)).toHaveClass('off')
+      const bot = connRow('Deezer bot')
+      expect(within(bot).getByText("Paused — Telegram isn't set up")).toBeInTheDocument()
+      expect(dot(bot)).toHaveClass('amber')
+      await waitFor(() => expect(api.telegramStatus).toHaveBeenCalled())
+    })
+
+    it('trusts health over a stale settings read, either way round', async () => {
+      // Keys saved since Settings loaded: health has heard, the settings object has not.
+      const current = live as unknown as { settings: AppSettings; health: Health }
+      vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: true, phone_masked: null })
+      render(<SettingsPage live={makeLive({ settings: { ...current.settings, telegram_configured: false },
+        health: { ...current.health, telegram_authorized: false, telegram_configured: true } })} onReconnect={() => {}} />)
+      await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
+      expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+    })
+  })
+
   it('files the format question with the folder, where it belongs', () => {
     // The format applies to every lossless download, whatever fetched it. Under a Soulseek heading it
     // would claim to be a Soulseek setting -- the same implication-by-position this section removes.

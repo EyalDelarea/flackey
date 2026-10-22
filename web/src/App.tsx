@@ -96,7 +96,9 @@ function AppBody({ live }: { live: Live }) {
       setReconnecting(false)
       setStep(1)
     }
-    const back = reconnecting && current === 3 ? () => { setReconnecting(false); setStep(1) }
+    // Refetched on the way back too: keys saved in the step and then backed out of change
+    // `telegram_configured`, which only a full health read carries, and Settings would go on saying "Not set up".
+    const back = reconnecting && current === 3 ? () => { setReconnecting(false); setStep(1); refresh().catch(() => undefined) }
       : reconnecting && current === 5 ? () => setStep(3)
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
       : current === 5 ? () => setStep(4)
@@ -119,9 +121,12 @@ function AppBody({ live }: { live: Live }) {
   // "Reconnect to keep digging", was true when the whole worker waited on Telegram, which it no longer does.
   // Not "signed out" when Telegram simply did not answer: telling a signed-in owner to sign in sends them
   // after the wrong fix. Reconnect still is the way back -- it asks Telegram again first.
+  // A copy with no Telegram keys never had an account to sign out of; the bot still waits on one, so the
+  // banner stays, but it names the step that is actually missing.
   if (sourceOn && !authorized) {
-    const why = h.telegram_unreachable ? "can't reach Telegram" : 'Telegram is signed out'
-    banners.push(<Banner key="telegram" tone="amber" text={`Deezer bot paused — ${why}. Soulseek keeps downloading; reconnect to get the bot's MP3 copies back.`} action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
+    const why = !telegramConfigured ? "Telegram isn't set up" : h.telegram_unreachable ? "can't reach Telegram" : 'Telegram is signed out'
+    const fix = telegramConfigured ? 'reconnect' : 'set it up'
+    banners.push(<Banner key="telegram" tone="amber" text={`Deezer bot paused — ${why}. Soulseek keeps downloading; ${fix} to get the bot's MP3 copies back.`} action={{ label: telegramConfigured ? 'Reconnect' : 'Set up', onClick: () => setReconnecting(true) }} />)
   }
   // Only when there is something to click: a newer tag with no installer yet is detail for the
   // Settings page, not a launch-time nag with nowhere for the click to go. `live.update` is null when

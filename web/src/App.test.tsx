@@ -37,11 +37,13 @@ beforeEach(() => {
     published_date: null, prerelease: false })
 })
 
-/** Signed out, so the sidebar offers Reconnect: the shortest way into setup step 2 from the main screen. */
+/** Signed out, so the sidebar offers Reconnect: the shortest way into setup step 2 from the main screen.
+    A copy that never had keys calls the same button "Set up". */
 async function reconnect(over: Partial<Health> = {}) {
   vi.spyOn(api, 'health').mockResolvedValue(health(over))
   render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }))
+  const label = over.telegram_configured === false ? 'Set up' : 'Reconnect'
+  fireEvent.click(await screen.findByRole('button', { name: label }))
   await screen.findByText('Telegram')
 }
 
@@ -113,6 +115,31 @@ describe('the Telegram banner', () => {
     render(<App />)
     await screen.findByText('Not connected')
     expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+  })
+
+  it('says nothing about Telegram when it was never set up and the bot is off', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_configured: false,
+      source_enabled: false, lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
+    render(<App />)
+    // Soulseek alone is a working source, so the sidebar is green rather than pointing at Settings.
+    await screen.findByText('Connected')
+    expect(screen.queryByText('Not connected')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/signed out/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()
+  })
+
+  it('names the missing setup, not a sign-out, when the bot is on but Telegram was never set up', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_configured: false, source_enabled: true }))
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+    render(<App />)
+    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    expect(banner).toHaveTextContent("Telegram isn't set up")
+    expect(banner).toHaveTextContent('set it up to get')
+    expect(banner).not.toHaveTextContent('signed out')
+    expect(within(banner).queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()
+    fireEvent.click(within(banner).getByRole('button', { name: 'Set up' }))
+    expect(await screen.findByText(/needs Telegram API keys/)).toBeInTheDocument()
   })
 
   it('stays away while Telegram is signed in', async () => {
@@ -201,6 +228,19 @@ describe('the setup hint on the Telegram step', () => {
     await reconnect({ telegram_configured: false })
     await screen.findByText(/needs Telegram API keys/)
     expect(screen.queryByText('Waiting for Telegram…')).not.toBeInTheDocument()
+  })
+
+  it('opens from the Settings row, and re-reads health on the way back out', async () => {
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_configured: false, source_enabled: false }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Settings/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }))
+    await screen.findByText(/needs Telegram API keys/)
+    // Keys saved in the step and then backed out of: only a fresh health read says Telegram is set up now.
+    const before = vi.mocked(api.health).mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await waitFor(() => expect(vi.mocked(api.health).mock.calls.length).toBe(before + 1))
   })
 
   it('is there once the copy has keys and the step is the sign-in', async () => {
