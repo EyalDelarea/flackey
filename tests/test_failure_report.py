@@ -106,8 +106,12 @@ def no_route(a: LosslessAttempt) -> str:
      "Soulseek: the search failed (search rejected: http 500)"),
     (attempt("unavailable"), "Soulseek: not reachable"),
     (attempt("no_pick"), "Soulseek: no result matched closely enough"),
+    (attempt("queued", survivors=3, events=[("enqueue", {}), ("too_slow", {"pick": 1}), ("enqueue", {})]),
+     "Soulseek: 3 copies found, 2 tried, 1 given up as too slow, stuck in the peers' queues"),
+    (attempt("too_slow", survivors=2, events=[("enqueue", {}), ("too_slow", {"pick": 1})]),
+     "Soulseek: 2 copies found, 1 tried, the transfers were too slow"),
 ], ids=["transfers", "zero-results", "no-match", "one-copy", "disk-full", "search-failed", "unavailable",
-        "no-count"])
+        "no-count", "slow-then-queued", "too-slow"])
 def test_a_soulseek_miss_is_diagnosed_from_its_attempt(a, want):
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=no_route(a)),
                         attempts=[a])

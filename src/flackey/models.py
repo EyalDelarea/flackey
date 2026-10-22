@@ -327,7 +327,8 @@ class LosslessAttempt:
     raw_dir: str | None = None
 
 
-ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
+ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "too_slow",
+                    "transfer_failed",
                     "verify_failed", "damaged", "verify_unavailable", "fingerprint_failed",
                     "fingerprint_unavailable", "convert_failed", "unavailable", "interrupted")
 
@@ -341,6 +342,7 @@ MISS_REASON = {
     "first_byte_timeout": "the people who had it never started sending",
     "queued": "the people who had it are busy and their queue has not reached us yet",
     "transfer_timeout": "the people who had it stopped sending part-way through",
+    "too_slow": "the people who had it were sending too slowly",
     # Evidence, not a verdict on anyone's honesty: a cutoff is consistent with a lossy source and can also
     # come from a resampler or a mastering filter (issue #97).
     "verify_failed": "the copies offered did not pass the lossless check",

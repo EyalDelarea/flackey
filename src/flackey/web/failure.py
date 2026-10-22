@@ -43,6 +43,7 @@ ATTEMPT_PHRASE = {
     "queued": "stuck in the peers' queues",
     "first_byte_timeout": "the peers never started sending",
     "transfer_timeout": "the transfers stalled part-way",
+    "too_slow": "the transfers were too slow",
     "transfer_failed": "the transfers failed",
     "verify_failed": "did not pass the lossless check",
     "damaged": "the copies arrived damaged or incomplete",
@@ -134,6 +135,10 @@ def attempt_line(a: LosslessAttempt, of: int = 1) -> str:
         tried = names.count("enqueue")
         if tried:
             head += f", {tried} tried"
+        # A slow transfer given up for the next pick ends nothing by itself, so only the timeline says that the
+        # pick which did end the attempt was not the first choice.
+        if (slow := names.count("too_slow")) and a.outcome != "too_slow":
+            head += f", {slow} given up as too slow"
         # A full disk is closed as transfer_failed (no peer was at fault), and only the timeline says so.
         why = "the disk was full" if "disk_full" in names else ATTEMPT_PHRASE.get(a.outcome, a.outcome)
         line = f"{name}: {head}, {why}"

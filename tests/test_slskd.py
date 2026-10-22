@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -7,7 +8,13 @@ import httpx
 import pytest
 import respx
 
-from flackey.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
+from flackey.source.lossless import (
+    LosslessError,
+    LosslessUnavailable,
+    SlowRule,
+    TooSlow,
+    TransferProgress,
+)
 from flackey.source.slskd import (
     SlskdClient,
     SoulseekProvider,
@@ -613,3 +620,164 @@ def test_budget_the_total_ceiling_catches_a_peer_that_trickles_forever():
     b.observe(210.5, 211, "InProgress")
     err = b.expired(210.5, "InProgress", 211, 1000)
     assert err.outcome == "transfer_timeout" and str(err) == "not finished within 100 s"
+
+
+# ---- the too-slow rule: a moving transfer measured against the next pick ----
+
+RULE = SlowRule(grace_s=30, finish_s=240, spare_from=0.75, max_rate_bps=200_000)
+MB = 1_000_000
+
+
+def moving(rule: SlowRule | None = RULE, *, first: int = 10_000) -> TransferBudget:
+    """First byte at t=110, `first` bytes in by then."""
+    b = budget(total_s=6000, slow=rule)
+    b.observe(110.0, first, "InProgress")
+    return b
+
+
+def test_budget_a_slow_transfer_is_given_up_once_its_grace_has_passed():
+    b = moving()
+    b.observe(139.0, 39_000, "InProgress")
+    assert b.expired(139.0, "InProgress", 39_000, MB) is None          # 29 s of bytes: too early to say
+    b.observe(140.0, 40_000, "InProgress")
+    err = b.expired(140.0, "InProgress", 40_000, MB)                   # 1 kB/s, 960 s to go
+    assert isinstance(err, TooSlow) and err.outcome == "too_slow"
+    assert (err.pct, err.speed_bps, err.left_s) == (4, 1000.0, 960.0)
+    assert str(err) == "1 kB/s at 4 %: 960 s more to finish, past the 240 s the next copy is worth"
+
+
+@pytest.mark.parametrize("rule, first, done", [
+    (None, 10_000, 40_000),                                            # no next pick: slow beats nothing
+    (RULE, 10_000, 310_000),                                           # 10 kB/s: 69 s to go
+    (RULE, 760_000, 761_000),                                          # three quarters in: finish it
+    (SlowRule(grace_s=30, finish_s=240, spare_from=0.75, max_rate_bps=1000), 10_000, 40_000),  # not below cap
+    (RULE, 10_000, 10_000),                                            # nothing since the first byte: a stall
+], ids=["no-rule", "fast-enough", "nearly-done", "at-the-rate-cap", "stalled"])
+def test_budget_the_slow_rule_leaves_these_alone(rule, first, done):
+    b = moving(rule, first=first)
+    b.observe(140.0, done, "InProgress")
+    assert b.too_slow(140.0, done, MB) is None and b.expired(140.0, "InProgress", done, MB) is None
+
+
+def test_budget_a_grace_of_nothing_does_not_divide_by_it():
+    b = moving(SlowRule(grace_s=0, finish_s=240, spare_from=0.75, max_rate_bps=200_000))
+    assert b.too_slow(110.0, 10_000, MB) is None                        # the first byte's own poll
+
+
+def test_the_slow_settings_refuse_a_grace_of_nothing():
+    from pydantic import ValidationError
+
+    from flackey.config import Settings
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, lossless_slow_grace_s=0)
+
+
+def _play(rule: SlowRule, size: int, rate: float) -> TooSlow | None:
+    """A steady transfer of `size` at `rate` bytes/s, polled every 2 s from its first byte to its end."""
+    b = budget(total_s=1e9, slow=rule)
+    t, done = 100.0, 0
+    while done < size:
+        t, done = t + 2, min(size, int(done + 2 * rate))
+        b.observe(t, done, "InProgress")
+        if (err := b.expired(t, "InProgress", done, size)) is not None:
+            return err
+    return None
+
+
+def _next(size: int, speed: int):
+    return replace(flac_file(size=size), username="next", upload_speed_bps=speed)
+
+
+def test_the_case_this_was_written_for_switches():
+    """2026-10-22: 106 MB at 125 kB/s, 14 minutes. A free-slot peer advertising 1 MB/s projects to 166 s."""
+    from flackey.config import Settings
+    from flackey.worker.lossless_attempt import slow_rule_for
+    err = _play(slow_rule_for(_next(106 * MB, 1_000_000), Settings(_env_file=None)), 106 * MB, 125_000)
+    assert isinstance(err, TooSlow) and err.pct == 4 and round(err.left_s) == 816
+
+
+@pytest.mark.parametrize("size, rate, next_speed", [
+    (120 * MB, 400_000, 3_000_000),       # a good home peer on a big 24-bit file: above the 200 kB/s cap
+    (40 * MB, 150_000, 3_000_000),        # a 40 MB file is safe from ~148 kB/s (40 MB in 270 s)
+    (106 * MB, 125_000, 300_000),         # the next peer's word is not clearly better: 2 x 413 s > 816 s
+    (106 * MB, 125_000, 200_000),         # nor is ours below half of it
+], ids=["big-file-400kBps", "40MB-150kBps", "next-not-much-faster", "next-not-twice-as-fast"])
+def test_a_transfer_that_is_not_clearly_worse_than_the_next_copy_is_kept(size, rate, next_speed):
+    from flackey.config import Settings
+    from flackey.worker.lossless_attempt import slow_rule_for
+    assert _play(slow_rule_for(_next(size, next_speed), Settings(_env_file=None)), size, rate) is None
+
+
+def _slow_poll(downloads: Path):
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    return downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+
+
+@respx.mock
+async def test_a_slow_transfer_is_cancelled_in_slskd_and_leaves_nothing_behind(provider):
+    p, clock, downloads = provider
+    dest = _slow_poll(downloads)
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
+        httpx.Response(200, json=transfer("InProgress", 1000 * n)) for n in range(1, 200)])
+
+    def cancel_as_it_lands(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x")                                         # landed between the poll and the cancel
+        return httpx.Response(204)
+
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(side_effect=cancel_as_it_lands)
+    with pytest.raises(TooSlow) as e:
+        await p.download(flac_file(), first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+    assert e.value.outcome == "too_slow" and cancel.calls[0].request.url.params["remove"] == "true"
+    assert 32 <= clock.t <= 34 and not dest.exists()                  # 30 s after the first byte at t=2
+
+
+@respx.mock
+@pytest.mark.parametrize("answers, switched", [
+    ([httpx.Response(500), httpx.Response(204)], True),                # one retry
+    ([httpx.Response(404)], True),                                     # already gone: nothing to stop
+    ([httpx.Response(500), httpx.Response(500)], False),
+    ([httpx.ConnectError("down"), httpx.Response(409)], False),
+], ids=["retried", "gone", "refused-twice", "unreachable-then-refused"])
+async def test_a_slow_transfer_slskd_will_not_cancel_is_kept_to_the_end(provider, answers, switched):
+    """Given up in name while slskd still runs it, it would compete with the pick it was given up for, and
+    `cancel_all` never sweeps this run's own transfers. So it is kept, and nothing ends it as slow again."""
+    p, _, downloads = provider
+    dest = _slow_poll(downloads)
+    f = flac_file(size=40_000)
+
+    def land(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x" * f.size)
+        return httpx.Response(200, json=transfer("Completed, Succeeded", f.size, size=f.size))
+
+    crawling = [httpx.Response(200, json=transfer("InProgress", 100 * n, size=f.size)) for n in range(1, 60)]
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[*crawling, land])
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(side_effect=answers)
+    if switched:
+        with pytest.raises(TooSlow):
+            await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+    else:
+        got = await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+        assert got.name.endswith(dest.name) and got.read_bytes() == b"x" * f.size
+    assert cancel.call_count == len(answers)
+
+
+@respx.mock
+@pytest.mark.parametrize("after", [
+    lambda f: httpx.Response(200, json=transfer("Completed, Cancelled", 3000, size=f.size)),
+    lambda f: httpx.Response(200, json=[]),                            # removed after all: no longer listed
+], ids=["cancelled", "gone"])
+async def test_a_slow_transfer_slskd_stopped_despite_an_error_is_still_the_switch(provider, after):
+    """The cancel answered 500 twice, so the transfer was kept -- but slskd had stopped it. Read as the
+    `transfer_failed` a Cancelled state otherwise is, the copy would never be the attempt's fallback."""
+    p, _, downloads = provider
+    dest = _slow_poll(downloads)
+    f = flac_file(size=40_000)
+    crawling = [httpx.Response(200, json=transfer("InProgress", 100 * n, size=f.size)) for n in range(1, 17)]
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[*crawling, after(f)])
+    respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(
+        side_effect=[httpx.Response(500), httpx.Response(500)])
+    with pytest.raises(TooSlow) as e:
+        await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+    assert e.value.outcome == "too_slow" and e.value.pct == 4 and not dest.exists()
