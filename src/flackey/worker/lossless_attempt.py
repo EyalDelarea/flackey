@@ -20,9 +20,9 @@ from ..lossless import (
     transfer_ceiling_s,
 )
 from ..models import Candidate, CatalogTrack, Request, norm
-from ..source import LosslessError, LosslessProvider, TransferProgress
+from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
 from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
-from .policy import PEER_STUCK_OUTCOMES, SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
+from .policy import MAX_SLOW_SWITCHES, PEER_STUCK_OUTCOMES, SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
 from .records import (
     CATALOG_SOURCE,
     QUERY_SOURCE,
@@ -201,8 +201,24 @@ class LosslessMixin:
         # of a request while another peer had the song with a free slot (2026-10-14).
         stuck_peers: set[str] = set()
         refused = []                                  # files the fingerprint said are another recording
-        n = 0
-        for file in report.survivors:
+        n = slow_switches = 0
+
+        def budget_s(f) -> float:
+            # What one pick may cost, for this file: the queue wait is left out because the pick about to
+            # start still has its own, and charging it twice is what would close this gate the moment the
+            # ceiling grew with the file.
+            return s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(f.size, s)
+
+        def next_pick(i: int, peer: str):
+            """The survivor the loop would try after the `i`th if this one's peer turned out too slow: the
+            same skips the loop makes, with `peer` among the stuck ones."""
+            if n >= s.lossless_max_picks:
+                return None
+            return next((f for f in report.survivors[i + 1:]
+                         if f.username != peer and f.username not in stuck_peers
+                         and not any(same_recording(f, r, ref.artist) for r in refused)), None)
+
+        for i, file in enumerate(report.survivors):
             if file.username in stuck_peers:
                 continue
             if any(same_recording(file, r, ref.artist) for r in refused):
@@ -211,11 +227,7 @@ class LosslessMixin:
             if n == s.lossless_max_picks:
                 break
             n += 1
-            # What one pick may cost, for this file: the queue wait is left out because the pick about to
-            # start still has its own, and charging it twice is what would close this gate the moment the
-            # ceiling grew with the file.
-            budget_s = s.lossless_search_wait_s + s.lossless_first_byte_s + transfer_ceiling_s(file.size, s)
-            if n > 1 and rec.elapsed_ms() / 1000 > budget_s:
+            if n > 1 and rec.elapsed_ms() / 1000 > budget_s(file):
                 rec.event("budget_exhausted", pick=n)
                 break
             # The download lands in slskd's folder, is moved to tmp_dir and converted next to itself there:
@@ -227,7 +239,15 @@ class LosslessMixin:
                 rec.event("disk_full", pick=n, need_bytes=need, folders=short)
                 outcome = "transfer_failed"
                 break
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic)
+            # A slow transfer may be given up only for a pick that would really run next, and only while
+            # giving it up still leaves that pick inside its budget; otherwise this one runs to its end.
+            slow = None
+            nxt = next_pick(i, file.username) if slow_switches < MAX_SLOW_SWITCHES else None
+            if nxt is not None and (until_s := budget_s(nxt) - rec.elapsed_ms() / 1000) > 0:
+                slow = SlowRule(grace_s=s.lossless_slow_grace_s, finish_s=s.lossless_slow_finish_s,
+                                spare_from=s.lossless_slow_spare_from, until_s=until_s,
+                                next_speed_bps=nxt.upload_speed_bps)
+            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow)
             if hit is not None:
                 try:
                     rec.finish("filed")
@@ -239,6 +259,8 @@ class LosslessMixin:
                 break
             if outcome in PEER_STUCK_OUTCOMES:
                 stuck_peers.add(file.username)
+            if outcome == "too_slow":
+                slow_switches += 1
             if outcome == "fingerprint_failed":
                 refused.append(file)
         rec.finish(outcome)
@@ -246,7 +268,8 @@ class LosslessMixin:
 
 
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
-                                  file, n: int, acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
+                                  file, n: int, acoustic: Acoustic,
+                                  slow: SlowRule | None = None) -> tuple[LosslessHit | None, str]:
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
@@ -272,7 +295,13 @@ class LosslessMixin:
             landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s,
                                              total_s=transfer_ceiling_s(file.size, s), poll_s=s.lossless_poll_s,
                                              queue_wait_s=s.lossless_queue_wait_s, stall_s=s.lossless_stall_s,
-                                             on_progress=progress, on_raw=rec.raw)
+                                             slow=slow, on_progress=progress, on_raw=rec.raw)
+        except TooSlow as e:
+            # Its own event, not `transfer_failed`: the peer did send, and a failure report or replay reading
+            # this timeline should see a switch, with how slow it was, rather than a refusal.
+            rec.event("too_slow", pick=n, peer=file.username, pct=e.pct, speed_kbps=round(e.speed_bps / 1000),
+                      left_s=round(e.left_s), error=str(e))
+            return None, e.outcome
         except LosslessError as e:
             rec.event("transfer_failed", error=str(e))
             return None, e.outcome

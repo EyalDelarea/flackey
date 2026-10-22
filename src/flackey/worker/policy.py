@@ -50,11 +50,21 @@ SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # Not here: unavailable/interrupted, which the request-level retry (RETRY_LOSSLESS_OUTCOMES)
 # already handles, no_pick, which is about the search rather than any peer, and verify_unavailable,
 # which is about this computer: without ffmpeg every survivor fails the same way.
+# too_slow is the same fact as transfer_timeout caught earlier: the transfer was moving, but the next
+# survivor is the better bet (2026-10-22: 14 minutes for 106 MB at 125 kB/s, other copies untried). It is
+# only ever raised while there is a next pick, see `SlowRule`.
 SECOND_PICK_AFTER = {"verify_failed", "damaged", "fingerprint_failed", "transfer_failed", "first_byte_timeout",
-                     "queued", "transfer_timeout"}
-# Of those, the ones that say the peer never sent anything: its other files are skipped for the rest of the
-# attempt. A failed check or a broken transfer says something about the file, and the peer stays eligible.
-PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout"}
+                     "queued", "transfer_timeout", "too_slow"}
+# Of those, the ones that say something about the peer's line rather than the file -- it never sent anything,
+# or sent too slowly for any of its files to be worth the wait -- so its other files are skipped for the rest
+# of the attempt. A failed check or a broken transfer says something about the file, and the peer stays
+# eligible. Within one attempt only: nothing carries a peer over to the next request (no outcome bans a
+# peer), because a peer's speed is whatever else its line is doing at the time: slow is not bad.
+PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout", "too_slow"}
+# How many slow transfers one attempt gives up before it keeps the next one whatever its speed. Each switch
+# costs a grace period and a new peer's queue and first byte; two slow peers in a row are as likely to say
+# the line at this end is the slow one, and then a third switch would only make the track arrive later.
+MAX_SLOW_SWITCHES = 2
 # After these, the next spelling gets a search of its own (issue #69). Both say this spelling found nothing
 # that is the recording; neither says anything about the other spellings. Everything else is either a fact
 # about the provider (unavailable, interrupted) or a fact that holds for every spelling alike
@@ -76,7 +86,7 @@ SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
 # kind of answer: the copies broke on the way, and the next transfer is a fresh roll. Not here: a missing
 # reference, a missing ffmpeg or nothing to search for, which no amount of waiting changes.
 LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "damaged", "first_byte_timeout",
-                       "transfer_timeout", "queued", "unavailable", "interrupted"}
+                       "transfer_timeout", "too_slow", "queued", "unavailable", "interrupted"}
 LONG_RETRY_EVERY_S = 6 * 3600
 LONG_RETRY_TIMES = 12            # 3 days at 6 h
 MAINTENANCE_EVERY_S = 86_400

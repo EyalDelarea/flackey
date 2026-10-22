@@ -259,6 +259,7 @@ const MISS_REASON: Record<string, string> = {
   first_byte_timeout: 'the people who had it never started sending',
   queued: 'the people who had it are busy and their queue has not reached us yet',
   transfer_timeout: 'the people who had it stopped sending part-way through',
+  too_slow: 'the people who had it were sending too slowly',
   verify_failed: 'the copies offered did not pass the lossless check',
   damaged: 'the copies that arrived were damaged or incomplete',
   verify_unavailable: 'ffmpeg is missing, so the audio could not be checked',

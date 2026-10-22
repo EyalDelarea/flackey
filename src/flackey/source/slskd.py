@@ -3,6 +3,7 @@ the spike established are in the tests' docstring and in the spec; nothing here 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 import time
@@ -16,7 +17,14 @@ from uuid import uuid4
 import httpx
 
 from ..lossless import LosslessFile
-from .lossless import LosslessError, LosslessUnavailable, RawSink, TransferProgress
+from .lossless import (
+    LosslessError,
+    LosslessUnavailable,
+    RawSink,
+    SlowRule,
+    TooSlow,
+    TransferProgress,
+)
 
 log = logging.getLogger(__name__)
 SEARCH_IDLE_MS = 5000       # slskd's own "no new responses for this long" timeout; milliseconds
@@ -34,16 +42,19 @@ def is_queued(state: str) -> bool:
 
 @dataclass
 class TransferBudget:
-    """The four timeouts of one download, as a pure function of the clock (see `SlskdProvider.download`
-    for why there are four). Fed every poll with what slskd reported; answers with the LosslessError that
-    ends the transfer, or None while it may go on. Cancelling the transfer is the caller's job."""
+    """The four timeouts of one download, and the optional too-slow rule, as a pure function of the clock
+    (see `SlskdProvider.download` for why there are four). Fed every poll with what slskd reported; answers
+    with the LosslessError that ends the transfer, or None while it may go on. Cancelling the transfer is
+    the caller's job."""
     t0: float
     first_byte_s: float
     total_s: float
     queue_wait_s: float
     stall_s: float
+    slow: SlowRule | None = None
     active_at: float | None = None       # left the peer's queue
     first_byte_at: float | None = None
+    first_done: int = 0                  # bytes slskd reported at that poll: the rate counts from there
     last_done: int = 0
     moved_at: float | None = None        # the last poll that saw a new byte
 
@@ -57,7 +68,7 @@ class TransferBudget:
         if self.active_at is None and (done > 0 or not is_queued(state)):
             self.active_at = now
         if done > 0 and self.first_byte_at is None:
-            self.first_byte_at = now
+            self.first_byte_at, self.first_done = now, done
         if done > self.last_done:
             self.last_done, self.moved_at = done, now
 
@@ -74,9 +85,31 @@ class TransferBudget:
             return LosslessError(f"no bytes within {self.first_byte_s:.0f} s", "first_byte_timeout")
         if self.moved_at is not None and now - self.moved_at > self.stall_s:
             return LosslessError(f"stopped sending after {done} of {size} bytes", "transfer_timeout")
+        if (err := self.too_slow(now, done, size)) is not None:
+            return err
         if now - self.active_at > self.total_s:
             return LosslessError(f"not finished within {self.total_s:.0f} s", "transfer_timeout")
         return None
+
+    def too_slow(self, now: float, done: int, size: int) -> TooSlow | None:
+        """A transfer that is moving, measured against `SlowRule`. A rate of nothing is left to the stall
+        bound: a transfer that stopped is `transfer_timeout`, not slow."""
+        rule = self.slow
+        if rule is None or self.first_byte_at is None or size <= 0:
+            return None
+        flowing = now - self.first_byte_at
+        if flowing < rule.grace_s or now - self.t0 > rule.until_s or done >= size * rule.spare_from:
+            return None
+        rate = (done - self.first_done) / flowing
+        if rate <= 0 or (rule.next_speed_bps and rule.next_speed_bps <= rate):
+            return None
+        left_s = (size - done) / rate
+        if left_s <= rule.finish_s:
+            return None
+        pct = round(100 * done / size)
+        return TooSlow(f"{rate / 1000:.0f} kB/s at {pct} %: {left_s:.0f} s more to finish, past the "
+                       f"{rule.finish_s:.0f} s worth waiting while another copy is untried",
+                       pct=pct, speed_bps=rate, left_s=left_s)
 
 
 class SlskdClient:
@@ -317,7 +350,7 @@ class SoulseekProvider:
 
     async def download(self, file: LosslessFile, *, first_byte_s: float, total_s: float, poll_s: float,
                        queue_wait_s: float | None = None, stall_s: float | None = None,
-                       on_progress: Callable[[TransferProgress], None] | None = None,
+                       slow: SlowRule | None = None, on_progress: Callable[[TransferProgress], None] | None = None,
                        on_raw: RawSink | None = None) -> Path:
         """Four separate budgets, because a transfer can stop for four unrelated reasons.
 
@@ -333,23 +366,27 @@ class SoulseekProvider:
         is not evidence: a 67 MB FLAC arriving honestly at 100 kB/s takes eleven minutes, so only the bytes
         stopping says the transfer is dead. Give `total_s` room for the file (see `transfer_ceiling_s`); it
         is there for a peer that trickles forever, which no stall bound can catch.
+
+        `slow` is not a fifth timeout but a comparison: an honest 125 kB/s peer is not dead, and with no other
+        copy to try it still runs to the ceiling. Given one (only while the caller has a next pick), a
+        transfer whose remaining bytes would take too long ends as "too_slow" (`TransferBudget.too_slow`).
         """
         dest = local_path_for(self.downloads, file)     # containment before anything is enqueued
         async with self._path_lock(dest):
             return await self._download_held(file, dest, first_byte_s=first_byte_s, total_s=total_s,
                                              poll_s=poll_s, queue_wait_s=queue_wait_s, stall_s=stall_s,
-                                             on_progress=on_progress, on_raw=on_raw)
+                                             slow=slow, on_progress=on_progress, on_raw=on_raw)
 
     async def _download_held(self, file: LosslessFile, dest: Path, *, first_byte_s: float, total_s: float,
                              poll_s: float, queue_wait_s: float | None = None, stall_s: float | None = None,
-                             on_progress: Callable[[TransferProgress], None] | None = None,
+                             slow: SlowRule | None = None, on_progress: Callable[[TransferProgress], None] | None = None,
                              on_raw: RawSink | None = None) -> Path:
         _remove_stale_file(dest)                        # so a leftover file can't be mistaken for the fresh one
         self._enqueued.add((file.username, file.path))  # before the request: slskd may hold it before it answers
         await self.client.enqueue(file.username, file.path, file.size)
         budget = TransferBudget(self.clock(), first_byte_s=first_byte_s, total_s=total_s,
                                 queue_wait_s=first_byte_s if queue_wait_s is None else queue_wait_s,
-                                stall_s=first_byte_s if stall_s is None else stall_s)
+                                stall_s=first_byte_s if stall_s is None else stall_s, slow=slow)
         last_state, n = None, 0
         # Only for the cancel path: the id slskd gave this transfer, once we have seen it. Stopping a
         # download the owner cancelled means telling the sidecar too -- otherwise the bytes keep arriving
@@ -398,6 +435,12 @@ class SoulseekProvider:
                                         else "completed but no file at the derived path", "transfer_failed")
                 if (err := budget.expired(now, state, done, file.size)) is not None:
                     await self.client.cancel_download(file.username, tr["id"])
+                    # slskd keeps the partial bytes in its own incomplete folder and `remove` drops the
+                    # transfer; this is for a file that landed between the poll and the cancel, which would
+                    # otherwise sit at the derived path until the next download of the track cleared it.
+                    # The path's lock is still held, so it can be no other download's.
+                    with contextlib.suppress(OSError, ValueError):
+                        dest.unlink(missing_ok=True)
                     raise err
         except asyncio.CancelledError:
             # The owner stopped this download. Tell slskd so the peer stops sending, and take the partial

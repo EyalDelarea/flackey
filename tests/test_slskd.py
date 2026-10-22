@@ -7,7 +7,13 @@ import httpx
 import pytest
 import respx
 
-from flackey.source.lossless import LosslessError, LosslessUnavailable, TransferProgress
+from flackey.source.lossless import (
+    LosslessError,
+    LosslessUnavailable,
+    SlowRule,
+    TooSlow,
+    TransferProgress,
+)
 from flackey.source.slskd import (
     SlskdClient,
     SoulseekProvider,
@@ -613,3 +619,61 @@ def test_budget_the_total_ceiling_catches_a_peer_that_trickles_forever():
     b.observe(210.5, 211, "InProgress")
     err = b.expired(210.5, "InProgress", 211, 1000)
     assert err.outcome == "transfer_timeout" and str(err) == "not finished within 100 s"
+
+
+# ---- the too-slow rule: a moving transfer measured against the next pick ----
+
+RULE = SlowRule(grace_s=30, finish_s=240, spare_from=0.75, until_s=1000)
+MB = 1_000_000
+
+
+def moving(rule: SlowRule | None = RULE, *, first: int = 10_000) -> TransferBudget:
+    """First byte at t=110, `first` bytes in by then."""
+    b = budget(total_s=6000, slow=rule)
+    b.observe(110.0, first, "InProgress")
+    return b
+
+
+def test_budget_a_slow_transfer_is_given_up_once_its_grace_has_passed():
+    b = moving()
+    b.observe(139.0, 39_000, "InProgress")
+    assert b.expired(139.0, "InProgress", 39_000, MB) is None          # 29 s of bytes: too early to say
+    b.observe(140.0, 40_000, "InProgress")
+    err = b.expired(140.0, "InProgress", 40_000, MB)                   # 1 kB/s, 960 s to go
+    assert isinstance(err, TooSlow) and err.outcome == "too_slow"
+    assert (err.pct, err.speed_bps, err.left_s) == (4, 1000.0, 960.0)
+    assert str(err) == "1 kB/s at 4 %: 960 s more to finish, past the 240 s worth waiting while another copy is untried"
+
+
+@pytest.mark.parametrize("rule, first, done", [
+    (None, 10_000, 40_000),                                            # no next pick: slow beats nothing
+    (RULE, 10_000, 310_000),                                           # 10 kB/s: 69 s to go
+    (RULE, 760_000, 761_000),                                          # three quarters in: finish it
+    (SlowRule(grace_s=30, finish_s=240, spare_from=0.75, until_s=35), 10_000, 40_000),  # next pick's budget gone
+    (SlowRule(grace_s=30, finish_s=240, spare_from=0.75, until_s=1000, next_speed_bps=1000), 10_000, 40_000),
+    (RULE, 10_000, 10_000),                                            # nothing since the first byte: a stall
+], ids=["no-rule", "fast-enough", "nearly-done", "past-until", "next-no-faster", "stalled"])
+def test_budget_the_slow_rule_leaves_these_alone(rule, first, done):
+    b = moving(rule, first=first)
+    b.observe(140.0, done, "InProgress")
+    assert b.too_slow(140.0, done, MB) is None and b.expired(140.0, "InProgress", done, MB) is None
+
+
+@respx.mock
+async def test_a_slow_transfer_is_cancelled_in_slskd_and_leaves_nothing_behind(provider):
+    p, clock, downloads = provider
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[
+        httpx.Response(200, json=transfer("InProgress", 1000 * n)) for n in range(1, 200)])
+
+    def cancel_as_it_lands(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x")                                         # landed between the poll and the cancel
+        return httpx.Response(204)
+
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(side_effect=cancel_as_it_lands)
+    with pytest.raises(TooSlow) as e:
+        await p.download(flac_file(), first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+    assert e.value.outcome == "too_slow" and cancel.calls[0].request.url.params["remove"] == "true"
+    assert 32 <= clock.t <= 34 and not dest.exists()                  # 30 s after the first byte at t=2
