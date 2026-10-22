@@ -167,6 +167,23 @@ def test_the_diagnosis_is_one_short_line():
     assert len(line) <= DIAGNOSIS_CHARS and line.endswith("x…") and "\n" not in line
 
 
+def test_a_long_diagnosis_and_its_subject_stop_at_a_word_not_inside_one(tmp_path: Path):
+    # Long enough that a plain cut lands inside "back" at 160 and inside "started" at the subject's 80.
+    msg = ("no way to fetch this track: the people who had it never started sending, the Deezer bot is switched "
+           "off, so there is no lossy copy to fall back on. Press Try again to search once more")
+    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg))
+    line = diagnose(rec)
+    assert len(line) <= DIAGNOSIS_CHARS and line.endswith("…")
+    assert f"Error at download: {msg}".startswith(line[:-1]), "cut at the end, nothing dropped from the middle"
+    assert f"Error at download: {msg}"[len(line) - 1] == " ", "the cut lands on a space, not inside a word"
+    rep = build_report(settings_for(tmp_path), {}, ClientContext(), redact=Redactor([], home=HOME))
+    rep.diagnosis = line
+    subject = compose_email(rep, "", "", "z.zip", Redactor([], home=HOME)).subject
+    assert subject.startswith("Flackey failure: ") and subject.endswith("…")
+    cut = subject.removeprefix("Flackey failure: ")[:-1]
+    assert line.startswith(cut) and line[len(cut)] == " ", subject
+
+
 def test_an_unfinished_attempt_says_so():
     assert attempt_line(attempt(None)) == "Soulseek: the attempt never finished"
 

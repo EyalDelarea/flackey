@@ -37,6 +37,7 @@ from ..slskd_config import read_api_key, read_password, read_username, read_web_
 from ..store import Store
 from ..tools import missing_helpers
 from .failure import FailureRecord, diagnose, narrow_log, record_json, record_text, window
+from .failure import cap as cap_words
 from .failure import load as load_failure
 from .guard import from_the_app
 from .library import reveal_path
@@ -482,8 +483,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
     log goes in the zip, which the reporter attaches by dragging. Each piece is redacted on its own rather
     than the finished body, whose email redaction would take the To address with it."""
     def cap(text: str, n: int) -> str:
-        text = text.strip()
-        return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+        return cap_words(text.strip(), n)
 
     first = next((ln for ln in description.strip().splitlines() if ln.strip()), "Something went wrong")
     details = "\n".join(f"{k}: {v}" for k, v in report.summary)

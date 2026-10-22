@@ -78,9 +78,22 @@ def load(store: Store, request_id: int) -> FailureRecord:
         candidate=candidate)
 
 
+def cap(text: str, n: int) -> str:
+    """`text` in at most `n` characters, ending in "…" when it had to be cut. The cut goes back to the last
+    space so a subject never stops mid-word ("…lossy copy to fa…"); a single word longer than half the
+    room is cut inside itself instead, or a long link would leave next to nothing."""
+    if len(text) <= n:
+        return text
+    head = text[:n - 1]
+    if not text[n - 1].isspace():
+        m = re.match(r"(.*)\s", head, re.DOTALL)
+        if m and len(m.group(1)) >= n // 2:
+            head = m.group(1)
+    return head.rstrip(" \t\n,;:") + "…"
+
+
 def _cap(text: str, n: int = DIAGNOSIS_CHARS) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+    return cap(" ".join(text.split()), n)
 
 
 def _count(n: int, one: str, many: str) -> str:
