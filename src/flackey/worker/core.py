@@ -13,7 +13,7 @@ import httpx
 from ..attempts import prune_raw
 from ..config import Settings
 from ..library import prune_missing_tracks
-from ..models import RETRYABLE_STATES, Request, RequestState
+from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
 from ..source import LosslessError, LosslessProvider, Source, SourceUnauthorized
 from ..store import Store
@@ -24,6 +24,7 @@ from .filing import FilingMixin
 from .lossless_attempt import LosslessMixin
 from .pipeline import PipelineMixin
 from .policy import (
+    BOT_PAUSED,
     CANCELLABLE,
     LOGIN_REQUIRED,
     LOSSLESS_HEALTH_EVERY_S,
@@ -52,7 +53,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # such a track with the stand-in's own tags, as before.
         self.tag_lookup = tag_lookup
         # shared with /api/health (Task 14): {"telegram_authorized": bool}; the worker flips it to False
-        # when the Telethon session dies and then stops, leaving every request queued for the next run
+        # when the Telethon session dies. That pauses the Deezer bot and nothing else: Soulseek carries on.
         self.status = status if status is not None else {"telegram_authorized": True}
         self.providers = list(providers or [])
         self.http = http or httpx.AsyncClient(timeout=20)
@@ -76,6 +77,19 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
         # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
         self._catalog_blocked = False
+        # Requests whose current pass went without the bot because Telegram was signed out. Kept per pass
+        # rather than read off `status` when the pass ends: Telegram can come back while a track is on
+        # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
+        self._bot_skipped: set[int] = set()
+        # What `_bot_ready` said on the last tick, so the tick it changes to yes can re-queue what the
+        # paused bot left behind. False to begin with: a sign-in made while the app was closed counts.
+        self._bot_was_ready = False
+
+
+    def _bot_ready(self) -> bool:
+        """Whether a pass may talk to the Deezer bot right now: switched on, and the Telegram account it
+        lives in signed in. Asked at each use, because the flag can flip under a pass in flight."""
+        return self.settings.source_enabled and bool(self.status.get("telegram_authorized", True))
 
 
     def _set_state(self, req: Request, state: RequestState, **kw) -> None:
@@ -194,10 +208,15 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         share nothing that makes an order necessary -- the peer sending one has its own upload slot, and
         the two stages that *are* shared (the single Deezer bot conversation, slskd's single-search
         endpoint) hold their own locks inside the components that own them. So the loop's job is no longer
-        to take turns; it is to keep starting whatever is due and to wait for the lot at the end."""
+        to take turns; it is to keep starting whatever is due and to wait for the lot at the end.
+
+        It used to stop whenever the bot was on and Telegram signed out, which took Soulseek down with
+        it: Telegram was required in all but name. Now nothing ends the loop but cancellation -- a signed-out
+        Telegram pauses the bot (`_bot_ready`), and the tracks go on without it."""
         await self.startup()
         try:
-            while self.status.get("telegram_authorized", True) or not self.settings.source_enabled:
+            while True:
+                await self._requeue_for_the_bot()
                 await self._maintenance()
                 self._start_due()
                 await self.refresh_lossless_health()
@@ -207,9 +226,30 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             # outlive it, still writing to the store the app is closing. Each one puts itself back on the
             # queue as it unwinds (see `process`), so the next run picks up where this one stopped.
             await self._stop_all()
-        # Unguarded on purpose: reaching this line means the loop ended normally, which only happens
-        # when the source is on and Telegram is signed out (cancellation skips it entirely).
-        log.error("worker stopped: %s (sign in from the setup screen in the UI)", LOGIN_REQUIRED)
+
+
+    async def _requeue_for_the_bot(self) -> None:
+        """On the tick the bot becomes reachable, give back what failed for want of it. A track Soulseek
+        did not have, filed nowhere because the bot was paused, is exactly the one the MP3 fallback
+        exists for; making the owner find it on the Failed tab and press Try again would be a chore the
+        app can do itself. `BOT_PAUSED` in the row is how those are told apart from every other failure:
+        failures go through `retry`, like Try again, and a row already waiting on its backoff is just
+        made due now."""
+        ready = self._bot_ready()
+        came_back, self._bot_was_ready = ready and not self._bot_was_ready, ready
+        if not came_back:
+            return
+        n = 0
+        for req in self.store.list_requests(SWEEPABLE_STATES | {RequestState.QUEUED}, limit=100_000):
+            if BOT_PAUSED not in f"{req.error_message or ''} {req.flag_reason or ''}":
+                continue
+            if req.state == RequestState.QUEUED:
+                self.store.update_request(req.id, retry_after=None)
+            else:
+                await self.retry(req.id)
+            n += 1
+        if n:
+            log.info("Telegram is back: re-queued %d requests the paused Deezer bot left without a file", n)
 
 
     async def _stop_all(self) -> None:
@@ -305,13 +345,14 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             self._on_cancelled(request_id)
             raise    # never swallowed: a cancellation that does not propagate is a task that never stops
         except SourceUnauthorized as e:
-            # not the request's fault: keep it queued, attempts untouched, and pause the worker
+            # Not the request's fault: keep it queued, attempts untouched, and pause the bot. The next tick
+            # starts the request again, and that pass goes on without the bot rather than waiting for it.
             self._set_state(self.store.get_request(request_id), RequestState.QUEUED, flag_reason=LOGIN_REQUIRED)
             if self.status.get("telegram_authorized", True):
                 self.status["telegram_authorized"] = False
                 log.error("%s: %s", LOGIN_REQUIRED, e)
-                await self.notifier.send(f"{LOGIN_REQUIRED}: {e}\nRun `flackey login` and restart. "
-                                         f"Requests stay queued.")
+                await self.notifier.send(f"{LOGIN_REQUIRED}: {e}\nSign in again from the app. Until then "
+                                         f"the Deezer bot is paused; Soulseek downloads carry on.")
         except Exception as e:
             log.exception("req#%d failed", request_id)
             self._set_state(self.store.get_request(request_id), RequestState.ERROR, error_message=str(e)[:500])

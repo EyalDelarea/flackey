@@ -13,7 +13,7 @@ from ..models import Candidate, CatalogTrack, Query, Request, RequestState
 from ..notify import Button
 from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
-from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS
+from .policy import BOT_PAUSED, MAX_ATTEMPTS, REVIEW_BUTTONS
 from .records import CATALOG_SOURCE, QUERY_SOURCE, _mmss, catalog_candidate, query_candidate
 
 log = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ class PipelineMixin:
     """Part of `Worker`, which supplies the state these methods read."""
 
     async def _process(self, request_id: int) -> None:
+        self._bot_skipped.discard(request_id)   # a fact about one pass; this is a new one
         req = self.store.get_request(request_id)
         query = req.query()
         if query.artist is None and query.title is None:
@@ -53,11 +54,17 @@ class PipelineMixin:
             self.store.update_request(req.id, catalog_track_id=catalog.id)
 
         cands: list[Candidate] = []
-        # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers three
+        # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers four
         # different situations and the row used to say which, so it still does: a bot that is switched
-        # off is the owner's own setting, and the bot's own sentence is how a not-found is diagnosed.
+        # off is the owner's own setting, a paused one is Telegram's and goes away with a sign-in, and the
+        # bot's own sentence is how a not-found is diagnosed.
         source_why = "the Deezer bot is switched off"
-        if self.settings.source_enabled:
+        if self.settings.source_enabled and not self._bot_ready():
+            # Never asked, not even to time out: a signed-out client either raises at once or, with no
+            # keys at all, is not connected to anything. The pass carries on as if the bot were off.
+            source_why = BOT_PAUSED
+            self._bot_skipped.add(req.id)
+        elif self.settings.source_enabled:
             source_why = "no Deezer candidates"
             try:
                 cands = await self.source.search(query)
@@ -256,6 +263,14 @@ class PipelineMixin:
             catalog = None
             cand = query_candidate(req.query(), req.id)
             self.store.update_request(req.id, catalog_track_id=None)
+        if hit is None and cand.source not in (CATALOG_SOURCE, QUERY_SOURCE) and not self._bot_ready():
+            # A record the bot offered on an earlier pass -- picked in review, or kept when a fetch was cut
+            # short -- and the bot is not there to send it now: switched off since, or Telegram signed out.
+            # Fetching anyway would only raise, so this pass ends the way a stand-in's does, below.
+            if self.settings.source_enabled:
+                self._bot_skipped.add(req.id)
+            await self._no_route(req)
+            return
         if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
             # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
             # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers

@@ -6,22 +6,25 @@ from flackey.app import start_sidecar, supervise_worker
 from flackey.slskd_binary import SlskdBinaryError
 
 
-async def test_supervisor_starts_the_worker_when_telegram_becomes_authorized():
+async def test_supervisor_runs_the_worker_with_telegram_signed_out():
+    """Telegram used to gate the worker, and with it every Soulseek download. A signed-out account now
+    only pauses the Deezer bot inside the worker, so the supervisor starts it whatever Telegram says."""
     status = {"telegram_authorized": False, "worker_running": False}
     runs = []
+    parked = asyncio.Event()
 
     class W:
         async def run_forever(self):
             runs.append(status["worker_running"])
-            status["telegram_authorized"] = False   # what the real worker does when the session dies
+            await parked.wait()
 
     task = asyncio.create_task(supervise_worker(W(), status, poll_s=0.01))
     await asyncio.sleep(0.05)
-    assert runs == []
-    status["telegram_authorized"] = True
-    await asyncio.sleep(0.05)
-    assert runs == [True] and status["worker_running"] is False
+    assert runs == [True] and status["worker_running"] is True
     task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert status["worker_running"] is False
 
 
 async def test_supervisor_keeps_running_after_worker_crash():
@@ -33,16 +36,18 @@ async def test_supervisor_keeps_running_after_worker_crash():
             runs.append(status["worker_running"])
             if len(runs) == 1:
                 raise RuntimeError("worker crashed")
-            status["telegram_authorized"] = False  # stop retrying once the restart is proven
+            await asyncio.Event().wait()   # the restart is proven; stay up until cancelled
 
     task = asyncio.create_task(supervise_worker(CrashingW(), status, poll_s=0.01))
     loop = asyncio.get_event_loop()
     deadline = loop.time() + 2.0
     while len(runs) < 2 and loop.time() < deadline:
         await asyncio.sleep(0.01)
-    assert len(runs) >= 2                  # a genuine restart happened, not just the first crash
-    assert status["worker_running"] is False
+    assert runs == [True, True]            # a genuine restart happened, not just the first crash
     task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert status["worker_running"] is False
 
 
 async def test_streams_close_once_the_server_is_told_to_exit():
@@ -156,25 +161,6 @@ def test_build_providers_follows_the_api_key_and_never_logs_it(tmp_path, caplog)
     assert len(providers) == 1 and isinstance(providers[0], SoulseekProvider)
     assert providers[0].downloads == tmp_path / "slskd" / "downloads" and providers[0].downloads.is_dir()
     assert "very-secret-key" not in caplog.text
-
-
-async def test_supervisor_runs_the_worker_when_run_when_says_so_without_telegram():
-    """A Soulseek-only copy has no Telegram to sign in to; the gate _run passes in must still start it."""
-    status = {"telegram_authorized": False, "worker_running": False}
-    runs = []
-    source_on = [False]
-
-    class W:
-        async def run_forever(self):
-            runs.append(status["worker_running"])
-            source_on[0] = True   # stop after one run
-
-    task = asyncio.create_task(supervise_worker(
-        W(), status, poll_s=0.01,
-        run_when=lambda: status["telegram_authorized"] or not source_on[0]))
-    await asyncio.sleep(0.05)
-    assert runs == [True] and status["worker_running"] is False
-    task.cancel()
 
 
 def test_boot_points_the_soulseek_share_at_the_library_folder(tmp_path):

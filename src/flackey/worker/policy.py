@@ -13,6 +13,11 @@ REVIEW_BUTTONS = 5
 CANCELLABLE = {RequestState.QUEUED, RequestState.IDENTIFYING, RequestState.FETCHING,
                RequestState.AWAITING_REVIEW, RequestState.ERROR}
 LOGIN_REQUIRED = "Telegram login required"
+# Why a pass went without the Deezer bot although the owner has it switched on. The worker no longer
+# stops when Telegram signs out -- Soulseek has nothing to do with Telegram -- so the bot is skipped
+# instead, and a request that ends up with no file for that reason says so. It is also the marker
+# `Worker._requeue_for_the_bot` looks for once Telegram is back, so it must survive into the row as is.
+BOT_PAUSED = "the Deezer bot is paused because Telegram is signed out"
 # Which rung of the ladder a request is on, for the one failure state that does not say so by its own name
 # (issue #60). Written on the row when it turns to `error`, and read by the Failed tab to split one
 # undifferentiated lump into Search / Download / Verify. Filing sits under "verify" because it is the back

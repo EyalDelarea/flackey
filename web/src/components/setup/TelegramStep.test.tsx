@@ -21,6 +21,16 @@ it('shows the QR, then the password box when Telegram asks, then finishes', asyn
   expect(api.password).toHaveBeenCalledWith('secret')
 })
 
+it('says Telegram is optional on the sign-in screen, the way the Soulseek step does', async () => {
+  vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
+  vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
+  render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={10} />)
+  await screen.findByText('Scan with the Telegram app on your phone')
+  expect(screen.getByText(/^Optional — Telegram is only how Flackey reaches the Deezer bot/)).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Use phone number instead'))
+  expect(screen.getByText(/^Optional — /)).toBeInTheDocument()      // the step's, not one sign-in screen's
+})
+
 it('switches to the phone flow', async () => {
   vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
   vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
