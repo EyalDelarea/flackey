@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 
 from rapidfuzz import fuzz
 
@@ -15,7 +15,16 @@ from .config import Settings
 from .identify import parse_version
 from .match import candidate_release, candidate_version
 from .models import Candidate, CatalogTrack, is_original, norm
-from .version import record_version, says_remaster, split_version, with_remaster
+from .version import (
+    EXTENDED,
+    Version,
+    record_version,
+    same_arrangement,
+    says_extended,
+    says_remaster,
+    split_version,
+    with_remaster,
+)
 
 LOSSLESS_EXTENSIONS = frozenset({"flac", "wav", "aiff", "aif"})
 MAX_SAMPLE_RATE = 48_000                       # CDJs play 44.1 and 48 kHz; nothing higher gets downloaded
@@ -81,6 +90,12 @@ class Reference:
     # built from the request's own words rather than a catalogue record or a source candidate; a hit on it
     # tags from the request
     from_query: bool = False
+    # Issue #187, both only while the owner prefers extended mixes. `cut` "extended" is the spelling that
+    # looks for the extended mix alone: searched with "extended", and every file that does not name an
+    # extended cut of this track is rejected (`rule_cut`). `prefer_extended` ranks an extended cut first
+    # in any spelling, and lets the fingerprint match an edit cut inside the reference's excerpt.
+    cut: str = ""
+    prefer_extended: bool = False
 
     @property
     def is_original(self) -> bool:
@@ -115,11 +130,43 @@ def reference_for(catalog: CatalogTrack | None, cand: Candidate, requested_durat
 
 def search_text(ref: Reference) -> str:
     """What is typed into the network: first artist, title without parentheses, mix name only when it is a
-    real version (the spike: this form found every track once the search was allowed to complete)."""
+    real version (the spike: this form found every track once the search was allowed to complete). The
+    extended spelling adds "extended" alone: a peer must match every word, and "(Extended).flac" has no
+    "mix" to match (issue #187)."""
     text = f"{first_artist(ref.artist)} {_PARENS.sub('', ref.title)}"
+    if ref.cut == EXTENDED:
+        if extended_target(ref.mix_name):
+            text += f" {_without_remaster_year(ref.mix_name)}"
+        return " ".join(f"{text} extended".split())
     if not ref.is_original:
         text += f" {_without_remaster_year(ref.mix_name)}"
     return " ".join(text.split())
+
+
+# The short versions an extended mix is the long one of: asked for one of these, the extended mix is the
+# original's (issue #187)
+RADIO_EDITS = frozenset({"radio edit", "radio mix", "radio version", "radio cut", "single version", "single edit",
+                         "short edit", "short version", "edit"})
+
+
+def wants_extended(mix_name: str | None) -> bool:
+    """Whether a request for `mix_name` can be answered with its extended mix when the owner prefers one:
+    not when it already is one, and not for a remaster, which is a question about the release that the
+    extended mix's would only blur."""
+    v = split_version(mix_name)
+    return not v.cut and not v.remaster
+
+
+def extended_target(mix_name: str | None) -> str:
+    """The arrangement whose extended cut is wanted for a request for `mix_name`: the original's for a radio
+    edit ("" either way), the remix's own for a remix."""
+    a = split_version(mix_name).arrangement
+    return "" if a in RADIO_EDITS else a
+
+
+def extended_reference(ref: Reference) -> Reference:
+    """`ref` as the spelling that looks for its extended mix only."""
+    return replace(ref, cut=EXTENDED, prefer_extended=True)
 
 
 def file_title(name: str, artist: str) -> tuple[str, str | None]:
@@ -134,6 +181,32 @@ def file_title(name: str, artist: str) -> tuple[str, str | None]:
     artist_tokens = set(norm(artist).split())
     tokens = [t for t in norm(title).split() if t not in artist_tokens]
     return " ".join(tokens), version
+
+
+def file_version(f: LosslessFile, ref: Reference) -> Version:
+    """The version a peer's file name says it is, as far as this track goes: the version text
+    `file_title` finds, else whatever the name holds besides the asked title ("Never Gonna Give You Up
+    (Extended Version) (Rick Astley)" has no version text of its own, the words are left over). Its cut is
+    read off the whole file name; never off the folder, which is about more than this file."""
+    title, version = file_title(f.name, ref.artist)
+    if version is None:
+        asked = set(norm(ref.title).split())
+        extra = [t for t in title.split() if t not in asked]
+        # a credit is not a version: "(feat. Sia)"
+        for i, t in enumerate(extra):
+            if t in ("feat", "ft", "featuring"):
+                extra = extra[:i]
+                break
+        version = " ".join(extra) or None
+    v = split_version(version)
+    return replace(v, cut=EXTENDED if says_extended(f.name) else "")
+
+
+def own_extended(f: LosslessFile, ref: Reference) -> bool:
+    """`f` names an extended cut of the asked arrangement: "Feel So Close (Extended Mix)" for Feel So Close,
+    never "(Liquid Soul Extended Remix)", which is Liquid Soul's remix (issue #187)."""
+    have = file_version(f, ref)
+    return have.cut == EXTENDED and same_arrangement(extended_target(ref.mix_name), have.arrangement)
 
 
 @dataclass(frozen=True)
@@ -210,6 +283,14 @@ def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | No
     return "banned user" if f.username in p.banned_users else None
 
 
+def rule_cut(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
+    """Only on the extended spelling: what does not name an extended cut of this track is left for the
+    spellings after it, which take any cut (issue #187)."""
+    if ref.cut != EXTENDED or own_extended(f, ref):
+        return None
+    return "does not say it is an extended mix of this track"
+
+
 def _asks_remaster(ref: Reference) -> bool:
     return split_version(ref.mix_name).remaster
 
@@ -243,6 +324,8 @@ def rank_version(f: LosslessFile, ref: Reference) -> int:
     word; a file that lacks it is now tried after every one that has it, and filed flagged "version
     unconfirmed" unless its tags settle it. Asked for the original, a path that says remaster comes last of
     all: the fingerprint would pass it as the original."""
+    if ref.prefer_extended and own_extended(f, ref):
+        return -1                     # the owner prefers the extended mix: ahead of the asked cut itself
     agrees = _version_agrees(f, ref)
     named = says_remaster(f.path)
     if _asks_remaster(ref):
@@ -257,6 +340,8 @@ def rank_duration(f: LosslessFile, ref: Reference) -> int:
     626 s file was the 392 s video's recording, and two wrong files sat within 2 s of theirs), so it orders
     what to try first and the fingerprint decides (issue #69)."""
     known = ref.durations
+    if ref.prefer_extended and own_extended(f, ref):
+        return 0                      # the known lengths are the shorter cut's: no measure of this one
     if not known or f.length_s is None:
         return 10_000
     return min(abs(f.length_s - d) for d in known) // DURATION_BUCKET_S
@@ -299,7 +384,7 @@ def rank_artist(f: LosslessFile, ref: Reference) -> int:
 HARD_RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("limits", rule_limits),
     ("plausible_size", rule_plausible_size),
-    ("queue", rule_queue), ("banned_user", rule_banned_user),
+    ("queue", rule_queue), ("banned_user", rule_banned_user), ("cut", rule_cut),
 ]
 IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
     ("same_song", rank_same_song), ("version", rank_version), ("duration", rank_duration), ("title", rank_title),
