@@ -308,12 +308,15 @@ class InterpretMixin:
                  f" by r{outcome.reading}" if outcome.reading is not None else "", outcome.why, tried, detail)
 
     async def _deezer_turn(self) -> None:
-        """Wait until DEEZER_INTERVAL_S has passed since this module last called Deezer's API."""
-        loop = asyncio.get_running_loop()
-        wait = self._deezer_last + DEEZER_INTERVAL_S - loop.time()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._deezer_last = loop.time()
+        """Wait until DEEZER_INTERVAL_S has passed since the worker last called Deezer's API -- from here or
+        from filing's ISRC lookup (`_isrc_release_date`). One caller at a time, so two cannot both see the
+        last call as long enough ago and go together."""
+        async with self._deezer_lock:
+            loop = asyncio.get_running_loop()
+            wait = self._deezer_last + DEEZER_INTERVAL_S - loop.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._deezer_last = loop.time()
 
     async def _arbitrate(self, readings: list[Query], video: AcousticReference, ident: Identification | None,
                          budget: asyncio.Timeout | None = None) -> tuple[Outcome, list[ReadingResult], int]:

@@ -4,8 +4,10 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
+from flackey import deezer as deezer_mod
 from flackey import worker as worker_mod
 from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
@@ -722,6 +724,97 @@ async def test_a_remaster_keeps_its_own_year(env):
     assert r.state == RequestState.DONE and r.catalog_track_id == remaster.id
     assert store.get_catalog_track(r.catalog_track_id).original_date is None
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2021-02-22"
+
+
+# Beatport has only the 2005 release; Deezer, asked by the record's ISRC through its public API, answers with
+# the original album's record. One lightweight call per ISRC per run, at filing, failing open.
+DEEZER_DISCOVERY = {"id": 3135556, "isrc": DP_ISRC, "title": "One More Time", "title_short": "One More Time",
+                    "duration": 320, "release_date": "2001-03-07", "artist": {"name": "Daft Punk"},
+                    "album": {"id": 302127, "title": "Discovery"}}
+
+
+def _deezer_isrc(monkeypatch, answer):
+    """A worker http client whose only server is Deezer's ISRC endpoint, answering `answer` (a JSON body, or
+    an int for a bare status), with the real lookup put back in place of conftest's stand-in."""
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.path)
+        assert request.url.host == "api.deezer.com" and request.url.path.startswith("/track/isrc:")
+        return httpx.Response(answer) if isinstance(answer, int) else httpx.Response(200, json=answer)
+
+    monkeypatch.setattr(filing_mod, "release_date_by_isrc", deezer_mod.release_date_by_isrc)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), asked
+
+
+def _worker_with_http(env, http, cands, tracks):
+    settings, store, notifier = env
+    return Worker(store, FakeSource(cands), FakeCatalog(tracks), notifier, settings, artwork_fetch=no_art, http=http)
+
+
+async def test_deezer_dates_a_beatport_reissue_by_the_original_album(env, monkeypatch):
+    _, store, _ = env
+    http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
+    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert r.state == RequestState.DONE and asked == [f"/track/isrc:{DP_ISRC}"]
+    ct = store.get_catalog_track(r.catalog_track_id)
+    assert (ct.release_date, ct.original_date) == ("2005-03-14", "2001-03-07")
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-07"
+    assert w._deezer_last > 0                    # it took its turn with the worker's other Deezer calls
+
+
+async def test_the_isrc_lookup_is_asked_once_per_isrc_in_a_run(env, monkeypatch):
+    _, store, _ = env
+    http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
+    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
+    req = store.get_request(store.add_request("daft punk one more time", RequestKind.TEXT))
+    # A playlist with the recording twice -- or in two spellings of its ISRC -- asks Deezer once.
+    assert await w._isrc_release_date(req, DP_ISRC) == "2001-03-07"
+    assert await w._isrc_release_date(req, DP_ISRC.lower()) == "2001-03-07"
+    assert len(asked) == 1
+
+
+async def test_a_failed_isrc_lookup_is_not_remembered(env, monkeypatch):
+    _, store, _ = env
+    http, asked = _deezer_isrc(monkeypatch, 503)
+    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
+    req = store.get_request(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert await w._isrc_release_date(req, DP_ISRC) is None
+    assert await w._isrc_release_date(req, DP_ISRC) is None
+    assert len(asked) == 2
+
+
+@pytest.mark.parametrize("answer", [
+    {"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}},   # Deezer's 200 refusal
+    500,
+    {**DEEZER_DISCOVERY, "isrc": "FRZ039800212"},                                       # another recording
+    {**DEEZER_DISCOVERY, "release_date": "2006-03-31"},                                 # nothing earlier
+], ids=["quota-body", "http-500", "other-isrc", "later"])
+async def test_a_failed_or_unhelpful_isrc_lookup_keeps_the_releases_year(env, monkeypatch, answer):
+    _, store, _ = env
+    http, asked = _deezer_isrc(monkeypatch, answer)
+    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert r.state == RequestState.DONE and len(asked) == 1
+    assert store.get_catalog_track(r.catalog_track_id).original_date is None
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
+
+
+async def test_a_remaster_request_keeps_its_year_and_asks_deezer_nothing(env, monkeypatch):
+    _, store, _ = env
+    http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
+    remaster = CatalogTrack(**{**DP_REISSUE.__dict__, "id": 5004, "mix_name": "Remastered 2021",
+                               "release_date": "2021-02-22", "release_name": "One More Time"})
+    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")], [remaster])
+    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
+                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and asked == []
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2021-02-22"
+    # A record that does not call itself one is still the remaster the request asked for.
+    plain = CatalogTrack(**{**DP_REISSUE.__dict__, "release_date": "2021-02-22"})
+    assert await w._dated(store.get_request(rid), dp_cand(), plain) is plain and asked == []
 
 
 async def test_nothing_found_files_the_stand_in_as_before(env):

@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from flackey.deezer import DeezerApi, DeezerError, parse_track_json
+from flackey.deezer import DeezerApi, DeezerError, parse_track_json, release_date_by_isrc
 
 SAMPLE = {"id": 1754956977, "isrc": "UKU932231081", "title": "Into the Void", "title_short": "Into the Void",
           "title_version": "", "duration": 442, "release_date": "2022-06-03",
@@ -18,6 +18,28 @@ def test_parse_track_json():
 
 def test_parse_track_json_drops_deezers_no_date_placeholder():
     assert parse_track_json({**SAMPLE, "release_date": "0000-00-00"}).release_date is None
+
+
+async def test_release_date_by_isrc_reads_the_records_date_with_a_short_timeout():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["timeout"] = request.url.path, request.extensions["timeout"]["read"]
+        return httpx.Response(200, json=SAMPLE)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        assert await release_date_by_isrc(c, "UKU932231081") == "2022-06-03"
+    assert seen == {"path": "/track/isrc:UKU932231081", "timeout": 5.0}
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(200, json={"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}}),
+    httpx.Response(500), httpx.Response(200, text="<html>"),
+], ids=["quota-body", "http-500", "not-json"])
+async def test_release_date_by_isrc_raises_for_any_failed_lookup(response):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response)) as c:
+        with pytest.raises(DeezerError):
+            await release_date_by_isrc(c, "UKU932231081")
 
 
 def test_parse_track_json_keeps_version():

@@ -101,3 +101,24 @@ class DeezerApi:
 
     async def album(self, album_id: int) -> DeezerAlbum:
         return parse_album_json(await self._get(f"album/{album_id}"))
+
+
+# Short on purpose: the answer only ever moves a year in the tags, and a track waits on it while filing.
+ISRC_TIMEOUT_S = 5.0
+
+
+async def release_date_by_isrc(http: httpx.AsyncClient, isrc: str, *, timeout: float = ISRC_TIMEOUT_S) -> str | None:
+    """The release date of Deezer's record for this ISRC, from the public API (no account), or None when the
+    record it answers with carries no date or another ISRC. Raises DeezerError for any failed lookup,
+    including the 200-with-an-error-body Deezer answers a spent quota with."""
+    try:
+        r = await http.get(f"{DeezerApi.BASE}/track/isrc:{isrc}", timeout=timeout)
+    except httpx.HTTPError as e:
+        raise DeezerError(str(e) or type(e).__name__) from e
+    if r.status_code != 200:
+        raise DeezerError(f"deezer http {r.status_code}")
+    try:
+        track = parse_track_json(r.json())
+    except (ValueError, KeyError, TypeError) as e:
+        raise DeezerError(f"deezer sent no track ({e})") from e
+    return track.release_date if (track.isrc or "").upper() == isrc.upper() else None

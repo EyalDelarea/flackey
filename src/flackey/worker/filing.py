@@ -9,7 +9,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..catalog import with_original_date
+from ..catalog import is_remaster, with_original_date
+from ..deezer import release_date_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
@@ -200,14 +201,7 @@ class FilingMixin:
         `fill_missing` only fills empty fields, so Beatport's tags are never touched and a row filled once
         is not looked up again."""
         if catalog is not None and catalog.id > 0:
-            # The Deezer record that was downloaded dates the recording too, when its ISRC says it is the same
-            # one: Deezer often has the original album where Beatport only sells a later compilation.
-            if cand.release_date and cand.isrc and catalog.isrc and cand.isrc.upper() == catalog.isrc.upper():
-                dated = with_original_date(catalog, also=[cand.release_date], asked=req.query_version)
-                if dated is not catalog:
-                    self.store.upsert_catalog_track(dated)
-                return dated
-            return catalog
+            return await self._dated(req, cand, catalog)
         if catalog is None:
             catalog = _fallback_catalog(cand)
         if self.tag_lookup is not None and catalog.tag_source is None:
@@ -226,6 +220,41 @@ class FilingMixin:
         self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id)
         return catalog
+
+
+    async def _dated(self, req: Request, cand: Candidate, catalog: CatalogTrack) -> CatalogTrack:
+        """A Beatport record dated by the recording's first release where Deezer knows an earlier one. Beatport
+        often sells only a later compilation ("One More Time" on a 2005 one), and Deezer, asked by the
+        record's ISRC, usually answers with the original album. Asked here, at filing, rather than before the
+        download: it only ever moves a year. The Deezer record the bot downloaded counts as well, when its ISRC
+        is the record's. A remaster -- the record's or the request's -- keeps its own year, so it asks nothing."""
+        if not catalog.isrc or is_remaster(catalog.title, catalog.mix_name, catalog.release_name, req.query_version):
+            return catalog
+        also = [cand.release_date] if cand.isrc and cand.isrc.upper() == catalog.isrc.upper() else []
+        also.append(await self._isrc_release_date(req, catalog.isrc))
+        dated = with_original_date(catalog, also=also, asked=req.query_version)
+        if dated is not catalog:
+            log.info("req#%d: dated by the recording's first release, %s (the release is %s)", req.id,
+                     dated.original_date, catalog.release_date)
+            self.store.upsert_catalog_track(dated)
+        return dated
+
+
+    async def _isrc_release_date(self, req: Request, isrc: str) -> str | None:
+        """Deezer's release date for `isrc`, once per ISRC per run, paced with every other Deezer call the
+        worker makes. Fails open: any error is the release's own date, as before the lookup existed."""
+        key = isrc.upper()
+        if key in self._isrc_dates:
+            return self._isrc_dates[key]
+        await self._deezer_turn()
+        try:
+            date = await release_date_by_isrc(self.http, key)
+        except Exception as e:  # noqa: BLE001 - DeezerError above all; tags are an extra, the file is already good
+            log.info("req#%d: deezer isrc lookup for %s failed (%s); keeping the release's year", req.id, key,
+                     e or type(e).__name__)
+            return None
+        self._isrc_dates[key] = date
+        return date
 
 
     async def _file_track(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,

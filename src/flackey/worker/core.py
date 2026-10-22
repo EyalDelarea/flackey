@@ -91,6 +91,12 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._shadow_tasks: dict[int, asyncio.Task] = {}
         self._shadow = asyncio.Semaphore(1)
         self._deezer_last = 0.0
+        # `_deezer_turn` is shared by the shadow comparison and filing's ISRC lookup, which run at once; the
+        # lock makes their turns follow one another rather than read the same `_deezer_last` together.
+        self._deezer_lock = asyncio.Lock()
+        # Deezer's release date per ISRC, asked once per run (`_isrc_release_date`). Failed lookups are not
+        # kept, so a blip costs one track its earlier year, not every track after it.
+        self._isrc_dates: dict[str, str | None] = {}
         # Requests whose current pass went without the bot because Telegram was signed out. Kept per pass
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.

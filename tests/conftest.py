@@ -61,6 +61,16 @@ def _no_public_deezer_lookup(monkeypatch):
 
     monkeypatch.setattr("flackey.worker.interpret.search_deezer", no_search)
 
+    # And filing's ISRC lookup, which dates a Beatport record by the recording's first release: every worker
+    # test that files a record with an ISRC would ask. Failing is the lookup's own fallback -- the release's
+    # year -- so nothing else changes. Tests of the lookup patch the real one back with a MockTransport.
+    from flackey.deezer import DeezerError
+
+    async def no_isrc(http, isrc, *, timeout=5.0):
+        raise DeezerError("no deezer isrc lookup in tests")
+
+    monkeypatch.setattr("flackey.worker.filing.release_date_by_isrc", no_isrc)
+
 
 @pytest.fixture(autouse=True)
 def _never_open_the_real_installer(monkeypatch):
