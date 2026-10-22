@@ -157,24 +157,19 @@ def announce(handle: ServerHandle, open_browser: bool) -> None:
         webbrowser.open(address)
 
 
-async def supervise_worker(worker, status: dict, poll_s: float = 1.0,
-                           run_when: Callable[[], bool] | None = None) -> None:
-    """The worker stops itself when the Telegram session dies; start it again once the setup screen
-    has signed the account back in. `run_when` is the gate: by default "Telegram is authorized", and
-    app._run widens it to "or the Telegram source is switched off", because a Soulseek-only copy has
-    nothing to sign in to."""
-    if run_when is None:
-        def run_when() -> bool:
-            return bool(status.get("telegram_authorized"))
+async def supervise_worker(worker, status: dict, poll_s: float = 1.0) -> None:
+    """Keep the worker running: start it again after a crash. It used to be gated on Telegram as well,
+    because the worker stopped itself when the session died -- and with it every Soulseek download,
+    although Soulseek has nothing to do with Telegram. A signed-out Telegram now pauses the Deezer bot
+    inside the worker (`Worker._bot_ready`), so there is nothing here to wait for."""
     while True:
-        if run_when():
-            status["worker_running"] = True
-            try:
-                await worker.run_forever()
-            except Exception:
-                log.exception("worker crashed; retrying in %ss", poll_s)
-            finally:
-                status["worker_running"] = False
+        status["worker_running"] = True
+        try:
+            await worker.run_forever()
+        except Exception:
+            log.exception("worker crashed; retrying in %ss", poll_s)
+        finally:
+            status["worker_running"] = False
         await asyncio.sleep(poll_s)
 
 
@@ -191,7 +186,7 @@ async def watch_telegram_session(login: TelegramLogin, status: dict, poll_s: flo
     Asking is the whole subtlety. Closing the app disconnects the client too, so does a wifi drop, and
     so does a sign-out; only a probe that reaches Telegram and is refused means the session is gone.
     Setting the flag is what publishes the `status` event (`events.Status.__setitem__`) that moves the
-    banner and pauses the worker, which is why nothing less certain may set it."""
+    banner and pauses the Deezer bot, which is why nothing less certain may set it."""
     while True:
         await asyncio.sleep(poll_s)
         # Re-read every time: log_out() and reconfigure() build a new client and reassign login.client,
@@ -209,8 +204,8 @@ async def watch_telegram_session(login: TelegramLogin, status: dict, poll_s: flo
             continue
         if alive is False and login.client is client and status.get("telegram_authorized", True):
             status["telegram_authorized"] = False
-            log.error("Telegram signed this app out; sign in again from the UI. The worker is paused "
-                      "and the queue is kept")
+            log.error("Telegram signed this app out; sign in again from the UI. The Deezer bot is "
+                      "paused until then; Soulseek carries on")
 
 
 async def close_streams_on_exit(server, bus: EventBus, poll_s: float = 0.2) -> None:
@@ -315,7 +310,8 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
         await client.connect()
         if not await client.is_user_authorized():
             status["telegram_authorized"] = False
-            log.error("Telegram login required, sign in from the setup screen in the UI; the worker is paused")
+            log.error("Telegram login required, sign in from the setup screen in the UI; the Deezer bot is "
+                      "paused until then")
         login = TelegramLogin(client, True, on_authorized=on_authorized, make_client=make_client)
 
     http = httpx.AsyncClient(timeout=20)
@@ -364,15 +360,12 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     display_host = "localhost" if settings.web_host in ("0.0.0.0", "::") else settings.web_host
     url = f"http://{display_host}:{settings.web_port}"
 
-    worker_runs = status["telegram_authorized"] or not settings.source_enabled
-    log.info("flackey started%s", ", worker running" if worker_runs else "")
+    log.info("flackey started, worker running")
     try:
         await run_until_server_stops(
             serve(server, url, handle),
             start_sidecar(slskd_process),
-            supervise_worker(worker, status,
-                             run_when=lambda: bool(status.get("telegram_authorized"))
-                             or not settings.source_enabled),
+            supervise_worker(worker, status),
             close_streams_on_exit(server, bus),
             watch_telegram_session(login, status),
             sharing.run_forever())

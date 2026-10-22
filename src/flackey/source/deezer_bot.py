@@ -116,7 +116,7 @@ class DeezerBotSource:
         difference -- and disconnects the client before anything here ever sees the error, so from this
         side a revoked session is a plain builtin `ConnectionError("Cannot send requests while
         disconnected")`. So is a wifi drop, a socket reset and a Telegram that cannot be reached, which
-        is why this cannot simply be mapped to SourceUnauthorized: that would pause the worker and put
+        is why this cannot simply be mapped to SourceUnauthorized: that would pause the bot and put
         a "sign in again" banner over the app every time the network hiccupped (issue #91). Only
         Telegram can tell the two apart, so ask it, and treat "cannot tell" the way a blip is treated.
 
@@ -221,7 +221,7 @@ class DeezerBotSource:
             dest = dest_dir / f"{cand.deezer_id}.{document_ext(msg)}"
             # Outside the conversation (the file transfer is not a conversation message), so it needs
             # its own timeout and must stay under the same except clauses: a session expiring mid-download
-            # must pause the worker (SourceUnauthorized), not surface as a generic error.
+            # must pause the bot (SourceUnauthorized), not surface as a generic error.
             await asyncio.wait_for(self.client.download_media(msg, file=str(dest)), timeout=self.fetch_timeout)
         except UnauthorizedError as e:
             raise SourceUnauthorized(f"Telegram session rejected ({e.__class__.__name__})") from e

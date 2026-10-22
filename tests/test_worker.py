@@ -964,16 +964,25 @@ async def test_cancel_refuses_finished_requests(env):
     assert store.get_request(rid).state == RequestState.DONE
 
 
-async def test_unauthorized_session_pauses_worker_and_keeps_request(env):
+async def test_unauthorized_session_pauses_the_bot_and_the_request_goes_on_without_it(env):
     settings, store, notifier = env
     status = {"telegram_authorized": True}
-    w = Worker(store, FakeSource(error=SourceUnauthorized("session revoked")), FakeCatalog([CT]), notifier, settings,
-               artwork_fetch=no_art, status=status)
+    source = FakeSource(error=SourceUnauthorized("session revoked"))
+    w = Worker(store, source, FakeCatalog([CT]), notifier, settings, artwork_fetch=no_art, status=status)
     rid = store.add_request("q", RequestKind.TEXT)
     r = await w.process(rid)
-    assert r.state == RequestState.QUEUED and r.attempts == 0 and "login" in r.flag_reason.lower()
-    assert status["telegram_authorized"] is False and "flackey login" in notifier.sent[-1][0]
-    await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=1)   # returns at once: the worker is paused
+    # Not the request's fault, so nothing is spent on it: queued, attempts untouched, due at once.
+    assert r.state == RequestState.QUEUED and r.attempts == 0 and r.retry_after is None
+    assert "login" in r.flag_reason.lower()
+    assert status["telegram_authorized"] is False and "Soulseek downloads carry on" in notifier.sent[-1][0]
+
+    # The next pass does not wait for a sign-in and does not knock on the bot again.
+    r = await w.process(rid)
+    assert source.searches == 1 and source.fetched == []
+    # "q" names no artist and title, so with no bot to ask there is nothing to search for -- and the row
+    # says the bot was paused, not switched off, so a sign-in can bring it back.
+    assert r.state == RequestState.NOT_FOUND and worker_mod.BOT_PAUSED in r.error_message
+    assert "switched off" not in r.error_message
 
 
 async def test_on_start_forgets_tracks_whose_files_are_gone(env):
@@ -1348,21 +1357,25 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
     assert not store.get_request(auto).reviewed     # never paused, so it never earns the rung
 
 
-async def test_run_forever_keeps_going_with_telegram_signed_out_when_the_source_is_off(env):
-    """Telegram signed out only stops the worker while the bot is a source; with it switched off the
-    loop must keep running so Soulseek requests still get served."""
+@pytest.mark.parametrize("source_enabled", [True, False])
+async def test_run_forever_keeps_going_with_telegram_signed_out(env, source_enabled):
+    """Telegram signed out used to stop the loop whenever the bot was a source, and every Soulseek
+    request with it. Now it pauses the bot and nothing else: only cancellation ends the loop."""
     w = make_worker(env, FakeSource(), FakeCatalog())
-    w.settings.source_enabled = False
+    w.settings.source_enabled = source_enabled
     w.status["telegram_authorized"] = False
     ticks = []
 
-    async def stop_after_two(force: bool = False) -> None:
-        if force:            # startup()'s own call, not a loop tick
-            return
-        ticks.append(1)
-        if len(ticks) == 2:
-            w.settings.source_enabled = True   # now the loop condition is false on the next check
+    async def count(force: bool = False) -> None:
+        if not force:        # startup()'s own call is not a loop tick
+            ticks.append(1)
 
-    w._maintenance = stop_after_two
-    await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=2)
-    assert len(ticks) == 2
+    w._maintenance = count
+    task = asyncio.create_task(w.run_forever(poll_s=0.01))
+    deadline = asyncio.get_running_loop().time() + 2
+    while len(ticks) < 5 and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert not task.done() and len(ticks) >= 5
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

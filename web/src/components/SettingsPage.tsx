@@ -35,11 +35,11 @@ function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: 
 /* Four readings, not two. The bot is reached *through* the Telegram account above it, so "on" is only
    the whole truth while that account is signed in -- on its own, "On" beside a green dot told an owner
    whose Telegram had dropped that the thing was working. Off is grey rather than amber because the owner
-   chose it and nothing is wrong; on-but-unreachable is amber, and names Telegram rather than the bot,
-   because Telegram is where the fix is. */
+   chose it and nothing is wrong; on-but-unreachable is amber and "paused" -- the worker skips it and
+   carries on with Soulseek -- and names Telegram rather than the bot, because Telegram is where the fix is. */
 function deezerBotLine(authorized: boolean, enabled: boolean): { dot: Dot; text: string } {
   if (!enabled) return { dot: ' off', text: authorized ? 'Off — requests use Soulseek only' : 'Off — and Telegram is signed out' }
-  if (!authorized) return { dot: ' amber', text: 'On, but Telegram is signed out' }
+  if (!authorized) return { dot: ' amber', text: 'Paused — Telegram is signed out' }
   return { dot: '', text: 'On — searches and fetches through Telegram' }
 }
 
@@ -274,8 +274,10 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           nothing else. */}
       <h2>Connections</h2>
       <div className="group">
+        {/* Signed out is only a fault while the bot needs it. With the bot off nothing waits on Telegram,
+            so the dot goes grey, the way the bot's own row and the sidebar already treat it. */}
         <div className="srow"><div className="srow-body"><div className="k">Telegram</div>
-          <div className="v"><span className={`status-dot${authorized ? '' : ' amber'}`} />{telegramLine}</div></div>
+          <div className="v"><span className={`status-dot${authorized ? '' : sourceEnabled ? ' amber' : ' off'}`} />{telegramLine}</div></div>
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
         {/* The bot is a chat Flackey holds inside the Telegram account, not a fourth account to sign into,
