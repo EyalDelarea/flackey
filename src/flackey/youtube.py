@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import socket
 import time
 from dataclasses import dataclass
@@ -28,11 +29,14 @@ MAX_REFERENCE_BYTES = 200 * 1024 * 1024
 
 class YouTubeError(Exception):
     """`network` is set when YouTube was never reached -- no connection, no DNS, a timeout -- as against a
-    page yt-dlp did reach and could not read, which is the one an update to yt-dlp might fix."""
+    page yt-dlp did reach and could not read, which is the one an update to yt-dlp might fix.
+    `unavailable` is set when YouTube answered that the video is not there to read (removed, private, a
+    terminated account): nothing to update, and nothing to retry."""
 
-    def __init__(self, message: str = "", *, network: bool = False):
+    def __init__(self, message: str = "", *, network: bool = False, unavailable: bool = False):
         super().__init__(message)
         self.network = network
+        self.unavailable = unavailable
 
 
 class ReferenceAborted(DownloadCancelled):
@@ -73,6 +77,11 @@ def parse_ytdlp_json(data: dict) -> tuple[str, list[YouTubeEntry]]:
 
 
 YOUTUBE_FETCH_TIMEOUT_S = 120
+# How YouTube, through yt-dlp, says a video is gone rather than unreadable: "Video unavailable", "This video
+# is unavailable", "Private video", "This video has been removed by the uploader", "This video is no longer
+# available because the YouTube account associated with this video has been terminated".
+_GONE_RE = re.compile(r"\bvideo (?:is )?unavailable\b|\bprivate video\b|\bthis video is (?:private|no longer "
+                      r"available)\b|\bthis video has been removed\b", re.IGNORECASE)
 _UNREACHABLE = (TransportError, ConnectionError, TimeoutError, socket.gaierror)
 
 
@@ -129,7 +138,8 @@ async def fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]:
     except TimeoutError:
         raise YouTubeError(f"yt-dlp timed out after {YOUTUBE_FETCH_TIMEOUT_S}s", network=True) from None
     except Exception as e:  # yt-dlp raises its own DownloadError hierarchy for anything network-side
-        raise YouTubeError(str(e).strip()[-500:] or "yt-dlp failed", network=unreachable(e)) from e
+        message = str(e).strip()[-500:] or "yt-dlp failed"
+        raise YouTubeError(message, network=unreachable(e), unavailable=bool(_GONE_RE.search(message))) from e
     try:
         return parse_ytdlp_json(data)
     except (AttributeError, KeyError, TypeError) as e:
