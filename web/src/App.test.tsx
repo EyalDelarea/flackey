@@ -117,16 +117,23 @@ describe('the Telegram banner', () => {
     expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
   })
 
-  it('says nothing about Telegram when it was never set up and the bot is off', async () => {
+  it('says nothing about Telegram when it was never set up and the bot is off, and Settings says "Not set up"', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_configured: false,
       source_enabled: false, lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
+    vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
     render(<App />)
     // Soulseek alone is a working source, so the sidebar is green rather than pointing at Settings.
     await screen.findByText('Connected')
     expect(screen.queryByText('Not connected')).not.toBeInTheDocument()
     expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+    // Where the sidebar's dot leads: the account that was never made reads as such, with no sign-out in it.
+    fireEvent.click(screen.getByRole('button', { name: /Settings/ }))
+    const row = (await screen.findByText('Not set up')).closest('.srow') as HTMLElement
+    expect(within(row).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
     expect(screen.queryByText(/signed out/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()   // Soulseek's has one
+    fireEvent.click(within(row).getByRole('button', { name: 'Set up' }))
+    expect(await screen.findByText(/needs Telegram API keys/)).toBeInTheDocument()
   })
 
   it('names the missing setup, not a sign-out, when the bot is on but Telegram was never set up', async () => {

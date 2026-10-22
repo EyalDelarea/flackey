@@ -500,6 +500,25 @@ describe('the Connections section', () => {
       await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
       expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
     })
+
+    it('trusts health the other way round too: keys gone since Settings loaded', async () => {
+      const current = live as unknown as { settings: AppSettings; health: Health }
+      vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+      render(<SettingsPage live={makeLive({ settings: { ...current.settings, telegram_configured: true },
+        health: { ...current.health, telegram_authorized: false, telegram_configured: false } })} onReconnect={() => {}} />)
+      await waitFor(() => expect(within(connRow('Telegram')).getByText('Not set up')).toBeInTheDocument())
+      expect(within(connRow('Telegram')).getByRole('button', { name: 'Set up' })).toBeInTheDocument()
+    })
+
+    it('falls back to the settings read when health predates the field', async () => {
+      const current = live as unknown as { settings: AppSettings; health: Health }
+      vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
+      const health = { ...current.health, telegram_authorized: false }
+      delete (health as Partial<Health>).telegram_configured
+      render(<SettingsPage live={makeLive({ settings: { ...current.settings, telegram_configured: false }, health })}
+        onReconnect={() => {}} />)
+      await waitFor(() => expect(within(connRow('Telegram')).getByText('Not set up')).toBeInTheDocument())
+    })
   })
 
   it('files the format question with the folder, where it belongs', () => {
