@@ -5,15 +5,54 @@ import pytest
 
 from flackey.models import (
     FAILED_STATES,
+    MISS_REASON,
+    NO_RESULTS_REASON,
     REPORTABLE_STATES,
     RETRYABLE_STATES,
     SWEEPABLE_STATES,
     TERMINAL_STATES,
     CatalogTrack,
+    LosslessAttempt,
     Query,
     RequestState,
+    miss_reason,
     norm,
 )
+
+
+def _no_pick(seen=None, files=None, outcome="no_pick", aid=1) -> LosslessAttempt:
+    timeline = [] if files is None else [{"t_ms": 5, "event": "search_completed", "detail": {"files": files}}]
+    return LosslessAttempt(id=aid, request_id=1, provider="soulseek", created_at="2026-10-20T10:00:00+00:00",
+                           query="q", outcome=outcome, report=None if seen is None else {"seen": seen},
+                           timeline=timeline)
+
+
+@pytest.mark.parametrize("attempts, want", [
+    ([_no_pick(seen=0)], NO_RESULTS_REASON),
+    ([_no_pick(files=0)], NO_RESULTS_REASON),                       # the pick never ran; the timeline counted
+    ([_no_pick(seen=0, aid=1), _no_pick(seen=0, aid=2)], NO_RESULTS_REASON),   # every spelling came back empty
+    ([_no_pick(seen=14)], MISS_REASON["no_pick"]),
+    ([_no_pick(seen=5, aid=1), _no_pick(seen=0, aid=2)], MISS_REASON["no_pick"]),  # an earlier spelling saw copies
+    ([_no_pick()], MISS_REASON["no_pick"]),                          # an old row that never said: the old words
+    ([_no_pick(seen=3, outcome="fingerprint_failed", aid=1), _no_pick(seen=0, aid=2)], NO_RESULTS_REASON),
+    ([], MISS_REASON["no_pick"]),
+], ids=["empty", "timeline-only", "every-spelling-empty", "results", "earlier-spelling-saw-some", "unknown",
+        "after-another-outcome", "no-rows"])
+def test_a_no_pick_says_no_copies_only_when_every_search_came_back_empty(attempts, want):
+    assert miss_reason("no_pick", attempts) == want
+
+
+def test_miss_reason_leaves_every_other_outcome_alone():
+    empty = [_no_pick(seen=0)]
+    for outcome, reason in MISS_REASON.items():
+        if outcome != "no_pick":
+            assert miss_reason(outcome, empty) == reason
+    assert miss_reason(None, empty) is None
+
+
+def test_the_empty_search_wording_matches_the_ui():
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
+    assert f"const NO_RESULTS_REASON = '{NO_RESULTS_REASON}'" in ts
 
 
 def test_query_search_text_prefers_structured_fields():

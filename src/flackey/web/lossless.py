@@ -5,7 +5,7 @@ from statistics import median
 
 from fastapi import APIRouter, HTTPException
 
-from ..models import ATTEMPT_OUTCOMES, MISS_REASON
+from ..models import ATTEMPT_OUTCOMES, miss_reason
 from ..source.lossless import LosslessError
 from ..store import Store
 
@@ -75,7 +75,8 @@ def router(store: Store, worker=None) -> APIRouter:
                 "track_id": t.id, "artist": t.artist, "title": t.title, "mix_name": t.mix_name,
                 "fmt": t.fmt, "bitrate_kbps": t.bitrate_kbps, "added_at": t.added_at,
                 "outcome": outcome,
-                "reason": MISS_REASON.get(outcome) if outcome else "no lossless search ran for this one",
+                "reason": (miss_reason(outcome, store.attempts_for_request(t.request_id) if outcome == "no_pick"
+                                       else None) if outcome else "no lossless search ran for this one"),
                 # A track can only be retried if there is still a request and a recorded choice to search from
                 "upgradable": t.request_id is not None and attempt is not None,
             })

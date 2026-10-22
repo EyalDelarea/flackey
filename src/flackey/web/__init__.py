@@ -16,7 +16,7 @@ from ..config import Settings, platform_name
 from ..events import EventBus, Status
 from ..fingerprint import fpcalc_available
 from ..inbox import Inbox
-from ..models import Verdict
+from ..models import Verdict, found_nothing
 from ..store import Store
 from ..telegram import TelegramLogin
 from ..worker import Worker, format_line
@@ -72,7 +72,11 @@ class Bundles:
         "nothing matched" for a pass whose earlier spelling found a different recording, while the worker
         was already waiting on the different recording."""
         attempt, outcome = self.store.lossless_outcome(rid)
-        return None if attempt is None else to_dict(dataclasses.replace(attempt, outcome=outcome))
+        if attempt is None:
+            return None
+        # `no_results`: the `no_pick` was an empty search, which the page words as such (`models.miss_reason`).
+        return {**to_dict(dataclasses.replace(attempt, outcome=outcome)),
+                "no_results": outcome == "no_pick" and found_nothing(self.store.attempts_for_request(rid))}
 
     def reference(self, rid: int) -> dict | None:
         """What this request was fingerprinted against, as the page needs it: which audio, and where in it

@@ -11,11 +11,13 @@ import pytest
 from flackey.models import (
     ATTEMPT_OUTCOMES,
     MISS_REASON,
+    NO_RESULTS_REASON,
     LosslessAttempt,
     Rejection,
     Request,
     RequestKind,
     RequestState,
+    miss_reason,
 )
 from flackey.store import Store
 from flackey.web.failure import (
@@ -85,9 +87,9 @@ def test_the_diagnosis_names_the_failure_the_way_the_app_does(rec, want):
     assert diagnose(rec) == want
 
 
-def no_route(outcome: str) -> str:
-    """What `_no_route` writes on the row: MISS_REASON's sentence, inside its own."""
-    return (f"no way to fetch this track: {MISS_REASON[outcome]}; Deezer offered nothing to fall back on. "
+def no_route(a: LosslessAttempt) -> str:
+    """What `_no_route` writes on the row: `miss_reason`'s sentence, inside its own."""
+    return (f"no way to fetch this track: {miss_reason(a.outcome, [a])}; Deezer offered nothing to fall back on. "
             "Press Try again to search once more")
 
 
@@ -107,9 +109,28 @@ def no_route(outcome: str) -> str:
 ], ids=["transfers", "zero-results", "no-match", "one-copy", "disk-full", "search-failed", "unavailable",
         "no-count"])
 def test_a_soulseek_miss_is_diagnosed_from_its_attempt(a, want):
-    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=no_route(a.outcome)),
+    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=no_route(a)),
                         attempts=[a])
     assert diagnose(rec) == want
+
+
+def test_an_empty_search_reads_the_same_in_the_row_and_in_the_report():
+    """The owner's row says "found no copies" and the report's line says "returned 0 results": the same
+    count, read the same way, so the two cannot tell different stories about one search."""
+    empty, some = attempt("no_pick", seen=0), attempt("no_pick", seen=37, survivors=0)
+    assert miss_reason("no_pick", [empty]) == NO_RESULTS_REASON == "Soulseek found no copies of this track"
+    assert miss_reason("no_pick", [some]) == MISS_REASON["no_pick"]
+    assert NO_RESULTS_REASON in no_route(empty) and attempt_line(empty) == "Soulseek returned 0 results"
+
+
+def test_a_row_written_before_the_empty_search_had_its_own_words_is_still_diagnosed():
+    """An error from an older copy says "nothing matched" for an empty search; the report still reads it as
+    the Soulseek miss it was rather than as an unrelated error."""
+    msg = (f"no way to fetch this track: {MISS_REASON['no_pick']}; Deezer offered nothing to fall back on. "
+           "Press Try again to search once more")
+    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg),
+                        attempts=[attempt("no_pick", seen=0)])
+    assert diagnose(rec) == "Soulseek returned 0 results"
 
 
 def test_the_long_wait_giving_up_is_still_a_soulseek_miss():
@@ -299,7 +320,7 @@ def failed(tmp_path: Path):
                              if outcome != "no_pick" else {"seen": 0, "survivors": [], "summary": "0 files: nothing left"})
     store.update_request(rid, state=RequestState.ERROR, failed_stage="download", attempts=4,
                          query_artist="Artist", query_title="Title",
-                         error_message=no_route("transfer_failed") + " -- key slskd-key-9876")
+                         error_message=no_route(attempt("transfer_failed")) + " -- key slskd-key-9876")
     store.conn.execute("UPDATE requests SET created_at=?, updated_at=? WHERE id=?", (T0, T1, rid))
     store.conn.commit()
     settings.data_dir.mkdir(parents=True, exist_ok=True)

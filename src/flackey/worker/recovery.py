@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from ..models import MISS_REASON, LosslessAttempt, Request, RequestState
+from ..models import LosslessAttempt, Request, RequestState, miss_reason
 from .policy import (
     BOT_PAUSED,
     LONG_RETRY_EVERY_S,
@@ -83,7 +83,7 @@ class RecoveryMixin:
         -- three passes, two "retrying" messages, no searches. Say it once and stop, the same way a track
         neither side can identify lands terminally rather than burning the backoff schedule."""
         _, outcome = self._lossless_outcome(req.id)
-        why = MISS_REASON.get(outcome) if outcome else None
+        why = self._miss_reason(req.id, outcome)
         if why is None:
             # There is no off switch for Soulseek: no provider means no account was ever saved.
             why = ("Soulseek isn't set up" if not (self.providers and self.settings.lossless_enabled)
@@ -142,6 +142,12 @@ class RecoveryMixin:
         return self.store.lossless_outcome(request_id)
 
 
+    def _miss_reason(self, request_id: int, outcome: str | None) -> str | None:
+        """`models.miss_reason`: "found no copies" for a search that came back empty rather than "nothing
+        matched", which is only true when there was something to match. Every row is read only for that one."""
+        return miss_reason(outcome, self.store.attempts_for_request(request_id) if outcome == "no_pick" else None)
+
+
     def _lossless_miss_line(self, req: Request, *, from_find_lossless: bool = False) -> str | None:
         """The owner asked to be told, not just shown, when a track lands on the lossy copy. Only when a
         lossless attempt actually ran and missed: with the provider off or absent there is nothing to
@@ -153,7 +159,7 @@ class RecoveryMixin:
         attempt, outcome = self._lossless_outcome(req.id)
         if attempt is None or outcome in (None, "filed"):
             return None
-        why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
+        why = self._miss_reason(req.id, outcome) or f"the lossless attempt ended in {outcome}"
         # The track is filed, so its row has no Try again: Find lossless is the button that searches again.
         # Said from that button's own result (`from_find_lossless`), it only needs to say it can be pressed again.
         manual = ("Press it again later to search once more." if from_find_lossless

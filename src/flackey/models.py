@@ -340,6 +340,41 @@ MISS_REASON = {
     "unavailable": "Soulseek was not reachable at the time",
     "interrupted": "it was interrupted",
 }
+# `no_pick` covers two different misses: results came back and none was close enough, or the search came
+# back empty. The second is not about matching at all, and "nothing matched closely enough" sent the owner
+# off to doubt the match when nobody online had the track. `miss_reason` picks between them.
+NO_RESULTS_REASON = "Soulseek found no copies of this track"
+
+
+def results_seen(a: LosslessAttempt) -> int | None:
+    """How many files this attempt's search returned: the pick report's count, or the timeline's where the
+    pick never ran. None when neither recorded it -- a row from before either existed."""
+    seen = (a.report or {}).get("seen")
+    if seen is None:
+        seen = next((e.get("detail", {}).get("files") for e in a.timeline
+                     if isinstance(e, dict) and e.get("event") == "search_completed"), None)
+    return seen if isinstance(seen, int) else None
+
+
+def found_nothing(attempts: list[LosslessAttempt]) -> bool:
+    """Whether the `no_pick` that ended these attempts (oldest first) came from searches that returned no
+    files at all. Every spelling of a pass that ends in `no_pick` ended in `no_pick` itself
+    (`lossless_attempt.pass_outcome`), so the pass is inside the trailing run of `no_pick` rows; the run may
+    reach back into an earlier pass too, which only ever keeps the older wording. One search that came back
+    with something, or one that did not say, and "found no copies" would not be the whole truth."""
+    run = []
+    for a in reversed(attempts):
+        if a.outcome != "no_pick":
+            break
+        run.append(a)
+    return bool(run) and all(results_seen(a) == 0 for a in run)
+
+
+def miss_reason(outcome: str | None, attempts: list[LosslessAttempt] | None = None) -> str | None:
+    """`MISS_REASON` for `outcome`, except a `no_pick` whose searches all came back empty, which says so."""
+    if outcome == "no_pick" and attempts and found_nothing(attempts):
+        return NO_RESULTS_REASON
+    return MISS_REASON.get(outcome) if outcome else None
 
 
 @dataclass

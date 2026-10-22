@@ -36,7 +36,10 @@ export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number
   evidence?:{ kind:string; value:Record<string, unknown> }[] }
 export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
 export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;
-  fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
+  fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null
+  /** A `no_pick` whose searches came back empty, rather than with nothing close enough. Absent from an older
+      server, which reads as the old wording. */
+  no_results?:boolean }
 /** `kind` says which check the file failed -- 'quality' (the spectral check) or 'different_recording'
     (genuine audio, wrong track). Optional so a fixture or a row written before the column existed still
     type-checks; absent reads as 'quality', which is all there was then. */
