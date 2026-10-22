@@ -170,4 +170,6 @@ def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int
     if artist is None and uploader:
         artist = _channel(uploader) or None
     t, version = parse_version(rest)
+    if not re.search(r"\w", t):  # cleanup ate it all ("[FREE DL]", "Premiere:"): search for what was there
+        t, version = (rest if re.search(r"\w", rest) else title.strip()), None
     return Query(raw=title, artist=artist, title=t, version=version, duration_s=duration_s)

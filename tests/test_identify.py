@@ -180,6 +180,18 @@ def test_parse_youtube_title_cleanup_leaves_real_names_alone(title, expected):
     assert (q.artist, q.title, q.version) == expected
 
 
+@pytest.mark.parametrize("title,expected", [
+    ("*", ("x", "*", None)),
+    ("[FREE DL]", ("x", "[FREE DL]", None)),
+    ("Premiere:", ("x", "Premiere:", None)),
+    ("Official Video", ("x", "Official Video", None)),
+    ("Artist - (Someone Remix)", ("Artist", "(Someone Remix)", None)),
+])
+def test_cleanup_never_leaves_an_empty_title(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
 def test_a_leading_catalogue_number_that_is_the_channel_stays_the_artist():
     q = parse_youtube_title("ABC123 - Track - Extended Mix", "ABC123 - Topic")
     assert (q.artist, q.title, q.version) == ("ABC123", "Track", "Extended Mix")
