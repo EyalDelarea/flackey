@@ -69,7 +69,7 @@ def _no_public_deezer_lookup(monkeypatch):
     async def no_isrc(http, isrc, *, timeout=5.0):
         raise DeezerError("no deezer isrc lookup in tests")
 
-    monkeypatch.setattr("flackey.worker.filing.release_date_by_isrc", no_isrc)
+    monkeypatch.setattr("flackey.worker.filing.track_by_isrc", no_isrc)
 
 
 @pytest.fixture(autouse=True)

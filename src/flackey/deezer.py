@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import httpx
@@ -107,12 +108,19 @@ class DeezerApi:
 ISRC_TIMEOUT_S = 5.0
 
 
-async def release_date_by_isrc(http: httpx.AsyncClient, isrc: str, *, timeout: float = ISRC_TIMEOUT_S) -> str | None:
-    """The release date of Deezer's record for this ISRC, from the public API (no account), or None when the
-    record it answers with carries no date or another ISRC. Raises DeezerError for any failed lookup,
-    including the 200-with-an-error-body Deezer answers a spent quota with."""
+async def track_by_isrc(http: httpx.AsyncClient, isrc: str, *, timeout: float = ISRC_TIMEOUT_S) -> DeezerTrack | None:
+    """Deezer's record for this ISRC, from the public API (no account), or None when the record it answers
+    with is filed under another ISRC. Raises DeezerError for any failed lookup -- including the
+    200-with-an-error-body Deezer answers a spent quota or an unknown ISRC ("no data") with -- and for one
+    that takes longer than `timeout` in all: httpx's own timeout is per phase, not for the whole call.
+
+    The caller still has to compare lengths: Deezer files DJ-mix and compilation cuts under the original's
+    ISRC, and such a record's date is not the recording's."""
     try:
-        r = await http.get(f"{DeezerApi.BASE}/track/isrc:{isrc}", timeout=timeout)
+        async with asyncio.timeout(timeout):
+            r = await http.get(f"{DeezerApi.BASE}/track/isrc:{isrc}", timeout=timeout)
+    except TimeoutError as e:
+        raise DeezerError(f"deezer took longer than {timeout:g} s") from e
     except httpx.HTTPError as e:
         raise DeezerError(str(e) or type(e).__name__) from e
     if r.status_code != 200:
@@ -121,4 +129,4 @@ async def release_date_by_isrc(http: httpx.AsyncClient, isrc: str, *, timeout: f
         track = parse_track_json(r.json())
     except (ValueError, KeyError, TypeError) as e:
         raise DeezerError(f"deezer sent no track ({e})") from e
-    return track.release_date if (track.isrc or "").upper() == isrc.upper() else None
+    return track if (track.isrc or "").upper() == isrc.upper() else None

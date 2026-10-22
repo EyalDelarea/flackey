@@ -9,8 +9,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..catalog import is_remaster, with_original_date
-from ..deezer import release_date_by_isrc
+from ..catalog import DURATION_SLACK_S, is_remaster, with_original_date
+from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
@@ -21,6 +21,15 @@ from ..verify import verify
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
+# How long a failed Deezer ISRC lookup stands before the next track with that ISRC asks again.
+ISRC_RETRY_AFTER_S = 600
+
+
+def _same_length(duration_s: int | None, catalog: CatalogTrack) -> bool:
+    """A Deezer record is the same cut as the Beatport record only at the same length, give or take the
+    rounding `catalog._same_recording` allows. Unknown on either side is not the same."""
+    return (duration_s is not None and duration_s > 0 and catalog.duration_s is not None
+            and abs(duration_s - catalog.duration_s) <= DURATION_SLACK_S)
 
 
 class FilingMixin:
@@ -230,8 +239,17 @@ class FilingMixin:
         is the record's. A remaster -- the record's or the request's -- keeps its own year, so it asks nothing."""
         if not catalog.isrc or is_remaster(catalog.title, catalog.mix_name, catalog.release_name, req.query_version):
             return catalog
-        also = [cand.release_date] if cand.isrc and cand.isrc.upper() == catalog.isrc.upper() else []
-        also.append(await self._isrc_release_date(req, catalog.isrc))
+        also: list[str | None] = []
+        if cand.isrc and cand.isrc.upper() == catalog.isrc.upper() and _same_length(cand.duration_s, catalog):
+            also.append(cand.release_date)
+        record = await self._isrc_record(req, catalog.isrc)
+        if record is not None and _same_length(record.duration_s, catalog):
+            also.append(record.release_date)
+        elif record is not None:
+            # Deezer files DJ-mix and compilation cuts under the original's ISRC; a cut of another length is
+            # another release of something else's making, and its date says nothing about this recording.
+            log.info("req#%d: deezer's record for %s is %ss, the record %ss; not dating by it", req.id,
+                     catalog.isrc, record.duration_s, catalog.duration_s)
         dated = with_original_date(catalog, also=also, asked=req.query_version)
         if dated is not catalog:
             log.info("req#%d: dated by the recording's first release, %s (the release is %s)", req.id,
@@ -240,21 +258,26 @@ class FilingMixin:
         return dated
 
 
-    async def _isrc_release_date(self, req: Request, isrc: str) -> str | None:
-        """Deezer's release date for `isrc`, once per ISRC per run, paced with every other Deezer call the
-        worker makes. Fails open: any error is the release's own date, as before the lookup existed."""
+    async def _isrc_record(self, req: Request, isrc: str) -> DeezerTrack | None:
+        """Deezer's record for `isrc`, once per ISRC per run, paced with every other Deezer call the worker
+        makes. Fails open: any error is the release's own date, as before the lookup existed. A failure --
+        an outage, a spent quota, an ISRC Deezer has no data for -- is remembered for ISRC_RETRY_AFTER_S, so
+        a playlist filed during an outage does not ask again for every track, and asked again after it."""
         key = isrc.upper()
-        if key in self._isrc_dates:
-            return self._isrc_dates[key]
+        if key in self._isrc_records:
+            record, until = self._isrc_records[key]
+            if until is None or self.clock() < until:
+                return record
         await self._deezer_turn()
         try:
-            date = await release_date_by_isrc(self.http, key)
+            record = await track_by_isrc(self.http, key)
         except Exception as e:  # noqa: BLE001 - DeezerError above all; tags are an extra, the file is already good
             log.info("req#%d: deezer isrc lookup for %s failed (%s); keeping the release's year", req.id, key,
                      e or type(e).__name__)
+            self._isrc_records[key] = (None, self.clock() + ISRC_RETRY_AFTER_S)
             return None
-        self._isrc_dates[key] = date
-        return date
+        self._isrc_records[key] = (record, None)
+        return record
 
 
     async def _file_track(self, req: Request, cand: Candidate, catalog: CatalogTrack | None, tmp: Path,

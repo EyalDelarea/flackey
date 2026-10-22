@@ -12,6 +12,7 @@ import httpx
 
 from ..attempts import prune_raw
 from ..config import Settings
+from ..deezer import DeezerTrack
 from ..library import prune_missing_tracks
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
@@ -94,9 +95,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # `_deezer_turn` is shared by the shadow comparison and filing's ISRC lookup, which run at once; the
         # lock makes their turns follow one another rather than read the same `_deezer_last` together.
         self._deezer_lock = asyncio.Lock()
-        # Deezer's release date per ISRC, asked once per run (`_isrc_release_date`). Failed lookups are not
-        # kept, so a blip costs one track its earlier year, not every track after it.
-        self._isrc_dates: dict[str, str | None] = {}
+        # Deezer's record per ISRC (`_isrc_record`): an answer for the run, with no expiry; a failed lookup as
+        # None until the `clock` time beside it, so an outage is asked about again later but not per track.
+        self._isrc_records: dict[str, tuple[DeezerTrack | None, float | None]] = {}
         # Requests whose current pass went without the bot because Telegram was signed out. Kept per pass
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
