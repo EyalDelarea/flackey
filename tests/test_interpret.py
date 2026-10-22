@@ -92,6 +92,20 @@ def test_a_collaboration_is_also_read_under_its_first_name():
     assert len(interpretations("Malcolm X - Title", "x")) == 1
 
 
+def test_a_genre_before_the_track_reads_the_track_first():
+    assert _rows(interpretations("HARD TECHNO | The Prodigy - No Good (Samuel Moriero & RBX Remix) [FREE DL]",
+                                 "LOST IN RAVE")) == [("The Prodigy", "No Good", "Samuel Moriero & RBX Remix")]
+    assert _rows(interpretations("[TECHNO] Patrick Hollo - Low [Subwoofer Records]", "Subwoofer Records")) == [
+        ("Patrick Hollo", "Low", None)]
+
+
+def test_the_pipe_part_passed_over_for_an_artist_and_title_is_still_a_reading():
+    assert _rows(interpretations("Label | Artist - Track [FREE DL]", "x")) == [
+        ("Artist", "Track", None), ("x", "Label", None)]
+    assert _rows(interpretations("Track Name | Artist - Album", "x")) == [
+        ("Artist", "Album", None), ("x", "Track Name", None)]
+
+
 @pytest.mark.parametrize("title", [
     "Artist - Title",
     "Artist - Title - Extended Mix",            # the third segment is a version, not a title

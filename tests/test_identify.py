@@ -274,6 +274,56 @@ def test_parse_youtube_title_review_cases(title, expected):
     assert (q.artist, q.title, q.version) == expected
 
 
+@pytest.mark.parametrize("title,uploader,expected", [
+    # the real titles: the genre before the "|" was read as the title, the bracket stayed on the artist
+    ("HARD TECHNO | The Prodigy - No Good (Samuel Moriero & RBX Remix) [FREE DL]", "LOST IN RAVE",
+     ("The Prodigy", "No Good", "Samuel Moriero & RBX Remix")),
+    ("[TECHNO] Patrick Hollo - Low [Subwoofer Records]", "Subwoofer Records", ("Patrick Hollo", "Low", None)),
+    # a leading genre tag, bracketed or before a ":" or "|"
+    ("TECHNO | Artist - Track", "x", ("Artist", "Track", None)),
+    ("Melodic Techno | Artist - Track (Extended Mix)", "x", ("Artist", "Track", "Extended Mix")),
+    ("Melodic Techno: Artist - Track", "x", ("Artist", "Track", None)),
+    ("[Psytrance] Artist - Track", "x", ("Artist", "Track", None)),
+    ("(Psytrance) Artist - Track", "x", ("Artist", "Track", None)),
+    ("[Melodic Techno] Artist - Track", "x", ("Artist", "Track", None)),
+    ("[DnB] Artist - Track", "x", ("Artist", "Track", None)),
+    ("[Drum & Bass] Artist - Track", "x", ("Artist", "Track", None)),
+    ("[Tech House] Artist - Track (Extended Mix)", "x", ("Artist", "Track", "Extended Mix")),
+    ("[Electro] - Pegboard Nerds - Hero [Monstercat Release]", "Monstercat", ("Pegboard Nerds", "Hero", None)),
+    ("[FREE DL] [TECHNO] Artist - Track", "x", ("Artist", "Track", None)),
+    # the "|" part that reads "Artist - Title", over a label, a genre or the channel's own name
+    ("Label | Artist - Track [FREE DL]", "x", ("Artist", "Track", None)),
+    ("Label | Artist - Track - Extended Mix", "x", ("Artist", "Track", "Extended Mix")),
+    ("LOST IN RAVE | Artist - Track", "LOST IN RAVE", ("Artist", "Track", None)),
+    ("Channel | Track", "Channel", ("Channel", "Track", None)),
+    ("Techno | Premiere | Artist - Track", "x", ("Artist", "Track", None)),
+])
+def test_a_genre_tag_label_or_channel_before_the_track_is_dropped(title, uploader, expected):
+    q = parse_youtube_title(title, uploader)
+    assert (q.artist, q.title, q.version) == expected
+
+
+@pytest.mark.parametrize("title,expected", [
+    # not genre tags: a catalogue number, a version, a word that is no genre alone, a name, a title
+    ("[NM022] Artist - Track", ("Artist", "Track", None)),
+    ("(Remix) Artist - Track", ("(Remix) Artist", "Track", None)),
+    ("(Deep) Artist - Track", ("(Deep) Artist", "Track", None)),
+    ("(House Music) Artist - Track", ("(House Music) Artist", "Track", None)),
+    ("(Hed) P.E. - Bartender", ("(Hed) P.E.", "Bartender", None)),
+    ("House: Track", ("x", "House: Track", None)),                  # no "Artist - Title" after it
+    ("[TECHNO]", ("x", "[TECHNO]", None)),                          # nothing after it
+    # the first "|" part as before: it has a dash, no later part has one, or several do
+    ("Artist - Track | Label", ("Artist", "Track", None)),
+    ("Artist - Track Remix | Label - Something", ("Artist", "Track Remix", None)),
+    ("Artist | Track", ("x", "Artist", None)),
+    ("Artist | Track - Extended Mix", ("x", "Artist", None)),      # "Track - Extended Mix" is no artist
+    ("Label | A - T | B - U", ("x", "Label", None)),
+])
+def test_what_is_not_a_genre_tag_or_a_better_pipe_part_stays(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
 def test_music_in_parentheses_is_a_label_when_it_is_the_channel():
     q = parse_youtube_title("Artist - Track (Armada Music) (Extended Mix)", "Armada Music")
     assert (q.artist, q.title, q.version) == ("Artist", "Track", "Extended Mix")
