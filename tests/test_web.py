@@ -2731,6 +2731,30 @@ def test_the_page_words_what_the_lossless_pass_concluded_not_its_last_row(client
     assert c.get(f"/api/requests/{rid}").json()["attempt"]["outcome"] == "no_pick"
 
 
+def test_an_empty_search_is_worded_as_no_copies_on_the_page_and_the_upgradable_list(client):
+    """`no_pick` from a search with zero results is "found no copies"; with results it is "nothing matched".
+    The bundle carries the difference as `no_results` so the row's fallback line can say which."""
+    c, store, settings = client
+    rows = {}
+    for name, seen in (("empty", 0), ("some", 12)):
+        rid = store.add_request(f"A - {name}", RequestKind.YT_TRACK)
+        aid = store.add_attempt(rid, "soulseek", "A " + name)
+        store.update_attempt(aid, outcome="no_pick", report={"seen": seen, "survivors": [], "summary": "s"},
+                             timeline=[{"t_ms": 0, "event": "search_completed", "detail": {"files": seen}}])
+        store.set_lossless_verdict(rid, "no_pick")
+        tid = store.add_track(path=settings.library_root / f"{name}.mp3", fmt="mp3", bitrate_kbps=320,
+                              cutoff_hz=20000, file_size=1, artist="A", title=name, mix_name="Original Mix",
+                              duration_s=1, isrc=None, catalog_track_id=None, request_id=rid)
+        rows[name] = (rid, tid)
+    upgradable = {t["track_id"]: t for t in c.get("/api/lossless/upgradable").json()["tracks"]}
+    empty_rid, empty_tid = rows["empty"]
+    some_rid, some_tid = rows["some"]
+    assert c.get(f"/api/requests/{empty_rid}").json()["attempt"]["no_results"] is True
+    assert c.get(f"/api/requests/{some_rid}").json()["attempt"]["no_results"] is False
+    assert upgradable[empty_tid]["reason"] == "Soulseek found no copies of this track"
+    assert upgradable[some_tid]["reason"] == "nothing on Soulseek matched this track closely enough"
+
+
 def test_removing_a_request_drops_its_queued_title_comparison(client_with_worker):
     c, worker = client_with_worker
 

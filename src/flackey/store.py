@@ -22,6 +22,7 @@ from .models import (
     RequestKind,
     RequestState,
     Track,
+    found_nothing,
 )
 from .models import norm as models_norm
 
@@ -147,6 +148,10 @@ class Store:
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("catalog_tracks", "tag_source", "TEXT")
+        # The recording's first release where it predates the release itself (`CatalogTrack.original_date`),
+        # and the Deezer date it may come from. NULL on every row written before them: unknown, not "none".
+        self._ensure_column("catalog_tracks", "original_date", "TEXT")
+        self._ensure_column("candidates", "release_date", "TEXT")
         # Where a request was when it failed. Only `error` needs it: the other three failure states say
         # where they stopped by their own name. Rows written before the column keep NULL -- the stage is
         # genuinely not recorded for them and a guess reads worse than an honest gap.
@@ -163,6 +168,9 @@ class Store:
         # attempt row says (`lossless_attempt.pass_outcome`). NULL before the column, and while a pass runs:
         # readers then fall back to the latest attempt row, as they always did.
         self._ensure_column("requests", "lossless_verdict", "TEXT")
+        # With a `no_pick` verdict, whether every search in the pass came back empty (`set_lossless_verdict`).
+        # NULL with any other verdict, and on rows from before the column until first read.
+        self._ensure_column("requests", "lossless_no_results", "INTEGER")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
         # would disappear from under the owner the moment they answered the question they came back to.
@@ -211,7 +219,8 @@ class Store:
 
     # Columns `Request` does not carry. The queue endpoint sends every field of every Request to the page on
     # each refresh, and these are worker-only: read them through their own methods below.
-    _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict")
+    _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict",
+                       "lossless_no_results")
 
     def _row_to_request(self, r: sqlite3.Row) -> Request:
         d = dict(r)
@@ -382,8 +391,31 @@ class Store:
         return attempt, verdict or (attempt.outcome if attempt else None)
 
     def set_lossless_verdict(self, request_id: int, outcome: str | None) -> None:
-        self.conn.execute("UPDATE requests SET lossless_verdict=? WHERE id=?", (outcome, request_id))
+        """The pass's verdict, and with a `no_pick` whether every search in it came back empty
+        (`models.found_nothing`) -- worked out here, once, while the pass's rows are fresh, rather than from
+        every attempt row's JSON each time the queue is drawn."""
+        empty = None
+        if outcome == "no_pick":
+            empty = int(found_nothing(self.attempts_for_request(request_id)))
+        self.conn.execute("UPDATE requests SET lossless_verdict=?, lossless_no_results=? WHERE id=?",
+                          (outcome, empty, request_id))
         self.conn.commit()
+
+    def lossless_no_results(self, request_id: int, outcome: str | None) -> bool:
+        """Whether the `no_pick` that `outcome` names (`lossless_outcome`'s) came from searches that found
+        nothing at all. Read from the verdict's column; worked out from the attempt rows only where it was
+        never stored -- a pass still running, or a verdict from before the column -- and kept for the latter."""
+        if outcome != "no_pick":
+            return False
+        r = self.conn.execute("SELECT lossless_verdict, lossless_no_results FROM requests WHERE id=?",
+                              (request_id,)).fetchone()
+        if r is not None and r["lossless_no_results"] is not None:
+            return bool(r["lossless_no_results"])
+        empty = found_nothing(self.attempts_for_request(request_id))
+        if r is not None and r["lossless_verdict"] == "no_pick":
+            self.conn.execute("UPDATE requests SET lossless_no_results=? WHERE id=?", (int(empty), request_id))
+            self.conn.commit()
+        return empty
 
     # ---- candidates -----------------------------------------------------
     def add_candidates(self, request_id: int, candidates: list[Candidate]) -> list[Candidate]:
@@ -407,10 +439,10 @@ class Store:
         for c in candidates:
             cur = self.conn.execute(
                 "INSERT INTO candidates (request_id, rank, source, source_ref, artist, title, mix_name, "
-                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview, release_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (request_id, c.rank, c.source, c.source_ref, c.artist, c.title, c.mix_name,
-                 c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview))
+                 c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview, c.release_date))
             out.append(Candidate(**{**c.__dict__, "id": int(cur.lastrowid), "request_id": request_id}))
         self.conn.commit()
         return out
@@ -437,16 +469,22 @@ class Store:
         self.conn.execute(
             "INSERT INTO catalog_tracks (id, isrc, artist, title, mix_name, label, genre, sub_genre, "
             "catalog_number, release_name, release_date, bpm, key, duration_ms, artwork_url, tag_source, "
-            "fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "original_date, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
             "isrc=excluded.isrc, artist=excluded.artist, title=excluded.title, mix_name=excluded.mix_name, "
             "label=excluded.label, genre=excluded.genre, sub_genre=excluded.sub_genre, "
             "catalog_number=excluded.catalog_number, release_name=excluded.release_name, "
             "release_date=excluded.release_date, bpm=excluded.bpm, key=excluded.key, "
             "duration_ms=excluded.duration_ms, artwork_url=excluded.artwork_url, "
-            "tag_source=excluded.tag_source, fetched_at=excluded.fetched_at",
+            "tag_source=excluded.tag_source, fetched_at=excluded.fetched_at, "
+            # The earlier of the two, and never NULL over a date: a later search that saw fewer releases (or
+            # a remaster request, which dates nothing) must not erase a first release already found and
+            # written into a file. Dates are ISO, so the string minimum is the earliest.
+            "original_date=CASE WHEN catalog_tracks.original_date IS NULL THEN excluded.original_date "
+            "WHEN excluded.original_date IS NULL THEN catalog_tracks.original_date "
+            "ELSE min(catalog_tracks.original_date, excluded.original_date) END",
             (t.id, t.isrc, t.artist, t.title, t.mix_name, t.label, t.genre, t.sub_genre, t.catalog_number,
              t.release_name, t.release_date, t.bpm, t.key, t.duration_ms, t.artwork_url, t.tag_source,
-             _now()))
+             t.original_date, _now()))
         self.conn.commit()
 
     def get_catalog_track(self, track_id: int) -> CatalogTrack | None:

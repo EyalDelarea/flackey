@@ -47,7 +47,8 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
     {tracks.map(t => {
       const c = t.catalog
       const lossy = isLossy(t)
-      const year = c?.release_date?.slice(0, 4) ?? ''
+      // The year the file is tagged with: the first release's where one is known, as `tag.py` writes it.
+      const year = (c?.original_date ?? c?.release_date)?.slice(0, 4) ?? ''
       const compactMeta = [c?.genre, c?.label, year].filter(Boolean).join(' · ')
       return (<div className={`trow${selected === t.id ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />

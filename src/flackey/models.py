@@ -132,6 +132,9 @@ class Candidate:
     has_preview: bool | None = None
     id: int | None = None
     request_id: int | None = None
+    # The Deezer record's release date (its album's), from the same enrichment call. Only ever used to date a
+    # recording's first release earlier than the Beatport release it is tagged from (`catalog.with_original_date`).
+    release_date: str | None = None
 
 
 @dataclass
@@ -154,14 +157,24 @@ class CatalogTrack:
     # Where the tags came from when Beatport could not supply them (issue #146): "deezer", "discogs" or
     # "deezer+discogs". None on a Beatport record, and on a stand-in no other catalogue could fill in.
     tag_source: str | None = None
+    # The recording's first release, when a source already in hand dates it earlier than this release:
+    # Beatport's other releases of it, the Deezer record that was downloaded, Discogs (`catalog.with_original_date`).
+    # A compilation or a reissue is what Beatport often sells, and its date tagged "One More Time" 2005.
+    # None when nothing earlier is known, and always on a remaster, whose own year is the point of it.
+    original_date: str | None = None
 
     @property
     def duration_s(self) -> int | None:
         return None if self.duration_ms is None else round(self.duration_ms / 1000)
 
     @property
+    def tag_date(self) -> str | None:
+        """The date written into the file and shown as the year: the first release's where one is known."""
+        return self.original_date or self.release_date
+
+    @property
     def year(self) -> str | None:
-        return self.release_date[:4] if self.release_date else None
+        return self.tag_date[:4] if self.tag_date else None
 
     @property
     def display_title(self) -> str:
@@ -342,6 +355,44 @@ MISS_REASON = {
     "unavailable": "Soulseek was not reachable at the time",
     "interrupted": "it was interrupted",
 }
+# `no_pick` covers two different misses: results came back and none was close enough, or the search came
+# back empty. The second is not about matching at all, and "nothing matched closely enough" sent the owner
+# off to doubt the match when nobody online had the track. `miss_reason` picks between them.
+NO_RESULTS_REASON = "Soulseek found no copies of this track"
+
+
+def results_seen(a: LosslessAttempt) -> int | None:
+    """How many files this attempt's search returned: the pick report's count, or the timeline's where the
+    pick never ran. None when neither recorded it -- a row from before either existed."""
+    seen = (a.report or {}).get("seen")
+    if seen is None:
+        seen = next((e.get("detail", {}).get("files") for e in a.timeline
+                     if isinstance(e, dict) and e.get("event") == "search_completed"), None)
+    return seen if isinstance(seen, int) else None
+
+
+def found_nothing(attempts: list[LosslessAttempt]) -> bool:
+    """Whether the `no_pick` that ended these attempts (oldest first) came from searches that returned no
+    files at all. Every spelling of a pass that ends in `no_pick` ended in `no_pick` itself
+    (`lossless_attempt.pass_outcome`), so the pass is inside the trailing run of `no_pick` rows; the run may
+    reach back into an earlier pass too, which only ever keeps the older wording. One search that came back
+    with something, or one that did not say, and "found no copies" would not be the whole truth."""
+    run = []
+    for a in reversed(attempts):
+        if a.outcome != "no_pick":
+            break
+        run.append(a)
+    return bool(run) and all(results_seen(a) == 0 for a in run)
+
+
+def miss_reason(outcome: str | None, attempts: list[LosslessAttempt] | None = None, *,
+                no_results: bool | None = None) -> str | None:
+    """`MISS_REASON` for `outcome`, except a `no_pick` whose searches all came back empty, which says so:
+    as `no_results` says when the caller has it (`Store.lossless_no_results`), else from `attempts`."""
+    empty = no_results if no_results is not None else bool(attempts) and found_nothing(attempts or [])
+    if outcome == "no_pick" and empty:
+        return NO_RESULTS_REASON
+    return MISS_REASON.get(outcome) if outcome else None
 
 
 @dataclass

@@ -5,7 +5,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from ..catalog import CatalogUnavailable, best_match
+from ..catalog import CatalogUnavailable, best_match, with_original_date
 from ..identify import parse_text
 from ..library import find_duplicate
 from ..match import candidate_query, candidate_version, decide, same_version
@@ -13,7 +13,7 @@ from ..models import Candidate, CatalogTrack, Query, Request, RequestState
 from ..notify import Button
 from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
-from .policy import BOT_PAUSED, MAX_ATTEMPTS, REVIEW_BUTTONS
+from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS, bot_paused
 from .records import CATALOG_SOURCE, QUERY_SOURCE, _mmss, catalog_candidate, query_candidate
 
 log = logging.getLogger(__name__)
@@ -50,6 +50,8 @@ class PipelineMixin:
         catalog_tracks = await self._catalog_search(req, query)
         catalog = best_match(query, catalog_tracks)
         if catalog:
+            # Dated by the earliest of its releases among the results in hand, not the reissue it is on.
+            catalog = self._dated_match(catalog, catalog_tracks, query.version)
             self.store.upsert_catalog_track(catalog)
             self.store.update_request(req.id, catalog_track_id=catalog.id)
 
@@ -62,7 +64,7 @@ class PipelineMixin:
         if self.settings.source_enabled and not self._bot_ready():
             # Never asked, not even to time out: a signed-out client either raises at once or, with no
             # keys at all, is not connected to anything. The pass carries on as if the bot were off.
-            source_why = BOT_PAUSED
+            source_why = bot_paused(self.settings.telegram_configured)
             self._bot_skipped.add(req.id)
         elif self.settings.source_enabled:
             source_why = "no Deezer candidates"
@@ -127,7 +129,7 @@ class PipelineMixin:
             # substitute a loosely matched release: require the normal search score first.
             matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
             if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
-                catalog = matched_catalog
+                catalog = self._dated_match(matched_catalog, catalog_tracks, query.version)
                 self.store.upsert_catalog_track(catalog)
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
                 if ident is None:
@@ -160,6 +162,15 @@ class PipelineMixin:
         self.store.update_request(req.id, chosen_candidate_id=chosen.id)
         return chosen, catalog
 
+    def _dated_match(self, catalog: CatalogTrack, tracks: list[CatalogTrack], asked: str | None) -> CatalogTrack:
+        """`catalog` dated by the earliest of its releases among `tracks`, the search results in hand -- and
+        by any earlier date already stored for the record. One search sees only some of Beatport's releases,
+        and the next request's (or the Deezer lookup at filing) may have found an earlier one: dated from this
+        search alone, the record would lose it, and a track filed as 2001 would read 2005 in the library."""
+        stored = self.store.get_catalog_track(catalog.id)
+        known = [stored.original_date] if stored is not None else []
+        return with_original_date(catalog, tracks, also=known, asked=asked)
+
     async def _catalog_search(self, req: Request, query: Query) -> list[CatalogTrack]:
         """Beatport's search, or nothing when Beatport refuses us. Beatport is a scraped web page and only
         adds tags -- the file comes from the source and the fingerprint proves it -- so a Cloudflare
@@ -185,8 +196,11 @@ class PipelineMixin:
         re-match Beatport against that version so the tags describe the recording in the file."""
         if catalog is None or same_version(cand, catalog):
             return catalog
-        catalog = best_match(candidate_query(cand), await self._catalog_search(req, candidate_query(cand)))
+        want = candidate_query(cand)
+        tracks = await self._catalog_search(req, want)
+        catalog = best_match(want, tracks)
         if catalog:
+            catalog = self._dated_match(catalog, tracks, want.version)
             self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id if catalog else None)
         return catalog

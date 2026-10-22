@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from ..models import MISS_REASON, LosslessAttempt, Request, RequestState
+from ..models import LosslessAttempt, Request, RequestState, miss_reason
 from .policy import (
-    BOT_PAUSED,
     LONG_RETRY_EVERY_S,
     LONG_RETRY_OUTCOMES,
     LONG_RETRY_TIMES,
@@ -17,6 +16,7 @@ from .policy import (
     SEARCH_AGAIN_AFTER,
     SLOW_BACKOFF_S,
     SLOW_RETRY_OUTCOMES,
+    bot_paused,
 )
 
 log = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class RecoveryMixin:
         -- three passes, two "retrying" messages, no searches. Say it once and stop, the same way a track
         neither side can identify lands terminally rather than burning the backoff schedule."""
         _, outcome = self._lossless_outcome(req.id)
-        why = MISS_REASON.get(outcome) if outcome else None
+        why = self._miss_reason(req.id, outcome)
         if why is None:
             # There is no off switch for Soulseek: no provider means no account was ever saved.
             why = ("Soulseek isn't set up" if not (self.providers and self.settings.lossless_enabled)
@@ -95,10 +95,12 @@ class RecoveryMixin:
             self._set_state(req, RequestState.QUEUED, flag_reason="Telegram is back; asking the Deezer bot",
                             retry_after=None)
             return
+        # "isn't set up" on a copy with no Telegram keys, where "signed out" names an account that never was
+        paused_why = bot_paused(self.settings.telegram_configured)
         if not self.settings.source_enabled:
             fallback = "the Deezer bot is switched off, so there is no lossy copy to fall back on"
         elif paused:
-            fallback = f"{BOT_PAUSED}, so there is no lossy copy to fall back on"
+            fallback = f"{paused_why}, so there is no lossy copy to fall back on"
         else:
             fallback = "Deezer offered nothing to fall back on"
         # Two clauses, each with its own subject: a semicolon, not a comma, between them ("... closely enough;
@@ -106,7 +108,7 @@ class RecoveryMixin:
         reason = f"no way to fetch this track: {why}; {fallback}"
         # The long wait's words are what the row shows for six hours at a time, and what
         # `_requeue_for_the_bot` reads: a paused bot has to be in them, not only in the quick ladder's.
-        waiting_on = f"{why}; {BOT_PAUSED}" if paused else why
+        waiting_on = f"{why}; {paused_why}" if paused else why
         transient = outcome in LONG_RETRY_OUTCOMES
         if self._lossless_allowed(self.store.get_request(req.id)):
             await self._retry_or_fail(req, reason, wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None,
@@ -142,6 +144,12 @@ class RecoveryMixin:
         return self.store.lossless_outcome(request_id)
 
 
+    def _miss_reason(self, request_id: int, outcome: str | None) -> str | None:
+        """`models.miss_reason`: "found no copies" for a search that came back empty rather than "nothing
+        matched", which is only true when there was something to match. Stored with the pass's verdict."""
+        return miss_reason(outcome, no_results=self.store.lossless_no_results(request_id, outcome))
+
+
     def _lossless_miss_line(self, req: Request, *, from_find_lossless: bool = False) -> str | None:
         """The owner asked to be told, not just shown, when a track lands on the lossy copy. Only when a
         lossless attempt actually ran and missed: with the provider off or absent there is nothing to
@@ -153,7 +161,7 @@ class RecoveryMixin:
         attempt, outcome = self._lossless_outcome(req.id)
         if attempt is None or outcome in (None, "filed"):
             return None
-        why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
+        why = self._miss_reason(req.id, outcome) or f"the lossless attempt ended in {outcome}"
         # The track is filed, so its row has no Try again: Find lossless is the button that searches again.
         # Said from that button's own result (`from_find_lossless`), it only needs to say it can be pressed again.
         manual = ("Press it again later to search once more." if from_find_lossless

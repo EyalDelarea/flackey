@@ -136,6 +136,8 @@ class DeezerBotSource:
         # render time to decide whether to offer a play control at all. The URL itself is not kept -- it is
         # signed and expires -- only whether one exists; `/api/candidates/{cid}/preview` resolves it afresh.
         c.has_preview = bool(t.preview_url)
+        # Free for the same reason: what dates the recording when Beatport only sells a later release of it.
+        c.release_date = t.release_date
         if t.artist:
             c.artist = t.artist
         if t.title:

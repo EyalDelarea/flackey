@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import httpx
@@ -23,6 +24,12 @@ class DeezerTrack:
     album_id: int | None = None
 
 
+def _date(value) -> str | None:
+    """Deezer writes 0000-00-00 for a record it has no date for."""
+    date = str(value or "").strip()
+    return date if date and not date.startswith("0000") else None
+
+
 def parse_track_json(data: dict) -> DeezerTrack:
     if "error" in data:
         raise DeezerError(str(data["error"]))
@@ -35,7 +42,7 @@ def parse_track_json(data: dict) -> DeezerTrack:
         artist=(data.get("artist") or {}).get("name") or "",
         album=(data.get("album") or {}).get("title"),
         duration_s=int(data.get("duration") or 0),
-        release_date=data.get("release_date"),
+        release_date=_date(data.get("release_date")),
         title_version=version,
         preview_url=data.get("preview") or None,
         album_id=int((data.get("album") or {}).get("id") or 0) or None,
@@ -62,13 +69,11 @@ def parse_album_json(data: dict) -> DeezerAlbum:
         raise DeezerError(str(data["error"]))
     md5 = data.get("md5_image")
     cover = _COVER_URL.format(md5=md5, px=COVER_PX) if md5 else None
-    date = data.get("release_date") or None
     return DeezerAlbum(
         id=int(data["id"]),
         title=data.get("title") or "",
         label=(data.get("label") or "").strip() or None,
-        # Deezer writes 0000-00-00 for an album it has no date for
-        release_date=date if date and not date.startswith("0000") else None,
+        release_date=_date(data.get("release_date")),
         cover_url=cover,
     )
 
@@ -97,3 +102,31 @@ class DeezerApi:
 
     async def album(self, album_id: int) -> DeezerAlbum:
         return parse_album_json(await self._get(f"album/{album_id}"))
+
+
+# Short on purpose: the answer only ever moves a year in the tags, and a track waits on it while filing.
+ISRC_TIMEOUT_S = 5.0
+
+
+async def track_by_isrc(http: httpx.AsyncClient, isrc: str, *, timeout: float = ISRC_TIMEOUT_S) -> DeezerTrack | None:
+    """Deezer's record for this ISRC, from the public API (no account), or None when the record it answers
+    with is filed under another ISRC. Raises DeezerError for any failed lookup -- including the
+    200-with-an-error-body Deezer answers a spent quota or an unknown ISRC ("no data") with -- and for one
+    that takes longer than `timeout` in all: httpx's own timeout is per phase, not for the whole call.
+
+    The caller still has to compare lengths: Deezer files DJ-mix and compilation cuts under the original's
+    ISRC, and such a record's date is not the recording's."""
+    try:
+        async with asyncio.timeout(timeout):
+            r = await http.get(f"{DeezerApi.BASE}/track/isrc:{isrc}", timeout=timeout)
+    except TimeoutError as e:
+        raise DeezerError(f"deezer took longer than {timeout:g} s") from e
+    except httpx.HTTPError as e:
+        raise DeezerError(str(e) or type(e).__name__) from e
+    if r.status_code != 200:
+        raise DeezerError(f"deezer http {r.status_code}")
+    try:
+        track = parse_track_json(r.json())
+    except (ValueError, KeyError, TypeError) as e:
+        raise DeezerError(f"deezer sent no track ({e})") from e
+    return track if (track.isrc or "").upper() == isrc.upper() else None

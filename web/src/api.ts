@@ -26,7 +26,10 @@ export interface Candidate { id:number; request_id:number; source:string; source
   duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null;
   has_preview?:boolean|null }
 export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;
-  catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null }
+  catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null
+  /** The recording's first release, where it predates this release: the date the file's tags carry. Absent
+      from an older server, and null when nothing earlier is known. */
+  original_date?:string|null }
 export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:number|null; source:string; source_fmt:string|null; label:string }
 export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number; cutoff_hz:number; file_size:number; artist:string; title:string; mix_name:string;
   duration_s:number|null; isrc:string|null; catalog_track_id:number|null; request_id:number|null; added_at:string; verified_at:string|null; spectrogram_path:string|null;
@@ -36,7 +39,10 @@ export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number
   evidence?:{ kind:string; value:Record<string, unknown> }[] }
 export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
 export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;
-  fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
+  fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null
+  /** A `no_pick` whose searches came back empty, rather than with nothing close enough. Absent from an older
+      server, which reads as the old wording. */
+  no_results?:boolean }
 /** `kind` says which check the file failed -- 'quality' (the spectral check) or 'different_recording'
     (genuine audio, wrong track). Optional so a fixture or a row written before the column existed still
     type-checks; absent reads as 'quality', which is all there was then. */

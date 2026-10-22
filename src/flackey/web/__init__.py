@@ -72,7 +72,12 @@ class Bundles:
         "nothing matched" for a pass whose earlier spelling found a different recording, while the worker
         was already waiting on the different recording."""
         attempt, outcome = self.store.lossless_outcome(rid)
-        return None if attempt is None else to_dict(dataclasses.replace(attempt, outcome=outcome))
+        if attempt is None:
+            return None
+        # `no_results`: the `no_pick` was an empty search, which the page words as such (`models.miss_reason`).
+        # Stored with the verdict when the pass ended, so drawing the queue reads one column, not every row.
+        return {**to_dict(dataclasses.replace(attempt, outcome=outcome)),
+                "no_results": self.store.lossless_no_results(rid, outcome)}
 
     def reference(self, rid: int) -> dict | None:
         """What this request was fingerprinted against, as the page needs it: which audio, and where in it

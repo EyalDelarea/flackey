@@ -269,6 +269,8 @@ const MISS_REASON: Record<string, string> = {
   unavailable: 'Soulseek was not reachable at the time',
   interrupted: 'it was interrupted',
 }
+/* `no_pick` from a search that came back empty: nothing was there to match (models.NO_RESULTS_REASON). */
+const NO_RESULTS_REASON = 'Soulseek found no copies of this track'
 
 function fallbackOf(b: Bundle): FallbackView | null {
   const t = b.track
@@ -277,7 +279,8 @@ function fallbackOf(b: Bundle): FallbackView | null {
   if (!t || t.source_fmt) return null
   const head = t.fmt === 'mp3' && t.bitrate_kbps ? `MP3 ${t.bitrate_kbps} kbps` : t.fmt.toUpperCase()
   const outcome = b.attempt?.outcome
-  const reason = outcome ? MISS_REASON[outcome] ?? `the lossless attempt ended in ${outcome}`
+  const reason = outcome === 'no_pick' && b.attempt?.no_results ? NO_RESULTS_REASON
+    : outcome ? MISS_REASON[outcome] ?? `the lossless attempt ended in ${outcome}`
     : 'no lossless search ran for this one'
   return { label: `${head} — lossless unavailable`, reason: `Kept the matched MP3 copy because ${reason}.` }
 }
@@ -584,6 +587,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
           .replace(/^no way to fetch this track:\s*/i, '')
           .replace(/nothing on Soulseek matched this track closely enough[,;] Deezer offered nothing to fall back on/i,
             'No Soulseek match; nothing on Deezer to fall back on')
+          .replace(/Soulseek found no copies of this track[,;] Deezer offered nothing to fall back on/i,
+            'No copies on Soulseek; nothing on Deezer to fall back on')
         v.status = `Previous attempt: ${reason}`
         v.statusTone = 'amber'
       } else {

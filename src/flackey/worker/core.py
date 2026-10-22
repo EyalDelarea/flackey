@@ -12,6 +12,7 @@ import httpx
 
 from ..attempts import prune_raw
 from ..config import Settings
+from ..deezer import DeezerTrack
 from ..library import prune_missing_tracks
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
@@ -31,7 +32,7 @@ from .interpret import InterpretMixin
 from .lossless_attempt import LosslessMixin
 from .pipeline import PipelineMixin
 from .policy import (
-    BOT_PAUSED,
+    BOT_PAUSED_MARK,
     CANCELLABLE,
     LOGIN_REQUIRED,
     LOSSLESS_HEALTH_EVERY_S,
@@ -91,6 +92,12 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._shadow_tasks: dict[int, asyncio.Task] = {}
         self._shadow = asyncio.Semaphore(1)
         self._deezer_last = 0.0
+        # `_deezer_turn` is shared by the shadow comparison and filing's ISRC lookup, which run at once; the
+        # lock makes their turns follow one another rather than read the same `_deezer_last` together.
+        self._deezer_lock = asyncio.Lock()
+        # Deezer's record per ISRC (`_isrc_record`): an answer for the run, with no expiry; a failed lookup as
+        # None until the `clock` time beside it, so an outage is asked about again later but not per track.
+        self._isrc_records: dict[str, tuple[DeezerTrack | None, float | None]] = {}
         # Requests whose current pass went without the bot because Telegram was signed out. Kept per pass
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
@@ -289,7 +296,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         """On the tick the bot becomes reachable, give back what failed for want of it. A track Soulseek
         did not have, filed nowhere because the bot was paused, is exactly the one the MP3 fallback
         exists for; making the owner find it on the Failed tab and press Try again would be a chore the
-        app can do itself. `BOT_PAUSED` in the row is how those are told apart from every other failure:
+        app can do itself. `BOT_PAUSED_MARK` in the row is how those are told apart from every other failure:
         each row gets what Try again gives a failure (`_fresh_pass`), whether it failed or is still waiting
         on its backoff -- a row six hours into the Soulseek wait has spent its retry budget on a source it
         could not use, and the bot's first timeout would otherwise end it.
@@ -304,7 +311,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         n = 0
         for req in self.store.list_requests(SWEEPABLE_STATES | {RequestState.QUEUED}, limit=100_000):
             why = req.flag_reason if req.state == RequestState.QUEUED else req.error_message
-            if BOT_PAUSED not in (why or ""):
+            if BOT_PAUSED_MARK not in (why or ""):          # "signed out" and "isn't set up" alike
                 continue
             self._fresh_pass(req)
             n += 1

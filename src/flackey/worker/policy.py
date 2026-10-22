@@ -18,6 +18,15 @@ LOGIN_REQUIRED = "Telegram login required"
 # instead, and a request that ends up with no file for that reason says so. It is also the marker
 # `Worker._requeue_for_the_bot` looks for once Telegram is back, so it must survive into the row as is.
 BOT_PAUSED = "the Deezer bot is paused because Telegram is signed out"
+# The same pause on a copy with no Telegram keys at all: there is no account to be signed out of, and the
+# banner and Settings say "isn't set up" for it. Both spellings carry BOT_PAUSED_MARK, which is what the
+# re-queue matches, so a row written either way is given back once Telegram is there.
+BOT_PAUSED_NOT_SET_UP = "the Deezer bot is paused because Telegram isn't set up"
+BOT_PAUSED_MARK = "the Deezer bot is paused because Telegram "
+
+
+def bot_paused(configured: bool) -> str:
+    return BOT_PAUSED if configured else BOT_PAUSED_NOT_SET_UP
 # Which rung of the ladder a request is on, for the one failure state that does not say so by its own name
 # (issue #60). Written on the row when it turns to `error`, and read by the Failed tab to split one
 # undifferentiated lump into Search / Download / Verify. Filing sits under "verify" because it is the back

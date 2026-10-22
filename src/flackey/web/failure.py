@@ -22,6 +22,8 @@ from ..models import (
     Rejection,
     Request,
     RequestState,
+    miss_reason,
+    results_seen,
     source_label,
 )
 from ..store import Store
@@ -120,10 +122,7 @@ def attempt_line(a: LosslessAttempt, of: int = 1) -> str:
         error = next(e.get("detail", {}).get("error") for e in events if e.get("event") == "search_failed")
         line = f"{name}: the search failed" + (f" ({error})" if error else "")
     elif a.outcome == "no_pick":
-        seen = report.get("seen")
-        if seen is None:
-            seen = next((e.get("detail", {}).get("files") for e in events if e.get("event") == "search_completed"),
-                        None)
+        seen = results_seen(a)       # the same count the owner's "found no copies" is read from
         if seen == 0:
             line = f"{name} returned 0 results"
         elif seen is None:                       # neither the pick nor the timeline counted them
@@ -179,9 +178,12 @@ def _diagnosis(rec: FailureRecord) -> str:
     if r.state == RequestState.ERROR:
         # A request that gave up on Soulseek says so in `MISS_REASON`'s words (`_no_route`, and the end of
         # `_wait_for_soulseek`): when the last attempt's sentence is in the message, that attempt is the story.
-        why = MISS_REASON.get(last.outcome or "") if last is not None else None
-        if lossless and why and why in (r.error_message or ""):
-            return lossless
+        # Either wording of a `no_pick`: "found no copies" since the worker could tell an empty search apart,
+        # "nothing matched" on a row written before it could.
+        if last is not None and lossless:
+            whys = {miss_reason(last.outcome, rec.attempts), MISS_REASON.get(last.outcome or "")} - {None}
+            if any(why in (r.error_message or "") for why in whys):
+                return lossless
         return f"Error at {r.failed_stage or 'an unrecorded stage'}: {r.error_message or 'no message was recorded'}"
     return f"Not a failure: this track is {r.state.value} now"
 

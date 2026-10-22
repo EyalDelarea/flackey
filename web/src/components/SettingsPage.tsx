@@ -36,10 +36,12 @@ function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: 
    the whole truth while that account is signed in -- on its own, "On" beside a green dot told an owner
    whose Telegram had dropped that the thing was working. Off is grey rather than amber because the owner
    chose it and nothing is wrong; on-but-unreachable is amber and "paused" -- the worker skips it and
-   carries on with Soulseek -- and names Telegram rather than the bot, because Telegram is where the fix is. */
-function deezerBotLine(authorized: boolean, enabled: boolean, unreachable = false): { dot: Dot; text: string } {
-  const why = unreachable ? "can't reach Telegram" : 'Telegram is signed out'
-  if (!enabled) return { dot: ' off', text: authorized ? 'Off — requests use Soulseek only' : `Off — and ${why}` }
+   carries on with Soulseek -- and names Telegram rather than the bot, because Telegram is where the fix is.
+   A Telegram that was never set up has no account to be signed out of, so it is never called that: off
+   with nothing to sign back into is simply off. */
+function deezerBotLine(authorized: boolean, enabled: boolean, unreachable = false, configured = true): { dot: Dot; text: string } {
+  const why = !configured ? "Telegram isn't set up" : unreachable ? "can't reach Telegram" : 'Telegram is signed out'
+  if (!enabled) return { dot: ' off', text: authorized || !configured ? 'Off — requests use Soulseek only' : `Off — and ${why}` }
   if (!authorized) return { dot: ' amber', text: `Paused — ${why}` }
   return { dot: '', text: 'On — searches and fetches through Telegram' }
 }
@@ -147,10 +149,13 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .finally(() => setResettingSetup(false))
   }
   const unreachable = live.health?.telegram_unreachable ?? false
+  // No API keys means no account was ever made here: "Signed out" and Reconnect named one that does not
+  // exist. Absent from an older server's health, which is the configured case.
+  const configured = live.health?.telegram_configured ?? s.telegram_configured ?? true
   const telegramLine = authorized ? (tg?.phone_masked ? `Connected as ${tg.phone_masked}` : 'Connected')
-    : unreachable ? "Can't reach Telegram" : 'Signed out'
+    : !configured ? 'Not set up' : unreachable ? "Can't reach Telegram" : 'Signed out'
   const sourceEnabled = live.health?.source_enabled ?? true
-  const bot = deezerBotLine(authorized, sourceEnabled, unreachable)
+  const bot = deezerBotLine(authorized, sourceEnabled, unreachable, configured)
   const setTelegramSource = (on: boolean) => {
     setSourceBusy(true); setSourceError(null)
     api.telegramSource(on)
@@ -278,11 +283,12 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       <h2>Connections</h2>
       <div className="group">
         {/* Signed out is only a fault while the bot needs it. With the bot off nothing waits on Telegram,
-            so the dot goes grey, the way the bot's own row and the sidebar already treat it. */}
+            so the dot goes grey, the way the bot's own row and the sidebar already treat it. Never set up
+            is grey too -- nothing broke -- and its button opens the same setup step, named for what it does. */}
         <div className="srow"><div className="srow-body"><div className="k">Telegram</div>
-          <div className="v"><span className={`status-dot${authorized ? '' : sourceEnabled ? ' amber' : ' off'}`} />{telegramLine}</div></div>
+          <div className="v"><span className={`status-dot${authorized ? '' : sourceEnabled && configured ? ' amber' : ' off'}`} />{telegramLine}</div></div>
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
-            : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
+            : <button className="btn-secondary" onClick={onReconnect}>{configured ? 'Reconnect' : 'Set up'}</button>}</div></div>
         {/* The bot is a chat Flackey holds inside the Telegram account, not a fourth account to sign into,
             and the key says so in three words rather than with an indent the reader has to decode. Its
             switch is always there and Reconnect lives on the Telegram row alone: two Reconnects stacked one

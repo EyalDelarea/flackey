@@ -643,6 +643,16 @@ describe('the lossy fallback is visible rather than silent', () => {
     })
   })
 
+  it('says Soulseek found no copies when the search came back empty, and nothing matched when it did not', () => {
+    expect(presentRow(filed({}, { outcome: 'no_pick', no_results: true }), opts).fallback?.reason)
+      .toBe('Kept the matched MP3 copy because Soulseek found no copies of this track.')
+    expect(presentRow(filed({}, { outcome: 'no_pick', no_results: false }), opts).fallback?.reason)
+      .toBe('Kept the matched MP3 copy because nothing on Soulseek matched this track closely enough.')
+    // An older server never says: the old words, which were the only ones then.
+    expect(presentRow(filed({}, { outcome: 'no_pick' }), opts).fallback?.reason)
+      .toBe('Kept the matched MP3 copy because nothing on Soulseek matched this track closely enough.')
+  })
+
   it('says so plainly when no lossless search ever ran', () => {
     expect(presentRow(filed({}, null), opts).fallback?.reason)
       .toBe('Kept the matched MP3 copy because no lossless search ran for this one.')
@@ -719,6 +729,10 @@ describe('a queued track', () => {
     const joined = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
       flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough; Deezer offered nothing to fall back on, will retry' }), opts)
     expect(joined.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
+    // An empty search is its own sentence, shortened the same way.
+    const empty = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
+      flag_reason: 'no way to fetch this track: Soulseek found no copies of this track; Deezer offered nothing to fall back on' }), opts)
+    expect(empty.status).toBe('Previous attempt: No copies on Soulseek; nothing on Deezer to fall back on')
   })
 
   it('shows the wait for Soulseek as itself rather than as a previous attempt', () => {

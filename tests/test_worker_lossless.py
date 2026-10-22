@@ -1450,7 +1450,7 @@ async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(len
     # The row waits rather than burning the 30 s ladder on a question nothing could have answered yet:
     # who is online changes over a quarter of an hour, so that is how long it waits before asking again.
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
-    assert "nothing on Soulseek matched" in r.flag_reason and "Deezer offered nothing" in r.flag_reason
+    assert "Soulseek found no copies of this track" in r.flag_reason and "Deezer offered nothing" in r.flag_reason
 
 
 async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(lenv):
@@ -1567,7 +1567,7 @@ async def test_an_empty_search_with_no_source_waits_on_the_long_backoff_and_then
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
-    assert "switched off" in r.flag_reason and "nothing on Soulseek matched" in r.flag_reason
+    assert "switched off" in r.flag_reason and "Soulseek found no copies of this track" in r.flag_reason
 
     for _ in range(MAX_ATTEMPTS - 1):
         store.update_request(rid, retry_after=None)
@@ -1749,7 +1749,7 @@ async def test_no_record_anywhere_and_no_lossless_copy_has_no_lossy_fallback(len
         r = await w.process(rid)
     # Since Task 15 the spent ladder hands over to the 6 h wait rather than parking; either way Deezer was
     # never asked, which is what this covers.
-    assert r.state == RequestState.QUEUED and "nothing on Soulseek matched" in r.flag_reason
+    assert r.state == RequestState.QUEUED and "Soulseek found no copies of this track" in r.flag_reason
     assert r.flag_reason.startswith("waiting for Soulseek")
     assert attempt_of(store, rid).outcome == "no_pick"
     assert w.source.fetched == []
@@ -1940,7 +1940,7 @@ async def test_a_transient_soulseek_miss_waits_and_looks_again(lenv):
     store.update_request(rid, attempts=worker_mod.MAX_ATTEMPTS - 1)       # the quick ladder is spent
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.lossless_retry == 1 and r.attempts == worker_mod.MAX_ATTEMPTS
-    assert r.flag_reason.startswith("waiting for Soulseek: nothing on Soulseek matched")
+    assert r.flag_reason.startswith("waiting for Soulseek: Soulseek found no copies of this track")
     wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
     assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
     assert notifier.sent[-1][0].startswith("Waiting for Soulseek")
@@ -1950,6 +1950,45 @@ async def test_a_transient_soulseek_miss_waits_and_looks_again(lenv):
     assert r.attempts == worker_mod.MAX_ATTEMPTS + 1 and r.lossless_retry == 1
     # Said once, when the ladder handed over: the row carries the countdown and the reason meanwhile.
     assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
+
+
+async def test_a_search_with_results_but_no_match_still_says_nothing_matched(lenv):
+    """The other half of `no_pick`: copies came back, and none was close enough. "Found no copies" would be
+    untrue here -- the owner can go and look at them in the attempt's report."""
+    _, store, _, provider, _, _ = lenv
+    provider.files = [lf("a", extension="mp3"), lf("b", extension="mp3")]   # on offer, but nothing lossless
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    rid = store.add_request("A - B", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="A", title="B", duration_s=3))
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "no_pick" and attempt_of(store, rid).report["seen"] == 2
+    assert "nothing on Soulseek matched this track closely enough" in r.flag_reason
+    assert "found no copies" not in r.flag_reason
+
+
+async def test_an_empty_later_spelling_does_not_hide_the_copies_an_earlier_one_found(lenv):
+    """Beatport's spelling finds copies that do not match; the request's own words then find nothing. The
+    pass did see copies, so it is "nothing matched", not "found no copies"."""
+    settings, store, notifier, _, _, _ = lenv
+    provider = FakeProvider(settings.slskd_downloads,
+                            files_for=lambda text: [lf("a", extension="mp3")] if text.startswith("Astral") else [])
+    w = make(lenv, provider=provider, catalog=FakeCatalog([]))
+    rid = store.add_request("AP - Into the Void", RequestKind.YT_TRACK,
+                            query=Query(raw="", artist="AP", title="Into the Void", duration_s=3))
+    r = await w.process(rid)
+    assert provider.searches == ["Astral Projection Into the Void", "AP Into the Void"]
+    assert [a.report["seen"] for a in store.attempts_for_request(rid)] == [1, 0]
+    assert r.state == RequestState.DONE                                   # on Deezer's copy
+    assert "No lossless copy this time — nothing on Soulseek matched this track closely enough." in notifier.sent[-1][0]
+
+
+async def test_a_lossy_fallback_after_an_empty_search_says_no_copies_were_found(lenv):
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = []
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert "No lossless copy this time — Soulseek found no copies of this track." in notifier.sent[-1][0]
 
 
 async def test_the_long_wait_gives_up_after_its_budget(lenv):
@@ -2402,7 +2441,7 @@ async def test_a_soulseek_miss_says_the_bot_is_paused_not_switched_off(lenv):
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1
-    assert worker_mod.BOT_PAUSED in r.flag_reason and "nothing on Soulseek matched" in r.flag_reason
+    assert worker_mod.BOT_PAUSED in r.flag_reason and "Soulseek found no copies of this track" in r.flag_reason
     assert "switched off" not in r.flag_reason
     assert (source.searches, source.fetched) == (0, [])  # no search, and no MP3 fallback either
 
@@ -2412,6 +2451,25 @@ async def test_a_soulseek_miss_says_the_bot_is_paused_not_switched_off(lenv):
     # The six-hour wait shows its reason for hours at a time; the paused bot has to be in it too.
     assert r.flag_reason.startswith("waiting for Soulseek") and worker_mod.BOT_PAUSED in r.flag_reason
     assert "paused because Telegram is signed out" in notifier.sent[-1][0]
+
+
+async def test_a_copy_with_no_telegram_keys_says_telegram_isnt_set_up_and_is_still_given_back(lenv):
+    """No keys, no account: the row says what the banner and Settings say ("isn't set up"), not "signed out".
+    The re-queue matches both spellings, so setting Telegram up later still gives the row back."""
+    settings, store, _, _, _, _ = lenv
+    settings.telegram_api_id, settings.telegram_api_hash = None, None
+    status = {"telegram_authorized": False}
+    w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []), source=FakeSource([good_cand()]),
+             status=status)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert worker_mod.BOT_PAUSED_NOT_SET_UP in r.flag_reason and "signed out" not in r.flag_reason
+    store.update_request(rid, state=RequestState.ERROR, error_message=r.flag_reason)
+
+    await w._requeue_for_the_bot()
+    status["telegram_authorized"] = True
+    await w._requeue_for_the_bot()
+    assert store.get_request(rid).state == RequestState.QUEUED
 
 
 async def test_a_record_the_bot_offered_earlier_is_not_fetched_while_telegram_is_signed_out(lenv):
