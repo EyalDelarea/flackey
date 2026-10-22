@@ -72,14 +72,24 @@ def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_b
     return " · ".join(p for p in parts if p)
 
 
+# What a record carries where it knows no genre or label: Beatport's for a release without one, and every
+# stand-in's (`worker.records._fallback_catalog`) until Deezer or Discogs fills it in. A placeholder, never a
+# value: written, it was a genre called "Unknown" in every DJ tool's genre list. The tag is left out instead.
+PLACEHOLDER = "Unknown"
+
+
+def _known(value: str | None) -> str:
+    return "" if value is None or value.strip() == PLACEHOLDER else value
+
+
 def _values(catalog: CatalogTrack, verdict: Verdict, source: str = "deezer_bot") -> dict[str, str]:
     return {
         "title": catalog.display_title,
         "artist": catalog.artist,
         "album": catalog.release_name or catalog.title,
         "albumartist": catalog.artist,
-        "genre": catalog.genre,
-        "label": catalog.label,
+        "genre": _known(catalog.genre),
+        "label": _known(catalog.label),
         "catalognumber": catalog.catalog_number or "",
         "date": catalog.release_date or "",
         "isrc": catalog.isrc or "",
@@ -114,8 +124,10 @@ def _write_id3(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) 
     tags.add(TPE1(encoding=3, text=v["artist"]))
     tags.add(TALB(encoding=3, text=v["album"]))
     tags.add(TPE2(encoding=3, text=v["albumartist"]))
-    tags.add(TCON(encoding=3, text=v["genre"]))
-    tags.add(TPUB(encoding=3, text=v["label"]))
+    if v["genre"]:
+        tags.add(TCON(encoding=3, text=v["genre"]))
+    if v["label"]:
+        tags.add(TPUB(encoding=3, text=v["label"]))
     if v["date"]:
         # TDRC is a 2.4 frame; a 2.3 reader skips it. TYER is what rekordbox looks for, so write both and
         # let each reader take the one it knows. `read_tags` still prefers the full date from TDRC.
