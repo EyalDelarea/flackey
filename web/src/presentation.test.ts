@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -10,6 +10,10 @@ const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
   ({ request: { ...base, ...r }, candidates: [], catalog: null, track: null, rejection: null, ...rest })
 
 describe('formatting', () => {
+  it('plural', () => {
+    expect(plural(1, 'track')).toBe('1 track'); expect(plural(0, 'track')).toBe('0 tracks')
+    expect(plural(3, 'copy', 'copies')).toBe('3 copies'); expect(plural(1200, 'line')).toBe('1,200 lines')
+  })
   it('mmss', () => { expect(mmss(442)).toBe('7:22'); expect(mmss(5)).toBe('0:05'); expect(mmss(null)).toBe('?:??') })
   it('gb', () => { expect(gb(3.2e9)).toBe('3.2 GB'); expect(gb(512e6)).toBe('512 MB') })
   it('stepIndex', () => { expect(stepIndex('fetching')).toBe(2); expect(stepIndex('done')).toBe(4); expect(stepIndex('rejected')).toBeNull() })

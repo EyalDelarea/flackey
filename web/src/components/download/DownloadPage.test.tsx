@@ -150,19 +150,27 @@ describe('filter bar, remove and clear failed', () => {
 
   it('Cancel, or changing the filter, closes the confirm without removing anything', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
     expect(api.removeRequests).not.toHaveBeenCalled()
   })
 
+  it('counts one row as one track, not "1 tracks"', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
+    expect(screen.getByText('Downloads · 1 track')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove 1 track' })).toBeInTheDocument()
+    expect(screen.getByText('Whole batch · 1 track')).toBeInTheDocument()
+    expect(screen.queryByText(/\b1 tracks\b|Remove these 1\b/)).not.toBeInTheDocument()
+  })
+
   it('says so when some of the rows could not be removed', async () => {
     vi.mocked(api.removeRequests).mockResolvedValueOnce({ removed: [], skipped: [1] })
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove 1' }))
     expect(await screen.findByText('One track was not removed — a file was being checked or filed. Try again in a moment.')).toBeInTheDocument()
   })

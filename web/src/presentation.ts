@@ -90,6 +90,9 @@ export interface PresentOpts {
   fetchProgress?: FetchProgress[] | null
 }
 
+/** "1 track", "3 tracks": every count the page prints beside a noun goes through here, so none of them
+ *  reads "1 tracks". `many` for the nouns that do not just take an s. */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
 export const mmss = (s: number | null | undefined) => s == null ? '?:??' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
 // `done` is the last index, not one past it: the old value indexed past STEPS, so the Done rung could never
