@@ -294,7 +294,13 @@ def test_parse_youtube_title_review_cases(title, expected):
     # the "|" part that reads "Artist - Title", over a label, a genre or the channel's own name
     ("Label | Artist - Track [FREE DL]", "x", ("Artist", "Track", None)),
     ("Label | Artist - Track - Extended Mix", "x", ("Artist", "Track", "Extended Mix")),
+    ("Some Records | Artist - Track", "x", ("Artist", "Track", None)),
+    ("Techno Mix 2024 | Artist - Track", "x", ("Artist", "Track", None)),
+    ("Episode 12 | Artist - Track", "x", ("Artist", "Track", None)),
+    ("Piano Tutorial | Coldplay - Clocks", "Piano Guy", ("Coldplay", "Clocks", None)),
+    ("Tomorrowland 2024 | Artist - Track", "Tomorrowland", ("Artist", "Track", None)),
     ("LOST IN RAVE | Artist - Track", "LOST IN RAVE", ("Artist", "Track", None)),
+    ("Mr. Suicide Sheep | Artist - Track", "MrSuicideSheep", ("Artist", "Track", None)),
     ("Channel | Track", "Channel", ("Channel", "Track", None)),
     ("Techno | Premiere | Artist - Track", "x", ("Artist", "Track", None)),
 ])
@@ -310,8 +316,16 @@ def test_a_genre_tag_label_or_channel_before_the_track_is_dropped(title, uploade
     ("(Deep) Artist - Track", ("(Deep) Artist", "Track", None)),
     ("(House Music) Artist - Track", ("(House Music) Artist", "Track", None)),
     ("(Hed) P.E. - Bartender", ("(Hed) P.E.", "Bartender", None)),
-    ("House: Track", ("x", "House: Track", None)),                  # no "Artist - Title" after it
-    ("[TECHNO]", ("x", "[TECHNO]", None)),                          # nothing after it
+    # no "Artist - Title" after it: a song named like a genre, or a dash that only carries a version
+    ("House: Track", ("x", "House: Track", None)),
+    ("[TECHNO]", ("x", "[TECHNO]", None)),
+    ("(Disco) Inferno", ("x", "(Disco) Inferno", None)),
+    ("(Techno) Viking", ("x", "(Techno) Viking", None)),
+    ("Psy: Gangnam Style - Live", ("Psy: Gangnam Style", "Live", None)),
+    ("Jungle: Busy Earnin' - Live", ("Jungle: Busy Earnin'", "Live", None)),
+    ("Jungle | Fred again..", ("x", "Jungle", None)),
+    ("Trance | Metro Boomin, Travis Scott & Young Thug", ("x", "Trance", None)),
+    ("House | Charli XCX ft. John Cale", ("x", "House", None)),
     # the first "|" part as before: it has a dash, no later part has one, or several do
     ("Artist - Track | Label", ("Artist", "Track", None)),
     ("Artist - Track Remix | Label - Something", ("Artist", "Track Remix", None)),
@@ -321,6 +335,36 @@ def test_a_genre_tag_label_or_channel_before_the_track_is_dropped(title, uploade
 ])
 def test_what_is_not_a_genre_tag_or_a_better_pipe_part_stays(title, expected):
     q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
+@pytest.mark.parametrize("title,uploader,expected", [
+    # the artist's own channel
+    ("Perfect | Ed Sheeran - Acoustic", "Ed Sheeran", ("Ed Sheeran", "Perfect", None)),
+    ("Latch | Disclosure - Acoustic", "Disclosure", ("Disclosure", "Latch", None)),
+    ("Blinding Lights | The Weeknd - After Hours", "TheWeekndVEVO", ("The Weeknd", "Blinding Lights", None)),
+    # a lyric, translation, cover or re-upload tag after the dash
+    ("Perfect | Ed Sheeran - Letra en Español", "Lyrics Channel", ("Ed Sheeran", "Perfect", None)),
+    ("Perfect | Ed Sheeran - Lyric Video", "Lyrics Channel", ("Ed Sheeran", "Perfect", None)),
+    ("Perfect | Ed Sheeran - Lyrics (Letra)", "x", ("Ed Sheeran", "Perfect", None)),
+    ("Perfect | Ed Sheeran - Slowed + Reverb", "x", ("Ed Sheeran", "Perfect", None)),
+    ("Shape of You | Ed Sheeran - Topic", "x", ("Ed Sheeran", "Shape of You", None)),
+    ("Summertime | K-391 - NCS Release", "NoCopyrightSounds", ("K-391", "Summertime", None)),
+    ("Shallow | Lady Gaga & Bradley Cooper - Lyrics/Letra", "x", ("Lady Gaga & Bradley Cooper", "Shallow", None)),
+    ("As It Was | Harry Styles - Deutsche Übersetzung", "x", ("Harry Styles", "As It Was", None)),
+    ("As It Was | Harry Styles - 가사", "x", ("Harry Styles", "As It Was", None)),
+    ("Lemon | 米津玄師 - MV", "x", ("米津玄師", "Lemon", None)),
+    ("紅蓮華 | LiSA - THE FIRST TAKE", "THE FIRST TAKE", ("LiSA", "紅蓮華", None)),
+    ("Группа крови | Кино - Текст песни", "x", ("Кино", "Группа крови", None)),
+    ("Bohemian Rhapsody | Queen - Drum Cover", "x", ("Queen", "Bohemian Rhapsody", None)),
+    ("Song | Artist - 10 Hours", "x", ("Artist", "Song", None)),
+    ("Song | Artist - 2019", "x", ("Artist", "Song", None)),
+    # nothing tells an album from a title: the song before the "|", whose artist is after it
+    ("Tum Hi Ho | Arijit Singh - Aashiqui 2", "T-Series", ("Arijit Singh", "Tum Hi Ho", None)),
+    ("Track Name | Artist - Album", "x", ("Artist", "Track Name", None)),
+])
+def test_song_pipe_artist_dash_suffix_reads_the_song(title, uploader, expected):
+    q = parse_youtube_title(title, uploader)
     assert (q.artist, q.title, q.version) == expected
 
 

@@ -99,11 +99,17 @@ def test_a_genre_before_the_track_reads_the_track_first():
         ("Patrick Hollo", "Low", None)]
 
 
-def test_the_pipe_part_passed_over_for_an_artist_and_title_is_still_a_reading():
+def test_x_pipe_artist_dash_y_is_also_read_the_other_way_round():
+    # "Label | Artist - Title" and "Song | Artist - Album" look alike: whichever is not read first is second
     assert _rows(interpretations("Label | Artist - Track [FREE DL]", "x")) == [
-        ("Artist", "Track", None), ("x", "Label", None)]
-    assert _rows(interpretations("Track Name | Artist - Album", "x")) == [
-        ("Artist", "Album", None), ("x", "Track Name", None)]
+        ("Artist", "Track", None), ("Artist", "Label", None)]
+    assert _rows(interpretations("Blinding Lights | The Weeknd - After Hours", "x")) == [
+        ("The Weeknd", "Blinding Lights", None), ("The Weeknd", "After Hours", None)]
+    # a lyric channel's tag after the dash: the song first, and the artist and the song swapped second
+    assert _rows(interpretations("Perfect | Ed Sheeran - Letra en Español", "Lyrics Channel")) == [
+        ("Ed Sheeran", "Perfect", None), ("Perfect", "Ed Sheeran", None)]
+    # the artist's own channel: no doubt left
+    assert _rows(interpretations("Perfect | Ed Sheeran - Acoustic", "Ed Sheeran")) == [("Ed Sheeran", "Perfect", None)]
 
 
 @pytest.mark.parametrize("title", [
