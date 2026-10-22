@@ -126,7 +126,10 @@ def test_any_other_bytes_under_the_flac_name_are_a_disguise(tmp_path: Path, monk
         verify.probe(put(tmp_path, "x.flac", payload))
 
 
-@pytest.mark.parametrize("payload", [b"", b"fLaC\x00", b"not audio", b"\x00" * 70_000])
+# Named ids: pytest puts the test id in an environment variable, and Windows refuses one longer than 32,767
+# characters -- which the 70 KB of zero bytes, spelled out, is.
+@pytest.mark.parametrize("payload", [b"", b"fLaC\x00", b"not audio", b"\x00" * 70_000],
+                         ids=["empty", "shorter-than-a-header", "short-text", "all-zero-bytes"])
 def test_a_file_with_nothing_in_it_is_damage_not_a_disguise(tmp_path: Path, monkeypatch, payload: bytes):
     """Empty, shorter than any header, or all zero bytes: nothing arrived to be disguised. A truncated real
     FLAC is not here -- it keeps its header and probes as FLAC."""
