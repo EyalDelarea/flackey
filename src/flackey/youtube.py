@@ -82,6 +82,15 @@ YOUTUBE_FETCH_TIMEOUT_S = 120
 # available because the YouTube account associated with this video has been terminated".
 _GONE_RE = re.compile(r"\bvideo (?:is )?unavailable\b|\bprivate video\b|\bthis video is (?:private|no longer "
                       r"available)\b|\bthis video has been removed\b", re.IGNORECASE)
+# ... except that YouTube opens other refusals with the same words: "Video unavailable. This content isn't
+# available, try again later. The current session has been rate-limited", and a video blocked "in your
+# country" or "location". Those are not gone, and saying "removed or private" would be untrue.
+_NOT_GONE_RE = re.compile(r"try again later|rate[- ]limit|\bcountry\b|\blocation\b", re.IGNORECASE)
+
+
+def gone(message: str) -> bool:
+    """Whether yt-dlp's message is YouTube saying the video is not there (removed, private, terminated)."""
+    return bool(_GONE_RE.search(message)) and not _NOT_GONE_RE.search(message)
 _UNREACHABLE = (TransportError, ConnectionError, TimeoutError, socket.gaierror)
 
 
@@ -139,7 +148,7 @@ async def fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]:
         raise YouTubeError(f"yt-dlp timed out after {YOUTUBE_FETCH_TIMEOUT_S}s", network=True) from None
     except Exception as e:  # yt-dlp raises its own DownloadError hierarchy for anything network-side
         message = str(e).strip()[-500:] or "yt-dlp failed"
-        raise YouTubeError(message, network=unreachable(e), unavailable=bool(_GONE_RE.search(message))) from e
+        raise YouTubeError(message, network=unreachable(e), unavailable=gone(message)) from e
     try:
         return parse_ytdlp_json(data)
     except (AttributeError, KeyError, TypeError) as e:
