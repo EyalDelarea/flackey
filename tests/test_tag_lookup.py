@@ -21,6 +21,7 @@ from flackey.tag_lookup import (
     pick_genre,
     split_title,
     title_key,
+    same_version,
     version_key,
 )
 
@@ -98,6 +99,14 @@ def test_a_remaster_and_an_original_mix_are_no_version():
     for v in (["Original Mix"], ["Remastered 2024"], ["2024 Remaster"], ["Digital Remaster"], []):
         assert version_key(v) == "", v
     assert version_key(["Vini Vici Remix"]) == "vini vici remix"
+
+
+def test_an_extended_cut_is_a_version_of_its_own():
+    """Issue #187: Discogs' Extended Mix must not tag the radio edit's file, nor the reverse."""
+    for v in (["Extended Mix"], ["Extended"], ["Club Mix"], ["12'' Version"]):
+        assert version_key(v) == "extended", v
+    assert version_key(["Liquid Soul Extended Remix"]) == "liquid soul remix extended"
+    assert not same_version(version_key(["Extended Mix"]), version_key(["Original Mix"]))
 
 
 def test_wanted_reads_version_and_remaster():
