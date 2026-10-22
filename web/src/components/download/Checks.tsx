@@ -1,8 +1,9 @@
 import Icon from '../Icon'
 import type { CheckView } from '../../presentation'
 
-/** The evidence that the file is the real thing. The fingerprint score answers "is this actually the
- *  recording we asked for"; the cutoff answers "is the audio genuine". Both already ride in the bundle. */
+/** The evidence about the file. The fingerprint score answers "is this actually the
+ *  recording we asked for"; the spectrum says where the content stops, which is evidence about the source rather
+ *  than proof of it (issue #97). Both already ride in the bundle. */
 export default function Checks({ checks }: { checks: CheckView[] }) {
   if (!checks.length) return null
   return (

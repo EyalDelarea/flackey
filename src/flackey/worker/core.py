@@ -317,9 +317,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         changing your mind, not the app overturning a verdict. It is kept out of "Retry all" instead -- see
         `SWEEPABLE_STATES` -- so an afternoon of deliberate stops cannot be undone by one press.
 
-        REJECTED is the one failure that stays out. A file was checked, failed and thrown away, so there is
-        no attempt to repeat: the way back is `accept_rejection` when the owner has listened and decided the
-        recording is fine after all, or submitting the link again for a fresh search.
+        REJECTED is the one failure that stays out. A file was checked and failed, so another pass would
+        only fetch the same copy to fail it again: the way back is `accept_rejection`, which files the kept
+        copy once the owner has listened and decided it is fine after all, or submitting the link again for
+        a fresh search.
         """
         req = self.store.get_request(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:

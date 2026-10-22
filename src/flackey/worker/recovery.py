@@ -115,8 +115,10 @@ class RecoveryMixin:
             await self._wait_for_soulseek(req, waiting_on, max(req.attempts + 1, MAX_ATTEMPTS))
             return
         # "Try again" is the right advice for a miss a later search could answer differently -- but not for
-        # one that cannot be checked at all: with no reference, the next search reaches the same dead end.
-        reason += (". Use Try again once it can be checked" if outcome == "fingerprint_unavailable"
+        # one that cannot be checked at all: with no reference, or no ffmpeg, the next search reaches the same
+        # dead end.
+        reason += (". Use Try again once it can be checked"
+                   if outcome in ("fingerprint_unavailable", "verify_unavailable")
                    else ". Use Try again in the app to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")

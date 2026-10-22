@@ -67,6 +67,22 @@ def demuxer(path: Path) -> str | None:
     return claimed
 
 
+def arrived_empty(path: Path) -> bool:
+    """Nothing arrived to judge: a file shorter than any header, or nothing but zero bytes -- what a transfer
+    that never wrote its data leaves behind. A truncated transfer of a real file is not this: it keeps its
+    header and still reads as what it claims. So anything else under the wrong name is a disguise (an AAC,
+    an Ogg, an MP3 called .flac), not damage (issue #97)."""
+    with open(path, "rb") as f:
+        chunk = f.read(HEAD_BYTES)
+        if len(chunk) < HEAD_BYTES:
+            return True
+        while chunk:
+            if chunk.strip(b"\0"):
+                return False
+            chunk = f.read(1 << 20)
+    return True
+
+
 def input_args(path: Path) -> list[str]:
     """The ffmpeg/ffprobe options that go right before `-i path` (or before `path` for ffprobe)."""
     fmt = demuxer(path)

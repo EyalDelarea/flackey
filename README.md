@@ -6,7 +6,7 @@ tagged, Rekordbox-ready track in your DJ library — automatically.
 
 Paste the link into the app; a worker running on your computer matches the track
 on Beatport, fetches it from Soulseek (lossless) or through a Telegram source bot
-(using your own accounts), verifies it is genuine 320 kbps or better, tags it and
+(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it and
 files it in your DJ Library (by default one folder per artist,
 `~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
 BPM and key are left to Rekordbox's analysis; genre and label are in the tags.
@@ -182,7 +182,7 @@ database. Rekordbox stays the source of truth for performance metadata.
 <summary><strong>🎼 Lossless via Soulseek</strong></summary>
 
 Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every request first asks the
-Soulseek network for a FLAC of the matched track. The file is verified (spectral cutoff), proven to be the
+Soulseek network for a FLAC of the matched track. The file is checked for the spectral cutoff a lossy source leaves, proven to be the
 same recording as what you asked for with a Chromaprint fingerprint against the request's own audio (the
 YouTube video, or the matched record's 30 s preview), converted to your filing format (AIFF, WAV or FLAC;
 audio untouched, peer tags dropped) and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same

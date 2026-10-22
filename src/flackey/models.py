@@ -182,6 +182,18 @@ class Verdict:
     sample_rate: int | None = None
 
 
+# What `verify.spectral_cutoff_hz` answers when it finds no edge: Nyquist of its 44.1 kHz analysis. It is the
+# absence of a measurement, not one -- silence produces it too -- so it is never printed as a frequency
+# ("verified to 22.1 kHz" claimed content up there that nobody had seen, issue #97).
+NO_EDGE_HZ = 22_050
+
+
+def edge_text(cutoff_hz: int, measured: str = "content to") -> str:
+    """The spectral check's finding in words: where the content stops (`measured` names it: "content to"
+    in a sentence, "cutoff" in a file's comment tag), or that no edge was found."""
+    return "no edge found" if cutoff_hz >= NO_EDGE_HZ else f"{measured} {cutoff_hz / 1000:.1f} kHz"
+
+
 @dataclass
 class Track:
     id: int
@@ -279,8 +291,9 @@ class Rejection:
     # Defaulted so a row written before the column existed still loads, and reads as the only kind there
     # was then.
     kind: str = "quality"
-    # The refused file, kept so the owner can hear it before deciding (issue #92). Only ever set on a
-    # 'different_recording' rejection, and cleared the moment the file leaves -- filed or deleted.
+    # The refused file, kept so the owner can hear it before deciding (issues #92, #97). Set on a different
+    # recording and on a spectral quality refusal (one with a cutoff), never on one for bitrate or format,
+    # and cleared the moment the file leaves -- filed or deleted.
     audio_path: str | None = None
 
 
@@ -302,8 +315,8 @@ class LosslessAttempt:
 
 
 ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
-                    "verify_failed", "fingerprint_failed", "fingerprint_unavailable", "convert_failed",
-                    "unavailable", "interrupted")
+                    "verify_failed", "damaged", "verify_unavailable", "fingerprint_failed",
+                    "fingerprint_unavailable", "convert_failed", "unavailable", "interrupted")
 
 # Why a lossless attempt came back empty, in the owner's words rather than the vocabulary above. Every
 # outcome but "filed" needs one: a track kept on the lossy copy is a thing the owner asked to be told
@@ -315,7 +328,12 @@ MISS_REASON = {
     "first_byte_timeout": "the people who had it never started sending",
     "queued": "the people who had it are busy and their queue has not reached us yet",
     "transfer_timeout": "the people who had it stopped sending part-way through",
-    "verify_failed": "the copies offered were not really lossless",
+    # Evidence, not a verdict on anyone's honesty: a cutoff is consistent with a lossy source and can also
+    # come from a resampler or a mastering filter (issue #97).
+    "verify_failed": "the copies offered did not pass the lossless check",
+    # A transfer problem, not a verdict on the audio: the bytes could not be read to the end (issue #97).
+    "damaged": "the copies that arrived were damaged or incomplete",
+    "verify_unavailable": "ffmpeg is missing, so the audio could not be checked",
     "fingerprint_failed": "the copies offered were a different recording",
     "fingerprint_unavailable": "the recording could not be checked acoustically",
     "convert_failed": "the file could not be converted",

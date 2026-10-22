@@ -110,6 +110,20 @@ def test_verify_verdicts(real320: Path, fake320: Path, flac: Path, pink_fake_fla
     assert not verify(pink_fake_flac, tmp_path).passed
 
 
+def test_a_shallow_edge_is_still_caught(tmp_path: Path):
+    """A FLAC made from a 3 s mono 64 kbps MP3: the file test_worker_lossless.py used to hand the real
+    detector to reach a failed check. Its edge is shallower than a 128 kbps one, and the draft detector on
+    the audio-verification branch read it as clean (issue #97), so it is pinned here, where a change to the
+    detector is supposed to be noticed, rather than in the tests of the pick loop."""
+    mono = tmp_path / "mono.wav"
+    _ffmpeg("-f", "lavfi", "-i", "anoisesrc=color=white:seed=1:sample_rate=44100:duration=3", str(mono))
+    low = _encode(mono, 64, "mono64.mp3")
+    fake = tmp_path / "mono64.flac"
+    _ffmpeg("-i", str(low), "-c:a", "flac", str(fake))
+    v = verify(fake, tmp_path)
+    assert not v.passed and v.fmt == "flac" and v.cutoff_hz < 20_000
+
+
 def test_verify_names_spectrogram(real320: Path, tmp_path: Path):
     assert verify(real320, tmp_path, name="req7-123").spectrogram_path == tmp_path / "req7-123.png"
 

@@ -13,7 +13,7 @@ export const STEP_TIPS: Record<string, string> = {
   Search: 'Working out which track this is. Beatport gives the official title, remix name and release; Deezer says who has a copy.',
   Choose: 'More than one copy could be the right one and none of them won outright, so it is waiting on you. Most tracks skip this.',
   Download: "Pulling the file down. Soulseek first for a lossless copy, which can mean waiting in a stranger's queue; Deezer as the fallback. A Soulseek copy is also checked and fingerprinted here, before it moves on.",
-  Verify: 'Reading the spectrogram to make sure the file is really lossless. An MP3 re-wrapped as FLAC has a hard cutoff around 16 kHz that real music never has.',
+  Verify: 'Reading the spectrogram for signs of a lossy source. An MP3 re-wrapped as FLAC usually shows a sharp edge, often around 16 kHz, where the encoder threw the top away. A clean spectrum is consistent with lossless, not proof of it.',
   Done: 'Tagged with artist, title, remix and artwork, and filed under the artist\'s folder. No BPM or key — Rekordbox works those out on import.',
 }
 /** `paused` is the parked row's rung: a hollow ring where `current` is a filled pulsing dot. Without it a
@@ -36,7 +36,11 @@ export interface SampleView { key: string; label: string; url: string }
  *  against -- playable when that was a Deezer preview, and a link to the owner's own video when it was
  *  not, because nothing here keeps a copy of their video's audio. Either half can be missing: a row whose
  *  kept file was cleaned up, a request with no stored reference at all. */
-export interface SamplesView { found: SampleView | null; reference: SampleView | null; video: { url: string; at: string } | null }
+export interface SamplesView { found: SampleView | null; reference: SampleView | null; video: { url: string; at: string } | null
+  /** `compare` for a different recording: what was asked for against what was found. `listen` for a copy the
+   *  quality check refused (issue #97): there is nothing to compare it with -- the reference is a 30 s
+   *  preview, lossy itself -- so the block plays the found copy alone. */
+  kind: 'compare' | 'listen' }
 export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean
   /** Null when Deezer has no sample for this record, which is known before the card is drawn -- so the
    *  card shows no play control at all rather than a dead one. Built here rather than in the page,
@@ -159,7 +163,7 @@ export const matchesFilter = (r: Request, filter: Filter): boolean =>
      these lists disagree, because a button offering a retry the worker refuses is the confusion this whole
      table exists to end.
    - `final`: nothing in the app moves it again. `done` and `duplicate` are final because they succeeded;
-     `rejected` because a file was checked, failed and deleted -- there is no attempt left to repeat, only
+     `rejected` because a file was checked and failed -- another pass would fetch it to fail it again, so only
      "Keep it anyway" once the owner has listened to it. */
 export type Finality = 'open' | 'retryable' | 'stopped' | 'final'
 const FINALITY_OF: Record<RequestState, Finality> = {
@@ -219,7 +223,9 @@ const MISS_REASON: Record<string, string> = {
   first_byte_timeout: 'the people who had it never started sending',
   queued: 'the people who had it are busy and their queue has not reached us yet',
   transfer_timeout: 'the people who had it stopped sending part-way through',
-  verify_failed: 'the copies offered were not really lossless',
+  verify_failed: 'the copies offered did not pass the lossless check',
+  damaged: 'the copies that arrived were damaged or incomplete',
+  verify_unavailable: 'ffmpeg is missing, so the audio could not be checked',
   fingerprint_failed: 'the copies offered were a different recording',
   fingerprint_unavailable: 'the recording could not be checked acoustically',
   convert_failed: 'the file could not be converted',
@@ -247,7 +253,7 @@ const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
    because FETCHING is the one the owner may still stop -- so without these the platter sits at 100% and the
    label says nothing while they run. The worker publishes the key; the words live here with the rest of them. */
 const PHASE_TEXT: Record<string, string> = {
-  verifying: 'Checking the audio is really lossless',
+  verifying: 'Checking the audio for signs of a lossy source',
   fingerprinting: 'Checking it is the same recording',
   converting: 'Converting it for your library',
 }
@@ -307,8 +313,11 @@ function stepsFor(r: Request): StepView[] | null {
   return skipsChoice(r) ? rungs.filter(s => s.name !== 'Choose') : rungs
 }
 
-/** What proves the file is the real thing: the Chromaprint match against Deezer, and the spectrogram cutoff.
+/** The evidence about the file: the Chromaprint match against Deezer, and where the spectrogram stops.
  *  Both already ride along in the bundle - the UI simply never showed them. */
+/* The spectral check's "no edge found": Nyquist of its 44.1 kHz analysis, the same `NO_EDGE_HZ` as
+   src/flackey/models.py (`test_the_no_edge_value_matches_the_ui` keeps the two equal). */
+const NO_EDGE_HZ = 22050
 function checksFor(b: Bundle): CheckView[] {
   const out: CheckView[] = []
   // `attempt.fingerprint` scores the file the *Soulseek attempt* pulled down, which is not always the file
@@ -324,11 +333,17 @@ function checksFor(b: Bundle): CheckView[] {
   const fp = aboutThisFile ? attempt!.fingerprint : null
   if (fp && fp.score != null) out.push({ label: 'Same recording', value: `${(fp.score * 100).toFixed(1)}% match`, ok: fp.status !== 'failed' })
   const hz = b.track?.cutoff_hz ?? b.rejection?.cutoff_hz ?? null
-  // "Verified to 22.1 kHz", not "Audio to": the number is the highest frequency carrying real content, and
-  // 22.1 kHz means no encoder lowpass was found anywhere, which is the point the line is making. A file
-  // that failed is not verified to anything, so it says what it is instead.
-  if (hz) out.push({ label: b.track != null ? 'Verified to' : 'Audio only to',
-                     value: `${(hz / 1000).toFixed(1)} kHz`, ok: b.track != null })
+  // What the spectral check saw, not what it proved (issue #97). It used to read "Verified to 22.1 kHz", but
+  // 22050 is the check's answer when it found no edge at all -- silence gives the same number -- so that one
+  // value is said in words. Any other number is where the content stops: evidence on a filed track, and on a
+  // refused one the reason it was refused.
+  // A track the owner kept after the quality check refused it (issue #97) says so, and its spectrum line
+  // reads as the failure it was rather than as a pass.
+  const overruled = b.track?.evidence?.some(e => e.kind === 'quality_check' && e.value.status === 'failed') ?? false
+  if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
+  const filed = b.track != null && !overruled
+  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
+    : { label: filed ? 'Content to' : 'Audio only to', value: `${(hz / 1000).toFixed(1)} kHz`, ok: filed })
   return out
 }
 
@@ -358,15 +373,26 @@ function titleOf(b: Bundle): { title: string; version: string | null } {
 /* The words below a failed row. Keyed off the state, except for the one row where the state does not say
    enough: a rejection whose refused copy was kept is not the dead end `FAILED_COPY.rejected` describes --
    the file is still here and there is a button that files it. Printing "checked, failed and deleted" over
-   a player would be the row contradicting itself (issue #92). */
+   a player would be the row contradicting itself (issue #92). A spectral quality rejection is kept the same
+   way since issue #97, and its note says what the check is worth: evidence, not proof. */
 const KEPT_COPY_NOTE = 'The audio is genuine — it just did not match the recording you asked for closely '
   + 'enough. Listen to both below: if this is the take you wanted after all, Keep it anyway files this '
   + 'very copy. Nothing is deleted until you remove the row.'
+const KEPT_QUALITY_NOTE = 'The spectrum looks like a lossy source — that is evidence, not proof. See why shows '
+  + 'it. If it sounds right to you, Keep it anyway files this very copy, marked as unverified. Nothing is '
+  + 'deleted until you remove the row.'
+
+/** Whether a rejection has a kept copy to play and file. A quality refusal keeps one only when it was
+ *  spectral, which is when it carries a cutoff; one refused on bitrate or format is a measured fact and is
+ *  deleted (issue #97). Every place that offers the copy asks this, so a row that claims otherwise is not
+ *  drawn a player, an "evidence, not proof" note or a button the worker would refuse. */
+const hasKeptCopy = (rj: Bundle['rejection']): boolean =>
+  !!rj?.audio_path && (rj.kind === 'different_recording' || !!rj.cutoff_hz)
 
 function outcomeOf(b: Bundle): OutcomeView | null {
   const state = b.request.state
-  if (state === 'rejected' && b.rejection?.kind === 'different_recording' && b.rejection.audio_path) {
-    return { retryable: false, note: KEPT_COPY_NOTE }
+  if (state === 'rejected' && hasKeptCopy(b.rejection)) {
+    return { retryable: false, note: b.rejection!.kind === 'different_recording' ? KEPT_COPY_NOTE : KEPT_QUALITY_NOTE }
   }
   const copy = FAILED_COPY[state]
   return copy ? { retryable: canRetry(state), note: copy.note } : null
@@ -432,15 +458,17 @@ const sampleFor = (c: Candidate): SampleView | null =>
   c.has_preview === false || c.deezer_id == null ? null
     : { key: `cand:${c.id}`, label: `${c.artist} – ${c.title} (${versionOf(c)})`, url: candidatePreviewUrl(c.id) }
 
-/** The listen-and-decide block on a rejected row (issue #92). Only for the recording check: a quality
- *  rejection is a fact about the file, there is nothing to listen for, and nothing was kept to listen to.
- *  Every half is independently optional, so a row with one side still offers that side rather than
- *  vanishing -- half an answer beats none when the question is "was that really the wrong take". */
+/** The listen-and-decide block on a rejected row (issue #92). For the recording check, both sides: every
+ *  half is independently optional, so a row with one side still offers that side rather than vanishing --
+ *  half an answer beats none when the question is "was that really the wrong take". For the quality check
+ *  (issue #97), the kept copy alone, and only while there is one: with nothing kept there is nothing to
+ *  hear or to file. */
 function samplesFor(b: Bundle): SamplesView | null {
   const rj = b.rejection
-  if (b.request.state !== 'rejected' || !rj || rj.kind !== 'different_recording') return null
-  const found = rj.audio_path
+  if (b.request.state !== 'rejected' || !rj) return null
+  const found = hasKeptCopy(rj)
     ? { key: `found:${rj.id}`, label: 'the copy Flackey found', url: rejectedAudioUrl(rj.id) } : null
+  if (rj.kind !== 'different_recording') return found ? { found, reference: null, video: null, kind: 'listen' } : null
   const ref = b.reference ?? null
   const reference = ref?.kind === 'deezer'
     ? { key: `ref:${b.request.id}`, label: 'the recording you asked for', url: referenceAudioUrl(b.request.id) } : null
@@ -450,7 +478,7 @@ function samplesFor(b: Bundle): SamplesView | null {
   const at = Math.floor(ref?.excerpt_start_s ?? 0)
   const video = ref?.kind === 'youtube'
     ? { url: `https://www.youtube.com/watch?v=${ref.ref}${at > 0 ? `&t=${at}` : ''}`, at: mmss(at) } : null
-  return found || reference || video ? { found, reference, video } : null
+  return found || reference || video ? { found, reference, video, kind: 'compare' } : null
 }
 
 export function presentRow(b: Bundle, opts: PresentOpts): RowView {
@@ -554,10 +582,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       break
     case 'rejected': {
       const reason = b.rejection?.reason || r.error_message || 'Failed the quality check'
-      // A refused file is normally gone by the time this row is drawn. The one that is not is the
-      // different recording the owner may still want (issue #92): its copy was moved aside instead, so
-      // the row must not announce a deletion while a play button for that very file sits under it.
-      const kept = b.rejection?.kind === 'different_recording' && !!b.rejection.audio_path
+      // A refused copy is moved aside rather than deleted, so the owner can hear it and overrule (issues
+      // #92, #97). The row must not announce a deletion while a play button for that very file sits under
+      // it -- nor promise a copy that was never kept (a format Flackey cannot file, an older row).
+      const kept = hasKeptCopy(b.rejection)
       v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
       const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
@@ -570,8 +598,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         caption: b.rejection?.kind === 'different_recording'
           ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
             : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
-          : khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
-          : 'The file did not pass the quality check.',
+          : (khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
+            : 'The file did not pass the quality check.') + (kept ? ' The copy is still here, so you can hear it and decide.' : ''),
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,
       }
       v.action = { label: opts.whyOpen ? 'Hide why' : 'See why', kind: 'why' }
