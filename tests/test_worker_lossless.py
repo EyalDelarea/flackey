@@ -18,12 +18,13 @@ from flackey.config import Settings
 from flackey.convert import ConvertError
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
-from flackey.models import CatalogTrack, Query, RequestKind, RequestState, Verdict
+from flackey.models import NO_EDGE_HZ, CatalogTrack, Query, RequestKind, RequestState, Verdict, edge_text
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
 from flackey.verify import Disguised, ToolMissing, VerifyError, probe
+from flackey.verify import verify as real_verify
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -87,10 +88,12 @@ class FakeDetector:
         png.parent.mkdir(parents=True, exist_ok=True)
         png.write_bytes(b"\x89PNG")              # a row only ever holds the path; nothing here draws it
         if _digest(path) in self.refused:
-            return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000, "lossless container but cutoff 11000 Hz: lossy source",
-                           png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
-        cutoff = 20_000 if pr.fmt == "mp3" else 22_050
-        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"content to {cutoff} Hz", png,
+            return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000,
+                           "lossless container but cutoff at 11000 Hz: consistent with a lossy source", png,
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+        cutoff = 20_000 if pr.fmt == "mp3" else NO_EDGE_HZ
+        head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
+        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"{head}, {edge_text(cutoff)}", png,
                        bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
 
 
@@ -345,6 +348,22 @@ async def test_a_rejected_transfer_still_files_from_the_next_peer(lenv):
     assert not list(settings.tmp_dir.iterdir())
 
 
+async def test_a_genuine_flac_passes_the_real_check_and_is_filed(lenv, monkeypatch):
+    """One run of the Soulseek attempt through the real detector, so the path from a download to a filed
+    track is not only ever exercised against a stand-in. White noise has content to the top; how the
+    detector judges harder material is test_verify.py's question, not this one's."""
+    settings, store, _, _, _, _ = lenv
+    monkeypatch.setattr(lossless_attempt_mod, "verify", real_verify)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and store.get_track(r.track_id).source == "soulseek"
+    verdict = next(e["detail"] for e in a.timeline if e["event"] == "verify")
+    assert verdict["passed"] is True and Path(a.spectrogram_path).stat().st_size > 1_000
+    assert not list(settings.tmp_dir.iterdir())
+
+
 async def test_verify_failure_tries_the_second_pick(lenv, detector, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
     provider.files = [lf("a"), lf("b", queue_length=1)]
@@ -447,7 +466,7 @@ async def test_a_disguised_copy_is_a_failed_check_not_damage(lenv, detector, tmp
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_every_copy_damaged_says_so_and_waits_for_the_next_transfer(lenv, detector, tmp_path: Path):
+async def test_every_copy_damaged_says_so_when_the_lossy_copy_is_filed(lenv, detector, tmp_path: Path):
     settings, store, notifier, provider, _, _ = lenv
     broken = detector.fail(_flac(tmp_path / "broken.flac", seed=3), VerifyError("truncated"))
     provider.files = [lf("a"), lf("b")]
@@ -457,9 +476,41 @@ async def test_every_copy_damaged_says_so_and_waits_for_the_next_transfer(lenv, 
     r = await w.process(rid)
     assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
     assert attempt_of(store, rid).outcome == "damaged" and provider.downloaded == ["a", "b"]
-    assert "damaged or incomplete" in notifier.sent[-1][0] and "not really lossless" not in notifier.sent[-1][0]
-    assert worker_mod.LONG_RETRY_OUTCOMES >= {"damaged", "transfer_failed"}
+    done = notifier.sent[-1][0]
+    assert "damaged or incomplete" in done and "lossless check" not in done
     assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_every_copy_damaged_with_nothing_to_fall_back_on_waits_for_the_next_transfer(lenv, detector,
+                                                                                            tmp_path: Path):
+    """The same answer as `transfer_failed`: the copies broke on the way, and tomorrow's transfer is a fresh
+    roll, so the request parks on the long wait for Soulseek rather than failing for good."""
+    settings, store, _, provider, _, _ = lenv
+    broken = detector.fail(_flac(tmp_path / "broken.flac", seed=3), VerifyError("truncated"))
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": broken, "b": broken}
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "damaged"
+    assert r.state == RequestState.QUEUED and r.retry_after is not None and r.lossless_retry == 1
+    assert r.flag_reason.startswith("waiting for Soulseek: the copies that arrived were damaged or incomplete")
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_missing_ffmpeg_with_nothing_to_fall_back_on_fails_once_instead_of_waiting(lenv, detector,
+                                                                                            tmp_path: Path):
+    """No amount of waiting installs ffmpeg: the row stops at once, says what is missing, and points at Try
+    again for when it is there -- not the long wait a transfer problem gets."""
+    settings, store, _, provider, _, _ = lenv
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "x.flac", seed=3), ToolMissing("ffmpeg is not installed"))
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "verify_unavailable"
+    assert r.state == RequestState.ERROR and r.retry_after is None
+    assert "ffmpeg is missing" in r.error_message
+    assert r.error_message.endswith("Use Try again once it can be checked")
 
 
 async def test_a_missing_ffmpeg_ends_the_attempt_instead_of_failing_every_peer(lenv, detector, tmp_path: Path):

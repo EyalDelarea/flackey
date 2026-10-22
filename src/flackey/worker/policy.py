@@ -35,10 +35,10 @@ RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
 # at 11:40 on 2026-09-10 and two, one on a free slot, at 14:51.
 SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
-# survivor. Four kinds sit here: the file was wrong (verify, fingerprint) or arrived broken (damaged), the
-# peer would not send it (rejected the transfer, or never started after leaving the queue), the peer stopped
-# part-way (transfer_timeout), and the peer is simply busy (queued). All four are facts about one
-# peer, never about the file, so giving up on the whole attempt at any of them threw away
+# survivor. Four kinds sit here: the copy was wrong (verify, fingerprint) or broke on the way (damaged),
+# the peer would not send it (rejected the transfer, or never started after leaving the queue), the peer
+# stopped part-way (transfer_timeout), and the peer is simply busy (queued). Each is a fact about one peer
+# or one copy, never about the track, so giving up on the whole attempt at any of them threw away
 # survivors that were still good. transfer_timeout used to be excluded on the theory that a slow
 # transfer measures the link rather than the peer; the Filteria measurement on 2026-09-10 says
 # otherwise -- 102 kB/s from one peer while four survivors sat on free slots with nobody queued.
