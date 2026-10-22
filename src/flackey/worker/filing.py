@@ -297,7 +297,7 @@ class FilingMixin:
         if t.source_fmt:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
         if not self.providers or not self.settings.lossless_enabled:
-            raise ValueError("Soulseek is off, so there is nothing to upgrade from")
+            raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
         if t.request_id is None:
             raise ValueError("this track has no request to search from")
         try:

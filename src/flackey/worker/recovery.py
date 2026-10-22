@@ -73,7 +73,8 @@ class RecoveryMixin:
         What to say. The old line asserted that Soulseek "has already looked and found nothing" whatever had
         actually happened, which for the live failure this was written from was untrue three ways over: the
         peers had five perfect copies and were merely busy. The attempt row knows which outcome it really was
-        and `MISS_REASON` already words each one, so read it rather than guess. Likewise the bot is
+        and `MISS_REASON` already words each one, so read it rather than guess. Soulseek with no account
+        saved "isn't set up" -- it has no off switch to be "switched off" by. Likewise the bot is
         "switched off" when the owner switched it off, "paused" when this pass skipped it because Telegram
         was signed out, and only otherwise said to have offered nothing.
 
@@ -84,7 +85,8 @@ class RecoveryMixin:
         _, outcome = self._lossless_outcome(req.id)
         why = MISS_REASON.get(outcome) if outcome else None
         if why is None:
-            why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
+            # There is no off switch for Soulseek: no provider means no account was ever saved.
+            why = ("Soulseek isn't set up" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
         paused = self.settings.source_enabled and req.id in self._bot_skipped
         if paused and self._bot_ready():

@@ -1175,7 +1175,7 @@ async def test_upgrade_refuses_when_the_provider_is_off(lenv):
     _, _, _, provider, _, _ = lenv
     w, before = await _file_on_deezer(lenv, provider)
     w.providers = []
-    with pytest.raises(ValueError, match="Soulseek is off"):
+    with pytest.raises(ValueError, match="Soulseek isn't set up"):
         await w.upgrade(before.id)
 
 
