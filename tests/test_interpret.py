@@ -92,6 +92,26 @@ def test_a_collaboration_is_also_read_under_its_first_name():
     assert len(interpretations("Malcolm X - Title", "x")) == 1
 
 
+def test_a_genre_before_the_track_reads_the_track_first():
+    assert _rows(interpretations("HARD TECHNO | The Prodigy - No Good (Samuel Moriero & RBX Remix) [FREE DL]",
+                                 "LOST IN RAVE")) == [("The Prodigy", "No Good", "Samuel Moriero & RBX Remix")]
+    assert _rows(interpretations("[TECHNO] Patrick Hollo - Low [Subwoofer Records]", "Subwoofer Records")) == [
+        ("Patrick Hollo", "Low", None)]
+
+
+def test_x_pipe_artist_dash_y_is_also_read_the_other_way_round():
+    # "Label | Artist - Title" and "Song | Artist - Album" look alike: whichever is not read first is second
+    assert _rows(interpretations("Label | Artist - Track [FREE DL]", "x")) == [
+        ("Artist", "Track", None), ("Artist", "Label", None)]
+    assert _rows(interpretations("Blinding Lights | The Weeknd - After Hours", "x")) == [
+        ("The Weeknd", "Blinding Lights", None), ("The Weeknd", "After Hours", None)]
+    # a lyric channel's tag after the dash: the song first, and the artist and the song swapped second
+    assert _rows(interpretations("Perfect | Ed Sheeran - Letra en Español", "Lyrics Channel")) == [
+        ("Ed Sheeran", "Perfect", None), ("Perfect", "Ed Sheeran", None)]
+    # the artist's own channel: no doubt left
+    assert _rows(interpretations("Perfect | Ed Sheeran - Acoustic", "Ed Sheeran")) == [("Ed Sheeran", "Perfect", None)]
+
+
 @pytest.mark.parametrize("title", [
     "Artist - Title",
     "Artist - Title - Extended Mix",            # the third segment is a version, not a title
