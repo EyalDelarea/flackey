@@ -643,7 +643,8 @@ async def test_waiting_for_the_cpu_slot_does_not_spend_the_budget(bare, monkeypa
     w._interpret(req, VIDEO)
     await w._shadow_settled()
     await holder
-    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 0)
+    # Both readings accept the record; "Astral Projection - Into the Void" names it better than "Label" does
+    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 1)
 
 
 async def test_a_preview_that_could_not_be_checked_is_skipped_not_ambiguous(bare, monkeypatch, caplog):
@@ -795,3 +796,55 @@ async def test_a_title_deezer_does_not_know_is_not_counted_as_one_to_ask_about(r
     w._interpret(req, VIDEO)
     await w._shadow_settled()
     assert store.get_interpretation_outcome(req.id) == (SKIPPED, None) and previews == []
+
+
+def test_readings_that_only_name_records_still_agree_or_disagree():
+    """A music video accepts nothing on length, but its readings still name records: two readings naming
+    two different songs are `ambiguous`, not `skipped` -- that is the music-video case the label is for."""
+    darude = Query(raw="x", artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    other = Query(raw="x", artist="Someone Else", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    mine = ReadingResult(darude, accepted(darude, [ORIGINAL]), named=named(darude, [ORIGINAL]))
+    theirs_found = [_dz(305, artist="Someone Else", title="Sandstorm", duration_s=600)]
+    theirs = ReadingResult(other, accepted(other, theirs_found), named=named(other, theirs_found))
+    assert not mine.accepted and not theirs.accepted and mine.named and theirs.named
+    assert classify([mine, theirs], None).klass == AMBIGUOUS
+    again = ReadingResult(other, [], named=[_dz(301, artist="Darude", title="Sandstorm", duration_s=443)])
+    assert classify([mine, again], None).klass == AGREED
+    assert classify([mine, ReadingResult(other, [])], None).klass == AGREED      # one names it, one nothing
+    assert classify([ReadingResult(darude, []), ReadingResult(other, [])], None).klass == SKIPPED
+
+
+def test_accepted_records_are_heard_before_any_reading_only_names():
+    a = ReadingResult(AP, [_dz(1)], named=[_dz(1), _dz(2), _dz(3)])
+    b = ReadingResult(LABEL, [_dz(4)], named=[_dz(4), _dz(5)])
+    assert [c.deezer_id for c in preview_order([a, b], skip=set())] == [1, 4, 2, 5, 3]
+
+
+def test_a_match_goes_to_the_reading_whose_words_name_it_best():
+    alpha = Query(raw="x", artist="Alpha x Beta", title="Title", duration_s=3)
+    first = Query(raw="x", artist="Alpha", title="Title", duration_s=3)
+    record = _dz(9, artist="Alpha", title="Title")
+    out = classify([ReadingResult(alpha, named=[record]), ReadingResult(first, named=[record])], matched=9)
+    assert (out.klass, out.reading) == (CONFIRMED, 1)
+    # Equally well named: the earlier reading, as before
+    assert classify([ReadingResult(first, named=[record]), ReadingResult(first, named=[record])], 9).reading == 0
+    # Accepting still outranks naming, however well
+    assert classify([ReadingResult(alpha, [record]), ReadingResult(first, named=[record])], 9).reading == 0
+
+
+async def test_an_extra_record_with_no_preview_does_not_overrule_the_verdict(realistic, monkeypatch):
+    """Deezer has no preview for plenty of records. One a reading only names, missing, says nothing about
+    what the readings accepted; one they accepted, missing, still makes the label `skipped`."""
+    w, store, answers, _, _, add = realistic
+
+    async def no_match_and_no_preview_for_303(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+        return Identification(None, None, [(c.deezer_id, None if c.deezer_id == 303 else 0.5) for c in cands], "none")
+
+    monkeypatch.setattr(interpret_mod, "identify_record", no_match_and_no_preview_for_303)
+    exact = _dz(306, artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S, rank=3)
+    answers["Darude Sandstorm"] = [exact, TML_RMX]           # 306 accepted; the remix only named
+    answers["Sandstorm"] = [exact]
+    req = add("Sandstorm", "Darude", SANDSTORM_VIDEO_S)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (AGREED, None)

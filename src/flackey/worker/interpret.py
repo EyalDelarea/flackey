@@ -145,43 +145,60 @@ def _words(q: Query) -> frozenset[str]:
 
 
 def preview_order(results: list[ReadingResult], skip: set[int], limit: int = MAX_PREVIEWS) -> list[Candidate]:
-    """The previews to fingerprint: each reading's first named record, then each one's second, and so on --
-    so the budget is shared rather than spent on the first reading's list -- once per Deezer id, and never
-    one the pipeline's own identification has already compared."""
+    """The previews to fingerprint: every record a reading accepts before any it only names, and within
+    each, each reading's first, then each one's second, and so on -- so the budget is shared rather than
+    spent on the first reading's list -- once per Deezer id, and never one the pipeline's own
+    identification has already compared."""
     out: list[Candidate] = []
     seen = set(skip)
-    depth = max((len(r.named) for r in results), default=0)
-    for i in range(depth):
-        for r in results:
-            if i < len(r.named) and r.named[i].deezer_id not in seen and len(out) < limit:
-                seen.add(r.named[i].deezer_id)
-                out.append(r.named[i])
+    accepted_ids = {c.deezer_id for r in results for c in r.accepted}
+    for pools in ([r.accepted for r in results],
+                  [[c for c in r.named if c.deezer_id not in accepted_ids] for r in results]):
+        for i in range(max((len(p) for p in pools), default=0)):
+            for pool in pools:
+                if i < len(pool) and pool[i].deezer_id not in seen and len(out) < limit:
+                    seen.add(pool[i].deezer_id)
+                    out.append(pool[i])
     return out
+
+
+def _words_points(reading: Query, c: Candidate) -> float:
+    """How exactly the reading's own words name `c`, artist plus title. token_sort, not the scoring's
+    token_set: that one gives "Alpha x Beta" and "Alpha" both 100 for a record by Alpha, and telling those
+    two apart is the point here. A reading with no artist has only its title to offer, so it is not
+    credited with the record's artist it borrows for `accepted`."""
+    title = fuzz.token_sort_ratio(norm(reading.title), norm(parse_version(c.title)[0]))
+    return title + (fuzz.token_sort_ratio(norm(reading.artist), norm(c.artist)) if reading.artist else 0)
 
 
 def classify(results: list[ReadingResult], matched: int | None) -> Outcome:
     """The label, from what each reading found and which Deezer record (if any) the video matched.
 
-    A match is attributed to the first reading that accepted that record, or failing that the first whose
-    words name it (the video's length or version was not the one `accepted` asks for, but the artist and
-    the title it read were right). Without one, a search that failed leaves the readings unfinished and
-    the label is `skipped`; readings that are the same words split differently search for the same thing
-    and are `agreed` by construction; otherwise every reading that found a record must have found the same
-    one. Readings that found nothing at all are `skipped` too: Deezer not knowing a track is no evidence
-    that its readings disagree, and the label exists to count those. Counted as `ambiguous`, every title
-    the public catalogue lacks -- a label's upload, a bootleg, most of what Soulseek alone has -- read as
-    one the owner would have to be asked about, whatever the pipeline then found and proved by audio."""
+    A match is attributed to a reading that accepted that record, or failing that one whose words name it
+    (the video's length or version was not the one `accepted` asks for, but the artist and the title it
+    read were right); among several, the one whose artist and title name it best, then the earlier.
+    Without one, a search that failed leaves the readings unfinished and the label is `skipped`; readings
+    that are the same words split differently search for the same thing and are `agreed` by construction;
+    otherwise every reading that found a record -- its best accepted one, or else its best named one --
+    must have found the same one. Readings that named nothing at all are `skipped` too: Deezer not knowing
+    a track is no evidence that its readings disagree, and the label exists to count those. Counted as
+    `ambiguous`, every title the public catalogue lacks -- a label's upload, a bootleg, most of what
+    Soulseek alone has -- read as one the owner would have to be asked about, whatever the pipeline then
+    found and proved by audio."""
     if matched is not None:
         for pool in ("accepted", "named"):
-            for i, r in enumerate(results):
-                if any(c.deezer_id == matched for c in getattr(r, pool)):
-                    return Outcome(CONFIRMED, i, f"deezer:{matched} is the video")
+            hits = [(_words_points(r.reading, c), -i) for i, r in enumerate(results)
+                    for c in getattr(r, pool) if c.deezer_id == matched]
+            if hits:
+                return Outcome(CONFIRMED, -max(hits)[1], f"deezer:{matched} is the video")
     failed = [r for r in results if r.error]
     if failed:
         return Outcome(SKIPPED, None, f"{len(failed)} of {len(results)} Deezer searches failed")
     if len({_words(r.reading) for r in results}) == 1:
         return Outcome(AGREED, None, "the readings are the same words")
-    tops = [r.accepted[0] for r in results if r.accepted]
+    # A music video's readings often accept nothing (no release is its length) yet name records all the
+    # same: those still say whether the readings lead to one recording or to two.
+    tops = [(r.accepted or r.named)[0] for r in results if r.named]
     if not tops:
         return Outcome(SKIPPED, None, "no reading found a record to tell them apart by")
     if all(same_record(tops[0], t) for t in tops[1:]):
@@ -325,6 +342,7 @@ class InterpretMixin:
         # The CPU slot is the real requests' first: time spent waiting for it is theirs, not this budget's
         cpu = self._cpu if budget is None else _OffTheClock(self._cpu, budget)
         tried, unscored = 0, 0
+        accepted_ids = {c.deezer_id for r in results for c in r.accepted}
         for cand in preview_order(results, known):
             # One at a time, so each preview's Deezer lookup takes its turn, and the CPU slot is held for
             # fpcalc alone -- never across a download, where it would starve the real requests' checks.
@@ -334,7 +352,9 @@ class InterpretMixin:
             tried += 1
             if check.chosen is not None:
                 return classify(results, check.chosen.deezer_id), results, tried
-            unscored += sum(score is None for _, score in check.tried)
+            # Only an accepted record's: a record a reading merely names is an extra listen, and Deezer
+            # has no preview for plenty of them; one missing must not overrule what the rest showed.
+            unscored += sum(score is None for _, score in check.tried) if cand.deezer_id in accepted_ids else 0
         outcome = classify(results, None)
         if unscored:
             # A preview that could not be fetched (Deezer refusing the lookup, a download failing) might have
