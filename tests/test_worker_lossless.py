@@ -18,7 +18,15 @@ from flackey.config import Settings
 from flackey.convert import ConvertError
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
-from flackey.models import NO_EDGE_HZ, CatalogTrack, Query, RequestKind, RequestState, Verdict, edge_text
+from flackey.models import (
+    NO_EDGE_HZ,
+    CatalogTrack,
+    Query,
+    RequestKind,
+    RequestState,
+    Verdict,
+    edge_text,
+)
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
