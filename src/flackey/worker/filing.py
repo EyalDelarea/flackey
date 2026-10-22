@@ -9,6 +9,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..catalog import with_original_date
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
@@ -199,6 +200,13 @@ class FilingMixin:
         `fill_missing` only fills empty fields, so Beatport's tags are never touched and a row filled once
         is not looked up again."""
         if catalog is not None and catalog.id > 0:
+            # The Deezer record that was downloaded dates the recording too, when its ISRC says it is the same
+            # one: Deezer often has the original album where Beatport only sells a later compilation.
+            if cand.release_date and cand.isrc and catalog.isrc and cand.isrc.upper() == catalog.isrc.upper():
+                dated = with_original_date(catalog, also=[cand.release_date], asked=req.query_version)
+                if dated is not catalog:
+                    self.store.upsert_catalog_track(dated)
+                return dated
             return catalog
         if catalog is None:
             catalog = _fallback_catalog(cand)

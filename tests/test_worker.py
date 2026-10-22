@@ -648,6 +648,82 @@ async def test_a_beatport_match_is_never_looked_up_again(env):
     assert "beatport 16552105" in tags["comment"]
 
 
+# ---- the year: the recording's first release, not the reissue Beatport sells ------------------------------
+# Daft Punk – One More Time was tagged 2005: the Beatport record that won was a later release of it. Beatport's
+# search also listed the album cut -- same ISRC, same length, credited and mixed differently, so it scored
+# lower -- dated 2001. Lengths are 3 s because that is what the fake source files.
+DP_ISRC = "GBDUW0000059"
+DP_REISSUE = CatalogTrack(id=5001, isrc=DP_ISRC, artist="Daft Punk", title="One More Time", mix_name="Original Mix",
+                          label="Parlophone", genre="Dance / Pop", release_name="Musique Vol. 1 1993 - 2005",
+                          release_date="2005-03-14", duration_ms=3000)
+DP_ALBUM = CatalogTrack(id=5002, isrc=DP_ISRC, artist="Daft Punk, Romanthony", title="One More Time",
+                        mix_name="Album Version", label="Virgin", genre="Dance / Pop", release_name="Discovery",
+                        release_date="2001-03-12", duration_ms=3000)
+DP_REMIX = CatalogTrack(id=5003, isrc="GBDUW0000060", artist="Daft Punk", title="One More Time",
+                        mix_name="Romanthony's Unplugged", label="Virgin", genre="Dance / Pop",
+                        release_name="One More Time", release_date="2000-11-13", duration_ms=3000)
+
+
+def dp_cand(**kw) -> Candidate:
+    return Candidate(**{"source": "deezer_bot", "source_ref": "dz_track:3135556:send", "artist": "Daft Punk",
+                        "title": "One More Time", "duration_s": 3, "deezer_id": 3135556, "isrc": DP_ISRC,
+                        "rank": 1, **kw})
+
+
+async def test_the_year_is_the_recordings_first_release_among_beatports_results(env):
+    _, store, _ = env
+    w = make_worker(env, FakeSource([dp_cand()]), FakeCatalog([DP_REISSUE, DP_ALBUM, DP_REMIX]))
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert r.state == RequestState.DONE and r.catalog_track_id == DP_REISSUE.id   # still the record that won
+    ct = store.get_catalog_track(r.catalog_track_id)
+    # The release keeps its own date; the file carries the album's. The remix is a different recording, and
+    # its earlier single date counts for nothing.
+    assert (ct.release_date, ct.original_date) == ("2005-03-14", "2001-03-12")
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-12"
+
+
+async def test_the_year_falls_back_to_the_release_when_nothing_earlier_is_known(env):
+    _, store, _ = env
+    w = make_worker(env, FakeSource([dp_cand()]), FakeCatalog([DP_REISSUE, DP_REMIX]))
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert store.get_catalog_track(r.catalog_track_id).original_date is None
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
+
+
+async def test_the_downloaded_deezer_records_date_counts_when_its_isrc_is_the_records(env):
+    """With the bot on, the Deezer record that was downloaded was already looked up; its date is the
+    original album's even where Beatport only sells the reissue."""
+    _, store, _ = env
+    w = make_worker(env, FakeSource([dp_cand(release_date="2001-03-07")]), FakeCatalog([DP_REISSUE]))
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert store.get_catalog_track(r.catalog_track_id).original_date == "2001-03-07"
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-07"
+
+
+async def test_a_deezer_date_for_another_recording_does_not_count(env):
+    _, store, _ = env
+    w = make_worker(env, FakeSource([dp_cand(release_date="1999-01-01", isrc="FRZ039800212")]),
+                    FakeCatalog([DP_REISSUE]))
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
+
+
+async def test_a_remaster_keeps_its_own_year(env):
+    """Asked for "Remastered 2021", the remaster is what was wanted and its year is what tells it apart."""
+    _, store, _ = env
+    remaster = CatalogTrack(**{**DP_REISSUE.__dict__, "id": 5004, "mix_name": "Remastered 2021",
+                               "release_date": "2021-02-22"})
+    album = CatalogTrack(**{**DP_ALBUM.__dict__, "mix_name": "Remastered 2021"})
+    w = make_worker(env, FakeSource([dp_cand(mix_name="Remastered 2021", release_date="2001-03-07")]),
+                    FakeCatalog([remaster, album]))
+    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
+                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.catalog_track_id == remaster.id
+    assert store.get_catalog_track(r.catalog_track_id).original_date is None
+    assert read_tags(store.get_track(r.track_id).path)["date"] == "2021-02-22"
+
+
 async def test_nothing_found_files_the_stand_in_as_before(env):
     settings, store, notifier = env
     lookup = FakeTagLookup(FoundTags(notes=["discogs: no release found"]))

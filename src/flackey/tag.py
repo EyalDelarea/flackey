@@ -91,7 +91,8 @@ def _values(catalog: CatalogTrack, verdict: Verdict, source: str = "deezer_bot")
         "genre": _known(catalog.genre),
         "label": _known(catalog.label),
         "catalognumber": catalog.catalog_number or "",
-        "date": catalog.release_date or "",
+        # The recording's first release where one is known, not the reissue Beatport happens to sell.
+        "date": catalog.tag_date or "",
         "isrc": catalog.isrc or "",
         # No BPM and no key: Beatport's figures are unreliable for older catalog (82 BPM and "D Major" for a
         # 137 BPM D minor track), and Rekordbox analyzes both on import anyway.

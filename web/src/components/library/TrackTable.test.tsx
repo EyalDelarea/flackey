@@ -20,6 +20,14 @@ it('renders a track row from catalog data', () => {
   expect(onReveal).toHaveBeenCalledWith('/lib/Astral Projection/x.mp3')
 })
 
+it('shows the year the file is tagged with: the first release, where one is known', () => {
+  // Beatport sold a 2005 compilation; the recording came out in 2001, and that is what the tags say.
+  const reissue = { ...t, catalog: { ...t.catalog!, release_date: '2005-03-14', original_date: '2001-03-12' } }
+  render(<TrackTable tracks={[reissue]} onReveal={() => {}} />)
+  expect(screen.getByText('2001')).toBeInTheDocument()
+  expect(screen.queryByText('2005')).not.toBeInTheDocument()
+})
+
 const lossy: Track = { ...t, source: 'deezer_bot', source_fmt: null }
 
 it('names the format each file is filed as', () => {

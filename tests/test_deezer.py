@@ -16,6 +16,10 @@ def test_parse_track_json():
     assert t.album == "Into the Void" and t.release_date == "2022-06-03" and t.title_version is None
 
 
+def test_parse_track_json_drops_deezers_no_date_placeholder():
+    assert parse_track_json({**SAMPLE, "release_date": "0000-00-00"}).release_date is None
+
+
 def test_parse_track_json_keeps_version():
     t = parse_track_json({**SAMPLE, "title": "Into the Void (Vini Vici Remix)", "title_version": "(Vini Vici Remix)"})
     assert t.title_version == "Vini Vici Remix"

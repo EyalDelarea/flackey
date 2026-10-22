@@ -8,6 +8,7 @@ from flackey.catalog import (
     _length_pins_a_version,
     best_match,
     parse_search_html,
+    with_original_date,
 )
 from flackey.models import CatalogTrack, Query
 
@@ -211,6 +212,66 @@ def test_only_the_asked_song_by_the_asked_artist_can_pin_a_version_by_length():
     # The same remix credited to the asked artist, under a plain title, is still the one the length singles out
     album = _ct(3, "Darude", title="Sandstorm", mix="Album Edit", dur_s=231)
     assert best_match(q, [original, remix, album]) is album
+
+
+# ---- the original release's date --------------------------------------------------------------------
+# Beatport's search for "Daft Punk One More Time" lists the recording on several releases. The one that wins
+# the match can be a later compilation, and its date tagged the track 2005.
+
+def _dp(id, *, isrc="GBDUW0000059", artist="Daft Punk", mix="Original Mix", release="Musique Vol. 1 1993 - 2005",
+        date="2005-03-14", dur_s=320, title="One More Time"):
+    return CatalogTrack(id=id, isrc=isrc, artist=artist, title=title, mix_name=mix, label="L", genre="G",
+                        release_name=release, release_date=date, duration_ms=dur_s * 1000 if dur_s else None)
+
+
+def test_the_original_date_is_the_earliest_release_of_the_same_recording():
+    chosen = _dp(1)
+    album = _dp(2, artist="Daft Punk, Romanthony", mix="Album Version", release="Discovery", date="2001-03-12")
+    remix = _dp(3, isrc="GBDUW0000060", mix="Romanthony's Unplugged", release="One More Time", date="2000-11-13")
+    radio = _dp(4, mix="Radio Edit", release="One More Time", date="2000-11-13", dur_s=230)   # a different cut
+    dated = with_original_date(chosen, [chosen, album, remix, radio])
+    assert (dated.release_date, dated.original_date, dated.tag_date, dated.year) == (
+        "2005-03-14", "2001-03-12", "2001-03-12", "2001")
+    assert chosen.original_date is None                       # a copy, the search result is left alone
+
+
+@pytest.mark.parametrize("others", [
+    [],                                                                   # Beatport has no other release of it
+    [_dp(2, date="2006-06-01")],                                          # later releases say nothing
+    [_dp(2, date="2005-01-03")],                                          # the same year: nothing to change
+    [_dp(2, isrc="GBDUW0000099", date="2001-03-12")],                     # another ISRC: another recording
+    [_dp(2, isrc=None, mix="Album Version", date="2001-03-12")],          # no ISRC to say so, and another mix
+    [_dp(2, isrc=None, dur_s=None, date="2001-03-12")],                   # no length to compare
+    [_dp(2, mix="2001 Remaster", release="Discovery (Remastered)", date="2001-03-12")],  # never a remaster
+    [_dp(2, date="not a date")],
+], ids=["alone", "later", "same-year", "other-isrc", "other-mix", "no-length", "remaster", "garbage"])
+def test_the_releases_own_date_stands_without_an_earlier_release_of_the_recording(others):
+    chosen = _dp(1)
+    assert with_original_date(chosen, [chosen, *others]) is chosen
+
+
+def test_without_isrcs_the_same_act_title_mix_and_length_is_the_same_recording():
+    chosen = _dp(1, isrc=None)
+    album = _dp(2, isrc=None, release="Discovery", date="2001-03-12", dur_s=322)
+    assert with_original_date(chosen, [album]).original_date == "2001-03-12"
+
+
+def test_a_remaster_keeps_its_own_year():
+    """Asked for, or named in the record: the remaster's year is what tells it from the original."""
+    album = _dp(2, release="Discovery", date="2001-03-12")
+    remaster = _dp(1, mix="Remastered 2021", date="2021-02-22")
+    assert with_original_date(remaster, [album]) is remaster
+    plain = _dp(1, date="2021-02-22")
+    assert with_original_date(plain, [album], asked="Remastered 2021") is plain
+    assert with_original_date(plain, [album]).original_date == "2001-03-12"
+
+
+def test_another_sources_date_counts_and_an_earlier_one_found_before_is_kept():
+    chosen = _dp(1)
+    assert with_original_date(chosen, also=["2001-03-07"]).original_date == "2001-03-07"
+    assert with_original_date(chosen, also=["2001"]).original_date == "2001"           # Discogs gives a year
+    known = with_original_date(chosen, also=["2001-03-07"])
+    assert with_original_date(known, also=["2003-01-01"]) is known
 
 
 @pytest.mark.parametrize("asked, credited, title", [

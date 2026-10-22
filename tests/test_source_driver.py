@@ -295,6 +295,14 @@ async def test_enrich_records_that_deezer_has_no_sample():
     assert (await source._enrich(_candidate())).has_preview is False
 
 
+async def test_enrich_keeps_the_records_release_date():
+    """Fetched anyway; it dates the recording when Beatport only sells a later release of it."""
+    track = DeezerTrack(id=1, isrc="X", title="T", artist="A", album=None, duration_s=224,
+                        release_date="2001-03-07", title_version=None, preview_url=None)
+    source = DeezerBotSource(FakeClient(None, None), "bot", deezer=FakeDeezer(track))
+    assert (await source._enrich(_candidate())).release_date == "2001-03-07"
+
+
 async def test_enrich_leaves_the_sample_unknown_when_the_lookup_fails():
     """A lookup that never answered knows nothing. Recording False here would hide the play control on a
     candidate that does have a sample, and the owner would have no way to find out."""

@@ -5,7 +5,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from ..catalog import CatalogUnavailable, best_match
+from ..catalog import CatalogUnavailable, best_match, with_original_date
 from ..identify import parse_text
 from ..library import find_duplicate
 from ..match import candidate_query, candidate_version, decide, same_version
@@ -50,6 +50,8 @@ class PipelineMixin:
         catalog_tracks = await self._catalog_search(req, query)
         catalog = best_match(query, catalog_tracks)
         if catalog:
+            # Dated by the earliest of its releases among the results in hand, not the reissue it is on.
+            catalog = with_original_date(catalog, catalog_tracks, asked=query.version)
             self.store.upsert_catalog_track(catalog)
             self.store.update_request(req.id, catalog_track_id=catalog.id)
 
@@ -127,7 +129,7 @@ class PipelineMixin:
             # substitute a loosely matched release: require the normal search score first.
             matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
             if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
-                catalog = matched_catalog
+                catalog = with_original_date(matched_catalog, catalog_tracks, asked=query.version)
                 self.store.upsert_catalog_track(catalog)
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
                 if ident is None:
@@ -185,8 +187,11 @@ class PipelineMixin:
         re-match Beatport against that version so the tags describe the recording in the file."""
         if catalog is None or same_version(cand, catalog):
             return catalog
-        catalog = best_match(candidate_query(cand), await self._catalog_search(req, candidate_query(cand)))
+        want = candidate_query(cand)
+        tracks = await self._catalog_search(req, want)
+        catalog = best_match(want, tracks)
         if catalog:
+            catalog = with_original_date(catalog, tracks, asked=want.version)
             self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id if catalog else None)
         return catalog

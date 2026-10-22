@@ -23,6 +23,12 @@ class DeezerTrack:
     album_id: int | None = None
 
 
+def _date(value) -> str | None:
+    """Deezer writes 0000-00-00 for a record it has no date for."""
+    date = str(value or "").strip()
+    return date if date and not date.startswith("0000") else None
+
+
 def parse_track_json(data: dict) -> DeezerTrack:
     if "error" in data:
         raise DeezerError(str(data["error"]))
@@ -35,7 +41,7 @@ def parse_track_json(data: dict) -> DeezerTrack:
         artist=(data.get("artist") or {}).get("name") or "",
         album=(data.get("album") or {}).get("title"),
         duration_s=int(data.get("duration") or 0),
-        release_date=data.get("release_date"),
+        release_date=_date(data.get("release_date")),
         title_version=version,
         preview_url=data.get("preview") or None,
         album_id=int((data.get("album") or {}).get("id") or 0) or None,
@@ -62,13 +68,11 @@ def parse_album_json(data: dict) -> DeezerAlbum:
         raise DeezerError(str(data["error"]))
     md5 = data.get("md5_image")
     cover = _COVER_URL.format(md5=md5, px=COVER_PX) if md5 else None
-    date = data.get("release_date") or None
     return DeezerAlbum(
         id=int(data["id"]),
         title=data.get("title") or "",
         label=(data.get("label") or "").strip() or None,
-        # Deezer writes 0000-00-00 for an album it has no date for
-        release_date=date if date and not date.startswith("0000") else None,
+        release_date=_date(data.get("release_date")),
         cover_url=cover,
     )
 

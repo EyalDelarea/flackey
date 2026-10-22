@@ -76,6 +76,17 @@ def test_remix_goes_into_title(tmp_path: Path):
 
 
 @requires_ffmpeg
+@pytest.mark.parametrize("ext", ["mp3", "flac", "wav", "aiff"])
+def test_the_date_is_the_recordings_first_release_where_one_is_known(tmp_path: Path, ext: str):
+    """The album stays the release the record is on; the date and year are the recording's first release."""
+    p = _make(tmp_path, ext)
+    write_tags(p, CatalogTrack(**{**CT.__dict__, "release_name": "Goa Classics", "release_date": "2022-06-03",
+                                  "original_date": "1996-11-01"}), V, None)
+    t = read_tags(p)
+    assert (t["album"], t["date"], t["year"]) == ("Goa Classics", "1996-11-01", "1996")
+
+
+@requires_ffmpeg
 def test_missing_optional_fields(tmp_path: Path):
     p = _make(tmp_path, "mp3")
     ct = CatalogTrack(id=1, artist="A", title="T", mix_name="Original Mix", label="L", genre="G")

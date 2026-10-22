@@ -132,6 +132,9 @@ class Candidate:
     has_preview: bool | None = None
     id: int | None = None
     request_id: int | None = None
+    # The Deezer record's release date (its album's), from the same enrichment call. Only ever used to date a
+    # recording's first release earlier than the Beatport release it is tagged from (`catalog.with_original_date`).
+    release_date: str | None = None
 
 
 @dataclass
@@ -154,14 +157,24 @@ class CatalogTrack:
     # Where the tags came from when Beatport could not supply them (issue #146): "deezer", "discogs" or
     # "deezer+discogs". None on a Beatport record, and on a stand-in no other catalogue could fill in.
     tag_source: str | None = None
+    # The recording's first release, when a source already in hand dates it earlier than this release:
+    # Beatport's other releases of it, the Deezer record that was downloaded, Discogs (`catalog.with_original_date`).
+    # A compilation or a reissue is what Beatport often sells, and its date tagged "One More Time" 2005.
+    # None when nothing earlier is known, and always on a remaster, whose own year is the point of it.
+    original_date: str | None = None
 
     @property
     def duration_s(self) -> int | None:
         return None if self.duration_ms is None else round(self.duration_ms / 1000)
 
     @property
+    def tag_date(self) -> str | None:
+        """The date written into the file and shown as the year: the first release's where one is known."""
+        return self.original_date or self.release_date
+
+    @property
     def year(self) -> str | None:
-        return self.release_date[:4] if self.release_date else None
+        return self.tag_date[:4] if self.tag_date else None
 
     @property
     def display_title(self) -> str:

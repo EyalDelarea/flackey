@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 import unicodedata
+from collections.abc import Iterable
 from urllib.parse import quote
 
 from rapidfuzz import fuzz
@@ -184,6 +186,60 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
                                x[1].release_date or "9999", x[1].id))
     s, t = scored[0]
     return t if s >= 70 else None
+
+
+#: A remaster names itself in its title, mix or release ("Remastered 2024", "2011 Remaster"). Its year is
+#: the point of it, so nothing here dates one back to the original.
+_REMASTER_RE = re.compile(r"\bremaster", re.IGNORECASE)
+_DATE_RE = re.compile(r"(?:19|20)\d{2}(?:-\d{2}-\d{2})?")
+
+
+def is_remaster(*texts: str | None) -> bool:
+    return any(t and _REMASTER_RE.search(t) for t in texts)
+
+
+def _date(value: str | None) -> str | None:
+    """A YYYY or YYYY-MM-DD date, or None for anything else."""
+    return value if value and _DATE_RE.fullmatch(value) else None
+
+
+def _same_recording(a: CatalogTrack, b: CatalogTrack) -> bool:
+    """Beatport's records of one recording on different releases. The ISRC names a recording, so two that
+    both carry one decide it alone (a remaster has its own); otherwise the same act, title and mix at the
+    same length. Either way a length that differs is a different cut."""
+    if a.duration_s is not None and b.duration_s is not None and abs(a.duration_s - b.duration_s) > DURATION_SLACK_S:
+        return False
+    if a.isrc and b.isrc:
+        return a.isrc.upper() == b.isrc.upper()
+    return (a.duration_s is not None and b.duration_s is not None and _fold(a.artist) == _fold(b.artist)
+            and _fold(a.title) == _fold(b.title)
+            and (_fold(a.mix_name) == _fold(b.mix_name) or (_is_original(a.mix_name) and _is_original(b.mix_name))))
+
+
+def earliest_date(record: CatalogTrack, dates: Iterable[str | None], asked: str | None = None) -> str | None:
+    """The earliest of `dates` when its year is before the record's own, else None. A remaster keeps its
+    own year, whether the record or the request (`asked`, its version text) says it is one: that release
+    is what was asked for, and its year is what tells it from the original."""
+    if is_remaster(record.title, record.mix_name, record.release_name, asked):
+        return None
+    own = _date(record.release_date)
+    found = sorted(d for d in map(_date, dates) if d)
+    if not found or (own and found[0][:4] >= own[:4]):
+        return None
+    return found[0]
+
+
+def with_original_date(record: CatalogTrack, tracks: Iterable[CatalogTrack] = (), also: Iterable[str | None] = (),
+                       asked: str | None = None) -> CatalogTrack:
+    """`record` with `original_date` set from the earliest of Beatport's other releases of the same recording
+    in `tracks` -- the search results already in hand -- and any `also` date another source vouched for.
+    Beatport often sells a recording only on a later compilation or reissue, and its date is that release's:
+    "One More Time" was tagged 2005. No release that calls itself a remaster counts as the original, and a
+    date already found is kept unless an earlier one turns up. Nothing new is fetched for this."""
+    same = [t.release_date for t in tracks if t.id != record.id and _same_recording(record, t)
+            and not is_remaster(t.title, t.mix_name, t.release_name)]
+    earliest = earliest_date(record, [record.original_date, *same, *also], asked)
+    return dataclasses.replace(record, original_date=earliest) if earliest != record.original_date else record
 
 
 class BeatportCatalog:

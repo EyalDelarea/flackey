@@ -370,6 +370,43 @@ def test_fill_missing_only_fills_empty_fields():
     assert fill_missing(out, FoundTags(genre="House", sources=["discogs"])) == out     # filled once, kept
 
 
+@respx.mock
+async def test_discogs_keeps_the_year_of_every_release_that_passed():
+    """Deezer's label matches none of them, so every release is read in year order and all that pass are
+    usable: the label and number are the first's, and both years are kept for dating the recording."""
+    serve_discogs(respx.mock)
+    async with httpx.AsyncClient() as http:
+        m = await discogs_match(discogs(http), Wanted.of("Hallucinogen", "Alpha Centauri", "Original Mix", 616),
+                                prefer_label="Parlophone")
+    assert (m.release_id, m.year, m.years) == (1001, "1997", ["1997", "2024"])
+
+
+@respx.mock
+async def test_a_remaster_lends_no_years_to_date_the_recording_with():
+    serve_discogs(respx.mock)
+    async with httpx.AsyncClient() as http:
+        found = await TagLookup(None, discogs(http)).lookup(
+            _stand_in("Hallucinogen", "Alpha Centauri (2024 Remaster)", 620))
+    assert found.release_date == "2024" and found.dates == []
+    assert fill_missing(_stand_in("Hallucinogen", "Alpha Centauri (2024 Remaster)", 620), found).original_date is None
+
+
+def test_fill_missing_dates_the_recording_by_the_earliest_release_found():
+    """Deezer's album is a 2006 compilation; Discogs found the track on the 2001 album too. The compilation
+    stays the release, and the file is dated 2001."""
+    found = FoundTags(label="Parlophone", release_date="2006-03-31", dates=["2001", "2006"], sources=["deezer", "discogs"])
+    out = fill_missing(_stand_in("Daft Punk", "One More Time", 320), found)
+    assert (out.release_date, out.original_date, out.year) == ("2006-03-31", "2001", "2001")
+    # Nothing earlier, nothing changed: the release's own date is the year.
+    later = fill_missing(_stand_in("Daft Punk", "One More Time", 320),
+                         FoundTags(release_date="2006-03-31", dates=["2006"], sources=["deezer"]))
+    assert later.original_date is None and later.year == "2006"
+    # A remaster named in the record keeps its year whatever was found.
+    remaster = fill_missing(_stand_in("Daft Punk", "One More Time", 320, mix="Remastered 2021"),
+                            FoundTags(release_date="2021-02-22", dates=["2001"], sources=["deezer"]))
+    assert remaster.original_date is None and remaster.year == "2021"
+
+
 def test_fill_missing_with_nothing_found_changes_nothing():
     stand_in = _stand_in("A", "T", 300)
     assert fill_missing(stand_in, FoundTags()) is stand_in

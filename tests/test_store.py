@@ -120,6 +120,18 @@ def test_catalog_keeps_where_fallback_tags_came_from(store: Store):
     assert store.get_catalog_track(-7).label == ct.label
 
 
+def test_the_original_date_and_the_deezer_date_are_kept(store: Store):
+    ct = _catalog()
+    ct.original_date = "1996-11-01"
+    store.upsert_catalog_track(ct)
+    got = store.get_catalog_track(ct.id)
+    assert (got.release_date, got.original_date, got.year) == (ct.release_date, "1996-11-01", "1996")
+    rid = store.add_request("q", RequestKind.TEXT)
+    [c] = store.add_candidates(rid, [Candidate(source="deezer_bot", source_ref="dz:1", artist="A", title="T",
+                                               release_date="2001-03-07")])
+    assert store.get_candidate(c.id).release_date == "2001-03-07"
+
+
 def test_tag_source_column_is_added_to_an_old_database(tmp_path: Path):
     """The column is additive: a database from before issue #146 gains it on open, its rows read as None."""
     db = tmp_path / "old.db"

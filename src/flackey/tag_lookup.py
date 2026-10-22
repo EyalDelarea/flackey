@@ -32,6 +32,7 @@ import httpx
 from rapidfuzz import fuzz
 
 from . import __version__
+from .catalog import with_original_date
 from .deezer import DeezerApi, DeezerError
 from .identify import parse_version
 from .models import CatalogTrack, is_original, norm
@@ -373,6 +374,9 @@ class DiscogsMatch:
     genre: str | None
     sub_genre: str | None
     styles: list[str] = field(default_factory=list)
+    # Every year among the releases that passed and could have been chosen, the chosen one's included: the
+    # label and number come from one release, but the recording is as old as the earliest of them.
+    years: list[str] = field(default_factory=list)
 
 
 def _label_of(labels: list[dict]) -> tuple[str | None, str | None]:
@@ -479,8 +483,10 @@ async def discogs_match(discogs: Discogs, wanted: Wanted, prefer_label: str | No
         usable.sort(key=lambda p: not _same_label(prefer_label, _label_of(p.release.get("labels") or [])[0]))
     chosen = usable[0].release
     label, catno = _label_of(chosen.get("labels") or [])
+    years = sorted({y for y in (_year(p.release.get("year")) for p in usable) if y})
     return DiscogsMatch(release_id=int(chosen["id"]), label=label, catalog_number=catno,
-                        year=_year(chosen.get("year")), genre=genre, sub_genre=sub_genre, styles=styles)
+                        year=_year(chosen.get("year")), genre=genre, sub_genre=sub_genre, styles=styles,
+                        years=years)
 
 
 # ---- the lookup ------------------------------------------------------------------------------------
@@ -498,6 +504,9 @@ class FoundTags:
     sources: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     discogs_release: int | None = None
+    # Other dates the sources vouch for, earliest wins (`catalog.with_original_date`): the years of every
+    # Discogs release the track passed on. Left empty for a remaster, whose own year is the one to keep.
+    dates: list[str] = field(default_factory=list)
 
     @property
     def any(self) -> bool:
@@ -546,6 +555,8 @@ class TagLookup:
                 if took:
                     found.sources.append("discogs")
                     found.discogs_release = match.release_id
+                if not wanted.remaster:
+                    found.dates = list(match.years)
         return found
 
 
@@ -562,11 +573,12 @@ def fill_missing(catalog: CatalogTrack, found: FoundTags) -> CatalogTrack:
         value = getattr(found, name)
         if value and _empty(getattr(catalog, name)):
             changes[name] = value
-    if not changes:
-        return catalog
-    if found.sources and catalog.tag_source is None:
+    if changes and found.sources and catalog.tag_source is None:
         changes["tag_source"] = "+".join(found.sources)
-    return dataclasses.replace(catalog, **changes)
+    filled = dataclasses.replace(catalog, **changes) if changes else catalog
+    # Deezer's album can be a later compilation; the earliest release Discogs found the track on is when the
+    # recording came out. Only ever earlier, and never for a remaster.
+    return with_original_date(filled, also=found.dates)
 
 
 def default_lookup(http: httpx.AsyncClient, data_dir: Path) -> TagLookup:
