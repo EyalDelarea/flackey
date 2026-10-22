@@ -492,6 +492,19 @@ describe('failed states say why they are failed and whether they can come back',
     expect(presentRow(bundle({ state: 'error', attempts: 1 }), opts).outcome!.note).not.toMatch(/several/)
   })
 
+  it('says Try again and the count of looks once each when the message already counts them', () => {
+    const v = presentRow(bundle({ state: 'error', attempts: 15, error_message: 'the people who had it are busy and '
+      + 'their queue has not reached us yet; looked 12 times over 72 h. Press Try again to search once more' }), opts)
+    expect(v.status).toBe('Failed — the people who had it are busy and their queue has not reached us yet; looked 12 times over 72 h')
+    expect(v.outcome!.note).toBe('Flackey stopped trying. Try again starts the search over from the beginning, Soulseek included.')
+    expect((v.status + v.outcome!.note).match(/Try again/g)).toHaveLength(1)
+    expect(v.outcome!.note).not.toMatch(/15/)
+    // Advice that says *when* is not a repeat, and stays.
+    const unchecked = presentRow(bundle({ state: 'error', attempts: 1,
+      error_message: 'the recording could not be checked acoustically (no reference). Try again once it can be checked' }), opts)
+    expect(unchecked.status).toMatch(/Try again once it can be checked$/)
+  })
+
   it('points a final row at the one thing that does work: submitting the link again', () => {
     expect(presentRow(bundle({ state: 'rejected' }), opts).outcome!.note).toMatch(/paste the link again/i)
   })

@@ -426,8 +426,16 @@ const hasKeptCopy = (rj: Bundle['rejection']): boolean =>
   !!rj?.audio_path && (rj.kind === 'different_recording' || !!rj.cutoff_hz)
 
 /** How many passes an errored row had, as the row says it. `attempts` is 0 on a run that crashed outright,
- *  which was still one try. */
-const triedText = (n: number) => n >= 2 ? `Flackey tried this ${n} times and stopped.` : 'Flackey tried this once and stopped.'
+ *  which was still one try. A message that already counts its own looks -- the long wait for Soulseek ends
+ *  "looked 12 times over 72 h" while `attempts` holds 15, the quick ladder's three included -- keeps its
+ *  number, and the note does not set a second one beside it. */
+const triedText = (n: number, message: string | null) =>
+  /\b\d+ times\b/.test(message ?? '') ? 'Flackey stopped trying.'
+    : n >= 2 ? `Flackey tried this ${n} times and stopped.` : 'Flackey tried this once and stopped.'
+/* The note under every errored row already says what Try again does, so the message above it drops the
+   worker's own "Press Try again to search once more" rather than say it twice. "Try again once it can be
+   checked" stays: that one says when, which the note does not. */
+const TRY_AGAIN_TAIL = /\.?\s*Press Try again to search (?:Soulseek )?once more\.?$/
 
 function outcomeOf(b: Bundle): OutcomeView | null {
   const state = b.request.state
@@ -436,7 +444,7 @@ function outcomeOf(b: Bundle): OutcomeView | null {
   }
   const copy = FAILED_COPY[state]
   if (!copy) return null
-  return { retryable: canRetry(state), note: state === 'error' ? `${triedText(b.request.attempts)} ${copy.note}` : copy.note }
+  return { retryable: canRetry(state), note: state === 'error' ? `${triedText(b.request.attempts, b.request.error_message)} ${copy.note}` : copy.note }
 }
 
 /* `rejected` is one state and two refusals, and the summary must not merge them: telling the owner a track
@@ -655,7 +663,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`
       break
     case 'error':
-      v.status = `Failed — ${r.error_message || 'unknown error'}`; v.statusTone = 'red'
+      v.status = `Failed — ${r.error_message?.replace(TRY_AGAIN_TAIL, '') || 'unknown error'}`; v.statusTone = 'red'
       break
   }
   // One place decides which rows get a retry button, and it is the same `canRetry` the Failed tab counts
