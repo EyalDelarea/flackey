@@ -67,7 +67,7 @@ class SoulseekLink:
     async def _connect(self) -> None:
         try:
             await self._restart_sidecar()
-            self._worker.providers = self._build_providers(self._settings, self._http)
+            self._worker.replace_providers(self._build_providers(self._settings, self._http))
             await self._wait_for_login()
         except SlskdStartTimeout as e:
             log.warning("soulseek connect: sidecar was too slow to start: %s", e)

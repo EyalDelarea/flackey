@@ -124,14 +124,19 @@ def _is_the_song(query: Query, t: CatalogTrack) -> bool:
     if not (query.artist and query.title):
         return False
     asked = {_fold(_FEAT_RE.sub(" ", query.artist)), _fold(_CREDIT_SPLIT_RE.split(query.artist)[0])}
-    credited = {_fold(t.artist)} | {_fold(a) for a in t.artist.split(", ")}
+    credited = {_fold(t.artist)} | {_fold(a) for a in _RECORD_ACTS_RE.split(t.artist)}
     if not any(a and c and fuzz.token_sort_ratio(a, c) >= ARTIST_SAME for a in asked for c in credited):
         return False
     return set(_fold(_FEAT_RE.sub(" ", t.title)).split()) <= set(_fold(_FEAT_RE.sub(" ", query.title)).split())
 
 
-# "feat. X" / "ft X" / "featuring X" to the end of its bracket, or of the text
-_FEAT_RE = re.compile(r"[(\[]?\s*\b(?:feat|ft|featuring)\b\.?[^)\]]*[)\]]?", re.IGNORECASE)
+# "feat. X" / "ft X" / "featuring X" to the end of its bracket; bracketless, up to a dash or a bracket, so
+# "Sandstorm feat. X - TML Remix" keeps the remix credit that makes it another song (#178)
+_FEAT_RE = re.compile(r"[(\[]\s*\b(?:feat|ft|featuring)\b\.?[^)\]]*[)\]]?"
+                      r"|\b(?:feat|ft|featuring)\b\.?(?:(?!\s+[-–—]\s)[^(\[])*", re.IGNORECASE)
+# Where a record's credit splits into acts: Beatport's ", " and a featured act it put in the name. Not "&",
+# "x" or "vs": on this side they are as likely part of one act's name ("Above & Beyond").
+_RECORD_ACTS_RE = re.compile(r"\s*(?:,|\b(?:feat|ft|featuring)\b\.?)\s*", re.IGNORECASE)
 # Where the asked artist's main act ends: "A & B", "A x B", "A vs B", "A, B", "A feat. B"
 _CREDIT_SPLIT_RE = re.compile(r"\s*(?:,|&|\bx\b|\bvs\b\.?|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b)\s*",
                               re.IGNORECASE)

@@ -293,9 +293,12 @@ class SoulseekProvider:
         # the file has been moved out. Without this, one download's pre-clean would delete another's
         # in-flight file. Entries are dropped when nothing is waiting, so this cannot grow unboundedly.
         self._paths: dict[Path, asyncio.Lock] = {}
-        # (peer, remote path) of every download this process enqueued: `cancel_all` is for the previous
-        # run's transfers, and must never take one of this run's -- however late it gets to run.
+        # (peer, remote path) of every download this run enqueued: `cancel_all` is for the previous run's
+        # transfers, and must never take one of this run's -- however late it gets to run. Kept only while
+        # that sweep is owed (`begin_run` until the first `cancel_all` that succeeds): afterwards nothing
+        # reads it, and a set that is never cleared grows for the life of the process (#178).
         self._enqueued: set[tuple[str, str]] = set()
+        self._recording = False
 
     async def health(self) -> dict:
         try:
@@ -386,7 +389,8 @@ class SoulseekProvider:
                              slow: SlowRule | None = None, on_progress: Callable[[TransferProgress], None] | None = None,
                              on_raw: RawSink | None = None) -> Path:
         _remove_stale_file(dest)                        # so a leftover file can't be mistaken for the fresh one
-        self._enqueued.add((file.username, file.path))  # before the request: slskd may hold it before it answers
+        if self._recording:                              # before the request: slskd may hold it before it answers
+            self._enqueued.add((file.username, file.path))
         await self.client.enqueue(file.username, file.path, file.size)
         budget = TransferBudget(self.clock(), first_byte_s=first_byte_s, total_s=total_s,
                                 queue_wait_s=first_byte_s if queue_wait_s is None else queue_wait_s,
@@ -506,10 +510,19 @@ class SoulseekProvider:
         out.sort(key=lambda u: (u["started_at"] or "", u["file"]), reverse=True)
         return out
 
+    def begin_run(self, previous: SoulseekProvider | None = None) -> None:
+        """A worker run starts, and owes this sidecar a sweep: from here until `cancel_all` succeeds, every
+        download is recorded as this run's own. Called at each worker start, so after an in-process restart
+        the crashed run's transfers are leftovers like any other run's rather than still "ours". `previous`
+        is the provider this one replaces mid-run (a reconnect): its record is shared rather than copied,
+        so what its passes still under way enqueue is protected too."""
+        self._enqueued = previous._enqueued if previous is not None else set()
+        self._recording = True
+
     async def cancel_all(self) -> int:
-        """Cancel every unfinished transfer slskd kept from before this process started. One this process
-        enqueued is left alone: the worker sweeps whenever the sidecar first answers, which can be after
-        this run's first download went in."""
+        """Cancel every unfinished transfer slskd kept from before this run. One this run enqueued is left
+        alone: the worker sweeps whenever the sidecar first answers, which can be after this run's first
+        download went in. Once it has succeeded the sweep is done, and so is the record."""
         n = 0
         for t in await self.client.downloads():
             if (t.get("username"), t.get("filename")) in self._enqueued:
@@ -517,6 +530,8 @@ class SoulseekProvider:
             if not str(t.get("state", "")).startswith("Completed"):
                 await self.client.cancel_download(t["username"], t["id"])
                 n += 1
+        self._enqueued.clear()
+        self._recording = False
         return n
 
     async def rescan_shares(self) -> None:

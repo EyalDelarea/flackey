@@ -5,6 +5,7 @@ import pytest
 from flackey.catalog import (
     BeatportCatalog,
     CatalogParseError,
+    _is_the_song,
     _length_pins_a_version,
     best_match,
     parse_search_html,
@@ -280,10 +281,37 @@ def test_another_sources_date_counts_and_an_earlier_one_found_before_is_kept():
     ("Above & Beyond", "Above & Beyond, Zoë Johnston", "Sandstorm"),  # an act with "&" in its own name
     ("Tiësto", "Tiesto", "Sandstorm"),                                # an accent one side spells and one not
     ("Darude", "Darude", "Sandstorm (feat. Singer)"),                 # a feature credit inside the title
-], ids=["co-credit", "feat", "ampersand-act", "accent", "feat-in-title"])
+    ("Darude", "Darude", "Sandstorm feat. Singer"),                   # ... or after it, bracketless
+    ("Artist", "Artist feat. Singer", "Sandstorm"),                   # Beatport naming the feature in the act
+], ids=["co-credit", "feat", "ampersand-act", "accent", "feat-in-title", "bare-feat-in-title",
+        "feat-in-credit"])
 def test_the_asked_act_among_the_credits_still_pins_its_edit_by_length(asked, credited, title):
     q = Query(raw="", artist=asked, title="Sandstorm", duration_s=232)
     original = _ct(1, credited, title=title, dur_s=443, date="2000-01-01")
     edit = _ct(2, credited, title=title, mix="Radio Edit", dur_s=231, date="2000-01-01")
     assert _length_pins_a_version(q, [original, edit])
     assert best_match(q, [original, edit]) is edit
+
+
+@pytest.mark.parametrize("title", [
+    "Sandstorm feat. Singer - TML Remix",
+    "Sandstorm ft Singer – TML Remix",
+    "Sandstorm featuring Singer (TML Remix)",
+])
+def test_a_bracketless_feature_credit_does_not_hide_the_remix_after_it(title):
+    """`_FEAT_RE` ate an unbracketed "feat. X" to the end of the text, remix credit and all, so this
+    remix by the asked act read as the plain song and could pin itself by length (#178)."""
+    q = Query(raw="", artist="Darude", title="Sandstorm", duration_s=232)
+    assert not _is_the_song(q, _ct(1, "Darude", title=title, dur_s=231))
+
+
+def test_an_asked_title_with_a_bracketless_feature_keeps_its_remix_words():
+    """The same pattern reads the asked title: "X feat. Y - TML Remix" asked is Beatport's "X (TML Remix)"."""
+    q = Query(raw="", artist="Darude", title="Sandstorm feat. Singer - TML Remix", duration_s=232)
+    assert _is_the_song(q, _ct(1, "Darude", title="Sandstorm (TML Remix)", dur_s=231))
+
+
+def test_an_act_with_an_ampersand_is_one_act_not_two():
+    """Only commas and feature words split a credit: "Above & Beyond" is not "Above" and "Beyond"."""
+    q = Query(raw="", artist="Beyond", title="Sandstorm", duration_s=232)
+    assert not _is_the_song(q, _ct(1, "Above & Beyond", title="Sandstorm", dur_s=231))

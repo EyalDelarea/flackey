@@ -50,7 +50,10 @@ class FakeProvider:
 
 class FakeWorker:
     def __init__(self):
-        self.providers, self.status = [], {}
+        self.providers, self.status, self.swaps = [], {}, 0
+
+    def replace_providers(self, providers):
+        self.providers, self.swaps = list(providers), self.swaps + 1
 
 
 def make(tmp_path: Path, states, *, installed=True, process=None):
@@ -77,6 +80,8 @@ async def test_a_successful_sign_in_reports_the_name_and_publishes_the_health(tm
     # worker's next scheduled probe.
     assert worker.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "digger"}
     assert len(worker.providers) == 1        # rebuilt against the key that was just written
+    # Through the worker, so a sweep the old provider still owed moves to the new one (#178).
+    assert worker.swaps == 1
 
 
 async def test_a_login_the_server_keeps_refusing_names_the_likeliest_cause_without_asserting_it(tmp_path: Path):
