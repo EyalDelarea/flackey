@@ -90,6 +90,13 @@ class FilingMixin:
                 # listened for quality, not for which take this is, so this is news to them, not a verdict
                 # they have already overruled.
                 raise ValueError(f"this copy is also a different recording ({fp.reason}), so it was not filed")
+            if overruling_quality and (fp is None or fp.status != "matched"):
+                # Nothing vouched for it either: no stored reference, or fpcalc missing. Filing it would put a
+                # track in the library that no check of any kind passed, which the pipeline itself never does
+                # (spec §6). The copy stays, so the same button works once the check can run.
+                why = fp.reason if fp is not None else "no acoustic reference for this request"
+                raise ValueError(f"the recording could not be checked acoustically ({why}), so it was not "
+                                 "filed. Press Keep it anyway again once it can be checked")
             await self._file_track(req, cand, catalog, tmp, verdict, fp, None, self.source.name, None)
         finally:
             tmp.unlink(missing_ok=True)   # gone already when file_track moved it; garbage otherwise

@@ -807,7 +807,7 @@ async def test_a_quality_rejection_in_a_format_that_cannot_be_filed_keeps_nothin
 async def test_keep_it_anyway_refuses_a_kept_copy_with_no_cutoff(env, monkeypatch):
     """Only a spectral refusal is ever kept. A row that says otherwise -- written by hand, or by a build
     that kept bitrate refusals -- is still a measured fact the button must not overturn."""
-    settings, store, _notifier = env
+    _settings, store, _notifier = env
     rid, w = await _rejected_on_quality(env, monkeypatch)
     rj = store.get_rejection_for_request(rid)
     store.conn.execute("UPDATE rejections SET cutoff_hz=NULL WHERE id=?", (rj.id,))
@@ -852,6 +852,28 @@ async def test_keep_it_anyway_on_quality_still_refuses_a_different_recording(env
 
     monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_recording)
     with pytest.raises(ValueError, match="also a different recording"):
+        await w.accept_rejection(rid)
+    assert store.get_request(rid).state == RequestState.REJECTED
+    assert kept.exists() and store.get_rejection_for_request(rid).audio_path == str(kept)
+    assert not list(settings.tmp_dir.glob("*"))
+
+
+@pytest.mark.parametrize("unchecked", ["fpcalc missing", "no reference"])
+async def test_keep_it_anyway_on_quality_needs_the_recording_check_to_pass(env, monkeypatch, unchecked):
+    """Not failing is not passing. A copy refused on quality was never fingerprinted, so with no reference or
+    no fpcalc nothing at all would vouch for it -- the pipeline never files that, and neither does the button.
+    The copy stays, so the same press works once the check can run."""
+    settings, store, _notifier = env
+    rid, w = await _rejected_on_quality(env, monkeypatch)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+    if unchecked == "no reference":
+        store.conn.execute("DELETE FROM request_references WHERE request_id=?", (rid,))
+    else:
+        async def no_fpcalc(path, reference, *, minimum, missing=""):
+            return FingerprintResult("skipped", None, None, "fpcalc not installed")
+
+        monkeypatch.setattr(acoustic_mod, "fingerprint_check", no_fpcalc)
+    with pytest.raises(ValueError, match="could not be checked acoustically.*once it can be checked"):
         await w.accept_rejection(rid)
     assert store.get_request(rid).state == RequestState.REJECTED
     assert kept.exists() and store.get_rejection_for_request(rid).audio_path == str(kept)
