@@ -146,8 +146,8 @@ class RecoveryMixin:
 
     def _miss_reason(self, request_id: int, outcome: str | None) -> str | None:
         """`models.miss_reason`: "found no copies" for a search that came back empty rather than "nothing
-        matched", which is only true when there was something to match. Every row is read only for that one."""
-        return miss_reason(outcome, self.store.attempts_for_request(request_id) if outcome == "no_pick" else None)
+        matched", which is only true when there was something to match. Stored with the pass's verdict."""
+        return miss_reason(outcome, no_results=self.store.lossless_no_results(request_id, outcome))
 
 
     def _lossless_miss_line(self, req: Request, *, from_find_lossless: bool = False) -> str | None:

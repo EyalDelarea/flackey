@@ -383,9 +383,12 @@ def found_nothing(attempts: list[LosslessAttempt]) -> bool:
     return bool(run) and all(results_seen(a) == 0 for a in run)
 
 
-def miss_reason(outcome: str | None, attempts: list[LosslessAttempt] | None = None) -> str | None:
-    """`MISS_REASON` for `outcome`, except a `no_pick` whose searches all came back empty, which says so."""
-    if outcome == "no_pick" and attempts and found_nothing(attempts):
+def miss_reason(outcome: str | None, attempts: list[LosslessAttempt] | None = None, *,
+                no_results: bool | None = None) -> str | None:
+    """`MISS_REASON` for `outcome`, except a `no_pick` whose searches all came back empty, which says so:
+    as `no_results` says when the caller has it (`Store.lossless_no_results`), else from `attempts`."""
+    empty = no_results if no_results is not None else bool(attempts) and found_nothing(attempts or [])
+    if outcome == "no_pick" and empty:
         return NO_RESULTS_REASON
     return MISS_REASON.get(outcome) if outcome else None
 

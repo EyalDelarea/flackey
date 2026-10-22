@@ -22,6 +22,7 @@ from .models import (
     RequestKind,
     RequestState,
     Track,
+    found_nothing,
 )
 from .models import norm as models_norm
 
@@ -167,6 +168,9 @@ class Store:
         # attempt row says (`lossless_attempt.pass_outcome`). NULL before the column, and while a pass runs:
         # readers then fall back to the latest attempt row, as they always did.
         self._ensure_column("requests", "lossless_verdict", "TEXT")
+        # With a `no_pick` verdict, whether every search in the pass came back empty (`set_lossless_verdict`).
+        # NULL with any other verdict, and on rows from before the column until first read.
+        self._ensure_column("requests", "lossless_no_results", "INTEGER")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
         # would disappear from under the owner the moment they answered the question they came back to.
@@ -215,7 +219,8 @@ class Store:
 
     # Columns `Request` does not carry. The queue endpoint sends every field of every Request to the page on
     # each refresh, and these are worker-only: read them through their own methods below.
-    _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict")
+    _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict",
+                       "lossless_no_results")
 
     def _row_to_request(self, r: sqlite3.Row) -> Request:
         d = dict(r)
@@ -386,8 +391,31 @@ class Store:
         return attempt, verdict or (attempt.outcome if attempt else None)
 
     def set_lossless_verdict(self, request_id: int, outcome: str | None) -> None:
-        self.conn.execute("UPDATE requests SET lossless_verdict=? WHERE id=?", (outcome, request_id))
+        """The pass's verdict, and with a `no_pick` whether every search in it came back empty
+        (`models.found_nothing`) -- worked out here, once, while the pass's rows are fresh, rather than from
+        every attempt row's JSON each time the queue is drawn."""
+        empty = None
+        if outcome == "no_pick":
+            empty = int(found_nothing(self.attempts_for_request(request_id)))
+        self.conn.execute("UPDATE requests SET lossless_verdict=?, lossless_no_results=? WHERE id=?",
+                          (outcome, empty, request_id))
         self.conn.commit()
+
+    def lossless_no_results(self, request_id: int, outcome: str | None) -> bool:
+        """Whether the `no_pick` that `outcome` names (`lossless_outcome`'s) came from searches that found
+        nothing at all. Read from the verdict's column; worked out from the attempt rows only where it was
+        never stored -- a pass still running, or a verdict from before the column -- and kept for the latter."""
+        if outcome != "no_pick":
+            return False
+        r = self.conn.execute("SELECT lossless_verdict, lossless_no_results FROM requests WHERE id=?",
+                              (request_id,)).fetchone()
+        if r is not None and r["lossless_no_results"] is not None:
+            return bool(r["lossless_no_results"])
+        empty = found_nothing(self.attempts_for_request(request_id))
+        if r is not None and r["lossless_verdict"] == "no_pick":
+            self.conn.execute("UPDATE requests SET lossless_no_results=? WHERE id=?", (int(empty), request_id))
+            self.conn.commit()
+        return empty
 
     # ---- candidates -----------------------------------------------------
     def add_candidates(self, request_id: int, candidates: list[Candidate]) -> list[Candidate]:

@@ -132,6 +132,40 @@ def test_the_original_date_and_the_deezer_date_are_kept(store: Store):
     assert store.get_candidate(c.id).release_date == "2001-03-07"
 
 
+def _no_pick_attempt(store: Store, rid: int, seen: int) -> None:
+    aid = store.add_attempt(rid, "soulseek", "q")
+    store.update_attempt(aid, outcome="no_pick", report={"seen": seen, "survivors": [], "summary": "s"})
+
+
+def test_an_empty_search_is_worked_out_once_with_the_verdict(store: Store, monkeypatch):
+    """The queue is drawn on every push; reading every attempt row's JSON for each `no_pick` request each
+    time is what the stored flag saves."""
+    empty, some = store.add_request("a", RequestKind.TEXT), store.add_request("b", RequestKind.TEXT)
+    _no_pick_attempt(store, empty, 0)
+    _no_pick_attempt(store, some, 12)
+    store.set_lossless_verdict(empty, "no_pick")
+    store.set_lossless_verdict(some, "no_pick")
+    monkeypatch.setattr(store, "attempts_for_request", lambda rid: pytest.fail("read the attempt rows again"))
+    assert store.lossless_no_results(empty, "no_pick") is True
+    assert store.lossless_no_results(some, "no_pick") is False
+    assert store.lossless_no_results(empty, "queued") is False
+
+
+def test_an_empty_search_from_before_the_column_is_worked_out_on_first_read_and_kept(store: Store):
+    rid = store.add_request("a", RequestKind.TEXT)
+    _no_pick_attempt(store, rid, 0)
+    store.conn.execute("UPDATE requests SET lossless_verdict='no_pick', lossless_no_results=NULL WHERE id=?", (rid,))
+    assert store.lossless_no_results(rid, "no_pick") is True
+    assert store.conn.execute("SELECT lossless_no_results FROM requests WHERE id=?", (rid,)).fetchone()[0] == 1
+    # A pass still running has no verdict: worked out from its rows, and nothing stored for it.
+    running = store.add_request("b", RequestKind.TEXT)
+    _no_pick_attempt(store, running, 0)
+    assert store.lossless_no_results(running, "no_pick") is True
+    assert store.conn.execute("SELECT lossless_no_results FROM requests WHERE id=?", (running,)).fetchone()[0] is None
+    store.set_lossless_verdict(rid, None)                      # a new pass starts: the old answer goes with it
+    assert store.conn.execute("SELECT lossless_no_results FROM requests WHERE id=?", (rid,)).fetchone()[0] is None
+
+
 def test_an_upsert_keeps_the_earliest_original_date_and_never_erases_one(store: Store):
     ct = _catalog()
     for given, stored in ((None, None), ("2001-03-12", "2001-03-12"), (None, "2001-03-12"),

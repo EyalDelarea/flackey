@@ -16,7 +16,7 @@ from ..config import Settings, platform_name
 from ..events import EventBus, Status
 from ..fingerprint import fpcalc_available
 from ..inbox import Inbox
-from ..models import Verdict, found_nothing
+from ..models import Verdict
 from ..store import Store
 from ..telegram import TelegramLogin
 from ..worker import Worker, format_line
@@ -75,8 +75,9 @@ class Bundles:
         if attempt is None:
             return None
         # `no_results`: the `no_pick` was an empty search, which the page words as such (`models.miss_reason`).
+        # Stored with the verdict when the pass ended, so drawing the queue reads one column, not every row.
         return {**to_dict(dataclasses.replace(attempt, outcome=outcome)),
-                "no_results": outcome == "no_pick" and found_nothing(self.store.attempts_for_request(rid))}
+                "no_results": self.store.lossless_no_results(rid, outcome)}
 
     def reference(self, rid: int) -> dict | None:
         """What this request was fingerprinted against, as the page needs it: which audio, and where in it
