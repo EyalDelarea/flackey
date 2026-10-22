@@ -267,6 +267,7 @@ class _PipeRead(NamedTuple):
     text: str          # the part of the title that holds the track, cleaned (or "Artist - Song" made of two)
     others: list[str]  # the other readings its "|" makes as likely, in that form
     raw: str           # that part before cleanup, for `_read`'s fallback
+    swapped: str | None = None  # the least likely reading, after even a collaboration's first name
 
 
 def _is_artist_channel(channel: str) -> bool:
@@ -347,7 +348,7 @@ def _pipe_parts(s: str, channel: str) -> _PipeRead:
         return _PipeRead(part, [song], raw)
     # "Blinding Lights | The Weeknd - After Hours", as likely as "Label | A - T" and, the other way round,
     # "Pink Floyd | Comfortably Numb - Pulse"
-    return _PipeRead(song, [part, f"{first} - {artist}"], first_raw)
+    return _PipeRead(song, [part], first_raw, f"{first} - {artist}")
 
 
 def _strip_noise(s: str, channel: str = "") -> str:
@@ -534,6 +535,8 @@ def interpretations(title: str, uploader: str | None = None, duration_s: int | N
             if first:
                 readings.append(Query(raw=title, artist=first, title=r.title, version=r.version,
                                       duration_s=duration_s))
+    if pipe.swapped is not None:
+        readings.append(_read(pipe.swapped, text, title, uploader, duration_s, pipe.swapped))
     seen: set[tuple[frozenset[str], ...]] = set()
     out: list[Query] = []
     for r in readings:
