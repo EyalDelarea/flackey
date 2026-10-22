@@ -46,21 +46,18 @@ class TransferProgress:
 @dataclass(frozen=True)
 class SlowRule:
     """When a transfer that is still moving may be given up for the next pick. The worker passes one only
-    while there *is* a next pick to go to; without it a slow transfer runs to its ceiling as before, because
-    a slow copy beats no copy.
+    while there is a next pick worth going to (see `LosslessMixin._attempt`); without it a slow transfer
+    runs to its ceiling as before, because a slow copy beats no copy.
 
     Judged on the average rate since the first byte, once `grace_s` of data has flowed (the first seconds
-    of a transfer say little), against `finish_s`: the time the remaining bytes would still take. Never past
-    `spare_from` of the file -- that close to the end, finishing is cheaper than any new peer's queue and
-    first byte. `until_s`, counted from the enqueue, is how long the switch would still leave the next pick
-    inside the attempt's budget; later, giving up this transfer would leave nothing to switch to.
-    `next_speed_bps` is what the next pick advertises (0: it did not say): leaving a measured rate for a
-    peer who claims less is a trade for a slower copy."""
+    of a transfer say little). Given up only when both hold: the rate is below `max_rate_bps`, and the
+    remaining bytes would still take longer than `finish_s` at it. Never past `spare_from` of the file --
+    that close to the end, finishing is cheaper than any new peer's queue and first byte. The worker
+    folds what the next pick advertises into both numbers, so this side needs to know nothing about it."""
     grace_s: float
     finish_s: float
     spare_from: float
-    until_s: float
-    next_speed_bps: int = 0
+    max_rate_bps: float
 
 
 RawSink = Callable[[str, object], None]

@@ -98,18 +98,18 @@ class TransferBudget:
         if rule is None or self.first_byte_at is None or size <= 0:
             return None
         flowing = now - self.first_byte_at
-        if flowing < rule.grace_s or now - self.t0 > rule.until_s or done >= size * rule.spare_from:
+        # `flowing > 0` as well as the grace: a grace of 0 would otherwise divide by it on the first poll
+        if flowing <= 0 or flowing < rule.grace_s or done >= size * rule.spare_from:
             return None
         rate = (done - self.first_done) / flowing
-        if rate <= 0 or (rule.next_speed_bps and rule.next_speed_bps <= rate):
+        if rate <= 0 or rate >= rule.max_rate_bps:
             return None
         left_s = (size - done) / rate
         if left_s <= rule.finish_s:
             return None
         pct = round(100 * done / size)
         return TooSlow(f"{rate / 1000:.0f} kB/s at {pct} %: {left_s:.0f} s more to finish, past the "
-                       f"{rule.finish_s:.0f} s worth waiting while another copy is untried",
-                       pct=pct, speed_bps=rate, left_s=left_s)
+                       f"{rule.finish_s:.0f} s the next copy is worth", pct=pct, speed_bps=rate, left_s=left_s)
 
 
 class SlskdClient:
@@ -179,12 +179,16 @@ class SlskdClient:
         return [{**f, "username": f.get("username") or u.get("username")}
                 for u in users for d in u.get("directories", []) for f in d.get("files", [])]
 
-    async def cancel_download(self, username: str, transfer_id: str) -> None:
+    async def cancel_download(self, username: str, transfer_id: str) -> bool:
+        """Whether the transfer is gone afterwards. A 404 counts: there is nothing left to stop. Most callers
+        are ending a transfer that has failed anyway and ignore the answer; the too-slow switch must not."""
         try:
-            await self._call("DELETE", f"/transfers/downloads/{quote(username, safe='')}/{transfer_id}",
-                             params={"remove": "true"})
+            r = await self._call("DELETE", f"/transfers/downloads/{quote(username, safe='')}/{transfer_id}",
+                                 params={"remove": "true"})
         except LosslessError:
             log.debug("could not cancel transfer %s of %s", transfer_id, username)
+            return False
+        return r.status_code < 400 or r.status_code == 404
 
     async def rescan_shares(self) -> None:
         await self._call("PUT", "/shares")
@@ -434,7 +438,22 @@ class SoulseekProvider:
                     raise LosslessError(f"transfer ended {state}" if "Succeeded" not in state
                                         else "completed but no file at the derived path", "transfer_failed")
                 if (err := budget.expired(now, state, done, file.size)) is not None:
-                    await self.client.cancel_download(file.username, tr["id"])
+                    if isinstance(err, TooSlow):
+                        # This transfer is healthy, only slow. Abandoned in name while slskd still runs it,
+                        # it would compete for the line with the very pick it was dropped for, and as one of
+                        # this run's own transfers `cancel_all` would never sweep it. So the switch happens
+                        # only once slskd confirms the cancel; otherwise this one is kept, to the end.
+                        if not await self._cancel_twice(file.username, tr["id"]):
+                            log.warning("could not cancel the slow transfer of %s from %s; keeping it",
+                                        file.name, file.username)
+                            budget.slow = None
+                            continue
+                        # Whether slskd also deletes the partial it keeps in its own incomplete folder on a
+                        # cancel is not something the spike established, so say where it would be.
+                        log.info("gave up a slow transfer of %s from %s (%s); any partial is slskd's, in its "
+                                 "incomplete folder", file.name, file.username, err)
+                    else:
+                        await self.client.cancel_download(file.username, tr["id"])
                     # slskd keeps the partial bytes in its own incomplete folder and `remove` drops the
                     # transfer; this is for a file that landed between the poll and the cancel, which would
                     # otherwise sit at the derived path until the next download of the track cleared it.
@@ -451,6 +470,11 @@ class SoulseekProvider:
                 await self.client.cancel_download(file.username, transfer_id)
             dest.unlink(missing_ok=True)
             raise
+
+    async def _cancel_twice(self, username: str, transfer_id: str) -> bool:
+        """One retry: a cancel lost to a single slow answer from the sidecar should not cost the switch."""
+        return (await self.client.cancel_download(username, transfer_id)
+                or await self.client.cancel_download(username, transfer_id))
 
     async def uploads(self) -> list[dict]:
         """What peers are pulling from the shared library, newest first (spec-neutral shape the UI renders as

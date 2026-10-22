@@ -58,13 +58,21 @@ SECOND_PICK_AFTER = {"verify_failed", "damaged", "fingerprint_failed", "transfer
 # Of those, the ones that say something about the peer's line rather than the file -- it never sent anything,
 # or sent too slowly for any of its files to be worth the wait -- so its other files are skipped for the rest
 # of the attempt. A failed check or a broken transfer says something about the file, and the peer stays
-# eligible. Within one attempt only: nothing carries a peer over to the next request (no outcome bans a
-# peer), because a peer's speed is whatever else its line is doing at the time: slow is not bad.
+# eligible. A too-slow copy is still the attempt's fallback when the switch leads nowhere (see `_attempt`).
+# Within one attempt only: nothing carries a peer over to the next request (no outcome bans a peer),
+# because a peer's speed is whatever else its line is doing at the time: slow is not bad.
 PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout", "too_slow"}
-# How many slow transfers one attempt gives up before it keeps the next one whatever its speed. Each switch
-# costs a grace period and a new peer's queue and first byte; two slow peers in a row are as likely to say
-# the line at this end is the slow one, and then a third switch would only make the track arrive later.
-MAX_SLOW_SWITCHES = 2
+# How many slow transfers one attempt gives up. One: each switch costs a grace period, a restart from the
+# first byte and a new peer's queue, and a second slow peer in a row is as likely to say the line at this
+# end is the slow one (ten requests share it) -- then another switch only makes the track arrive later.
+MAX_SLOW_SWITCHES = 1
+# The rest of the too-slow rule's numbers (see `Settings.lossless_slow_grace_s` for all of them together).
+# A switch has to look clearly better on the next peer's own word, because that word is a historical
+# average: our measured rate below half what it advertises, and our time to go more than twice its
+# projected time, which counts a minute for its queue and first byte on top of its size at that speed.
+SLOW_RATE_FRACTION = 0.5
+SWITCH_GAIN = 2.0
+SWITCH_ALLOWANCE_S = 60
 # After these, the next spelling gets a search of its own (issue #69). Both say this spelling found nothing
 # that is the recording; neither says anything about the other spellings. Everything else is either a fact
 # about the provider (unavailable, interrupted) or a fact that holds for every spelling alike

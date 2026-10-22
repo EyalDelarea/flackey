@@ -125,17 +125,27 @@ class Settings(BaseSettings):
     lossless_transfer_s: int = 600
     lossless_min_rate_kbps: int = 160
     # Slow is not dead, so none of the above ends a transfer that keeps moving: a 106 MB FLAC arriving at
-    # 125 kB/s ran its whole 14 minutes on 2026-10-22 with other copies untried. While another pick is left
-    # (never on the last one -- a slow copy beats no copy), a transfer is given up when, after
-    # `lossless_slow_grace_s` of bytes flowing, the rest of the file would take longer than
-    # `lossless_slow_finish_s` at the rate measured so far, unless it is already `lossless_slow_spare_from`
-    # of the way there. Four minutes is generous on purpose: a 40 MB FLAC needs only ~170 kB/s to stay,
-    # which most peers on a free slot manage, so an ordinary home line does not churn through its picks;
-    # the 100-odd kB/s peers this is for take a big file ten minutes and more. Thirty seconds is long
-    # enough that the opening burst or lull of a transfer does not decide it, short enough to be cheap.
-    lossless_slow_grace_s: int = 30
-    lossless_slow_finish_s: int = 240
-    lossless_slow_spare_from: float = 0.75
+    # 125 kB/s ran its whole 14 minutes on 2026-10-22 with other copies untried. A transfer is now given up
+    # for the next pick only when all of these hold (the worker's half is `LosslessMixin._attempt`):
+    #   - the next pick is the same song, version and length as this one, on a free slot, and advertises a
+    #     speed -- an unknown speed is no reason to leave a known one;
+    #   - `lossless_slow_grace_s` of bytes have flowed and less than `lossless_slow_spare_from` is in;
+    #   - the measured rate is below `lossless_slow_rate_bps` and below half the next peer's advertised
+    #     speed (`policy.SLOW_RATE_FRACTION`);
+    #   - the rest would take longer than `lossless_slow_finish_s`, and longer than twice what the next copy
+    #     projects to (its size at its advertised speed, plus `policy.SWITCH_ALLOWANCE_S` for its queue and
+    #     first byte).
+    # In numbers: the 106 MB at 125 kB/s has ~820 s to go after the grace; a free-slot peer advertising
+    # 1 MB/s projects to 166 s, doubled 332, so it switches. A 120 MB 24-bit FLAC at 400 kB/s is never
+    # touched (above 200 kB/s), and a 40 MB FLAC is safe at anything over ~148 kB/s (40 MB in the 270 s of
+    # grace plus finish). Conservative on purpose: up to ten requests share one home line
+    # (`max_concurrent_requests`), so a measured rate can be our end's contention rather than the peer;
+    # that is why the cap is absolute, the margins are 2x, an attempt switches once
+    # (`policy.MAX_SLOW_SWITCHES`), and a switch that leads nowhere goes back to the slow copy.
+    lossless_slow_grace_s: int = Field(30, ge=1)
+    lossless_slow_finish_s: int = Field(240, ge=0)
+    lossless_slow_rate_bps: int = Field(200_000, ge=0)     # bytes per second, as peers advertise it
+    lossless_slow_spare_from: float = Field(0.75, gt=0, le=1)
     lossless_poll_s: float = 2.0
     lossless_max_queue: int | None = None
     lossless_fingerprint_min: float = 0.79
