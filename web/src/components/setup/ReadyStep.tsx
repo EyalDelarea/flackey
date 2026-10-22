@@ -51,7 +51,7 @@ export default function ReadyStep({ libraryRoot, onStart, onConnectSource, error
     <div className={`ready-disc${nothing ? ' neutral' : ''}`}><Icon name={nothing ? 'download' : 'check'} size={26} stroke={2.4} /></div>
     <h1>{nothing ? 'Almost set' : "You're set"}</h1>
     <p className="lead">{nothing
-      ? 'There is nowhere to fetch from yet: Telegram and Soulseek are both off. You can turn either on later from Settings. Your music will be filed into'
+      ? 'There is nowhere to fetch from yet: neither Telegram nor Soulseek is set up. You can set either up later from Settings. Your music will be filed into'
       : `${sources} and your music will be filed into`}</p>
     <div className="path-well">{libraryRoot}</div>
     {/* Credentials are read once, at startup (build_providers / SlskdProcess.start in app.py), so an

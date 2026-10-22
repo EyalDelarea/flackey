@@ -1,7 +1,10 @@
+import io
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from yt_dlp.networking import Response
+from yt_dlp.networking.exceptions import HTTPError, TransportError
 
 import flackey.youtube as yt
 from flackey.youtube import fetch_audio, parse_ytdlp_json, video_id
@@ -23,6 +26,35 @@ def test_parse_ytdlp_video_json():
             "uploader": "X", "duration": 301.4}
     name, entries = parse_ytdlp_json(data)
     assert name == "X - Y" and entries[0].duration_s == 301 and entries[0].url.endswith("v=a")
+
+
+def _HTTPResponse(status: int) -> Response:
+    return Response(io.BytesIO(b""), "https://www.youtube.com/watch?v=x", {}, status=status)
+
+
+def _wrapped_like_yt_dlp(inner: Exception) -> Exception:
+    """What `extract_info` raises: a DownloadError whose exc_info is the ExtractorError's cause, and whose
+    context is that ExtractorError."""
+    from yt_dlp.utils import DownloadError, ExtractorError
+    outer = DownloadError("ERROR: [youtube] x: Unable to download API page", exc_info=(type(inner), inner, None))
+    outer.__context__ = ExtractorError("Unable to download API page", cause=inner)
+    return outer
+
+
+@pytest.mark.parametrize("inner, network", [
+    (TransportError("[Errno 111] Connection refused", cause=ConnectionRefusedError(111, "refused")), True),
+    (TransportError("[Errno -2] Name or service not known"), True),
+    (ConnectionRefusedError(111, "refused"), True),
+    (HTTPError(_HTTPResponse(404)), False),
+    (ValueError("Unsupported URL"), False),
+], ids=["refused", "dns", "bare-socket", "http-404", "extraction"])
+async def test_an_unreachable_youtube_is_told_apart_from_an_unreadable_page(monkeypatch, inner, network):
+    def boom(url):
+        raise _wrapped_like_yt_dlp(inner)
+    monkeypatch.setattr(yt, "_extract", boom)
+    with pytest.raises(yt.YouTubeError) as e:
+        await yt.fetch_youtube("https://www.youtube.com/watch?v=x")
+    assert e.value.network is network
 
 
 async def test_a_link_is_read_without_any_yt_dlp_on_the_path(monkeypatch):

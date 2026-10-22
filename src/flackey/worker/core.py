@@ -372,7 +372,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             self.store.update_request(request_id, retry_after=None)
         elif req.state in RETRYABLE_STATES:
             # `lossless_retry`: "Try again" on a failure is the owner asking for another look at the
-            # providers, which is exactly what `_lossless_miss_line` tells them the button does. A
+            # providers, which is exactly what `_no_route`'s advice tells them the button does. A
             # not-found row can also become actionable after its source is enabled or a catalog changes.
             # Without this flag a request whose last pass did not find a candidate could never reach
             # Soulseek again.
