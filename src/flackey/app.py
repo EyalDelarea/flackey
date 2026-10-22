@@ -16,7 +16,7 @@ import httpx
 import uvicorn
 from telethon import TelegramClient
 
-from . import __version__
+from . import __version__, telegram
 from .catalog import BeatportCatalog
 from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
@@ -208,6 +208,32 @@ async def watch_telegram_session(login: TelegramLogin, status: dict, poll_s: flo
                       "paused until then; Soulseek carries on")
 
 
+async def connect_telegram(client) -> bool | None:
+    """Connect the saved Telegram session at startup and say whether it is signed in; None when
+    Telegram could not be reached at all.
+
+    This runs before the server and the worker, and Telethon's connect() has no deadline: on a network
+    that takes the connection and then answers nothing it waited for the handshake forever, so the app
+    never opened and Soulseek -- which needs no Telegram -- never downloaded. Not reached is treated as
+    signed out, which pauses only the Deezer bot; Reconnect asks Telegram again
+    (`TelegramLogin.status`), so a session that was fine all along comes back without a restart.
+
+    Whatever was cut short, the client is closed afterwards rather than judged by `is_connected()`:
+    with a saved sign-in that says yes long before connect() has started the loop that delivers
+    replies (`telegram.connect_or_close` has the details). Closed, every later attempt starts clean."""
+    timeout_s = telegram.CONNECT_TIMEOUT_S   # read here, not imported: tests shorten it
+    try:
+        async with asyncio.timeout(timeout_s):
+            await client.connect()
+            return await client.is_user_authorized()
+    except TimeoutError:
+        log.warning("Telegram did not answer within %gs; starting with the Deezer bot paused", timeout_s)
+    except OSError as e:
+        log.warning("Telegram is not reachable (%s); starting with the Deezer bot paused", e)
+    await client.disconnect()
+    return None
+
+
 async def close_streams_on_exit(server, bus: EventBus, poll_s: float = 0.2) -> None:
     """uvicorn's Ctrl-C handler only flips `should_exit`; its shutdown then awaits Server.wait_closed(), which
     on Python 3.12 waits for every open connection -- and the page's SSE stream never ends on its own. Closing
@@ -272,7 +298,7 @@ def make_on_authorized(settings: Settings, status: dict) -> Callable[[], None]:
     the source flag from health, and a sign-in that published only "authorized" left the sidebar saying
     "Telegram off" until the next full refresh."""
     def on_authorized() -> None:
-        status.update(telegram_authorized=True, source_enabled=True)
+        status.update(telegram_authorized=True, telegram_unreachable=False, source_enabled=True)
         if not settings.source_enabled:
             # A sign-in after a skipped setup step: the bot is a source again.
             save_settings(settings, source_enabled=True)
@@ -287,10 +313,19 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     log_startup_banner(settings, __version__)
     store = Store(settings.db_path)
     bus = EventBus()
-    status = Status(bus, telegram_authorized=True, worker_running=False,
+    # `telegram_unreachable` tells "signed out" from "signed in, as far as anyone knows, but Telegram
+    # did not answer": both pause the Deezer bot, only one of them is fixed by signing in.
+    status = Status(bus, telegram_authorized=True, telegram_unreachable=False, worker_running=False,
                     setup_done=store.get_setting("setup_done") == "1",
                     source_enabled=settings.source_enabled)
     on_authorized = make_on_authorized(settings, status)
+
+    def on_answer(signed_in: bool) -> None:
+        if signed_in and not status.get("telegram_authorized", True):
+            status.update(telegram_authorized=True, telegram_unreachable=False)
+            log.info("Telegram answered and the session is signed in; the Deezer bot is back on")
+        elif not signed_in and status.get("telegram_unreachable"):
+            status["telegram_unreachable"] = False   # reached after all, and signed out: say so
 
     # Telethon's constructor rejects a falsy api_id/api_hash outright (`not api_id or not api_hash`
     # raises ValueError before any network use), so `0`/`""` would crash right here -- verified against
@@ -305,14 +340,18 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     if not settings.telegram_configured:
         status["telegram_authorized"] = False
         log.info("Telegram keys not configured: the setup screen asks for them, or set them in Settings")
-        login = TelegramLogin(client, False, on_authorized=on_authorized, make_client=make_client)
+        login = TelegramLogin(client, False, on_authorized=on_authorized, make_client=make_client,
+                              on_answer=on_answer)
     else:
-        await client.connect()
-        if not await client.is_user_authorized():
+        authorized = await connect_telegram(client)
+        if authorized is None:
+            status.update(telegram_authorized=False, telegram_unreachable=True)
+        elif not authorized:
             status["telegram_authorized"] = False
             log.error("Telegram login required, sign in from the setup screen in the UI; the Deezer bot is "
                       "paused until then")
-        login = TelegramLogin(client, True, on_authorized=on_authorized, make_client=make_client)
+        login = TelegramLogin(client, True, on_authorized=on_authorized, make_client=make_client,
+                              on_answer=on_answer)
 
     http = httpx.AsyncClient(timeout=20)
     providers = build_providers(settings, http)

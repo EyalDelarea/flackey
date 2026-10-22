@@ -167,6 +167,9 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
                 # one and word "Finder" or "File Explorer" -- the page cannot tell from inside WebView2.
                 "platform": platform_name(),
                 "telegram_authorized": bool(status.get("telegram_authorized", True)),
+                # Signed in as far as anyone knows, but Telegram did not answer (app.connect_telegram):
+                # the page says "can't reach Telegram" rather than "signed out".
+                "telegram_unreachable": bool(status.get("telegram_unreachable", False)),
                 "worker_running": bool(status.get("worker_running", False)),
                 "setup_done": bool(status.get("setup_done", False)),
                 "telegram_configured": settings.telegram_configured,
