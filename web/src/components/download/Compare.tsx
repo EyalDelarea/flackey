@@ -13,15 +13,20 @@ interface Props { s: SamplesView; player: PlayerState; onPlay: (key: string, url
  *  disappearing and leaving a lopsided block with nothing to explain the gap.
  *
  *  The page's one <audio> serves both, so starting one stops the other -- which is the whole point:
- *  these are meant to be heard back to back, not together. */
+ *  these are meant to be heard back to back, not together.
+ *
+ *  A copy the quality check refused (issue #97) gets the same block with one row: there is nothing to hold
+ *  it against -- the reference is a 30 s preview, lossy itself -- so the question is only "does this sound
+ *  right to you", and the spectrogram behind See why is the other half of the answer. */
 export default function Compare({ s, player, onPlay, onAccept }: Props) {
+  const listen = s.kind === 'listen'
   return (
     <div className="compare">
-      <div className="compare-head">Listen to both, then decide</div>
-      <Side label="What you asked for" sample={s.reference} player={player} onPlay={onPlay}
+      <div className="compare-head">{listen ? 'Listen, then decide' : 'Listen to both, then decide'}</div>
+      {!listen && <Side label="What you asked for" sample={s.reference} player={player} onPlay={onPlay}
         fallback={s.video
           ? <a className="btn-link" href={s.video.url} target="_blank" rel="noreferrer">Open your video at {s.video.at}</a>
-          : <span className="muted">No copy of this to play</span>} />
+          : <span className="muted">No copy of this to play</span>} />}
       <Side label="What Flackey found" sample={s.found} player={player} onPlay={onPlay}
         fallback={<span className="muted">The copy is no longer here</span>} />
       {/* Only where there is still a file to file. Everything else on this row is a way of looking at what
@@ -31,7 +36,8 @@ export default function Compare({ s, player, onPlay, onAccept }: Props) {
           <button className="btn-primary" onClick={onAccept}>
             <Icon name="check" size={12} stroke={2.2} />Keep it anyway
           </button>
-          <span className="muted">Files this copy, tagged and named like any other track.</span>
+          <span className="muted">{listen ? 'Files this copy, tagged and named like any other track, and marked unverified.'
+            : 'Files this copy, tagged and named like any other track.'}</span>
         </div>)}
     </div>
   )

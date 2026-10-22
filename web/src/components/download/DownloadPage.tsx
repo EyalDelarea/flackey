@@ -41,7 +41,9 @@ function useNow(ms: number) {
   return now
 }
 
-export default function DownloadPage({ live }: { live: Live }) {
+/** `onReport` opens the bug report for one failed row (issue #165). The dialog lives in `App`, which already
+ *  owns the general one; without the callback the rows offer no report at all rather than a dead link. */
+export default function DownloadPage({ live, onReport }: { live: Live; onReport?: (requestId: number) => void }) {
   const now = useNow(1000)
   const platform = usePlatform()
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
@@ -97,7 +99,9 @@ export default function DownloadPage({ live }: { live: Live }) {
   // Two populations, deliberately. The chips count what the tab is showing (`scoped`); the batch bar above
   // each group counts the whole playlist (`bundles`), because a Downloads tab that has already dropped every
   // finished row would otherwise draw a bar reading "0 filed" on a batch that is half filed.
-  const groups = groupRows(scoped, live.playlists, opts, filter, bundles).map(g => ({ ...g, rows: g.rows.map(r => whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r) }))
+  const groups = groupRows(scoped, live.playlists, opts, filter, bundles).map(g => ({ ...g, rows: g.rows.map(r => ({
+    ...(whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r),
+    reportable: r.reportable && onReport != null })) }))
   // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
   // down to is what "Retry all" retries. `sweepable`, not "has a retry button" -- a track the owner stopped
   // carries the button and is still left out, so counting the buttons would promise a sweep of seventeen
@@ -198,6 +202,7 @@ export default function DownloadPage({ live }: { live: Live }) {
     // is about to be redrawn as a finished track with no player on it at all.
     else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
     else if (kind === 'cancel') run(api.cancel(id))
+    else if (kind === 'report') onReport?.(id)
     // A finished row goes through DELETE as it always has. A live one -- parked, queued, downloading --
     // has to be stopped first, which only the batch route does, so it goes there as a batch of one.
     else if (kind === 'remove') {

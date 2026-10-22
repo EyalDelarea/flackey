@@ -77,12 +77,14 @@ CREATE TABLE IF NOT EXISTS rejections (
   -- can tell them apart -- `reason` is written for a human and `cutoff_hz` is absent on both a
   -- different-recording rejection and an unsupported-format one.
   kind TEXT NOT NULL DEFAULT 'quality',
-  -- Where the refused file was kept, for the one rejection the owner may overrule. A 'different_recording'
-  -- verdict says the audio is genuine and not the track that was asked for, which is a judgement an ear can
+  -- Where the refused file was kept, so the owner may overrule the verdict. A 'different_recording' verdict
+  -- says the audio is genuine and not the track that was asked for, which is a judgement an ear can
   -- overturn -- an old track remastered or re-mixed can score below the floor and still be the copy the
-  -- owner wants (issue #92). So that file is moved aside instead of deleted: this path is what the row
-  -- plays and what "Keep it anyway" files. NULL on every other rejection, and on one whose file has since
-  -- been filed or removed.
+  -- owner wants (issue #92). A spectral 'quality' verdict (one with a `cutoff_hz`) is evidence of a lossy
+  -- source, not proof of one (issue #97). So those files are moved aside instead of deleted: this path is
+  -- what the row plays and what "Keep it anyway" files. NULL on a quality rejection for bitrate or format,
+  -- which is a measured fact; on one written before spectral rejections were kept; and on one whose file
+  -- has since been filed or removed.
   audio_path TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -522,7 +524,7 @@ class Store:
                       spectrogram_path: Path | None, *, kind: str = "quality",
                       audio_path: Path | None = None) -> int:
         """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
-        genuine audio of the wrong track). `audio_path` is the refused file, kept only for the second kind.
+        genuine audio of the wrong track). `audio_path` is the refused file, kept for the owner to overrule.
         Both keyword-only so no caller can drift into the positional slot that the spectrogram already
         holds."""
         cur = self.conn.execute(
@@ -550,6 +552,12 @@ class Store:
         r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? ORDER BY id DESC LIMIT 1",
                               (request_id,)).fetchone()
         return None if r is None else Rejection(**dict(r))
+
+    def rejections_for_request(self, request_id: int) -> list[Rejection]:
+        """Every rejection the request has collected, oldest first: a request that was retried can be
+        refused more than once, and a failure report wants the whole run of them."""
+        rows = self.conn.execute("SELECT * FROM rejections WHERE request_id=? ORDER BY id", (request_id,)).fetchall()
+        return [Rejection(**dict(r)) for r in rows]
 
     def list_rejections(self, limit: int = 200) -> list[Rejection]:
         rows = self.conn.execute("SELECT * FROM rejections ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
@@ -596,6 +604,11 @@ class Store:
         r = self.conn.execute("SELECT * FROM lossless_attempts WHERE request_id=? ORDER BY id DESC LIMIT 1",
                               (request_id,)).fetchone()
         return None if r is None else self._row_to_attempt(r)
+
+    def attempts_for_request(self, request_id: int) -> list[LosslessAttempt]:
+        rows = self.conn.execute("SELECT * FROM lossless_attempts WHERE request_id=? ORDER BY id",
+                                 (request_id,)).fetchall()
+        return [self._row_to_attempt(r) for r in rows]
 
     def list_attempts(self, limit: int = 50, outcome: str | None = None) -> list[LosslessAttempt]:
         if outcome:

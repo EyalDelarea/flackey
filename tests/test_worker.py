@@ -18,6 +18,7 @@ from flackey.models import (
     Query,
     RequestKind,
     RequestState,
+    Verdict,
 )
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
@@ -736,18 +737,147 @@ async def test_a_different_recording_is_kept_so_the_owner_can_hear_it(env, monke
     assert "keep it anyway" in notifier.sent[-1][0]
 
 
-async def test_a_quality_rejection_keeps_nothing(env):
-    """The other verdict is a fact about the file, not a matter of taste: an MP3 wearing a FLAC extension
-    is one whatever it sounds like. Nothing is kept, and the row offers nothing to listen to."""
-    settings, store, _notifier = env
+EDGE_REASON = "cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source"
+
+
+def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+    """The spectral check refusing a 320 kbps MP3 for an edge at 16 kHz. Stood in for rather than produced:
+    these tests are about what the worker does with the verdict, and test_verify.py owns the detector."""
+    png = spectrogram_dir / f"{name or path.stem}.png"
+    png.parent.mkdir(parents=True, exist_ok=True)
+    png.write_bytes(b"\x89PNG")
+    return Verdict(False, "mp3", 320, 16_000, EDGE_REASON, png)
+
+
+async def _rejected_on_quality(env, monkeypatch):
+    """Drive a request to a spectral quality rejection, the kind a copy is kept for."""
+    _settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    monkeypatch.setattr(filing_mod, "verify", _spectral_refusal)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.REJECTED
+    return rid, w
+
+
+async def test_a_spectral_rejection_is_kept_so_the_owner_can_overrule_it(env, monkeypatch):
+    """Issue #97: this one used to be deleted, on the theory that "an MP3 wearing a FLAC extension is a fact
+    about the file". An edge is evidence, not proof -- a resampler or a mastering filter can draw the same
+    one -- and the bytes are already downloaded, so they are kept beside the different recordings (#92)."""
+    settings, store, notifier = env
+    rid, _w = await _rejected_on_quality(env, monkeypatch)
+
+    rj = store.get_rejection_for_request(rid)
+    assert rj.kind == "quality" and rj.cutoff_hz == 16_000 and rj.spectrogram_path
+    kept = Path(rj.audio_path)
+    assert kept.exists() and kept.parent == settings.rejected_dir
+    assert not list(settings.tmp_dir.glob("**/*.mp3"))
+    assert "keep it anyway" in notifier.sent[-1][0]
+
+
+async def test_a_bitrate_rejection_keeps_nothing(env):
+    """Under the bitrate floor is a measured fact, not spectral evidence: nothing to listen for, nothing to
+    overrule, so the copy is deleted as it always was and the row offers no player."""
+    settings, store, notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
-
     assert (await w.process(rid)).state == RequestState.REJECTED
+    rj = store.get_rejection_for_request(rid)
+    assert "bitrate" in rj.reason and rj.audio_path is None
+    assert not settings.rejected_dir.exists() or not list(settings.rejected_dir.iterdir())
+    assert "keep it anyway" not in notifier.sent[-1][0]
+    with pytest.raises(ValueError, match="no copy of this track was kept"):
+        await w.accept_rejection(rid)
 
+
+async def test_a_quality_rejection_in_a_format_that_cannot_be_filed_keeps_nothing(env, monkeypatch):
+    """"Keep it anyway" on a file Flackey cannot tag or file would be a button that fails, so there is none."""
+    settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    monkeypatch.setattr(filing_mod, "verify", lambda path, *_a, **_k: Verdict(False, "m4a", 256, 0,
+                                                                             "unsupported format m4a", None))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.REJECTED
     assert store.get_rejection_for_request(rid).audio_path is None
-    assert not list(settings.rejected_dir.glob("*")) if settings.rejected_dir.exists() else True
+    assert not settings.rejected_dir.exists() or not list(settings.rejected_dir.iterdir())
+
+
+async def test_keep_it_anyway_refuses_a_kept_copy_with_no_cutoff(env, monkeypatch):
+    """Only a spectral refusal is ever kept. A row that says otherwise -- written by hand, or by a build
+    that kept bitrate refusals -- is still a measured fact the button must not overturn."""
+    _settings, store, _notifier = env
+    rid, w = await _rejected_on_quality(env, monkeypatch)
+    rj = store.get_rejection_for_request(rid)
+    store.conn.execute("UPDATE rejections SET cutoff_hz=NULL WHERE id=?", (rj.id,))
+    with pytest.raises(ValueError, match="bitrate or format"):
+        await w.accept_rejection(rid)
+    assert Path(rj.audio_path).exists()
+
+
+async def test_keep_it_anyway_files_a_copy_that_failed_the_quality_check(env, monkeypatch):
+    """The same button as #92, the same bytes. Filed carrying its failure: a `quality_check` row on the
+    track, an "unverified" comment tag, and a Done line that says it was kept anyway."""
+    settings, store, notifier = env
+    rid, w = await _rejected_on_quality(env, monkeypatch)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+
+    r = await w.accept_rejection(rid)
+
+    assert r.state == RequestState.DONE
+    track = store.get_track(r.track_id)
+    assert track.path.exists() and track.bitrate_kbps == 320 and track.cutoff_hz == 16_000
+    ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert ev["quality_check"] == {"status": "failed", "kept_by": "owner", "reason": EDGE_REASON,
+                                   "bitrate_kbps": 320, "cutoff_hz": 16_000}
+    assert ev["recording_match"]["status"] == "matched"          # the check it never reached still ran
+    assert read_tags(track.path)["comment"].startswith("flackey: unverified 320 kbps · cutoff 16.0 kHz")
+    assert "kept anyway" in notifier.sent[-1][0] and "content to 16.0 kHz" in notifier.sent[-1][0]
+    assert store.get_rejection_for_request(rid).audio_path is None and not kept.exists()
+    assert not list(settings.tmp_dir.glob("*"))
+
+
+async def test_keep_it_anyway_on_quality_still_refuses_a_different_recording(env, monkeypatch):
+    """Overruling one check is not overruling both. A copy refused on quality never reached the fingerprint,
+    so the owner listened for quality, not for which take it is; filing a different recording on that press
+    would be the app deciding something they were never asked."""
+    settings, store, _notifier = env
+    rid, w = await _rejected_on_quality(env, monkeypatch)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+
+    async def wrong_recording(path, reference, *, minimum, missing=""):
+        return FingerprintResult("failed", 0.4, None, "best score 0.40 below 0.79", None, [4, 5, 6],
+                                 reference.label if reference else None)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_recording)
+    with pytest.raises(ValueError, match="also a different recording"):
+        await w.accept_rejection(rid)
+    assert store.get_request(rid).state == RequestState.REJECTED
+    assert kept.exists() and store.get_rejection_for_request(rid).audio_path == str(kept)
+    assert not list(settings.tmp_dir.glob("*"))
+
+
+@pytest.mark.parametrize("unchecked", ["fpcalc missing", "no reference"])
+async def test_keep_it_anyway_on_quality_needs_the_recording_check_to_pass(env, monkeypatch, unchecked):
+    """Not failing is not passing. A copy refused on quality was never fingerprinted, so with no reference or
+    no fpcalc nothing at all would vouch for it -- the pipeline never files that, and neither does the button.
+    The copy stays, so the same press works once the check can run."""
+    settings, store, _notifier = env
+    rid, w = await _rejected_on_quality(env, monkeypatch)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+    if unchecked == "no reference":
+        store.conn.execute("DELETE FROM request_references WHERE request_id=?", (rid,))
+    else:
+        async def no_fpcalc(path, reference, *, minimum, missing=""):
+            return FingerprintResult("skipped", None, None, "fpcalc not installed")
+
+        monkeypatch.setattr(acoustic_mod, "fingerprint_check", no_fpcalc)
+    with pytest.raises(ValueError, match="could not be checked acoustically.*once it can be checked"):
+        await w.accept_rejection(rid)
+    assert store.get_request(rid).state == RequestState.REJECTED
+    assert kept.exists() and store.get_rejection_for_request(rid).audio_path == str(kept)
+    assert not list(settings.tmp_dir.glob("*"))
 
 
 async def test_keep_it_anyway_files_the_copy_the_owner_listened_to(env, monkeypatch):
@@ -774,9 +904,8 @@ async def test_keep_it_anyway_files_the_copy_the_owner_listened_to(env, monkeypa
 
 
 async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
-    """One button, one meaning. It files a specific set of bytes; a row that has none -- because it failed
-    the quality check, because the copy was cleaned up, because it never got that far -- must not pretend
-    to have them."""
+    """One button, one meaning. It files a specific set of bytes; a row that has none -- because nothing was
+    kept, because the copy was cleaned up, because it never got that far -- must not pretend to have them."""
     settings, store, _notifier = env
     rid, w = await _rejected_as_a_different_recording(env, monkeypatch)
 
@@ -785,10 +914,12 @@ async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
     with pytest.raises(ValueError, match="only a rejected track"):
         await w.accept_rejection(other)
 
+    # A rejection with nothing kept: one written before quality rejections were kept, or in a format that
+    # could not be filed.
     quality = store.add_request("q2", RequestKind.TEXT)
     store.add_rejection(quality, "bitrate too low", 128, 15000, None)
     store.set_state(quality, RequestState.REJECTED)
-    with pytest.raises(ValueError, match="no copy of it to keep"):
+    with pytest.raises(ValueError, match="no copy of this track was kept"):
         await w.accept_rejection(quality)
 
     # The row still says there is a copy, and there is not: the promise is withdrawn rather than repeated.
@@ -833,16 +964,25 @@ async def test_cancel_refuses_finished_requests(env):
     assert store.get_request(rid).state == RequestState.DONE
 
 
-async def test_unauthorized_session_pauses_worker_and_keeps_request(env):
+async def test_unauthorized_session_pauses_the_bot_and_the_request_goes_on_without_it(env):
     settings, store, notifier = env
     status = {"telegram_authorized": True}
-    w = Worker(store, FakeSource(error=SourceUnauthorized("session revoked")), FakeCatalog([CT]), notifier, settings,
-               artwork_fetch=no_art, status=status)
+    source = FakeSource(error=SourceUnauthorized("session revoked"))
+    w = Worker(store, source, FakeCatalog([CT]), notifier, settings, artwork_fetch=no_art, status=status)
     rid = store.add_request("q", RequestKind.TEXT)
     r = await w.process(rid)
-    assert r.state == RequestState.QUEUED and r.attempts == 0 and "login" in r.flag_reason.lower()
-    assert status["telegram_authorized"] is False and "flackey login" in notifier.sent[-1][0]
-    await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=1)   # returns at once: the worker is paused
+    # Not the request's fault, so nothing is spent on it: queued, attempts untouched, due at once.
+    assert r.state == RequestState.QUEUED and r.attempts == 0 and r.retry_after is None
+    assert "login" in r.flag_reason.lower()
+    assert status["telegram_authorized"] is False and "Soulseek downloads carry on" in notifier.sent[-1][0]
+
+    # The next pass does not wait for a sign-in and does not knock on the bot again.
+    r = await w.process(rid)
+    assert source.searches == 1 and source.fetched == []
+    # "q" names no artist and title, so with no bot to ask there is nothing to search for -- and the row
+    # says the bot was paused, not switched off, so a sign-in can bring it back.
+    assert r.state == RequestState.NOT_FOUND and worker_mod.BOT_PAUSED in r.error_message
+    assert "switched off" not in r.error_message
 
 
 async def test_on_start_forgets_tracks_whose_files_are_gone(env):
@@ -1217,21 +1357,25 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
     assert not store.get_request(auto).reviewed     # never paused, so it never earns the rung
 
 
-async def test_run_forever_keeps_going_with_telegram_signed_out_when_the_source_is_off(env):
-    """Telegram signed out only stops the worker while the bot is a source; with it switched off the
-    loop must keep running so Soulseek requests still get served."""
+@pytest.mark.parametrize("source_enabled", [True, False])
+async def test_run_forever_keeps_going_with_telegram_signed_out(env, source_enabled):
+    """Telegram signed out used to stop the loop whenever the bot was a source, and every Soulseek
+    request with it. Now it pauses the bot and nothing else: only cancellation ends the loop."""
     w = make_worker(env, FakeSource(), FakeCatalog())
-    w.settings.source_enabled = False
+    w.settings.source_enabled = source_enabled
     w.status["telegram_authorized"] = False
     ticks = []
 
-    async def stop_after_two(force: bool = False) -> None:
-        if force:            # startup()'s own call, not a loop tick
-            return
-        ticks.append(1)
-        if len(ticks) == 2:
-            w.settings.source_enabled = True   # now the loop condition is false on the next check
+    async def count(force: bool = False) -> None:
+        if not force:        # startup()'s own call is not a loop tick
+            ticks.append(1)
 
-    w._maintenance = stop_after_two
-    await asyncio.wait_for(w.run_forever(poll_s=0.01), timeout=2)
-    assert len(ticks) == 2
+    w._maintenance = count
+    task = asyncio.create_task(w.run_forever(poll_s=0.01))
+    deadline = asyncio.get_running_loop().time() + 2
+    while len(ticks) < 5 and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert not task.done() and len(ticks) >= 5
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

@@ -105,7 +105,17 @@ describe('presentRow', () => {
     expect(v.formatLabel).toBe('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')
     expect(v.checks).toEqual([
       { label: 'Same recording', value: '98.5% match', ok: true },
-      { label: 'Verified to', value: '22.1 kHz', ok: true }])
+      { label: 'Spectrum', value: 'no edge found', ok: true }])
+  })
+  // 22050 is what the check answers when it found no edge -- silence answers it too -- so it is never shown
+  // as "22.1 kHz", which claimed content up there that nobody had seen (issue #97).
+  it('a measured edge on a filed track is evidence, not verification', () => {
+    const track = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 19800, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: 44100,
+      catalog: null }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks)
+      .toEqual([{ label: 'Content to', value: '19.8 kHz', ok: true }])
   })
   it('a failed fingerprint reads as a failed check, and a rejection still reports its cutoff', () => {
     const attempt = { id: 5, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
@@ -142,7 +152,7 @@ describe('presentRow', () => {
     expect(v.status).toBe('Sounds like a 128 kbps upscale. Deleted, not added to your library.'); expect(v.statusTone).toBe('red')
     expect(v.rejected).toBe(true); expect(v.steps).toBeNull(); expect(v.action).toEqual({ label: 'See why', kind: 'why' })
     expect(v.rejection).toEqual({ reason: 'Sounds like a 128 kbps upscale', cutoffKhz: 16, spectrogramUrl: '/api/rejections/2/spectrogram.png',
-      caption: 'A real 320 kbps file has sound up to 20 kHz. This one stops at 16 kHz — it was blown up from a smaller file.' })
+      caption: 'Nothing above 16 kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.' })
     expect(presentRow(bundle({ state: 'rejected' }, { rejection }), { ...opts, whyOpen: true }).action?.label).toBe('Hide why')
   })
   // Issue #61 added a second reason a file can be refused: it is genuine 320 kbps audio of the *wrong
@@ -174,7 +184,7 @@ describe('presentRow', () => {
     expect(v.samples).toEqual({
       found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
       reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
-      video: null })
+      video: null, kind: 'compare' })
   })
   it('a YouTube reference is a link into the owner\'s own video, at the second the excerpt came from', () => {
     // Nothing local holds that audio, so there is nothing to serve -- but the passage the fingerprint
@@ -186,14 +196,48 @@ describe('presentRow', () => {
     expect(v.samples?.reference).toBeNull()
     expect(v.samples?.video).toEqual({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=95', at: '1:35' })
   })
-  it('a quality rejection has nothing to listen to, because nothing was kept', () => {
-    // The spectral check is a fact about the file, not a judgement call -- there is no second opinion to
-    // have, so the row must not grow a player that implies there is.
+  it('a quality rejection whose copy was kept offers that copy alone, and says what the check is worth', () => {
+    // Issue #97: a sharp edge is evidence of a lossy source, not proof, so the owner may overrule it like a
+    // different recording (#92). There is nothing to compare with -- the reference is a lossy preview -- so
+    // the block plays the found copy alone, and the reference is not offered even when there is one.
+    const rejection = { id: 7, request_id: 1, reason: 'cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source',
+      bitrate_kbps: 320, cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '', kind: 'quality',
+      audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
+    expect(v.samples).toEqual({ found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
+      reference: null, video: null, kind: 'listen' })
+    expect(v.status).toMatch(/Kept aside for you to hear, not added/)
+    expect(v.rejection?.caption).toMatch(/^Nothing above 16 kHz\. .* still here, so you can hear it and decide\.$/)
+    expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('evidence, not proof') })
+  })
+  it('a bitrate rejection is a measured fact: no player, no evidence-not-proof note, and the plain wording', () => {
+    // Refused on bitrate, so it never reached the spectrum and carries no cutoff. Even a row that claims a
+    // kept copy is not offered one: the worker would refuse to file it.
+    const rejection = { id: 7, request_id: 1, reason: 'bitrate 128 kbps below 320', bitrate_kbps: 128, cutoff_hz: null,
+      spectrogram_path: '/x.png', created_at: '', kind: 'quality', audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
+    expect(v.samples).toBeNull()
+    expect(v.status).toBe('bitrate 128 kbps below 320. Deleted, not added to your library.')
+    expect(v.outcome?.note).not.toMatch(/evidence, not proof/)
+    expect(v.outcome?.note).toMatch(/checked, failed and deleted/)
+    expect(v.rejection?.caption).toBe('The file did not pass the quality check.')
+  })
+  it('a quality rejection with nothing kept has nothing to listen to', () => {
+    // A row written before copies were kept, or a format Flackey could not file: no player, no promise.
     const rejection = { id: 7, request_id: 1, reason: 'Sounds like a 128 kbps upscale', bitrate_kbps: 320,
       cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '' }
     const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
     expect(v.samples).toBeNull()
     expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a track kept after failing the quality check says so instead of passing', () => {
+    const track = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 16000, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: 44100,
+      catalog: null, evidence: [{ kind: 'quality_check', value: { status: 'failed', kept_by: 'owner' } }] }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks).toEqual([
+      { label: 'Quality check', value: 'kept anyway', ok: false },
+      { label: 'Audio only to', value: '16.0 kHz', ok: false }])
   })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
@@ -229,7 +273,7 @@ describe('presentRow', () => {
       fingerprint: { status: 'failed', score: 0.61, offset_s: null, reason: 'below 0.79' }, spectrogram_path: null,
       first_byte_ms: null, total_ms: null }
     expect(presentRow(bundle({ state: 'done', track_id: 11 }, { track, attempt }), opts).checks)
-      .toEqual([{ label: 'Verified to', value: '20.5 kHz', ok: true }])
+      .toEqual([{ label: 'Content to', value: '20.5 kHz', ok: true }])
   })
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')
@@ -240,6 +284,12 @@ describe('presentRow', () => {
     })
     const e = presentRow(bundle({ state: 'error', error_message: 'boom' }), opts)
     expect(e.status).toBe('Failed — boom'); expect(e.statusTone).toBe('red'); expect(e.action).toEqual({ label: 'Try again', kind: 'retry' })
+  })
+  it('offers a failure report on the failures the pipeline reached, not on a track the owner stopped', () => {
+    const reportable = (state: Request['state']) => presentRow(bundle({ state }), opts).reportable
+    expect(['rejected', 'not_found', 'error'].every(s => reportable(s as Request['state']))).toBe(true)
+    expect(['cancelled', 'done', 'duplicate', 'queued', 'fetching', 'awaiting_review']
+      .some(s => reportable(s as Request['state']))).toBe(false)
   })
   it('backoff row counts down and paused rows say so when Telegram is signed out', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)

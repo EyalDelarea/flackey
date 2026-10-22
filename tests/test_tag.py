@@ -95,6 +95,13 @@ def test_comment_for():
     assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 
 
+def test_comment_says_no_edge_rather_than_quoting_the_sentinel():
+    """22050 is the check's answer when it found no edge at all; "cutoff 22.1 kHz" in a player's comment
+    column would quote a measurement nobody made (issue #97)."""
+    clean = Verdict(True, "aiff", 1411, 22_050, "r", bit_depth=16, sample_rate=44100)
+    assert comment_for(clean, CT) == "flackey: verified aiff · no edge found · beatport 16552105 · via Deezer"
+
+
 def test_comment_names_the_fallback_tag_source():
     """A stand-in's negative id is Flackey's own, not Beatport's: the comment says where its tags came from
     (issue #146), or nothing when no catalogue knew the track."""
@@ -451,3 +458,10 @@ def test_the_wav_rewrite_keeps_the_file_s_permissions(tmp_path: Path):
     os.chmod(p, 0o644)
     _write_wav_info(p, VALUES)
     assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+def test_comment_says_unverified_on_a_copy_kept_after_failing_the_check():
+    """"Keep it anyway" files a copy the quality check refused (issue #97). The tag goes with the file into
+    every player, so it must not claim a check the file did not pass."""
+    kept = Verdict(False, "mp3", 320, 16_000, "cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source")
+    assert comment_for(kept, CT) == "flackey: unverified 320 kbps · cutoff 16.0 kHz · beatport 16552105 · via Deezer"

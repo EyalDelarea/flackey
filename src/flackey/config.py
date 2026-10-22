@@ -200,7 +200,7 @@ class Settings(BaseSettings):
 
     @property
     def rejected_dir(self) -> Path:
-        """Files a fingerprint refused but the owner may still want (issue #92). Not under `tmp_dir`: that
+        """Files a check refused but the owner may still want (issues #92, #97). Not under `tmp_dir`: that
         one is emptied on every pass by design, and these have to survive until the owner has listened."""
         return self.data_dir / "rejected"
 

@@ -408,13 +408,23 @@ describe('the Connections section', () => {
 
   it('does not let the Deezer bot look fine while Telegram is signed out', async () => {
     // The dependent state, told honestly: the bot is still switched on, but it is reached through an
-    // account that is gone, so the row is amber and points at Telegram rather than at itself.
+    // account that is gone, so it is paused -- amber, and pointing at Telegram rather than at itself.
     render(<SettingsPage live={signedOut()} onReconnect={() => {}} />)
     await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
+    expect(dot(connRow('Telegram'))).toHaveClass('amber')
     const bot = connRow('Deezer bot')
-    expect(within(bot).getByText('On, but Telegram is signed out')).toBeInTheDocument()
+    expect(within(bot).getByText('Paused — Telegram is signed out')).toBeInTheDocument()
     expect(dot(bot)).toHaveClass('amber')
     expect(dot(bot).className).not.toBe('status-dot')
+  })
+
+  it('does not call a signed-out Telegram a fault while the bot is switched off', async () => {
+    // Nothing waits on Telegram then: the same grey the bot's own row and the sidebar use, not amber.
+    render(<SettingsPage live={signedOut({ source_enabled: false })} onReconnect={() => {}} />)
+    await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
+    expect(dot(connRow('Telegram'))).toHaveClass('off')
+    expect(dot(connRow('Telegram'))).not.toHaveClass('amber')
+    expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
   })
 
   it('says a switched-off bot is signed out too, and offers the way back', () => {

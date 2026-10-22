@@ -134,7 +134,7 @@ def test_a_missing_ffprobe_is_reported_as_a_verify_failure_not_a_stack_trace(mon
     src = tmp_path / "a.flac"
     src.write_bytes(b"not audio")
 
-    with pytest.raises(verify.VerifyError, match="ffprobe"):
+    with pytest.raises(verify.ToolMissing, match="ffprobe"):
         verify.probe(src)
 
 

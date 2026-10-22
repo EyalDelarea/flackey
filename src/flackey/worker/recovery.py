@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..models import MISS_REASON, Request, RequestState
 from .policy import (
+    BOT_PAUSED,
     LONG_RETRY_EVERY_S,
     LONG_RETRY_OUTCOMES,
     LONG_RETRY_TIMES,
@@ -72,8 +73,9 @@ class RecoveryMixin:
         What to say. The old line asserted that Soulseek "has already looked and found nothing" whatever had
         actually happened, which for the live failure this was written from was untrue three ways over: the
         peers had five perfect copies and were merely busy. The attempt row knows which outcome it really was
-        and `MISS_REASON` already words each one, so read it rather than guess. Likewise the source is
-        "switched off" when the owner switched it off, and only otherwise "unavailable".
+        and `MISS_REASON` already words each one, so read it rather than guess. Likewise the bot is
+        "switched off" when the owner switched it off, "paused" when this pass skipped it because Telegram
+        was signed out, and only otherwise said to have offered nothing.
 
         Whether to come back. Exactly `_lossless_allowed`: after a retryable outcome the next pass really does
         search again, and after a definitive one it would repeat this pass's work to reach this pass's answer
@@ -85,22 +87,38 @@ class RecoveryMixin:
         if why is None:
             why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
-        fallback = ("the Deezer bot is switched off, so there is no lossy copy to fall back on"
-                    if not self.settings.source_enabled else "Deezer offered nothing to fall back on")
+        paused = self.settings.source_enabled and req.id in self._bot_skipped
+        if paused and self._bot_ready():
+            # Telegram came back while this pass was on Soulseek -- after the tick that re-queues what the
+            # paused bot left behind, so nothing else would bring this one back. Go round again with it.
+            self._set_state(req, RequestState.QUEUED, flag_reason="Telegram is back; asking the Deezer bot",
+                            retry_after=None)
+            return
+        if not self.settings.source_enabled:
+            fallback = "the Deezer bot is switched off, so there is no lossy copy to fall back on"
+        elif paused:
+            fallback = f"{BOT_PAUSED}, so there is no lossy copy to fall back on"
+        else:
+            fallback = "Deezer offered nothing to fall back on"
         reason = f"no way to fetch this track: {why}, {fallback}"
+        # The long wait's words are what the row shows for six hours at a time, and what
+        # `_requeue_for_the_bot` reads: a paused bot has to be in them, not only in the quick ladder's.
+        waiting_on = f"{why}; {BOT_PAUSED}" if paused else why
         transient = outcome in LONG_RETRY_OUTCOMES
         if self._lossless_allowed(self.store.get_request(req.id)):
             await self._retry_or_fail(req, reason, wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None,
-                                      long_after=why if transient else None)
+                                      long_after=waiting_on if transient else None)
             return
         if transient:
             # A verdict the next minute would only repeat (every copy was a different recording, every peer
             # refused): no quick ladder, straight to the wait for the people online to change.
-            await self._wait_for_soulseek(req, why, max(req.attempts + 1, MAX_ATTEMPTS))
+            await self._wait_for_soulseek(req, waiting_on, max(req.attempts + 1, MAX_ATTEMPTS))
             return
         # "Try again" is the right advice for a miss a later search could answer differently -- but not for
-        # one that cannot be checked at all: with no reference, the next search reaches the same dead end.
-        reason += (". Use Try again once it can be checked" if outcome == "fingerprint_unavailable"
+        # one that cannot be checked at all: with no reference, or no ffmpeg, the next search reaches the same
+        # dead end.
+        reason += (". Use Try again once it can be checked"
+                   if outcome in ("fingerprint_unavailable", "verify_unavailable")
                    else ". Use Try again in the app to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")

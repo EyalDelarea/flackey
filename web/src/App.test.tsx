@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import App from './App'
 import { api } from './api'
 import type { AppSettings, Health, Stats } from './api'
@@ -81,6 +81,35 @@ describe('reconnect and a live Soulseek connection', () => {
     expect(screen.queryByText('Connect a source')).not.toBeInTheDocument()
     const soulseekStep = [...document.querySelectorAll('.step')].find(el => el.textContent?.includes('Soulseek'))
     expect(soulseekStep).not.toHaveClass('skipped')
+  })
+})
+
+describe('the Telegram banner', () => {
+  it('says only the Deezer bot is paused, and that Soulseek keeps going, while Telegram is signed out', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: true }))
+    render(<App />)
+    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    expect(banner).toHaveClass('amber')
+    expect(banner).toHaveTextContent('Telegram is signed out')
+    expect(banner).toHaveTextContent('Soulseek keeps downloading')
+    expect(banner).not.toHaveTextContent('keep digging')   // the old line said downloads waited on Telegram
+    expect(screen.getAllByText(/Deezer bot paused/)).toHaveLength(1)
+    fireEvent.click(within(banner).getByRole('button', { name: 'Reconnect' }))
+    expect(await screen.findByText('Scan with the Telegram app on your phone')).toBeInTheDocument()
+  })
+
+  it('stays away when the bot is switched off, since nothing then needs Telegram', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: false }))
+    render(<App />)
+    await screen.findByText('Not connected')
+    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+  })
+
+  it('stays away while Telegram is signed in', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true, source_enabled: true }))
+    render(<App />)
+    await screen.findByText('Connected')
+    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
   })
 })
 

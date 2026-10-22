@@ -84,6 +84,31 @@ it('closes on Escape and on the close button', () => {
   expect(onClose).toHaveBeenCalledTimes(2)
 })
 
+it('reports one failed track: asks for nothing, says what it found, and sends it by request', async () => {
+  vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, log_lines: 12,
+    diagnosis: 'Soulseek: 4 copies found, 3 tried, the transfers failed',
+    files: [{ name: 'report.txt', text: 'Flackey failure report' }, { name: 'request-42.log', text: 'req#42 failed' }] })
+  vi.spyOn(api, 'sendBugReport').mockResolvedValue({ file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 'x', body: 'x' })
+  render(<ReportBugDialog screen="download" requestId={42} onClose={() => {}} />)
+  expect(screen.getByRole('heading', { name: 'Report this failure' })).toBeInTheDocument()
+  expect(api.bugPreview).toHaveBeenCalledWith(expect.objectContaining({ screen: 'download', request_id: 42 }))
+  expect(await screen.findByText(/What happened to this track: Soulseek: 4 copies found, 3 tried, the transfers failed/)).toBeInTheDocument()
+  expect(screen.getByText(/log lines about this track \(12 lines\)/)).toBeInTheDocument()
+  expect(screen.queryByLabelText(/What were you doing/)).not.toBeInTheDocument()
+  const go = screen.getByRole('button', { name: 'Email with Gmail' })
+  expect(go).toBeEnabled()
+  fireEvent.click(go)
+  await waitFor(() => expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining(
+    { request_id: 42, description: '', via: 'gmail' })))
+  expect(await screen.findByRole('heading', { name: 'Almost done' })).toBeInTheDocument()
+})
+
+it('sends no request with a general report', () => {
+  render(<ReportBugDialog screen="library" onClose={() => {}} />)
+  expect(screen.getByRole('heading', { name: 'Report a problem' })).toBeInTheDocument()
+  expect(vi.mocked(api.bugPreview).mock.calls[0][0]).not.toHaveProperty('request_id')
+})
+
 it('speaks Windows on Windows: File Explorer, no Mac, and the version loses its "(Windows app)"', async () => {
   vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, summary: [['Flackey', '0.1.9 (Windows app)'], ['System', 'Windows 11 (AMD64)']] })
   vi.spyOn(api, 'sendBugReport').mockResolvedValue({ file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 'x', body: 'x' })

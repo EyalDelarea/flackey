@@ -33,7 +33,7 @@ export default function WelcomeStep({ onStart }: { onStart: () => void }) {
       </div>
       <div className="cta">
         <button className="btn-primary lg" onClick={onStart}>Get started</button>
-        <div className="note">Two minutes: pick a folder, connect Telegram, add Soulseek.</div>
+        <div className="note">Two minutes: pick a folder, then connect Telegram, Soulseek or both.</div>
       </div>
     </div>
   </div>)
