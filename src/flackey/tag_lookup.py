@@ -35,7 +35,8 @@ from . import __version__
 from .catalog import with_original_date
 from .deezer import DeezerApi, DeezerError
 from .identify import parse_version
-from .models import CatalogTrack, is_original, norm
+from .models import CatalogTrack, norm
+from .version import arrangement, says_remaster, split_version
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +57,6 @@ SEARCH_PER_PAGE = 25
 # ---- titles and versions ---------------------------------------------------------------------------
 
 _PART_RE = re.compile(r"\bpt\b\.?", re.IGNORECASE)
-_REMASTER_RE = re.compile(r"\bremaster", re.IGNORECASE)
-# The remaster wording as a whole, so "2024 Remaster" / "Remastered 2011" / "Digital Remaster" leave
-# nothing behind that would read as a version of its own.
-_REMASTER_TEXT_RE = re.compile(r"\b(?:(?:19|20)\d{2}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?"
-                               r"(?:\s+version)?(?:\s+(?:19|20)\d{2})?\b", re.IGNORECASE)
-_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _DISCOGS_SUFFIX_RE = re.compile(r"\s*\(\d+\)$")     # Discogs' "Artist (2)" disambiguation
 _ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?)\s*", re.IGNORECASE)
 
@@ -90,10 +85,7 @@ def version_key(versions: list[str]) -> str:
     recording and an "Original Mix" is no version at all, so both read as ""."""
     parts: list[str] = []
     for v in versions:
-        v = _REMASTER_TEXT_RE.sub(" ", v)
-        if is_original(v):
-            continue
-        k = norm(v)
+        k = arrangement(v)
         if k and k not in parts:
             parts.append(k)
     return " ".join(parts)
@@ -122,11 +114,9 @@ class Wanted:
         base, versions = split_title(title)
         if mix_name:
             versions.append(mix_name)
-        texts = versions + ([album] if album else [])
-        remaster_text = next((t for t in texts if _REMASTER_RE.search(t)), None)
-        year = _YEAR_RE.search(remaster_text) if remaster_text else None
+        v = split_version(None, *versions, album)
         return cls(artist=artist, title=base, version=version_key(versions), duration_s=duration_s,
-                   remaster=remaster_text is not None, remaster_year=year.group(0) if year else None)
+                   remaster=v.remaster, remaster_year=v.year)
 
     @property
     def first_artist(self) -> str:
@@ -397,14 +387,14 @@ def _same_label(a: str | None, b: str | None) -> bool:
 
 def _is_remaster_result(r: dict) -> bool:
     texts = [r.get("title") or ""] + list(r.get("format") or [])
-    return any(_REMASTER_RE.search(t) for t in texts)
+    return any(says_remaster(t) for t in texts)
 
 
 def _is_remaster_release(rel: dict) -> bool:
     texts = [rel.get("title") or ""]
     for f in rel.get("formats") or []:
         texts += [f.get("text") or ""] + list(f.get("descriptions") or [])
-    return any(_REMASTER_RE.search(t) for t in texts)
+    return any(says_remaster(t) for t in texts)
 
 
 def _year(value) -> str | None:

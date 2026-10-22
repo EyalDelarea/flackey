@@ -192,7 +192,7 @@ def test_the_default_gate_is_the_hard_rules_then_the_identity_rankers():
     green. `version` leads the title-closeness rankers by the replay measurement (2026-09-21-no-pick-replay.md);
     `same_song` goes before it so a version match can never lift a different song over the asked one."""
     assert [n for n, _ in RULES] == ["extension", "has_length", "limits", "plausible_size", "queue",
-                                    "banned_user", "remaster_named"]
+                                    "banned_user"]
     assert [n for n, _ in RANKERS][:5] == ["same_song", "version", "duration", "title", "artist"]
     bound = inspect.signature(pick).parameters
     assert bound["rules"].default is RULES and bound["rankers"].default is RANKERS
@@ -256,19 +256,56 @@ def test_the_year_is_left_out_of_the_search_for_a_version():
     assert search_text(Reference("A", "T", "2012 Remix", 300)) == "A T Remix"
 
 
-def test_a_remaster_must_say_remaster_somewhere_in_its_path():
+def test_a_remaster_path_ranks_first_and_a_plain_one_is_still_tried():
     """The fingerprint cannot tell a remaster from the original it was made from (both 0.96 against the
-    2024 video, 2026-10-20), so the peer's path is the only evidence a file is the remaster."""
-    assert rejected_by(mk(path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403), LSD_2024) == "remaster_named"
-    assert rejected_by(mk(path="The Albums Remastered (2023)\\01. LSD.flac", length_s=402), LSD_2024) is None
-    assert rejected_by(mk(path="x\\01-hallucinogen-lsd_(remastered_2024).flac", length_s=403), LSD_2024) is None
-    assert rejected_by(mk(path="Twisted\\01. Hallucinogen - LSD.flac"), REF) is None
+    2024 video, 2026-10-20), so the peer's path saying remaster is the first evidence. Until issue #172 a
+    path without the word was rejected outright; it is now tried after every path that has it, and its own
+    tags decide whether it is filed as the remaster or flagged."""
+    plain = mk(path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403)
+    assert rejected_by(plain, LSD_2024) is None
+    assert rank_version(mk(path="The Albums Remastered (2023)\\01. LSD.flac", length_s=402), LSD_2024) == 0
+    assert rank_version(mk(path="x\\01-hallucinogen-lsd_(remastered_2024).flac", length_s=403), LSD_2024) == 0
+    assert rank_version(plain, LSD_2024) == 1
+    assert rank_version(mk(path="The Singles Remastered (2024)\\02 LSD (Live Mix).flac"), LSD_2024) == 2
 
 
 def test_the_remaster_beats_a_live_mix_from_the_remastered_singles():
-    """What request #384 was offered: the remastered singles' 9:09 Live Mix came first four times."""
+    """What request #384 was offered: the remastered singles' 9:09 Live Mix came first four times. The
+    plain "Twisted" copy is tried before it now: it is the right arrangement, and may be the remaster."""
     files = [mk(username="live", path="The Singles Remastered (2024)\\02 LSD (Live Mix).flac", length_s=549),
              mk(username="orig", path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403),
              mk(username="rm", path="The Albums Remastered (2023)\\01. LSD.flac", length_s=402)]
     report = pick(files, LSD_2024, PickPolicy())
-    assert [f.username for f in report.survivors] == ["rm", "live"]
+    assert [f.username for f in report.survivors] == ["rm", "orig", "live"]
+
+
+def test_an_original_request_ranks_a_remaster_path_last():
+    """Asked for the original, a remastered copy would pass the fingerprint as it: it is the last thing tried,
+    after even a file that names another mix (issue #172)."""
+    lsd = Reference(artist="Hallucinogen", title="LSD", mix_name="Original Mix", duration_s=403)
+    files = [mk(username="rm", path="The Albums Remastered (2023)\\01. LSD.flac", length_s=403),
+             mk(username="rm2", path="x\\01. Hallucinogen - LSD (Remastered 2024).flac", length_s=403),
+             mk(username="dub", path="x\\01. Hallucinogen - LSD (Dub).flac", length_s=403),
+             mk(username="orig", path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403, has_free_slot=False)]
+    report = pick(files, lsd, PickPolicy())
+    assert [f.username for f in report.survivors][:2] == ["orig", "dub"]
+    assert {f.username for f in report.survivors[2:]} == {"rm", "rm2"}
+
+
+def test_a_record_on_a_remastered_release_is_searched_and_ranked_as_the_remaster():
+    """Beatport files some remasters as "Original Mix" on a release that says "Remastered": the reference
+    must still ask for the remaster, or the gate would rank the remaster last (issue #172)."""
+    record = CatalogTrack(id=8, isrc="USA2P0300457", artist="Hallucinogen", title="LSD", mix_name="Original Mix",
+                          label="Twisted", genre="Psy-Trance", release_name="The Albums Remastered", duration_ms=403000)
+    ref = reference_for(record, Candidate(source="beatport", source_ref="beatport:8", artist="Hallucinogen",
+                                          title="LSD", duration_s=403))
+    assert ref.mix_name == "Remastered" and search_text(ref) == "Hallucinogen LSD Remastered"
+    files = [mk(username="orig", path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403),
+             mk(username="rm", path="The Albums Remastered (2023)\\01. LSD.flac", length_s=403, has_free_slot=False)]
+    assert pick(files, ref, PickPolicy()).survivors[0].username == "rm"
+
+
+def test_a_deezer_candidate_on_a_remastered_album_is_the_remaster_reference():
+    cand = Candidate(source="deezer_bot", source_ref="dz:2", artist="Hallucinogen", title="LSD", duration_s=403,
+                     deezer_id=2, album="The Albums Remastered")
+    assert reference_for(None, cand).mix_name == "Remastered"

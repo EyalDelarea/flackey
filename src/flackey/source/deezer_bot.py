@@ -138,6 +138,7 @@ class DeezerBotSource:
         c.has_preview = bool(t.preview_url)
         # Free for the same reason: what dates the recording when Beatport only sells a later release of it.
         c.release_date = t.release_date
+        c.album = t.album                 # what says "remaster" when the title does not (issue #172)
         if t.artist:
             c.artist = t.artist
         if t.title:

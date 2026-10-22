@@ -377,6 +377,15 @@ def read_tags(path: Path) -> dict[str, str]:
     return out
 
 
+def tags_as_arrived(path: Path) -> dict[str, str]:
+    """`read_tags`, or nothing for a file whose tags cannot be read: a peer's copy with a broken tag is no
+    worse a copy, and the tags are only ever evidence about its version (issue #172)."""
+    try:
+        return read_tags(path)
+    except Exception:  # noqa: BLE001 - mutagen raises its own error types for every malformed tag
+        return {}
+
+
 # A catalog cover is a few hundred kilobytes; the URL is another server's to answer, and its body ends up
 # in every tag written, so it is read only this far.
 MAX_ARTWORK_BYTES = 10 * 1024 * 1024

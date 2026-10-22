@@ -15,10 +15,12 @@ from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
+from ..match import candidate_version
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
-from ..tag import write_tags
+from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
 from ..verify import verify
+from ..version import VersionCheck, check_version, split_version
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
@@ -263,6 +265,15 @@ class FilingMixin:
         return dated
 
 
+    async def _lossy_version(self, req: Request, cand: Candidate, tmp: Path) -> VersionCheck | None:
+        """The version check for a file that came as the candidate's own record (the Deezer copy, or one the
+        owner kept): Deezer's album and title are evidence, and so are the file's tags (issue #172)."""
+        asked = split_version(candidate_version(cand), cand.album, req.query_version)
+        tags = await asyncio.to_thread(tags_as_arrived, tmp)
+        return check_version(asked, tags=tags, metadata=(cand.album, cand.title, cand.mix_name),
+                             release_year=cand.release_date)
+
+
     async def _isrc_record(self, req: Request, isrc: str) -> DeezerTrack | None:
         """Deezer's record for `isrc`, once per ISRC per run, paced with every other Deezer call the worker
         makes. Fails open: any error is the release's own date, as before the lookup existed. A failure --
@@ -297,6 +308,8 @@ class FilingMixin:
         added to its playlist and announced exactly like every other track -- the alternative was a second
         copy of this drifting away from the first."""
         self._set_state(req, RequestState.FILING)
+        # Read before `write_tags` replaces the file's own tags; a lossless hit read them before converting
+        version = hit.version_check if hit is not None else await self._lossy_version(req, cand, tmp)
         catalog = await self._tags_for(req, cand, catalog)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
@@ -320,6 +333,8 @@ class FilingMixin:
         # would not be.
         if fp is not None:
             self._record_evidence(track_id, fp, hit)
+        if version is not None:
+            self.store.add_evidence(track_id, "version_check", version.to_dict())
         if not verdict.passed:
             # Only `accept_rejection` files a failed verdict: the owner overruled the quality check (issue
             # #97). Recorded beside the fingerprint so the library says so, and the page can too.
@@ -336,6 +351,8 @@ class FilingMixin:
                  f"{catalog.genre} / {catalog.label}"]
         if not verdict.passed:
             parts.insert(3, "kept anyway: failed the quality check")
+        if version is not None and version.status == "unconfirmed":
+            parts.insert(1, "version unconfirmed")
         if conf is not None:
             parts.append(f"{conf}%")
         msg = " · ".join(parts)
@@ -414,6 +431,8 @@ class FilingMixin:
             sample_rate=hit.verdict.sample_rate)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
         self._record_evidence(t.id, hit.fingerprint, hit)
+        if hit.version_check is not None:
+            self.store.add_evidence(t.id, "version_check", hit.version_check.to_dict())
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:

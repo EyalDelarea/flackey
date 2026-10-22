@@ -1601,3 +1601,49 @@ async def test_run_forever_keeps_going_with_telegram_signed_out(env, source_enab
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ---- which version: from metadata, not the fingerprint (issue #172) -------------------------------------
+
+def _lsd(deezer_id: int, album: str, rank: int) -> Candidate:
+    return Candidate(source="deezer_bot", source_ref=f"dz_track:{deezer_id}:send", artist="Hallucinogen", title="LSD",
+                     duration_s=3, deezer_id=deezer_id, isrc="USA2P0300457", rank=rank, album=album)
+
+
+async def test_a_remaster_video_is_identified_among_the_remaster_previews_only(env, monkeypatch):
+    """Both "LSD" previews match the 2024 video at 0.96, and Deezer lists the remaster with no version text:
+    the original, first by text, used to be tried first and filed. Only its album tells the two apart."""
+    _settings, store, _notifier = env
+    tried: list[list[int]] = []
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        tried.append([c.deezer_id for c in cands])
+        return Identification(cands[0], 0.96, [(cands[0].deezer_id, 0.96)], "matches")  # any preview would
+
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
+    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0), _lsd(2, "The Albums Remastered", 1)]), FakeCatalog([]))
+    rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert tried == [[2]]
+    assert r.state == RequestState.DONE and store.get_candidate(r.chosen_candidate_id).deezer_id == 2
+    check = {e.kind: e.value for e in store.list_evidence(r.track_id)}["version_check"]
+    assert check["status"] == "confirmed"          # Deezer's own album says remaster
+
+
+async def test_a_remaster_video_with_no_remaster_on_deezer_searches_on_its_own_words(env, monkeypatch):
+    _settings, store, _notifier = env
+    tried = []
+
+    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
+        tried.append(cands)
+        return Identification(cands[0], 0.96, [], "matches")
+
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
+    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
+    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0)]), FakeCatalog([]))
+    rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc")
+    r = await w.process(rid)
+    assert tried == [] and r.track_id is None and r.chosen_candidate_id is None

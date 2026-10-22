@@ -186,7 +186,8 @@ async def search_deezer(text: str, http: httpx.AsyncClient, *, limit: int = LOOK
     except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise DeezerSearchError(str(e) or type(e).__name__) from e
     return [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
-                      mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, isrc=t.isrc, rank=i)
+                      mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, isrc=t.isrc, rank=i,
+                      release_date=t.release_date, album=t.album)
             for i, t in enumerate(found) if t.preview_url]
 
 

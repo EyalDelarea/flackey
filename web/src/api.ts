@@ -24,7 +24,7 @@ export interface Request { id:number; created_at:string; updated_at:string; raw_
 // is offered a button like any other. Only an explicit `false` hides the control.
 export interface Candidate { id:number; request_id:number; source:string; source_ref:string; artist:string; title:string; mix_name:string|null;
   duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null;
-  has_preview?:boolean|null }
+  has_preview?:boolean|null; album?:string|null }
 export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;
   catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null
   /** The recording's first release, where it predates this release: the date the file's tags carry. Absent
@@ -34,8 +34,9 @@ export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:nu
 export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number; cutoff_hz:number; file_size:number; artist:string; title:string; mix_name:string;
   duration_s:number|null; isrc:string|null; catalog_track_id:number|null; request_id:number|null; added_at:string; verified_at:string|null; spectrogram_path:string|null;
   source:string; source_fmt:string|null; bit_depth:number|null; sample_rate:number|null; format?:TrackFormat; catalog:Catalog|null
-  /** What the file was checked against and how it came out. The page reads one kind: `quality_check`, written
-      only when the owner kept a copy the quality check refused (issue #97). */
+  /** What the file was checked against and how it came out. The page reads two kinds: `quality_check`, written
+      only when the owner kept a copy the quality check refused (issue #97), and `version_check`, whose
+      `status` is "unconfirmed" when nothing in the file said it is the version asked for (issue #172). */
   evidence?:{ kind:string; value:Record<string, unknown> }[] }
 export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
 export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;

@@ -13,7 +13,9 @@ from rapidfuzz import fuzz
 
 from .config import Settings
 from .identify import parse_version
+from .match import candidate_version
 from .models import Candidate, CatalogTrack, is_original, norm
+from .version import record_version, says_remaster, split_version, with_remaster
 
 LOSSLESS_EXTENSIONS = frozenset({"flac", "wav", "aiff", "aif"})
 MAX_SAMPLE_RATE = 48_000                       # CDJs play 44.1 and 48 kHz; nothing higher gets downloaded
@@ -91,11 +93,14 @@ def first_artist(artist: str) -> str:
 
 
 def reference_for(catalog: CatalogTrack | None, cand: Candidate, requested_duration_s: int | None = None) -> Reference:
+    """The reference's mix name says remaster whenever the record's release does, so a record Beatport files
+    as "Original Mix" on a remastered release is searched and ranked as the remaster (issue #172)."""
     if catalog is not None:
-        return Reference(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s or cand.duration_s,
+        mix = with_remaster(catalog.mix_name, record_version(catalog).remaster)
+        return Reference(catalog.artist, catalog.title, mix, catalog.duration_s or cand.duration_s,
                          cand.deezer_id, requested_duration_s)
-    title, version = parse_version(cand.title)
-    return Reference(cand.artist, title, cand.mix_name or version or "Original Mix", cand.duration_s, cand.deezer_id,
+    title, _ = parse_version(cand.title)
+    return Reference(cand.artist, title, candidate_version(cand), cand.duration_s, cand.deezer_id,
                      requested_duration_s)
 
 
@@ -197,16 +202,7 @@ def rule_banned_user(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | No
 
 
 def _asks_remaster(ref: Reference) -> bool:
-    return "remaster" in norm(ref.mix_name)
-
-
-def rule_remaster_named(f: LosslessFile, ref: Reference, p: PickPolicy) -> str | None:
-    """The one identity check that rejects. A remaster is the original recording mastered again, so the
-    fingerprint matches both (0.96 each against the 2024 "LSD" video, 2026-10-20) and cannot prove which one
-    came. The peer's folder or file name saying so is the only evidence there is."""
-    if _asks_remaster(ref) and "remaster" not in norm(f.path):
-        return "nothing in its path says remaster"
-    return None
+    return split_version(ref.mix_name).remaster
 
 
 Ranker = Callable[[LosslessFile, Reference], object]
@@ -214,14 +210,14 @@ DURATION_BUCKET_S = 5          # encoding slack between releases of one recordin
 
 
 def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
-    """Does the file's name claim the version the reference is? Until #69 this was a rejection; a file that
-    names the wrong mix is now merely the last thing to try, because only the fingerprint can settle it."""
+    """Does the file's name claim the arrangement the reference is? Until #69 this was a rejection; a file
+    that names the wrong mix is now merely the last thing to try, because only the fingerprint can settle it.
+    Whether it is the remaster is `rank_version`'s question, asked of the whole path."""
     title, version = file_title(f.name, ref.artist)
     extra = [t for t in title.split() if t not in set(norm(ref.title).split())]
     words = set(norm(version or "").split()) | set(extra)
-    if ref.is_original:
+    if ref.is_original or split_version(ref.mix_name).is_original:
         return not (words & VERSION_WORDS) or "original" in words
-    # The remaster rule has already checked the whole path, which is where peers usually say it
     want = [w for w in norm(_YEAR.sub("", ref.mix_name)).split()
             if w not in VERSION_WORDS and not w.startswith("remaster")]
     have = set(norm(f"{version or ''} {title}").split())
@@ -229,7 +225,22 @@ def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
 
 
 def rank_version(f: LosslessFile, ref: Reference) -> int:
-    return 0 if _version_agrees(f, ref) else 1
+    """0 the asked version, 1 the asked arrangement without the word for the asked release, 2 the rest.
+
+    A remaster is the original recording mastered again, so the fingerprint matches both (0.96 each
+    against the 2024 "LSD" video, 2026-10-20) and cannot prove which one came: the peer's folder or file
+    name saying remaster is the first evidence there is, and the file's own tags after the download the
+    second (`version.check_version`). Until issue #172 a remaster request rejected every path without the
+    word; a file that lacks it is now tried after every one that has it, and filed flagged "version
+    unconfirmed" unless its tags settle it. Asked for the original, a path that says remaster comes last of
+    all: the fingerprint would pass it as the original."""
+    agrees = _version_agrees(f, ref)
+    named = says_remaster(f.path)
+    if _asks_remaster(ref):
+        return (0 if named else 1) if agrees else 2
+    if named:
+        return 2
+    return 0 if agrees else 1
 
 
 def rank_duration(f: LosslessFile, ref: Reference) -> int:
@@ -279,7 +290,7 @@ def rank_artist(f: LosslessFile, ref: Reference) -> int:
 HARD_RULES: list[tuple[str, Rule]] = [
     ("extension", rule_extension), ("has_length", rule_has_length), ("limits", rule_limits),
     ("plausible_size", rule_plausible_size),
-    ("queue", rule_queue), ("banned_user", rule_banned_user), ("remaster_named", rule_remaster_named),
+    ("queue", rule_queue), ("banned_user", rule_banned_user),
 ]
 IDENTITY_RANKERS: list[tuple[str, Ranker]] = [
     ("same_song", rank_same_song), ("version", rank_version), ("duration", rank_duration), ("title", rank_title),

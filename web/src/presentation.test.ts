@@ -276,6 +276,18 @@ describe('presentRow', () => {
       { label: 'Quality check', value: 'kept anyway', ok: false },
       { label: 'Audio only to', value: '16.0 kHz', ok: false }])
   })
+  it('a track whose version nothing confirmed says so, and a confirmed one says nothing extra', () => {
+    // Issue #172: the fingerprint proves the recording, not the remaster, so an unconfirmed one is flagged.
+    const track = (status: string) => ({ id: 9, path: '/l/a.aiff', fmt: 'aiff', bitrate_kbps: 1411, cutoff_hz: 22050,
+      file_size: 1, artist: 'A', title: 'T', mix_name: 'Remastered 2024', duration_s: 1, isrc: null, catalog_track_id: null,
+      request_id: 1, added_at: '', verified_at: null, spectrogram_path: null, source: 'slskd', source_fmt: 'flac',
+      bit_depth: 16, sample_rate: 44100, catalog: null, evidence: [{ kind: 'version_check', value: { status, reason: 'r' } }] })
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: track('unconfirmed') }), opts).checks).toEqual([
+      { label: 'Version', value: 'unconfirmed', ok: false },
+      { label: 'Spectrum', value: 'no edge found', ok: true }])
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: track('confirmed') }), opts).checks).toEqual([
+      { label: 'Spectrum', value: 'no edge found', ok: true }])
+  })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
       spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }

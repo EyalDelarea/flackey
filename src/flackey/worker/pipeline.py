@@ -8,7 +8,7 @@ from pathlib import Path
 from ..catalog import CatalogUnavailable, best_match, with_original_date
 from ..identify import parse_text
 from ..library import find_duplicate
-from ..match import candidate_query, candidate_version, decide, same_version
+from ..match import candidate_query, candidate_version, decide, identification_order, same_version
 from ..models import Candidate, CatalogTrack, Query, Request, RequestState
 from ..notify import Button
 from ..reference import Identification, identify_record
@@ -30,6 +30,7 @@ class PipelineMixin:
             query = parse_text(req.raw_text)
             self.store.update_request(req.id, query_artist=query.artist, query_title=query.title,
                                       query_version=query.version)
+            req = self.store.get_request(request_id)   # later stages read the asked version off the row
 
         if req.chosen_candidate_id is not None:
             cand = self.store.get_candidate(req.chosen_candidate_id)
@@ -117,10 +118,16 @@ class PipelineMixin:
         decision = decide(query, cands, catalog)
         ident: Identification | None = None
         if video is not None:
-            ordered = sorted(cands, key=lambda c: -(c.score or 0))
-            async with self._cpu:
-                ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
-                                              minimum=self.settings.lossless_fingerprint_min)
+            # Only the asked version's previews: the fingerprint matches a remaster's preview and its
+            # original's alike, so trying the wrong one first filed it (issue #172)
+            ordered = identification_order(query, cands)
+            if ordered:
+                async with self._cpu:
+                    ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
+                                                  minimum=self.settings.lossless_fingerprint_min)
+            else:
+                ident = Identification(None, None, [], f"no Deezer record is the requested version "
+                                                       f"'{query.version}'")
             log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
         self._interpret(req, video, ident)   # labels the request in the background; changes nothing here
         chosen_obj = ident.chosen if ident is not None else decision.chosen

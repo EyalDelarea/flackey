@@ -9,9 +9,10 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from .match import candidate_version, versions_agree
+from .match import candidate_release, candidate_version
 from .models import Candidate, CatalogTrack, Track
 from .store import Store
+from .version import Version, agrees, record_version, split_version
 
 log = logging.getLogger(__name__)
 _BAD = re.compile(r'[\\/:*?"<>|]')
@@ -157,13 +158,24 @@ def _present(store: Store, t: Track | None) -> Track | None:
 
 def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate) -> Track | None:
     isrc = (catalog.isrc if catalog else None) or cand.isrc
-    version = catalog.mix_name if catalog else candidate_version(cand)
+    version = record_version(catalog) if catalog else candidate_release(cand)
     if isrc:
         # A label can reissue a remaster under the original's ISRC (Hallucinogen's "LSD (Remastered
         # 2024)", 2026-10-20), so the ISRC is only the same track when the version agrees too.
         for t in store.find_tracks_by_isrc(isrc):
-            if (not (t.mix_name and version) or versions_agree(t.mix_name, version)) and _present(store, t):
+            if _same_version(t, version) and _present(store, t):
                 return t
     if catalog:
-        return _present(store, store.find_track_by_meta(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s))
-    return _present(store, store.find_track_by_meta(cand.artist, cand.title, candidate_version(cand), cand.duration_s))
+        t = store.find_track_by_meta(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s)
+    else:
+        t = store.find_track_by_meta(cand.artist, cand.title, candidate_version(cand), cand.duration_s)
+    # Beatport files some remasters as "Original Mix" on a remastered release, so the mix name alone
+    # matches the original already filed; the version has to agree here too.
+    return _present(store, t) if t is not None and _same_version(t, version) else None
+
+
+def _same_version(t: Track, version: Version) -> bool:
+    """A library track's stored mix agrees with `version` (a track with no mix is taken as agreeing). The
+    library keeps no release name, so a remaster filed as "Original Mix" reads as the original: asked for
+    again, it is fetched once more rather than an original standing in for it."""
+    return not t.mix_name or agrees(split_version(t.mix_name), version)
