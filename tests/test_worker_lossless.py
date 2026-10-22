@@ -2812,7 +2812,7 @@ async def test_with_no_extended_mix_the_normal_version_is_filed_and_the_done_lin
     assert (t.mix_name, t.duration_s, t.isrc, t.source) == ("Original Mix", 3, "UKU932231081", "soulseek")
     kinds = {e.kind: e.value for e in store.list_evidence(t.id)}
     assert kinds["extended"] == {"sought": True, "found": False, "mix_name": "Original Mix"}
-    assert "\nNo extended mix found, got the Original Mix" in notifier.sent[-1][0]
+    assert "\nNo extended mix found, so this is the Original Mix." in notifier.sent[-1][0]
     # the extended spelling's miss set no verdict and stopped nothing
     assert store.get_attempt_for_request(rid).outcome == "filed"
 
@@ -2908,3 +2908,24 @@ async def test_upgrade_never_swaps_a_radio_edit_for_its_extended_mix(lenv, monke
     assert after.path == before.path and after.path.exists() and after.mix_name == before.mix_name
     assert all("extended" not in s for s in provider.searches)    # the setting does not reach an upgrade
     assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_an_extended_mix_the_worker_filed_does_not_hide_the_radio_edit_once_the_setting_is_off(
+        lenv, monkeypatch, tmp_path: Path):
+    """The worker files the extended mix against the radio edit's record (its catalog id), not a row put in
+    by hand: switched off again, the same request still gets the radio edit, as a second track."""
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    w = make(lenv)
+    first = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert first.state == RequestState.DONE and store.get_track(first.track_id).mix_name == "Extended Mix"
+    settings.prefer_extended = False
+    second = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert second.state == RequestState.DONE and second.track_id != first.track_id
+    assert store.get_track(second.track_id).mix_name == "Original Mix"
+    assert sorted(t.mix_name for t in store.find_tracks_by_title("Astral Projection", "Into the Void")) == [
+        "Extended Mix", "Original Mix"]
+    # and on again, the extended mix already filed is the duplicate: nothing is searched
+    settings.prefer_extended = True
+    provider.searches.clear()
+    third = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert third.state == RequestState.DUPLICATE and third.track_id == first.track_id and provider.searches == []

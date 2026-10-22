@@ -399,7 +399,7 @@ class FilingMixin:
             parts.append(f"{conf}%")
         msg = " · ".join(parts)
         if sought and not extended:
-            msg += f"\nNo extended mix found, got the {catalog.mix_name or 'Original Mix'}"
+            msg += f"\nNo extended mix found, so this is the {catalog.mix_name or 'Original Mix'}."
         miss = self._lossless_miss_line(req)
         if miss:
             msg += f"\n{miss}"
