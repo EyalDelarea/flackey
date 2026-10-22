@@ -418,6 +418,13 @@ describe('the Connections section', () => {
     expect(dot(bot).className).not.toBe('status-dot')
   })
 
+  it('says Telegram could not be reached rather than signed out when it never answered', async () => {
+    render(<SettingsPage live={signedOut({ telegram_unreachable: true })} onReconnect={() => {}} />)
+    await waitFor(() => expect(within(connRow('Telegram')).getByText("Can't reach Telegram")).toBeInTheDocument())
+    expect(within(connRow('Deezer bot')).getByText("Paused — can't reach Telegram")).toBeInTheDocument()
+    expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+  })
+
   it('does not call a signed-out Telegram a fault while the bot is switched off', async () => {
     // Nothing waits on Telegram then: the same grey the bot's own row and the sidebar use, not amber.
     render(<SettingsPage live={signedOut({ source_enabled: false })} onReconnect={() => {}} />)

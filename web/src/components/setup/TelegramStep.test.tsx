@@ -62,6 +62,20 @@ it('skips the QR when the account is already signed in', async () => {
   expect(qrStart).not.toHaveBeenCalled()
 })
 
+it('shows the account as connected when the QR request finds it signed in after all', async () => {
+  // The status check could not reach Telegram, so it said "not signed in"; the server checks again
+  // before exporting a login (which would sign the account out) and says there is nothing to scan.
+  vi.spyOn(api, 'qrStart').mockResolvedValue({ state: 'done', phone_masked: '+31 •••• ••42' })
+  const qrState = vi.spyOn(api, 'qrState')
+  const onDone = vi.fn()
+  render(<TelegramStep onDone={onDone} onSkip={vi.fn()} pollMs={10} />)
+  await waitFor(() => expect(screen.getByText('Connected as +31 •••• ••42')).toBeInTheDocument())
+  expect(screen.queryByRole('img', { name: /qr/i })).toBeNull()
+  fireEvent.click(screen.getByText('Continue'))
+  expect(onDone).toHaveBeenCalled()
+  expect(qrState).not.toHaveBeenCalled()
+})
+
 it('asks for the API keys when this copy has none, then goes on to the QR', async () => {
   vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
   vi.spyOn(api, 'telegramKeys').mockResolvedValue({ configured: true })

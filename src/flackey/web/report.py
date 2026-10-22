@@ -415,7 +415,8 @@ def _connection_lines(settings: Settings, status) -> list[tuple[str, str]]:
     elif not status.get("source_enabled", settings.source_enabled):
         telegram = "switched off"
     else:
-        telegram = "connected" if status.get("telegram_authorized", True) else "signed out"
+        telegram = ("connected" if status.get("telegram_authorized", True)
+                    else "not reachable" if status.get("telegram_unreachable") else "signed out")
     if not settings.soulseek_enabled:
         soulseek = "not set up"
     else:
