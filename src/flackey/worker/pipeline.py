@@ -51,7 +51,7 @@ class PipelineMixin:
         catalog = best_match(query, catalog_tracks)
         if catalog:
             # Dated by the earliest of its releases among the results in hand, not the reissue it is on.
-            catalog = with_original_date(catalog, catalog_tracks, asked=query.version)
+            catalog = self._dated_match(catalog, catalog_tracks, query.version)
             self.store.upsert_catalog_track(catalog)
             self.store.update_request(req.id, catalog_track_id=catalog.id)
 
@@ -129,7 +129,7 @@ class PipelineMixin:
             # substitute a loosely matched release: require the normal search score first.
             matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
             if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
-                catalog = with_original_date(matched_catalog, catalog_tracks, asked=query.version)
+                catalog = self._dated_match(matched_catalog, catalog_tracks, query.version)
                 self.store.upsert_catalog_track(catalog)
                 self.store.update_request(req.id, catalog_track_id=catalog.id)
                 if ident is None:
@@ -162,6 +162,15 @@ class PipelineMixin:
         self.store.update_request(req.id, chosen_candidate_id=chosen.id)
         return chosen, catalog
 
+    def _dated_match(self, catalog: CatalogTrack, tracks: list[CatalogTrack], asked: str | None) -> CatalogTrack:
+        """`catalog` dated by the earliest of its releases among `tracks`, the search results in hand -- and
+        by any earlier date already stored for the record. One search sees only some of Beatport's releases,
+        and the next request's (or the Deezer lookup at filing) may have found an earlier one: dated from this
+        search alone, the record would lose it, and a track filed as 2001 would read 2005 in the library."""
+        stored = self.store.get_catalog_track(catalog.id)
+        known = [stored.original_date] if stored is not None else []
+        return with_original_date(catalog, tracks, also=known, asked=asked)
+
     async def _catalog_search(self, req: Request, query: Query) -> list[CatalogTrack]:
         """Beatport's search, or nothing when Beatport refuses us. Beatport is a scraped web page and only
         adds tags -- the file comes from the source and the fingerprint proves it -- so a Cloudflare
@@ -191,7 +200,7 @@ class PipelineMixin:
         tracks = await self._catalog_search(req, want)
         catalog = best_match(want, tracks)
         if catalog:
-            catalog = with_original_date(catalog, tracks, asked=want.version)
+            catalog = self._dated_match(catalog, tracks, want.version)
             self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id if catalog else None)
         return catalog

@@ -447,7 +447,13 @@ class Store:
             "catalog_number=excluded.catalog_number, release_name=excluded.release_name, "
             "release_date=excluded.release_date, bpm=excluded.bpm, key=excluded.key, "
             "duration_ms=excluded.duration_ms, artwork_url=excluded.artwork_url, "
-            "tag_source=excluded.tag_source, original_date=excluded.original_date, fetched_at=excluded.fetched_at",
+            "tag_source=excluded.tag_source, fetched_at=excluded.fetched_at, "
+            # The earlier of the two, and never NULL over a date: a later search that saw fewer releases (or
+            # a remaster request, which dates nothing) must not erase a first release already found and
+            # written into a file. Dates are ISO, so the string minimum is the earliest.
+            "original_date=CASE WHEN catalog_tracks.original_date IS NULL THEN excluded.original_date "
+            "WHEN excluded.original_date IS NULL THEN catalog_tracks.original_date "
+            "ELSE min(catalog_tracks.original_date, excluded.original_date) END",
             (t.id, t.isrc, t.artist, t.title, t.mix_name, t.label, t.genre, t.sub_genre, t.catalog_number,
              t.release_name, t.release_date, t.bpm, t.key, t.duration_ms, t.artwork_url, t.tag_source,
              t.original_date, _now()))

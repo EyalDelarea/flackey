@@ -132,6 +132,15 @@ def test_the_original_date_and_the_deezer_date_are_kept(store: Store):
     assert store.get_candidate(c.id).release_date == "2001-03-07"
 
 
+def test_an_upsert_keeps_the_earliest_original_date_and_never_erases_one(store: Store):
+    ct = _catalog()
+    for given, stored in ((None, None), ("2001-03-12", "2001-03-12"), (None, "2001-03-12"),
+                          ("2003-01-01", "2001-03-12"), ("1999-11-01", "1999-11-01")):
+        ct.original_date = given
+        store.upsert_catalog_track(ct)
+        assert store.get_catalog_track(ct.id).original_date == stored, given
+
+
 def test_tag_source_column_is_added_to_an_old_database(tmp_path: Path):
     """The column is additive: a database from before issue #146 gains it on open, its rows read as None."""
     db = tmp_path / "old.db"

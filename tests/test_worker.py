@@ -684,6 +684,30 @@ async def test_the_year_is_the_recordings_first_release_among_beatports_results(
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-12"
 
 
+async def test_a_later_search_that_sees_less_never_erases_the_first_release_found(env):
+    """Request A's search listed the 2001 album and its file says 2001. Request B for the same record gets
+    a search without the album -- Beatport's results vary -- and saved its record before the duplicate
+    check, which used to set the stored date back to nothing: A's library row then read 2005."""
+    _, store, _ = env
+    catalog = FakeCatalog([DP_REISSUE, DP_ALBUM])
+    w = make_worker(env, FakeSource([dp_cand()]), catalog)
+    a = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert store.get_catalog_track(DP_REISSUE.id).original_date == "2001-03-12"
+
+    catalog.tracks = [DP_REISSUE]
+    b = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert b.state == RequestState.DUPLICATE
+    assert store.get_catalog_track(DP_REISSUE.id).original_date == "2001-03-12"
+
+    # Filed again (the first copy gone from the library), the record keeps its first release in the file too.
+    path = store.get_track(a.track_id).path
+    store.delete_track(a.track_id)
+    path.unlink()
+    c = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    assert c.state == RequestState.DONE
+    assert read_tags(store.get_track(c.track_id).path)["date"] == "2001-03-12"
+
+
 async def test_the_year_falls_back_to_the_release_when_nothing_earlier_is_known(env):
     _, store, _ = env
     w = make_worker(env, FakeSource([dp_cand()]), FakeCatalog([DP_REISSUE, DP_REMIX]))
