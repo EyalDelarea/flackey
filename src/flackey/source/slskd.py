@@ -522,19 +522,30 @@ class SoulseekProvider:
     async def cancel_all(self) -> int:
         """Cancel every unfinished transfer slskd kept from before this run. One this run enqueued is left
         alone: the worker sweeps whenever the sidecar first answers, which can be after this run's first
-        download went in. Once it has succeeded the sweep is done, and so is the record."""
+        download went in. Once it has succeeded the sweep is done, and so is the record. So is it once slskd
+        refuses it for any reason but being down: the worker gives that sweep up rather than ask again
+        (`_cancel_leftovers`), and a record nothing will clear would grow for the life of the process."""
         n = 0
-        for t in await self.client.downloads():
-            if (t.get("username"), t.get("filename")) in self._enqueued:
-                continue
-            if not str(t.get("state", "")).startswith("Completed"):
-                await self.client.cancel_download(t["username"], t["id"])
-                n += 1
+        try:
+            for t in await self.client.downloads():
+                if (t.get("username"), t.get("filename")) in self._enqueued:
+                    continue
+                if not str(t.get("state", "")).startswith("Completed"):
+                    await self.client.cancel_download(t["username"], t["id"])
+                    n += 1
+        except LosslessUnavailable:
+            raise                       # still owed: asked again once the sidecar answers
+        except Exception:
+            self._end_sweep()
+            raise
+        self._end_sweep()
+        return n
+
+    def _end_sweep(self) -> None:
         # A fresh set rather than `clear()`: after a reconnect the set may be shared with the provider that
         # replaced this one, whose own sweep is still owed and still needs it.
         self._enqueued = set()
         self._recording = False
-        return n
 
     async def rescan_shares(self) -> None:
         await self.client.rescan_shares()

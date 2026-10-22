@@ -873,3 +873,21 @@ async def test_the_replaced_providers_late_sweep_leaves_the_new_ones_record(prov
     respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[]))
     assert await old.cancel_all() == 0
     assert new._enqueued == {("peer-alpha", "a.flac")}
+
+
+@respx.mock
+async def test_a_sweep_refused_for_good_stops_the_record(provider):
+    """The worker gives up a sweep slskd refuses (a 401, an answer it cannot read) and never asks again, so
+    the record must stop there too, or it grows for the life of the process (#184 review). One refused
+    only because slskd is not up yet stays owed, and keeps recording."""
+    p, _clock, _downloads = provider
+    listing = respx.get(f"{BASE}/transfers/downloads")
+    p.begin_run()
+    listing.mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(LosslessUnavailable):
+        await p.cancel_all()
+    assert p._recording
+    listing.mock(side_effect=None, return_value=httpx.Response(200, text="not json"))
+    with pytest.raises(ValueError):
+        await p.cancel_all()
+    assert not p._recording and not p._enqueued

@@ -133,7 +133,7 @@ def _is_the_song(query: Query, t: CatalogTrack) -> bool:
 # "feat. X" / "ft X" / "featuring X" to the end of its bracket; bracketless, up to a dash or a bracket, so
 # "Sandstorm feat. X - TML Remix" keeps the remix credit that makes it another song (#178)
 _FEAT_RE = re.compile(r"[(\[]\s*\b(?:feat|ft|featuring)\b\.?[^)\]]*[)\]]?"
-                      r"|\b(?:feat|ft|featuring)\b\.?(?:(?!\s+[-–—]\s)[^(\[])*", re.IGNORECASE)
+                      r"|\b(?:feat|ft|featuring)\b\.?(?:(?!\s+[-–—]\s)[^()\[\]])*", re.IGNORECASE)
 # Where a record's credit splits into acts: Beatport's ", " and a featured act it put in the name. Not "&",
 # "x" or "vs": on this side they are as likely part of one act's name ("Above & Beyond").
 _RECORD_ACTS_RE = re.compile(r"\s*(?:,|\b(?:feat|ft|featuring)\b\.?)\s*", re.IGNORECASE)

@@ -315,3 +315,10 @@ def test_an_act_with_an_ampersand_is_one_act_not_two():
     """Only commas and feature words split a credit: "Above & Beyond" is not "Above" and "Beyond"."""
     q = Query(raw="", artist="Beyond", title="Sandstorm", duration_s=232)
     assert not _is_the_song(q, _ct(1, "Above & Beyond", title="Sandstorm", dur_s=231))
+
+
+def test_a_feature_credit_inside_a_bracket_stops_at_its_end():
+    """A "feat." mid-bracket ends with the bracket: eating past it dropped "Remix", and this read as the
+    asked radio edit (#184 review)."""
+    q = Query(raw="", artist="Darude", title="Sandstorm (Radio Edit)", duration_s=232)
+    assert not _is_the_song(q, _ct(1, "Darude", title="Sandstorm (Radio feat. Singer) Remix", dur_s=231))
