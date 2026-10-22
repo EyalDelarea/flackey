@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 
@@ -107,9 +108,12 @@ def attempt_line(a: LosslessAttempt, of: int = 1) -> str:
         if seen is None:
             seen = next((e.get("detail", {}).get("files") for e in events if e.get("event") == "search_completed"),
                         None)
-        line = (f"{name} returned 0 results" if seen == 0
-                else f"{name}: {_count(seen, 'result', 'results') if seen is not None else 'results'}, "
-                     f"{ATTEMPT_PHRASE['no_pick']}")
+        if seen == 0:
+            line = f"{name} returned 0 results"
+        elif seen is None:                       # neither the pick nor the timeline counted them
+            line = f"{name}: no result matched closely enough"
+        else:
+            line = f"{name}: {_count(seen, 'result', 'results')}, {ATTEMPT_PHRASE['no_pick']}"
     else:
         survivors = report.get("survivors")
         head = _count(len(survivors), "copy", "copies") + " found" if survivors is not None else "copies found"
@@ -122,34 +126,43 @@ def attempt_line(a: LosslessAttempt, of: int = 1) -> str:
     return line + (f" (last of {of} attempts)" if of > 1 else "")
 
 
-def diagnose(rec: FailureRecord) -> str:
-    """The one line at the top of the report, from the rows alone. Each failure state already says where it
-    stopped -- not_found at identify, rejected at verify -- so only `error` needs `failed_stage`, the same
-    split `presentation.ts` draws its stage chips from."""
+def diagnose(rec: FailureRecord, redact: Callable[[str], str] | None = None) -> str:
+    """The one line at the top of the report, from the rows alone, through `redact` before it is cut to
+    length: the Redactor matches whole secrets, so one the cut had already halved would go out as its first
+    half."""
+    text = _diagnosis(rec)
+    return _cap(redact(text) if redact is not None else text)
+
+
+def _diagnosis(rec: FailureRecord) -> str:
+    """Each failure state already says where it stopped -- not_found at identify, rejected at verify -- so
+    only `error` needs `failed_stage`, the same split `presentation.ts` draws its stage chips from."""
     r = rec.request
     last = rec.attempts[-1] if rec.attempts else None
     lossless = attempt_line(last, len(rec.attempts)) if last is not None else None
     if r.state == RequestState.REJECTED:
         rj = rec.rejections[-1] if rec.rejections else None
         if rj is None:
-            return _cap(f"Rejected: {r.error_message or 'no rejection was recorded'}")
+            return f"Rejected: {r.error_message or 'no rejection was recorded'}"
         if rj.kind == "different_recording":
             why = re.sub(r"^a different recording:?\s*", "", rj.reason)
-            return _cap(f"Rejected: a different recording ({why})" if why else "Rejected: a different recording")
+            return f"Rejected: a different recording ({why})" if why else "Rejected: a different recording"
         # The cutoff is the number the spectrogram turns on, and the one the row quotes too. A file refused
         # before the spectrum was read (a low bitrate, an odd format) carries 0, so its reason says it instead.
         if rj.cutoff_hz:
             return f"Rejected: quality check (edge at {rj.cutoff_hz / 1000:.1f} kHz)"
-        return _cap(f"Rejected: quality check ({rj.reason})")
+        return f"Rejected: quality check ({rj.reason})"
     if r.state == RequestState.NOT_FOUND:
-        return _cap(f"Not found: {lossless or r.error_message or 'no reason was recorded'}")
+        # Only ever set when there was nothing to search with (`_search_on_the_request`), so an attempt row on
+        # such a request is from an earlier pass and its message is the one that says what happened this time.
+        return f"Not found: {r.error_message or lossless or 'no reason was recorded'}"
     if r.state == RequestState.ERROR:
         # A request that gave up on Soulseek says so in `MISS_REASON`'s words (`_no_route`, and the end of
         # `_wait_for_soulseek`): when the last attempt's sentence is in the message, that attempt is the story.
         why = MISS_REASON.get(last.outcome or "") if last is not None else None
         if lossless and why and why in (r.error_message or ""):
-            return _cap(lossless)
-        return _cap(f"Error at {r.failed_stage or 'an unrecorded stage'}: {r.error_message or 'no message was recorded'}")
+            return lossless
+        return f"Error at {r.failed_stage or 'an unrecorded stage'}: {r.error_message or 'no message was recorded'}"
     return f"Not a failure: this track is {r.state.value} now"
 
 

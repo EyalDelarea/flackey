@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -103,7 +103,9 @@ def no_route(outcome: str) -> str:
     (attempt("no_pick", events=[("search_failed", {"error": "search rejected: http 500"})]),
      "Soulseek: the search failed (search rejected: http 500)"),
     (attempt("unavailable"), "Soulseek: not reachable"),
-], ids=["transfers", "zero-results", "no-match", "one-copy", "disk-full", "search-failed", "unavailable"])
+    (attempt("no_pick"), "Soulseek: no result matched closely enough"),
+], ids=["transfers", "zero-results", "no-match", "one-copy", "disk-full", "search-failed", "unavailable",
+        "no-count"])
 def test_a_soulseek_miss_is_diagnosed_from_its_attempt(a, want):
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=no_route(a.outcome)),
                         attempts=[a])
@@ -124,6 +126,39 @@ def test_an_error_that_is_not_the_soulseek_miss_is_not_blamed_on_it():
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message="source error: bot gone"),
                         attempts=[attempt("no_pick", seen=0)])
     assert diagnose(rec) == "Error at download: source error: bot gone"
+
+
+def test_not_found_says_why_even_when_an_earlier_pass_searched_soulseek():
+    """not_found is only ever written when there was nothing to search with, so an attempt row on the request
+    belongs to an earlier pass and must not stand in for this one's reason."""
+    rec = FailureRecord(request(RequestState.NOT_FOUND, error_message="could not identify this track: no Deezer "
+                                "candidates and no Beatport match"),
+                        attempts=[attempt("transfer_failed", survivors=5, events=[("enqueue", {})])])
+    assert diagnose(rec) == "Not found: could not identify this track: no Deezer candidates and no Beatport match"
+
+
+def test_the_diagnosis_is_redacted_before_it_is_cut():
+    """A secret straddling the length cap must not go out as its first half."""
+    secret = "telegram-hash-0123456789abcdef"
+    msg = "x" * 130 + f" {secret} mail me@example.com from {Path.home()}/Music"
+    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg))
+    line = diagnose(rec, Redactor([secret], home=Path.home()))
+    assert "telegram-hash" not in line and len(line) <= DIAGNOSIS_CHARS
+
+
+def test_the_diagnosis_subject_and_body_carry_no_secrets(tmp_path: Path):
+    secret = "slskd-key-0123456789abcdef"
+    settings = settings_for(tmp_path)
+    store = Store(settings.db_path)
+    rid = store.add_request("Artist - Title", RequestKind.TEXT)
+    msg = "source error: " + "y" * 135 + f" {secret} reply to me@example.com, see {Path.home()}/x.log"
+    store.update_request(rid, state=RequestState.ERROR, failed_stage="search", error_message=msg)
+    redact = Redactor([secret], home=Path.home())
+    rep = build_report(settings, {}, ClientContext(), redact=redact, failure=load(store, rid), log_tz=UTC)
+    email = compose_email(rep, "", "", "z.zip", redact)
+    for text in (rep.diagnosis, email.subject, email.body, rep.files["report.txt"]):
+        for leaked in ("slskd-key-0", "me@example.com", str(Path.home())):
+            assert leaked not in text, (leaked, text)
 
 
 def test_the_diagnosis_is_one_short_line():
@@ -179,13 +214,20 @@ ValueError: bad
 def test_the_log_s_local_time_is_compared_in_its_own_zone():
     """The store writes UTC and the log writes the machine's clock: a request at 10:00 UTC logged in
     UTC+3 is at 13:00 in the file, and a window that ignored the difference would miss every warning."""
-    from datetime import timedelta, timezone
-
     plus3 = timezone(timedelta(hours=3))
     line = "2026-10-20 13:01:00.000 WARNING flackey.worker.core: soulseek: health probe failed\n"
     start, end = datetime(2026, 10, 20, 9, 58, tzinfo=UTC), datetime(2026, 10, 20, 10, 7, tzinfo=UTC)
     assert narrow_log(line, 7, start, end, tz=plus3) == line
     assert narrow_log(line, 7, start, end, tz=UTC) == ""
+
+
+def test_the_log_is_read_in_this_machine_s_own_zone_by_default():
+    """The real path: no zone given, the log's stamps read as the machine's local time, as `logging` wrote them."""
+    at = datetime(2026, 10, 20, 10, 1, tzinfo=UTC)
+    stamp = at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{stamp}.000 WARNING flackey.worker.core: soulseek: health probe failed\n"
+    assert narrow_log(line, 7, at - timedelta(minutes=1), at + timedelta(minutes=1)) == line
+    assert narrow_log(line, 7, at + timedelta(minutes=5), at + timedelta(minutes=9)) == ""
 
 
 # ---- the record, and the report built from it ------------------------------------------------------
@@ -302,7 +344,7 @@ def test_a_failure_preview_and_send_need_no_words_of_the_reporter_s_own(app):  #
         assert f"request-{rid}.log" in zf.namelist() and "flackey.log" not in zf.namelist()
 
 
-@pytest.mark.parametrize("rid, status", [(999, 404), ("7", 400), (True, 400)])
+@pytest.mark.parametrize("rid, status", [(999, 404), ("7", 400), (True, 400), (0, 400), (2**63, 400)])
 def test_a_failure_report_for_no_such_track_is_refused(app, rid, status):  # noqa: F811
     client, _, revealed, opened = app
     assert client.post("/api/bug-report/preview", json={"request_id": rid}).status_code == status

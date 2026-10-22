@@ -68,6 +68,14 @@ SCREENS = {"download": "Download", "library": "Library", "uploads": "Uploads", "
 # Shorter known values are skipped rather than redacted: a four-character Soulseek name like "beat"
 # would take every "beat" in every track title with it, and a secret that short is not one worth hiding.
 MIN_SECRET_CHARS = 4
+# How much of a known secret, cut off at the end of a value, still counts as it. The worker stores an
+# exception's text cut to 500 characters, so a secret that straddled the cut sits in the database as its
+# first half -- which the whole-value match above never sees. Eight characters is past where a prefix of
+# a password or key stops being a coincidence with an ordinary word.
+PARTIAL_SECRET_CHARS = 8
+# Where a value ends: the end of a line, a closing quote (a JSON string, a repr), a backslash (an escaped
+# quote inside JSON), or the ellipsis a cap leaves.
+_VALUE_END = r"(?=[\"'\\…]|$)"
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # A leading `+` is required: a bare run of digits is a Deezer track id or a timestamp far more often than
@@ -144,6 +152,12 @@ class Redactor:
         spellings = {v for s in known for v in _spellings(s)}
         self._known = [re.compile(r"(?<![\w])" + re.escape(s) + r"(?![\w])", 0 if s in known else re.IGNORECASE)
                        for s in sorted(spellings, key=len, reverse=True)]
+        # Each spelling's first PARTIAL_SECRET_CHARS, running on to the end of a value. Whether what follows
+        # really continues the secret is checked on the match (`_cut_secret`), which keeps the pattern short
+        # however long the secret is.
+        self._partials = [(re.compile(r"(?<![\w])" + re.escape(s[:PARTIAL_SECRET_CHARS]) + r"\S*?" + _VALUE_END,
+                                      re.MULTILINE | (0 if s in known else re.IGNORECASE)), s, s not in known)
+                          for s in sorted(spellings, key=len, reverse=True) if len(s) > PARTIAL_SECRET_CHARS]
         names = sorted({u.strip() for u in users if u and len(u.strip()) >= 3}, key=len, reverse=True)
         # Windows account names are case-insensitive, and a log prints whichever case the API returned.
         flags = re.IGNORECASE if self._windows else 0
@@ -168,6 +182,8 @@ class Redactor:
         text = _OTHER_WINDOWS_HOME.sub(lambda m: f"{m.group(1)}{m.group(2)}Users{m.group(2)}<user>", text)
         for pattern in self._known:
             text = pattern.sub("<redacted>", text)
+        for pattern, secret, fold in self._partials:
+            text = pattern.sub(lambda m, s=secret, f=fold: _cut_secret(m, s, f), text)
         for pattern in self._users:
             text = pattern.sub("<user>", text)
         text = _BOT_TOKEN.sub(lambda m: f"{m.group(1) or ''}<redacted>", text)
@@ -181,6 +197,14 @@ class Redactor:
         text = _IPV4.sub(lambda m: m.group(0) if m.group(0) in _KEEP_IPS else "<ip>", text)
         text = _IPV6.sub("<ip>", text)
         return text
+
+
+def _cut_secret(m: re.Match, secret: str, fold: bool) -> str:
+    """A match of a secret's head is only a cut-off secret when all of it is the secret's beginning."""
+    found = m.group(0)
+    head = secret[:len(found)]
+    same = found.lower() == head.lower() if fold else found == head
+    return "<redacted>" if same and len(found) < len(secret) else found
 
 
 def _redact_value(m: re.Match) -> str:
@@ -408,7 +432,7 @@ def build_report(settings: Settings, status, client: ClientContext, description:
     if failure is not None:
         summary.append(("Failed track", _track_name(failure)))
     summary = [(k, redact(v)) for k, v in summary]
-    diagnosis = redact(diagnose(failure)) if failure is not None else None
+    diagnosis = diagnose(failure, redact) if failure is not None else None
 
     files: dict[str, str] = {}
     if failure is None:
@@ -523,7 +547,8 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         rid = body.get("request_id")
         if rid is None:
             return None
-        if store is None or isinstance(rid, bool) or not isinstance(rid, int):
+        # Bounded as well as typed: SQLite's integers are 64-bit, and a larger one is an OverflowError, not a miss.
+        if store is None or isinstance(rid, bool) or not isinstance(rid, int) or not 0 < rid < 2**63:
             raise HTTPException(400, "That is not a track Flackey knows.")
         try:
             return load_failure(store, rid)
