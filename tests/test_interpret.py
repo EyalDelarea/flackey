@@ -810,9 +810,9 @@ async def test_a_title_deezer_does_not_know_is_not_counted_as_one_to_ask_about(r
     them apart. That is `skipped`, not `ambiguous` -- the "would ask" rate must not be what Deezer lacks."""
     w, store, _, previews, video_is, add = realistic
     monkeypatch.setattr(interpret_mod, "identify_record", video_is(0))
-    req = add("[TECHNO] Patrick Hollo - Low [Subwoofer Records]", "Subwoofer Records", 402)
+    req = add("Subwoofer Records - Patrick Hollo - Low", "x", 402)
     assert [(q.artist, q.title) for q in store.get_interpretations(req.id)] == [
-        ("[TECHNO] Patrick Hollo", "Low"), ("Patrick Hollo", "Low")]
+        ("Subwoofer Records", "Patrick Hollo - Low"), ("Patrick Hollo", "Low")]
     w._interpret(req, VIDEO)
     await w._shadow_settled()
     assert store.get_interpretation_outcome(req.id) == (SKIPPED, None) and previews == []
