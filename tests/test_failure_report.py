@@ -245,6 +245,19 @@ yt_dlp.utils.DownloadError: (https://open.spotify.com/track/ELSE)
     assert f"identifying {mine}" in kept and f"slow answer for {mine}." in kept
 
 
+def test_a_kept_yt_dlp_warning_does_not_share_the_other_video_s_id():
+    log = ("2026-10-20 10:01:00.000 WARNING flackey.inbox: yt-dlp failed for "
+           "https://www.youtube.com/watch?v=OTHERID0001: ERROR: [youtube] OTHERID0001: Video unavailable\n"
+           "2026-10-20 10:01:01.000 WARNING flackey.reference: [youtube] MINEid00001: Video unavailable\n"
+           "2026-10-20 10:01:02.000 WARNING flackey.youtube: [download] Destination: x\n")
+    start, end = datetime(2026, 10, 20, 9, 58, tzinfo=UTC), datetime(2026, 10, 20, 10, 7, tzinfo=UTC)
+    kept = narrow_log(log, 7, start, end, tz=UTC, own_links=["https://www.youtube.com/watch?v=MINEid00001"])
+    assert "OTHERID0001" not in kept
+    assert "yt-dlp failed for [other link]: ERROR: [youtube] [other id]: Video unavailable" in kept
+    assert "[youtube] MINEid00001: Video unavailable" in kept
+    assert "[download] Destination: x" in kept
+
+
 def test_the_log_s_local_time_is_compared_in_its_own_zone():
     """The store writes UTC and the log writes the machine's clock: a request at 10:00 UTC logged in
     UTC+3 is at 13:00 in the file, and a window that ignored the difference would miss every warning."""

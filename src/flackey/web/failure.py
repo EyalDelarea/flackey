@@ -267,15 +267,30 @@ _ANY_REQUEST = re.compile(r"\breq[#=]\d+|/requests/\d+")
 _LOUD = {"WARNING", "ERROR", "CRITICAL"}
 _LINK = re.compile(r"https?://[^\s\"'<>]+")
 OTHER_LINK = "[other link]"
+# yt-dlp names a video by its id as well as by its link: "ERROR: [youtube] dQw4w9WgXcQ: Video unavailable",
+# "[youtube:tab] PL...: ...". The id is the token after the extractor tag, up to the colon.
+_EXTRACTOR_ID = re.compile(r"(\[[\w-]+(?::[\w-]+)?\] )([\w-]{6,})(?=:)")
+OTHER_ID = "[other id]"
 
 
-def _other_links_out(line: str, own: frozenset[str]) -> str:
-    """`line` with every link but this request's own replaced. A warning that names no request can still name
-    a track: the time window keeps it for its context, not for the other link the owner pasted that hour."""
-    def sub(m: re.Match) -> str:
+def _looks_like_id(token: str) -> bool:
+    """An id, as against a word yt-dlp also puts there ("[download] Destination:"): ids carry a digit, `_`
+    or `-`, or a capital past the first letter."""
+    return bool(re.search(r"[\d_-]", token)) or any(c.isupper() for c in token[1:])
+
+
+def _other_links_out(line: str, own: frozenset[str], own_ids: frozenset[str]) -> str:
+    """`line` with every link but this request's own replaced, and every video id yt-dlp printed but this
+    request's own. A warning that names no request can still name a track: the time window keeps it for its
+    context, not for the other link the owner pasted that hour."""
+    def link(m: re.Match) -> str:
         url = m.group(0).rstrip(".,;:)]")
         return m.group(0) if url in own else OTHER_LINK + m.group(0)[len(url):]
-    return _LINK.sub(sub, line)
+
+    def video(m: re.Match) -> str:
+        token = m.group(2)
+        return m.group(0) if token in own_ids or not _looks_like_id(token) else m.group(1) + OTHER_ID
+    return _EXTRACTOR_ID.sub(video, _LINK.sub(link, line))
 
 
 def _parse_time(stamp: str) -> datetime:
@@ -293,12 +308,14 @@ def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: t
     its lifetime that names no request at all -- Soulseek dropping, Beatport refusing, a crash in a provider
     -- which is the context a request's own lines usually lack. A line naming another request is left out
     however loud it is. A traceback belongs to the record above it and comes along with it. In the records
-    kept for their timing alone, any link but `own_links` (the request's own) reads `[other link]`.
+    kept for their timing alone, any link but `own_links` (the request's own) reads `[other link]`, and any
+    video id yt-dlp printed but theirs reads `[other id]`.
 
     The log stamps local time (`logsetup.DATEFMT`) and the store stamps UTC; `tz` is the log's zone, the
     machine's own when not given, which is the one the log was written in."""
     mine = re.compile(rf"\breq[#=]{request_id}(?!\d)|/requests/{request_id}(?!\d)")
     own = frozenset(u.rstrip(".,;:)]") for u in own_links if u)
+    own_ids = frozenset(t for u in own for t in re.findall(r"[\w-]{6,}", u))
     out: list[str] = []
     keep = untagged = False
     for line in text.splitlines(keepends=True):
@@ -314,5 +331,5 @@ def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: t
                 at = naive.replace(tzinfo=tz) if tz is not None else naive.astimezone()
                 keep = untagged = start <= at <= end
         if keep:
-            out.append(_other_links_out(line, own) if untagged else line)
+            out.append(_other_links_out(line, own, own_ids) if untagged else line)
     return "".join(out)
