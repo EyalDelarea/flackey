@@ -118,6 +118,9 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10", {
     const version = String(data.tag_name || "").replace(/^v/, "");
     if (release)
       release.textContent = `Version ${version} · ${formatReleaseDate(data.published_at)}`;
+    // The Updates tile's banner names the current version rather than going stale in the HTML.
+    const wnVersion = document.querySelector("#wn-version");
+    if (wnVersion && version) wnVersion.textContent = version;
 
     if (notesList) {
       const title = `<span class="release-note-title">
@@ -308,7 +311,7 @@ if (appDemo) {
       "status",
       {
         search: "Working out what this is…",
-        found: "Found on Beatport · Deezer has a copy",
+        found: "Found it · Deezer has a copy",
         download: "Downloading from Deezer",
         verify: "Checking the file…",
         done: "Saved to your library",

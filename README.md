@@ -5,8 +5,9 @@ for Mac and Windows that turns a YouTube, YouTube Music or Spotify link into a
 tagged, Rekordbox-ready track in your DJ library — automatically.
 
 Paste the link into the app; a worker running on your computer matches the track
-on Beatport, fetches it from Soulseek (lossless) or through a Telegram source bot
-(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it and
+on Beatport and Deezer, fetches it from Soulseek (lossless) or through a Telegram source bot
+(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it (from Deezer and Discogs when
+Beatport can't be reached) and
 files it in your DJ Library (by default one folder per artist,
 `~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
 BPM and key are left to Rekordbox's analysis; genre and label are in the tags.

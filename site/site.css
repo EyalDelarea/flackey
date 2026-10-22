@@ -258,7 +258,8 @@ p {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  /* At most four across, so eight tiles fill two full rows on a wide screen. */
+  grid-template-columns: repeat(auto-fit, minmax(max(210px, calc((100% - 42px) / 4)), 1fr));
   gap: 14px;
 }
 .wn-card {
@@ -513,6 +514,101 @@ p {
   background: #007aff;
   color: #fff;
   font-weight: 600;
+}
+
+/* Keep it anyway: the amber failed-check note above the app's primary button */
+.wn-keep {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+}
+.wn-keep-note {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #fff6e8;
+  border: 1px solid #f5d9a8;
+  color: #8a5300;
+  white-space: nowrap;
+}
+.wn-keep-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border-radius: 6px;
+  background: #007aff;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 6px -2px rgba(0, 122, 255, 0.5);
+}
+.wn-keep-btn svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Messy YouTube title read into the track it names */
+.wn-clean {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: 92%;
+}
+.wn-messy {
+  font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgba(0, 0, 0, 0.42);
+  text-decoration: line-through rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+}
+.wn-arrow {
+  color: rgba(0, 0, 0, 0.3);
+  line-height: 1;
+}
+.wn-tidy {
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 10px -6px rgba(0, 0, 0, 0.3);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wn-tidy i {
+  font-style: normal;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.5);
+}
+/* Tags filled in from Deezer and Discogs */
+.wn-tags {
+  width: 168px;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
+}
+.wn-tags span {
+  display: flex;
+  justify-content: space-between;
+}
+.wn-tags b {
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.45);
+}
+.wn-tags em {
+  font-style: normal;
+  justify-self: end;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #248a3d;
 }
 
 .preview {
