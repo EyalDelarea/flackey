@@ -164,11 +164,13 @@ def classify(results: list[ReadingResult], matched: int | None) -> Outcome:
 
     A match is attributed to the first reading that accepted that record, or failing that the first whose
     words name it (the video's length or version was not the one `accepted` asks for, but the artist and
-    the title it read were right). Without one, a search that failed
-    leaves the readings unfinished and the label is `skipped`; readings that are the same words split
-    differently search for the same thing and are `agreed` by construction; otherwise every reading that
-    found a record must have found the same one. Readings that found nothing at all are `ambiguous`: the
-    catalogue says nothing about which is right, which is exactly when asking would be needed."""
+    the title it read were right). Without one, a search that failed leaves the readings unfinished and
+    the label is `skipped`; readings that are the same words split differently search for the same thing
+    and are `agreed` by construction; otherwise every reading that found a record must have found the same
+    one. Readings that found nothing at all are `skipped` too: Deezer not knowing a track is no evidence
+    that its readings disagree, and the label exists to count those. Counted as `ambiguous`, every title
+    the public catalogue lacks -- a label's upload, a bootleg, most of what Soulseek alone has -- read as
+    one the owner would have to be asked about, whatever the pipeline then found and proved by audio."""
     if matched is not None:
         for pool in ("accepted", "named"):
             for i, r in enumerate(results):
@@ -181,7 +183,7 @@ def classify(results: list[ReadingResult], matched: int | None) -> Outcome:
         return Outcome(AGREED, None, "the readings are the same words")
     tops = [r.accepted[0] for r in results if r.accepted]
     if not tops:
-        return Outcome(AMBIGUOUS, None, "no reading found a record")
+        return Outcome(SKIPPED, None, "no reading found a record to tell them apart by")
     if all(same_record(tops[0], t) for t in tops[1:]):
         return Outcome(AGREED, None, f"{len(tops)} of {len(results)} readings found a record, all the same one")
     return Outcome(AMBIGUOUS, None, f"{len(tops)} readings found different records")

@@ -173,7 +173,8 @@ def test_classify_agreed_ambiguous_and_skipped():
     assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [_dz(1)])], None).klass == AGREED
     differ = classify([ReadingResult(LABEL, [_dz(1, artist="Label")]), ReadingResult(AP, [_dz(2, title="X")])], None)
     assert (differ.klass, differ.reading) == (AMBIGUOUS, None)
-    assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [])], None).klass == AMBIGUOUS
+    # Deezer knowing neither reading says nothing about which is right: not a title to ask about
+    assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [])], None).klass == SKIPPED
     failed = classify([ReadingResult(LABEL, [_dz(1)]), ReadingResult(AP, error="http 500")], None)
     assert failed.klass == SKIPPED
     # The same words split in two places search for the same thing: agreed whatever they found
@@ -430,7 +431,7 @@ async def test_a_failing_video_is_fetched_once_a_pass_and_compared_on_the_pass_t
     store.update_request(rid, retry_after=None)
     r = await run(w, rid)
     assert videos == [URL] and r.state == RequestState.DONE
-    assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
+    assert store.get_interpretation_outcome(rid)[0] == SKIPPED       # this Deezer knows neither reading
 
 
 @requires_ffmpeg
@@ -483,7 +484,7 @@ async def test_the_other_readings_are_the_last_spellings_and_name_the_file_they_
     t = store.get_track(r.track_id)
     assert (t.artist, t.title) == ("Astral Projection", "Into the Void")
     assert store.get_request(rid).query_artist == "Label"             # the request's query is unchanged
-    assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
+    assert store.get_interpretation_outcome(rid)[0] == SKIPPED       # this Deezer knows neither reading
 
 
 @requires_ffmpeg
@@ -781,3 +782,16 @@ def test_named_hears_every_record_the_words_name_whatever_its_length_or_version(
     assert named(alone, found) == []                      # no artist: the length still stands in for it
     # What `accepted` takes comes first, in its order
     assert [c.deezer_id for c in named(AP, [_dz(1, duration_s=60), _dz(2)])] == [2, 1]
+
+
+async def test_a_title_deezer_does_not_know_is_not_counted_as_one_to_ask_about(realistic, monkeypatch):
+    """A label's upload of a track the public catalogue lacks: no reading finds a record, so nothing tells
+    them apart. That is `skipped`, not `ambiguous` -- the "would ask" rate must not be what Deezer lacks."""
+    w, store, _, previews, video_is, add = realistic
+    monkeypatch.setattr(interpret_mod, "identify_record", video_is(0))
+    req = add("[TECHNO] Patrick Hollo - Low [Subwoofer Records]", "Subwoofer Records", 402)
+    assert [(q.artist, q.title) for q in store.get_interpretations(req.id)] == [
+        ("[TECHNO] Patrick Hollo", "Low"), ("Patrick Hollo", "Low")]
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (SKIPPED, None) and previews == []
