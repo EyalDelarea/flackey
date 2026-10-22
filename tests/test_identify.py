@@ -384,6 +384,68 @@ def test_song_pipe_artist_dash_suffix_reads_the_song(title, uploader, expected):
     assert (q.artist, q.title, q.version) == expected
 
 
+@pytest.mark.parametrize("title,uploader,expected", [
+    # the artist's own channel: the "|" part that is the channel's name is the artist (#177)
+    ("Dua Lipa | Houdini", "DuaLipaVEVO", ("Dua Lipa", "Houdini", None)),
+    ("Dua Lipa | Houdini (Official Music Video)", "DuaLipaVEVO", ("Dua Lipa", "Houdini", None)),
+    ("As It Was | Harry Styles - Official Video", "HarryStylesVEVO", ("Harry Styles", "As It Was", None)),
+    ("Tarkan | Şımarık - Official Video", "TarkanVEVO", ("Tarkan", "Şımarık", None)),
+    ("Tarkan | Şımarık - Official Video", "Tarkan", ("Tarkan", "Şımarık", None)),
+    ("Taylor Swift | Anti-Hero - Vevo LIFT", "TaylorSwiftVEVO", ("Taylor Swift", "Anti-Hero", None)),
+    ("Ado | うっせぇわ - MV", "Ado", ("Ado", "うっせぇわ", None)),
+    ("Pink Floyd | Comfortably Numb - Pulse", "PinkFloydVEVO", ("Pink Floyd", "Comfortably Numb", None)),
+    ("Bad Bunny | Tití Me Preguntó - Video Oficial", "Bad Bunny", ("Bad Bunny", "Tití Me Preguntó", None)),
+    # a suffix that cleanup takes whole after the artist: the song is still the part before the "|"
+    ("Houdini | Dua Lipa - Official Video", "x", ("Dua Lipa", "Houdini", None)),
+    ("New Rules | Dua Lipa - Lyrics", "x", ("Dua Lipa", "New Rules", None)),
+    ("Mr. Brightside | The Killers - Lyrics", "Lyrics Channel", ("The Killers", "Mr. Brightside", None)),
+    # a bracket of noise words and a version: the noise goes, the version stays
+    ("Artist - Track (Official Video Remastered)", "x", ("Artist", "Track", "Remastered")),
+    ("Artist - Track (HD Remaster)", "x", ("Artist", "Track", "Remaster")),
+    ("Artist - Track (Live in 4K)", "x", ("Artist", "Track", "Live")),
+    ("a-ha - Take On Me (Official Video) [Remastered in 4K]", "a-ha", ("a-ha", "Take On Me", "Remastered")),
+    ("Queen – Bohemian Rhapsody (Official Video Remastered)", "Queen Official",
+     ("Queen", "Bohemian Rhapsody", "Remastered")),
+    ("Artist - Track [4K Remaster]", "x", ("Artist", "Track", "Remaster")),
+    ("Artist - Track (Official Video ft. Drake)", "x", ("Artist", "Track (ft. Drake)", None)),
+    ("Artist - Track (Lyric Video - Extended Mix)", "x", ("Artist", "Track", "Extended Mix")),
+    ("Artist - Track (Lyrics by Someone)", "x", ("Artist", "Track", None)),
+    # the same, with a version after the dash or a known promo channel's name first
+    ("Ed Sheeran | Perfect - Extended Mix", "Ed Sheeran", ("Ed Sheeran", "Perfect", "Extended Mix")),
+    ("Mr. Suicide Sheep | Artist - Track", "x", ("Artist", "Track", None)),
+    ("Eurodance | Fun Factory - Close To You", "x", ("Fun Factory", "Close To You", None)),
+])
+def test_the_remaining_title_shapes_of_issue_177(title, uploader, expected):
+    q = parse_youtube_title(title, uploader)
+    assert (q.artist, q.title, q.version) == expected
+
+
+@pytest.mark.parametrize("label", [
+    "Ninja Tune", "Warp", "Kitsuné", "Ed Banger", "Proximity", "NCS", "Mixmag", "Selected.", "Lowly.",
+    "Chill Nation", "Trap City", "Insomniac", "Monstercat Uncaged", "NEW", "Anjunadeep", "Deep House Nation",
+    "Old School", "90s Dance", "Eurodance", "Italo Disco", "Hi-NRG",
+])
+def test_a_label_or_genre_before_the_track_on_an_unrelated_channel(label):
+    q = parse_youtube_title(f"{label} | Artist - Track", "Unrelated Channel")
+    assert (q.artist, q.title, q.version) == ("Artist", "Track", None)
+
+
+@pytest.mark.parametrize("title,expected", [
+    # songs that only look like a label's or a genre's name stay songs
+    ("Sin City | AC/DC - Highway to Hell", ("AC/DC", "Sin City", None)),
+    ("Rolling in the Deep | Adele - 21", ("Adele", "Rolling in the Deep", None)),
+    ("New Rules | Dua Lipa - Future Nostalgia", ("Dua Lipa", "New Rules", None)),
+    ("School | Nirvana - Bleach", ("Nirvana", "School", None)),
+    ("Warped | Artist - Album", ("Artist", "Warped", None)),
+    ("Funkytown | Lipps Inc - Mouth to Mouth", ("Lipps Inc", "Funkytown", None)),
+    # a bracket of a noise word and nothing else that is a version keeps its words
+    ("Artist - Track (Live in Paris)", ("Artist", "Track", "Live in Paris")),
+])
+def test_what_only_looks_like_a_label_or_noise_stays(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
 def test_music_in_parentheses_is_a_label_when_it_is_the_channel():
     q = parse_youtube_title("Artist - Track (Armada Music) (Extended Mix)", "Armada Music")
     assert (q.artist, q.title, q.version) == ("Artist", "Track", "Extended Mix")

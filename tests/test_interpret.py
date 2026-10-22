@@ -105,12 +105,25 @@ def test_x_pipe_artist_dash_y_is_also_read_the_other_way_round():
     assert _rows(interpretations("Label | Artist - Track [FREE DL]", "x")) == [
         ("Artist", "Track", None), ("Artist", "Label", None)]
     assert _rows(interpretations("Blinding Lights | The Weeknd - After Hours", "x")) == [
-        ("The Weeknd", "Blinding Lights", None), ("The Weeknd", "After Hours", None)]
+        ("The Weeknd", "Blinding Lights", None), ("The Weeknd", "After Hours", None),
+        ("Blinding Lights", "The Weeknd", None)]  # "Pink Floyd | Comfortably Numb - Pulse" looks the same
     # a lyric channel's tag after the dash: the song first, and the artist and the song swapped second
     assert _rows(interpretations("Perfect | Ed Sheeran - Letra en Español", "Lyrics Channel")) == [
         ("Ed Sheeran", "Perfect", None), ("Perfect", "Ed Sheeran", None)]
     # the artist's own channel: no doubt left
     assert _rows(interpretations("Perfect | Ed Sheeran - Acoustic", "Ed Sheeran")) == [("Ed Sheeran", "Perfect", None)]
+
+
+def test_artist_pipe_song_dash_x_on_an_unrelated_channel_also_offers_the_artist_first():
+    # "Pink Floyd | Comfortably Numb - Pulse" looks like "Blinding Lights | The Weeknd - After Hours": the song
+    # stays first, but the artist-first reading is among the others (#177)
+    assert ("Pink Floyd", "Comfortably Numb", None) in _rows(
+        interpretations("Pink Floyd | Comfortably Numb - Pulse", "x"))
+    assert ("Bad Bunny", "Tití Me Preguntó", None) in _rows(
+        interpretations("Bad Bunny | Tití Me Preguntó - Video Oficial", "x"))
+    # on a channel that is only named like the artist, the "Channel | Artist - Title" reading stays first
+    assert _rows(interpretations("Pink Floyd | Comfortably Numb - Pulse", "Pink Floyd"))[:2] == [
+        ("Comfortably Numb", "Pulse", None), ("Pink Floyd", "Comfortably Numb", None)]
 
 
 @pytest.mark.parametrize("title", [
