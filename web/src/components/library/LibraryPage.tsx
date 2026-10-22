@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
-import { bucketOf, canRetry, gb, soulseekWait } from '../../presentation'
+import { asSentence, bucketOf, canRetry, gb, plural, soulseekWait } from '../../presentation'
 import { revealLabel, usePlatform } from '../../platform'
 import Icon from '../Icon'
 import Banner from '../Banner'
@@ -123,7 +123,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     try {
       const result = await api.refreshLibrary()
       await live.refreshLibrary()
-      setNote(result.removed ? `Removed ${result.removed} missing ${result.removed === 1 ? 'file' : 'files'} from the library.` : 'Library is up to date.')
+      setNote(result.removed ? `Removed ${plural(result.removed, 'missing file')} from the library.` : 'Library is up to date.')
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Couldn't refresh library. Try again.")
     } finally { setRefreshing(false) }
@@ -144,7 +144,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       setNote(`${t.artist} – ${t.title}: ${res.message}`)
       if (res.upgraded) setTracks(await api.library(q, selectedPlaylist))
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Couldn't search for a lossless copy. Try again.")
+      setActionError(err instanceof ApiError ? asSentence(err.message) : "Couldn't search for a lossless copy. Try again.")
     } finally {
       live.setUpgradeActivity(null)
     }
@@ -154,7 +154,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     <Toolbar>
       <div className="search"><Icon name="search" size={14} /><input className="input" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} aria-label="search library" /></div>
       <button className="btn-secondary" onClick={refresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
-      {s && <span className="counts">{s.tracks} tracks · {s.playlists} playlists · {gb(s.bytes)} on disk</span>}
+      {s && <span className="counts">{plural(s.tracks, 'track')} · {plural(s.playlists, 'playlist')} · {gb(s.bytes)} on disk</span>}
       {s && <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Open library folder</button>}
     </Toolbar>
     <div className="scroll">

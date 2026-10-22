@@ -34,10 +34,10 @@ it('says nothing has been uploaded yet rather than showing an empty table', asyn
   await waitFor(() => expect(screen.getByText(/Nobody has downloaded from you yet/)).toBeInTheDocument())
 })
 
-it('explains when Soulseek is switched off instead of looking broken', async () => {
+it('explains when Soulseek is not set up instead of looking broken', async () => {
   serve(feed({ enabled: false, provider: null }))
   render(<UploadsPage />)
-  await waitFor(() => expect(screen.getByText(/Soulseek is off/)).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText(/Soulseek isn't set up/)).toBeInTheDocument())
 })
 
 it('warns when the port is closed', async () => {

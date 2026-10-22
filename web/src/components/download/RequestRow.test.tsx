@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, render, screen, fireEvent } from '@testing-library/react'
 import RequestRow from './RequestRow'
 import { STEPS } from '../../presentation'
@@ -38,6 +40,17 @@ it('offers a report on a failed row, under the note and apart from the way out',
   expect(onAction).toHaveBeenCalledWith('report', 1, undefined)
   rerender(<RequestRow view={{ ...view, reportable: false }} onAction={onAction} onChoose={() => {}} {...preview} />)
   expect(screen.queryByRole('button', { name: 'Report this failure' })).not.toBeInTheDocument()
+})
+
+it('lines the report link up with the note above it rather than centring it in the row', () => {
+  const view: RowView = { ...base, bucket: 'failed', reportable: true, outcome: { retryable: true, note: 'Try again starts over.' } }
+  render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  const link = screen.getByRole('button', { name: 'Report this failure' })
+  expect(link.parentElement).toBe(screen.getByText('Try again starts over.').parentElement)
+  const css = readFileSync(resolve(__dirname, '../../app.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  const rule = css.match(/\.row \.report-failure\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(rule).toMatch(/align-self:\s*flex-start/)
+  expect(rule).toMatch(/text-align:\s*left/)
 })
 
 it('renders title, status and tag', () => {

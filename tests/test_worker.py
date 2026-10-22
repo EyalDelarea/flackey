@@ -481,7 +481,7 @@ async def test_no_record_and_no_soulseek_errors_instead_of_filing_the_deezer_cop
                             source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and r.track_id is None and source.fetched == []
-    assert "Soulseek is switched off" in r.error_message
+    assert "Soulseek isn't set up" in r.error_message
 
 
 async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypatch):
