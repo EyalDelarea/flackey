@@ -44,6 +44,21 @@ it('shows a red banner with a dismiss action when a row action fails', async () 
   expect(screen.queryByText('That track is already being fetched.')).not.toBeInTheDocument()
 })
 
+it('hands a failed row to the report dialog by its request, and offers no report with nowhere to send it', () => {
+  const onReport = vi.fn()
+  const { unmount } = render(<DownloadPage live={makeLive([bundle, mk(8, 'cancelled')])} onReport={onReport} />)
+  fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
+  // One link: the stopped track has nothing in it for the developer.
+  const links = screen.getAllByRole('button', { name: 'Report this failure' })
+  expect(links).toHaveLength(1)
+  fireEvent.click(links[0])
+  expect(onReport).toHaveBeenCalledWith(7)
+  unmount()
+  render(<DownloadPage live={makeLive([bundle])} />)
+  fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
+  expect(screen.queryByRole('button', { name: 'Report this failure' })).not.toBeInTheDocument()
+})
+
 it('refreshes queue and playlists after a paste submission returns', async () => {
   vi.mocked(api.submit).mockResolvedValueOnce({
     summary: 'Queued 3 of 3 from "Spotify Set" (0 already in library)',

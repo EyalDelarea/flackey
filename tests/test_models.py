@@ -5,6 +5,7 @@ import pytest
 
 from flackey.models import (
     FAILED_STATES,
+    REPORTABLE_STATES,
     RETRYABLE_STATES,
     SWEEPABLE_STATES,
     TERMINAL_STATES,
@@ -107,6 +108,16 @@ def test_stoppable_states_match_the_worker():
     block = re.search(r"const STOPPABLE: RequestState\[\] = \[(.*?)\]", ts)
     assert block, "presentation.ts no longer has a STOPPABLE list"
     assert set(re.findall(r"'(\w+)'", block.group(1))) == {s.value for s in CANCELLABLE - TERMINAL_STATES}
+
+
+def test_reportable_states_match_the_ui():
+    """The rows that offer "Report this failure" are the failures the pipeline reached by itself; a row the
+    owner stopped has nothing in it for the developer."""
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
+    block = re.search(r"const REPORTABLE: RequestState\[\] = \[(.*?)\]", ts)
+    assert block, "presentation.ts no longer has a REPORTABLE list"
+    assert set(re.findall(r"'(\w+)'", block.group(1))) == {s.value for s in REPORTABLE_STATES}
+    assert REPORTABLE_STATES < FAILED_STATES and RequestState.CANCELLED not in REPORTABLE_STATES
 
 
 def test_stage_names_match_the_ui():

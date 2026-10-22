@@ -1,4 +1,4 @@
-"""Report a bug from inside the app (issue #33).
+"""Report a bug from inside the app (issue #33), or one failed track (issue #165).
 
 Gathers the log, version, system release and displays, redacts them into a zip, and opens an email to
 the developer with the report already written, next to the zip in Finder (File Explorer on Windows) for
@@ -7,7 +7,10 @@ No token, no server of ours, no account: the reporter's own email is the transpo
 
 The repository is public, so `Redactor` is the security boundary. The preview the page shows and the
 zip that gets written are built by the same `build_report`, so what the reporter reviews is the bytes
-that leave -- not a description of them."""
+that leave -- not a description of them.
+
+A failure report is the same flow pointed at one request: `failure` adds the request's own record and a
+diagnosis line, and the log is narrowed to that request instead of sent whole."""
 
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ import sys
 import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path, PurePath, PureWindowsPath
 from urllib.parse import quote, quote_plus, urlencode
 
@@ -29,9 +32,12 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
 from ..config import Settings
-from ..logsetup import LOG_FILE
+from ..logsetup import BACKUPS, LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
+from ..store import Store
 from ..tools import missing_helpers
+from .failure import FailureRecord, diagnose, narrow_log, record_json, record_text, window
+from .failure import load as load_failure
 from .guard import from_the_app
 from .library import reveal_path
 from .update import open_url
@@ -320,22 +326,50 @@ class ClientContext:
 class Report:
     summary: list[tuple[str, str]]
     files: dict[str, str] = field(default_factory=dict)  # name in the zip -> redacted text
+    diagnosis: str | None = None                          # a failure report's one line; None for a bug report
 
     @property
     def log_lines(self) -> int:
-        return sum(text.count("\n") for name, text in self.files.items() if name != "report.txt")
+        # By name rather than "everything but report.txt": a failure report carries its rows as JSON too.
+        return sum(text.count("\n") for name, text in self.files.items() if ".log" in name)
 
 
-def _tail(path: Path) -> str | None:
+def _read(path: Path) -> str | None:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+def _cut(text: str) -> str:
     if len(text) <= LOG_TAIL_CHARS:
         return text
     cut = text[-LOG_TAIL_CHARS:]
     # Start on a whole line, and say that the start is not the start.
     return "[… earlier lines left out …]\n" + cut[cut.find("\n") + 1:]
+
+
+def _tail(path: Path) -> str | None:
+    text = _read(path)
+    return None if text is None else _cut(text)
+
+
+def request_log(settings: Settings, failure: FailureRecord, tz: tzinfo | None = None) -> str:
+    """Every rotated log, oldest first, narrowed to the one request. All of them rather than the newest two
+    the bug report sends: a track that waited days for Soulseek has its first lines in a file long rotated,
+    and the narrowing is what keeps reading all of them cheap to send."""
+    start, end = window(failure.request)
+    names = [f"{LOG_FILE}.{n}" for n in range(BACKUPS, 0, -1)] + [LOG_FILE]
+    text = "".join(narrow_log(t, failure.request.id, start, end, tz)
+                   for t in (_read(settings.data_dir / n) for n in names) if t)
+    return _cut(text) if text else "No log lines about this track are left: the log has moved on since.\n"
+
+
+def _track_name(failure: FailureRecord) -> str:
+    r, c = failure.request, failure.catalog
+    if c is not None:
+        return f"{c.artist} – {c.title} ({c.mix_name})"
+    return f"{r.query_artist} – {r.query_title}" if r.query_artist and r.query_title else r.raw_text
 
 
 def _connection_lines(settings: Settings, status) -> list[tuple[str, str]]:
@@ -355,7 +389,8 @@ def _connection_lines(settings: Settings, status) -> list[tuple[str, str]]:
 
 def build_report(settings: Settings, status, client: ClientContext, description: str = "",
                  steps: str = "", redact: Redactor | None = None,
-                 now: datetime | None = None) -> Report:
+                 now: datetime | None = None, failure: FailureRecord | None = None,
+                 log_tz: tzinfo | None = None) -> Report:
     redact = redact or Redactor(known_secrets(settings))
     now = now or datetime.now(UTC)
     summary = [("Flackey", __version__ + _build_label()),
@@ -370,16 +405,30 @@ def build_report(settings: Settings, status, client: ClientContext, description:
     missing = missing_helpers()
     if missing:
         summary.append(("Missing helpers", ", ".join(missing)))
+    if failure is not None:
+        summary.append(("Failed track", _track_name(failure)))
     summary = [(k, redact(v)) for k, v in summary]
+    diagnosis = redact(diagnose(failure)) if failure is not None else None
 
     files: dict[str, str] = {}
-    lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
+    if failure is None:
+        lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
+    else:
+        # The diagnosis first, so the file read on its own still answers what this is about.
+        lines = [f"Flackey failure report, {now:%Y-%m-%d %H:%M UTC}", f"Diagnosis: {diagnosis}", ""]
     lines += [f"{k}: {v}" for k, v in summary]
     if description.strip():
         lines += ["", "What went wrong:", redact(description.strip())]
     if steps.strip():
         lines += ["", "What they were doing:", redact(steps.strip())]
+    if failure is not None:
+        lines += ["", redact(record_text(failure)).rstrip("\n")]
     files["report.txt"] = "\n".join(lines) + "\n"
+    if failure is not None:
+        rid = failure.request.id
+        files[f"request-{rid}.json"] = redact(record_json(failure))
+        files[f"request-{rid}.log"] = redact(request_log(settings, failure, log_tz))
+        return Report(summary=summary, files=files, diagnosis=diagnosis)
     for name in LOG_NAMES:
         text = _tail(settings.data_dir / name)
         if text:
@@ -414,15 +463,25 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
 
     first = next((ln for ln in description.strip().splitlines() if ln.strip()), "Something went wrong")
     details = "\n".join(f"{k}: {v}" for k, v in report.summary)
+    # A failure report leads with its diagnosis, subject and body alike, so the inbox triages it unopened.
+    # The reporter's words are optional there: the diagnosis already says what went wrong.
+    diagnosis = report.diagnosis
+    attached = "this track's record and its log" if diagnosis else "the app log"
     # Shrink the reporter's text until the encoded URL fits; the whole of it is in report.txt regardless.
     limit = URL_TEXT_CHARS
     while True:
-        subject = "Flackey bug: " + cap(redact(first), min(SUBJECT_CHARS, max(limit, 20)))
-        parts = [cap(redact(description), limit)]
+        if diagnosis:
+            subject = "Flackey failure: " + cap(diagnosis, SUBJECT_CHARS)
+            parts = [f"Diagnosis: {cap(diagnosis, limit)}"]
+            if description.strip():
+                parts += ["", cap(redact(description), limit)]
+        else:
+            subject = "Flackey bug: " + cap(redact(first), min(SUBJECT_CHARS, max(limit, 20)))
+            parts = [cap(redact(description), limit)]
         if steps.strip():
             parts += ["", "What I was doing just before:", cap(redact(steps), limit)]
         parts += ["", "-- Details from Flackey --", details, "",
-                  f"Attached: {zip_name} (the app log, with personal details removed).",
+                  f"Attached: {zip_name} ({attached}, with personal details removed).",
                   f"If it's not attached yet, drag it in from the {file_browser()} window Flackey opened."]
         body = "\n".join(parts)
         url = _compose_url(via, subject, body)
@@ -453,31 +512,47 @@ def latest_zip(folder: Path) -> Path | None:
     return found[-1] if found else None
 
 
-def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_path) -> APIRouter:
+def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_path,
+           store: Store | None = None) -> APIRouter:
     r = APIRouter(prefix="/api/bug-report")
     folder = settings.data_dir / REPORT_DIR
 
-    def build(body: dict) -> tuple[Report, Redactor, str, str]:
+    def failure_for(body: dict) -> FailureRecord | None:
+        """The request a failure report is about, read here on the event loop rather than in `build`'s
+        thread, so the store is only ever asked from the thread every other route asks it from."""
+        rid = body.get("request_id")
+        if rid is None:
+            return None
+        if store is None or isinstance(rid, bool) or not isinstance(rid, int):
+            raise HTTPException(400, "That is not a track Flackey knows.")
+        try:
+            return load_failure(store, rid)
+        except KeyError:
+            raise HTTPException(404, "That track is no longer in the list.")
+
+    def build(body: dict, failure: FailureRecord | None) -> tuple[Report, Redactor, str, str]:
         description = str(body.get("description") or "")
         steps = str(body.get("steps") or "")
         redact = Redactor(known_secrets(settings))
-        report = build_report(settings, status, ClientContext.parse(body), description, steps, redact)
+        report = build_report(settings, status, ClientContext.parse(body), description, steps, redact,
+                              failure=failure)
         return report, redact, description, steps
 
     @r.post("/preview")
     async def preview(body: dict) -> dict:
         """Read-only: what would be sent. A POST only because the page's context is a body."""
-        report, _, _, _ = await asyncio.to_thread(build, body)
+        report, _, _, _ = await asyncio.to_thread(build, body, failure_for(body))
         return {"summary": [[k, v] for k, v in report.summary],
                 "files": [{"name": n, "text": t} for n, t in report.files.items()],
-                "log_lines": report.log_lines}
+                "log_lines": report.log_lines, "diagnosis": report.diagnosis}
 
     @r.post("")
     async def send(body: dict, request: Request) -> dict:
         from_the_app(request)
-        if not str(body.get("description") or "").strip():
+        failure = failure_for(body)
+        if failure is None and not str(body.get("description") or "").strip():
             raise HTTPException(400, "Say a few words about what went wrong first.")
-        report, redact, description, steps = await asyncio.to_thread(build, body)
+        report, redact, description, steps = await asyncio.to_thread(build, body, failure)
         try:
             path = await asyncio.to_thread(write_zip, report, folder)
         except OSError as e:
