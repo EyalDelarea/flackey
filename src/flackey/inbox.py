@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 NOT_A_LINK = "Paste a YouTube, YouTube Music, or Spotify link."
 YT_FAIL = "Could not read that link. yt-dlp may need an update."
 SPOTIFY_FAIL = "Could not read that Spotify link."
+# A link that never got as far as YouTube or Spotify says nothing about yt-dlp or the link: the fix is
+# the connection, so that is what the paste bar says.
+YT_UNREACHABLE = "Could not reach YouTube. Check your internet connection."
+SPOTIFY_UNREACHABLE = "Could not reach Spotify. Check your internet connection."
 
 
 class BadLink(Exception):
@@ -108,7 +112,7 @@ class Inbox:
                 track = await self.spotify_track(url)
             except SpotifyError as e:
                 log.warning("Spotify failed for %s: %s", url, e)
-                raise BadLink(SPOTIFY_FAIL) from e
+                raise BadLink(SPOTIFY_UNREACHABLE if e.network else SPOTIFY_FAIL) from e
             return self._queue_track(self._spotify_name(track), RequestKind.SPOTIFY_TRACK, track.source_url,
                                      self._spotify_query(track))
         if kind == RequestKind.SPOTIFY_PLAYLIST:
@@ -116,7 +120,7 @@ class Inbox:
                 playlist = await self.spotify_playlist(url)
             except SpotifyError as e:
                 log.warning("Spotify failed for %s: %s", url, e)
-                raise BadLink(SPOTIFY_FAIL) from e
+                raise BadLink(SPOTIFY_UNREACHABLE if e.network else SPOTIFY_FAIL) from e
             if not playlist.tracks:
                 raise BadLink(SPOTIFY_FAIL)
             pid = self.store.upsert_playlist(playlist.source_url, playlist.title)
@@ -149,7 +153,7 @@ class Inbox:
             name, entries = await self.youtube(url)
         except YouTubeError as e:
             log.warning("yt-dlp failed for %s: %s", url, e)
-            raise BadLink(YT_FAIL) from e
+            raise BadLink(YT_UNREACHABLE if e.network else YT_FAIL) from e
         if not entries:  # deleted, private, or region-blocked video; empty playlist
             raise BadLink(YT_FAIL)
         if kind == RequestKind.YT_TRACK:

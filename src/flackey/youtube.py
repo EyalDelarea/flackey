@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from yt_dlp import YoutubeDL
+from yt_dlp.networking.exceptions import TransportError
 from yt_dlp.utils import DownloadCancelled
 
 log = logging.getLogger(__name__)
@@ -25,7 +27,12 @@ MAX_REFERENCE_BYTES = 200 * 1024 * 1024
 
 
 class YouTubeError(Exception):
-    pass
+    """`network` is set when YouTube was never reached -- no connection, no DNS, a timeout -- as against a
+    page yt-dlp did reach and could not read, which is the one an update to yt-dlp might fix."""
+
+    def __init__(self, message: str = "", *, network: bool = False):
+        super().__init__(message)
+        self.network = network
 
 
 class ReferenceAborted(DownloadCancelled):
@@ -66,6 +73,26 @@ def parse_ytdlp_json(data: dict) -> tuple[str, list[YouTubeEntry]]:
 
 
 YOUTUBE_FETCH_TIMEOUT_S = 120
+_UNREACHABLE = (TransportError, ConnectionError, TimeoutError, socket.gaierror)
+
+
+def unreachable(e: BaseException) -> bool:
+    """Whether an exception out of yt-dlp means YouTube was never reached. yt-dlp wraps the socket error
+    twice -- a DownloadError carrying an ExtractorError whose `cause` is a TransportError -- so the whole
+    chain is walked rather than the outer type read. An HTTP error is an answer, not a missing network."""
+    seen: set[int] = set()
+    todo: list[object] = [e]
+    while todo:
+        x = todo.pop()
+        if not isinstance(x, BaseException) or id(x) in seen:
+            continue
+        seen.add(id(x))
+        if isinstance(x, _UNREACHABLE):
+            return True
+        exc_info = getattr(x, "exc_info", None)
+        todo += [getattr(x, "cause", None), x.__cause__, x.__context__,
+                 exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) > 1 else None]
+    return False
 
 
 def ytdlp_available() -> bool:
@@ -100,9 +127,9 @@ async def fetch_youtube(url: str) -> tuple[str, list[YouTubeEntry]]:
     try:
         data = await asyncio.wait_for(asyncio.to_thread(_extract, url), timeout=YOUTUBE_FETCH_TIMEOUT_S)
     except TimeoutError:
-        raise YouTubeError(f"yt-dlp timed out after {YOUTUBE_FETCH_TIMEOUT_S}s") from None
+        raise YouTubeError(f"yt-dlp timed out after {YOUTUBE_FETCH_TIMEOUT_S}s", network=True) from None
     except Exception as e:  # yt-dlp raises its own DownloadError hierarchy for anything network-side
-        raise YouTubeError(str(e).strip()[-500:] or "yt-dlp failed") from e
+        raise YouTubeError(str(e).strip()[-500:] or "yt-dlp failed", network=unreachable(e)) from e
     try:
         return parse_ytdlp_json(data)
     except (AttributeError, KeyError, TypeError) as e:
