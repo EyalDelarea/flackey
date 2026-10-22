@@ -1,4 +1,5 @@
 import asyncio
+from typing import ClassVar
 
 import pytest
 
@@ -498,3 +499,160 @@ async def test_the_running_server_asks_for_the_token_it_was_started_with(tmp_pat
     finally:
         handle.stop()
         await asyncio.wait_for(task, 5.0)
+
+
+# ---- a Telegram that never answers at startup ------------------------------
+class SilentTelegram:
+    """Stands in for TelegramClient in `_run`. `hang` names the call that never returns: "connect" for
+    a network that takes the connection and never answers the handshake, "authorized" for one that
+    goes quiet right after it. `answer()` is that network coming back."""
+
+    hang = "connect"
+    made: ClassVar[list] = []
+
+    def __init__(self, session, api_id, api_hash):
+        self.connected, self.disconnects, self.reachable = False, 0, False
+        SilentTelegram.made.append(self)
+
+    async def _wait_for_the_network(self):
+        if not self.reachable:
+            await asyncio.sleep(3600)
+
+    async def connect(self):
+        if self.hang == "connect":
+            await self._wait_for_the_network()
+        self.connected = True
+
+    async def is_user_authorized(self):
+        await self._wait_for_the_network()
+        return True
+
+    async def get_me(self):
+        await self._wait_for_the_network()
+
+        class Me:
+            phone = "31612345642"
+        return Me()
+
+    async def disconnect(self):
+        self.disconnects += 1
+        self.connected = False
+
+    def is_connected(self):
+        return self.connected
+
+    def answer(self):
+        self.reachable = True
+
+
+@pytest.mark.parametrize("hang", ["connect", "authorized"])
+async def test_the_app_opens_and_downloads_when_telegram_never_answers(tmp_path, caplog, monkeypatch, hang):
+    """The startup connect() had no deadline, and it ran before the server and the worker: on a network
+    that silently drops Telegram the window never opened and no Soulseek download ever ran. Telegram
+    not answering now reads as signed out -- the Deezer bot paused, everything else running -- and
+    Reconnect, which asks Telegram again first, brings it back without a restart."""
+    import httpx
+
+    from flackey import app as app_module
+    from flackey import telegram as telegram_module
+    from flackey.app import ServerHandle, run
+    from flackey.config import Settings
+
+    monkeypatch.setattr(app_module, "TelegramClient", SilentTelegram)
+    monkeypatch.setattr(SilentTelegram, "hang", hang)
+    monkeypatch.setattr(SilentTelegram, "made", [])
+    monkeypatch.setattr(telegram_module, "CONNECT_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(telegram_module, "PROBE_TIMEOUT_S", 0.2)
+    monkeypatch.setenv("FLACKEY_API_TOKEN", "k" * 40)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib",
+                        web_host="127.0.0.1", web_port=0, telegram_api_id=12345, telegram_api_hash="h" * 32)
+    handle = ServerHandle()
+    caplog.set_level("INFO")
+    task = asyncio.create_task(run(settings, open_browser=False, handle=handle))
+    await asyncio.wait_for(asyncio.to_thread(handle.started.wait, 10.0), 15.0)
+    try:
+        assert handle.error is None and handle.url is not None
+        assert "Telegram did not answer within 0.2s; starting with the Deezer bot paused" in caplog.text
+        assert "Telegram login required" not in caplog.text     # nobody said the session was gone
+        client = SilentTelegram.made[-1]
+        # A connect() cut short is closed rather than left half-open; one that finished is kept.
+        assert client.disconnects == (1 if hang == "connect" else 0)
+        port = handle.server.servers[0].sockets[0].getsockname()[1]
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     headers={"x-flackey-token": "k" * 40}) as http:
+            async def health():
+                return (await http.get("/api/health")).json()
+
+            first = await health()
+            assert first["telegram_authorized"] is False and first["telegram_configured"] is True
+            for _ in range(100):
+                if (await health())["worker_running"]:
+                    break
+                await asyncio.sleep(0.02)
+            assert (await health())["worker_running"] is True
+
+            # Still no answer: Reconnect's first question gets "not signed in" rather than a hang.
+            assert (await http.get("/api/telegram/status")).json()["authorized"] is False
+            assert (await health())["telegram_authorized"] is False
+
+            client.answer()
+            assert (await http.get("/api/telegram/status")).json()["authorized"] is True
+            assert (await health())["telegram_authorized"] is True
+    finally:
+        handle.stop()
+        await asyncio.wait_for(task, 5.0)
+
+
+async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, monkeypatch):
+    """The real Telethon, offline: a server that takes the connection and never says a word, which is
+    what a firewall dropping Telegram looks like from here. `connect_telegram` gives up, and what
+    Telethon had started for the connection -- the socket, the tasks that read and write it -- is
+    gone, so a later attempt starts clean instead of beside a leftover."""
+    from telethon import TelegramClient
+
+    from flackey import telegram as telegram_module
+    from flackey.app import connect_telegram
+
+    connections, closed = [], []
+
+    async def silent(reader, writer):
+        connections.append(writer)
+        await reader.read()            # until Telethon closes its end; never answers anything
+        closed.append(writer)
+        writer.close()
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(telegram_module, "CONNECT_TIMEOUT_S", 0.5)
+    loop = asyncio.get_running_loop()
+    errors = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+
+    def telethon_tasks():
+        return [t for t in asyncio.all_tasks()
+                if "telethon" in getattr(t.get_coro(), "cr_code", None).co_filename]
+
+    client = TelegramClient(str(tmp_path / "session"), 12345, "h" * 32)
+    client.session.set_dc(2, "127.0.0.1", port)
+    try:
+        for attempt in (1, 2):
+            assert await connect_telegram(client) is None
+            assert len(connections) == attempt, "never reached the silent server"
+            for _ in range(200):
+                if len(closed) == attempt:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(closed) == attempt, "the socket was left open"
+            assert not client.is_connected() and telethon_tasks() == []
+        import gc
+        gc.collect()
+        await asyncio.sleep(0.05)
+        assert errors == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+        for writer in connections:     # so a failure above ends the test instead of wait_closed() hanging
+            writer.close()
+        await client.disconnect()
+        server.close()
+        await server.wait_closed()

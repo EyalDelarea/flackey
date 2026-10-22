@@ -38,6 +38,7 @@ class FakeClient:
         self.calls = []
         self.dead = False
         self.connected = False
+        self.disconnects = 0
 
     async def is_user_authorized(self):
         if self.dead:
@@ -86,6 +87,10 @@ class FakeClient:
 
     async def connect(self):
         self.connected = True
+
+    async def disconnect(self):
+        self.disconnects += 1
+        self.connected = False
 
     def is_connected(self):
         return self.connected
@@ -394,8 +399,12 @@ async def test_start_qr_gives_up_when_the_connection_never_completes(monkeypatch
         async def connect(self):
             await asyncio.sleep(3600)
 
+    client = NeverConnects()
     with pytest.raises(LoginError):
-        await TelegramLogin(NeverConnects(), True).start_qr()
+        await TelegramLogin(client, True).start_qr()
+    # The cancelled connect() left Telethon's socket and its send/receive tasks open; closed here, or
+    # the next attempt opens a second set beside them.
+    assert client.disconnects == 1
 
 
 async def test_start_qr_leaves_no_half_started_login_behind_after_a_timeout(monkeypatch):
@@ -428,10 +437,15 @@ class ProbeClient:
         self.me, self.connected = me, connected
         self.connect_error, self.get_me_error = connect_error, get_me_error
         self.connects = 0
+        self.disconnects = 0
         self.authorized_answers = []   # what a stale is_user_authorized() would have said
 
     def is_connected(self):
         return self.connected
+
+    async def disconnect(self):
+        self.disconnects += 1
+        self.connected = False
 
     async def connect(self):
         self.connects += 1
@@ -527,3 +541,101 @@ async def test_status_does_not_invent_a_session_for_a_client_that_never_signed_i
 
     client = NeverSignedIn(connected=False, connect_error=ConnectionError("no route"))
     assert (await TelegramLogin(client, True).status())["authorized"] is False
+
+
+async def test_probe_closes_a_connection_it_gave_up_on(monkeypatch):
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "PROBE_TIMEOUT_S", 0.05)
+
+    class NeverConnects(ProbeClient):
+        async def connect(self):
+            await asyncio.sleep(3600)
+
+    client = NeverConnects(connected=False)
+    assert await probe_authorized(client) is None
+    assert client.disconnects == 1
+
+
+async def test_status_says_signed_out_rather_than_hanging_when_nobody_answers(monkeypatch):
+    """With nothing cached, `is_user_authorized()` is a request of its own, and on a connected socket
+    that nobody answers it waited forever -- and so did the Settings page and the Reconnect screen."""
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "PROBE_TIMEOUT_S", 0.05)
+
+    class Silent(ProbeClient):
+        async def get_me(self):
+            await asyncio.sleep(3600)
+
+        async def is_user_authorized(self):
+            await asyncio.sleep(3600)
+
+    status = await asyncio.wait_for(TelegramLogin(Silent(), True).status(), 2)
+    assert status["authorized"] is False
+
+
+async def test_status_reports_only_telegrams_own_yes_as_confirmed():
+    """A start that could not reach Telegram pauses the Deezer bot (app.connect_telegram); a status
+    check that reaches it and hears "signed in" is what lifts that. A cached yes, a no, or no answer
+    at all must not."""
+    seen = []
+    signed_in = ProbeClient()
+    await TelegramLogin(signed_in, True, on_confirmed=lambda: seen.append("yes")).status()
+    assert seen == ["yes"]
+
+    seen.clear()
+    await TelegramLogin(ProbeClient(me=None), True, on_confirmed=lambda: seen.append("yes")).status()
+    unreachable = ProbeClient(connected=False, connect_error=ConnectionError("no route"))
+    unreachable.authorized_answers = [True]          # the cached yes from an earlier sign-in
+    assert (await TelegramLogin(unreachable, True,
+                                on_confirmed=lambda: seen.append("yes")).status())["authorized"] is True
+    assert seen == []
+
+
+async def test_status_ignores_a_yes_about_a_client_that_was_replaced_meanwhile():
+    seen = []
+    login = TelegramLogin(None, True, on_confirmed=lambda: seen.append("yes"))
+
+    class Replaced(ProbeClient):
+        async def get_me(self):
+            login.client = ProbeClient(me=None)      # a sign-out swapped the client mid-probe
+            return A_USER
+
+    login.client = Replaced()
+    await login.status()
+    assert seen == []
+
+
+async def test_reconfigure_gives_up_rather_than_hanging_when_telegram_never_answers(monkeypatch):
+    """POST /api/telegram/keys awaited this connect() with no deadline, so a network that never
+    answers left the keys form spinning for good."""
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "CONNECT_TIMEOUT_S", 0.05)
+
+    class NeverConnects(FakeClient):
+        async def connect(self):
+            await asyncio.sleep(3600)
+
+    new = NeverConnects()
+    login = TelegramLogin(FakeClient(), False, make_client=lambda: new)
+    with pytest.raises(LoginError, match="Telegram did not answer in time"):
+        await login.reconfigure()
+    # The keys are kept (saving them again tries again), and the half-made connection is closed.
+    assert login.configured is True and login.client is new and new.disconnects == 1
+
+
+async def test_log_out_finishes_when_the_rebuilt_client_never_connects(monkeypatch):
+    from flackey import telegram as telegram_module
+
+    monkeypatch.setattr(telegram_module, "CONNECT_TIMEOUT_S", 0.05)
+
+    class NeverConnects(FakeClient):
+        async def connect(self):
+            await asyncio.sleep(3600)
+
+    new = NeverConnects()
+    login = TelegramLogin(FakeClient(authorized=True), True, make_client=lambda: new)
+    await asyncio.wait_for(login.log_out(), 2)
+    assert login.client is new and new.connected is False and new.disconnects == 1
