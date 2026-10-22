@@ -16,6 +16,7 @@ from ..lossless import (
     LosslessFile,
     Reference,
     downloaded_cut,
+    downloaded_mix,
     extended_reference,
     pick,
     policy_from_settings,
@@ -464,6 +465,7 @@ class LosslessMixin:
         if version is not None:
             rec.event("version", status=version.status, reason=version.reason)
         cut = downloaded_cut(file, ref, tags)
+        cut_name = downloaded_mix(file, ref, tags) if cut else None
         if cut:
             rec.event("cut", cut=cut)
         self._publish_phase(req.id, "converting")
@@ -492,7 +494,7 @@ class LosslessMixin:
             return None, "convert_failed"
         rec.event("convert", fmt=verdict.fmt, ms=int((self.clock() - t0) * 1000))
         return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref, version, cut,
-                           pr.duration_s), "filed"
+                           cut_name, pr.duration_s), "filed"
 
 
     def _publish_phase(self, request_id: int, phase: str) -> None:

@@ -14,7 +14,7 @@ from what the metadata says -- the record's title, mix and album, the peer's pat
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from rapidfuzz import fuzz
 
@@ -60,12 +60,22 @@ def arrangement(version: str | None) -> str:
     return "" if is_original(v) else norm(v)
 
 
+def named_version(version: str | None) -> str:
+    """`version` as matching has always read it: its whole name, extended cut included, normalised, and ""
+    for the original. "X Extended Remix" agrees with "X Remix" this way, as it did before issue #187, and
+    "Club Mix" is not "Extended Mix"."""
+    v = _REMASTER_TEXT_RE.sub(" ", version or "")
+    return "" if is_original(v) else norm(v)
+
+
 @dataclass(frozen=True)
 class Version:
     arrangement: str = ""          # "" is the original arrangement
     remaster: bool = False
     year: str | None = None        # the remaster's year, when its wording names one
     cut: str = ""                  # "extended", or "" for the normal length
+    # The whole name as matching reads it (`named_version`); not part of what makes two Versions equal
+    named: str = field(default="", compare=False)
 
     @property
     def is_original(self) -> bool:
@@ -74,6 +84,11 @@ class Version:
         Extended Mix for it (`match._original`)."""
         return not self.arrangement and not self.cut
 
+    @property
+    def label(self) -> str:
+        """What `agrees` compares: the name as read, or for a Version built by hand its parts."""
+        return self.named or " ".join(p for p in (self.arrangement, self.cut) if p)
+
 
 def split_version(version: str | None, *context: str | None) -> Version:
     """`version` (a mix name, a title's version text) read as a Version. `context` -- a title, an album, a
@@ -81,7 +96,8 @@ def split_version(version: str | None, *context: str | None) -> Version:
     remaster_texts = [t for t in (version, *context) if t and _REMASTER_RE.search(t)]
     # the first year any of them names: "Remastered" from Deezer's album, "Remastered 2024" from the request
     year = next((m.group(0) for t in remaster_texts if (m := _YEAR_RE.search(t))), None)
-    return Version(arrangement(version), bool(remaster_texts), year, EXTENDED if says_extended(version) else "")
+    return Version(arrangement(version), bool(remaster_texts), year, EXTENDED if says_extended(version) else "",
+                   named_version(version))
 
 
 def record_version(record: CatalogTrack, asked: Version | None = None) -> Version:
@@ -105,19 +121,19 @@ def same_arrangement(a: str, b: str) -> bool:
 
 
 def agrees(asked: Version, have: Version) -> bool:
-    """Is `have` the version `asked` names? The same arrangement, a remaster exactly when one was asked
-    for, and the same cut: the extended and the radio edit are two versions, and owning one is not owning
-    the other (issue #187). The years need not agree: peers and Deezer file the 2024 "LSD" remaster under the box set's 2023.
-    A date alone never makes a record the remaster -- a 2025 compilation of the original is not one -- it
-    only confirms a downloaded file (`check_version`)."""
-    return (same_arrangement(asked.arrangement, have.arrangement) and asked.remaster == have.remaster
-            and asked.cut == have.cut)
+    """Is `have` the version `asked` names, for matching a record or a candidate? The same name as read
+    (`named_version`) and a remaster exactly when one was asked for. The years need not agree: peers and
+    Deezer file the 2024 "LSD" remaster under the box set's 2023. A date alone never makes a record the
+    remaster -- a 2025 compilation of the original is not one -- it only confirms a downloaded file
+    (`check_version`)."""
+    return same_arrangement(asked.label, have.label) and asked.remaster == have.remaster
 
 
-def same_but_cut(asked: Version, have: Version) -> bool:
-    """`have` is `asked` but for its length: the same arrangement and release, whatever the cut. What an
-    extended copy of the asked track is."""
-    return agrees(asked, Version(have.arrangement, have.remaster, have.year, asked.cut))
+def same_owned_version(asked: Version, have: Version) -> bool:
+    """`agrees`, and the same cut: what the library holds, where the extended mix and the radio edit are
+    two versions and owning one is not owning the other (issue #187). "X Extended Remix" is not "X Remix"
+    here, though a candidate named one may still be fetched for the other."""
+    return agrees(asked, have) and asked.cut == have.cut
 
 
 def with_remaster(mix_name: str | None, remaster: bool) -> str | None:

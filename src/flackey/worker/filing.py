@@ -43,19 +43,16 @@ def _same_length(duration_s: int | None, catalog: CatalogTrack) -> bool:
 
 def as_filed(catalog: CatalogTrack, hit: LosslessHit | None) -> CatalogTrack:
     """The record as the file in hand is it. A lossless copy can be another cut of the record it was found
-    for -- the extended mix of a radio edit -- and is then filed as that: its mix name says extended, its
-    length is its own, and the radio edit's ISRC is not put on it (issue #187; it used to be filed as the
-    radio edit, at the radio edit's length). A copy of the record's own cut keeps the record's length,
-    unless the file's differs by more than rounding. Never saved back: the record is shared."""
-    if hit is None:
+    for -- the extended mix of a radio edit -- and is then filed as that: under the name the file gives its
+    cut ("Club Mix", "X Extended Remix"), else "Extended Mix", at its own length, without the radio edit's
+    ISRC (issue #187; it used to be filed as the radio edit, at the radio edit's length). A copy of the
+    record's own cut is filed as the record, length included, as before. Never saved back: the record is
+    shared."""
+    if hit is None or hit.cut != EXTENDED or split_version(catalog.mix_name).cut:
         return catalog
     probed = round(hit.duration_s) if hit.duration_s else None
-    if hit.cut == EXTENDED and not split_version(catalog.mix_name).cut:
-        return dataclasses.replace(catalog, mix_name=extended_mix_name(catalog.mix_name), isrc=None,
-                                   duration_ms=probed * 1000 if probed else None)
-    if probed and (catalog.duration_s is None or abs(probed - catalog.duration_s) > DURATION_SLACK_S):
-        return dataclasses.replace(catalog, duration_ms=probed * 1000)
-    return catalog
+    return dataclasses.replace(catalog, mix_name=hit.cut_name or extended_mix_name(catalog.mix_name), isrc=None,
+                               duration_ms=probed * 1000 if probed else None)
 
 
 class FilingMixin:

@@ -94,6 +94,7 @@ class LosslessHit:
     version_check: VersionCheck | None = None
     # Which cut came, by the file's name and tags: "extended", or "" for the reference's own (issue #187)
     cut: str = ""
+    cut_name: str | None = None       # the extended cut's own name, when the file gives one
     duration_s: float | None = None   # the converted file's own length, probed
 
 

@@ -2929,3 +2929,30 @@ async def test_an_extended_mix_the_worker_filed_does_not_hide_the_radio_edit_onc
     provider.searches.clear()
     third = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert third.state == RequestState.DUPLICATE and third.track_id == first.track_id and provider.searches == []
+
+
+async def test_a_normal_copy_longer_than_its_record_is_still_owned_when_asked_for_again(lenv, monkeypatch,
+                                                                                       tmp_path: Path):
+    """Only an extended cut is filed at its own length. A copy of the record's own cut keeps the record's
+    length, as before issue #187, so the library's length match still finds it the next time it is asked
+    for -- a request with no ISRC and no record to go by included."""
+    _settings, store, _notifier, provider, _ = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    provider.audio["a"] = _flac(tmp_path / "longer.flac", seconds=9, seed=3)
+    provider.files_for = lambda text: [lf("a", length_s=9, size=1_600_000)]
+    w = make(lenv)
+    first = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    t = store.get_track(first.track_id)
+    assert (t.mix_name, t.duration_s) == ("Original Mix", 3)
+    assert store.find_track_by_meta("Astral Projection", "Into the Void", "Original Mix", 3).id == t.id
+    again = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert again.state == RequestState.DUPLICATE and again.track_id == t.id
+
+
+async def test_off_a_club_mix_is_filed_under_its_own_name(lenv, monkeypatch, tmp_path: Path):
+    _settings, store, _notifier, provider, _ = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    provider.files_for = lambda text: [lf("x", path="Void\\02. Astral Projection - Into the Void (Club Mix).flac",
+                                          length_s=20, size=3_200_000)]
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)

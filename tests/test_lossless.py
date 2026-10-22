@@ -413,3 +413,16 @@ def test_a_report_round_trips_the_cut_and_older_reports_still_load():
     del old["reference"]["cut"], old["reference"]["prefer_extended"]
     assert PickReport.from_dict(old).reference == RADIO.__class__(**old["reference"])
     assert PickReport.from_dict(old).reference.cut == ""
+
+
+def test_an_extended_cut_is_named_by_the_file_s_own_words():
+    from flackey.lossless import downloaded_mix
+    remix = Reference(artist="CamelPhat", title="Cola", mix_name="Made by Pete Remix", duration_s=200)
+    assert downloaded_mix(mk(path="x\\01 - Cola (Made by Pete Extended Remix).flac"), remix) == "Made by Pete Extended Remix"
+    assert downloaded_mix(ext("Calvin Harris - Feel So Close (extended mix).flac"), RADIO) == "Extended Mix"
+    assert downloaded_mix(ext("Feel So Close (Club Mix).flac"), RADIO) == "Club Mix"
+    # nothing of its own to go by: the tags, else None (filed as "Extended Mix")
+    assert downloaded_mix(ext("01. Feel So Close.flac"), RADIO, {"mix": "Extended Mix"}) == "Extended Mix"
+    assert downloaded_mix(mk(path="x\\02.05 - Never Gonna Give You Up (Extended Version) (Rick Astley).flac"),
+                          Reference(artist="Rick Astley", title="Never Gonna Give You Up", mix_name=None,
+                                    duration_s=213)) is None

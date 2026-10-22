@@ -15,10 +15,10 @@ from .store import Store
 from .version import (
     EXTENDED,
     Version,
-    agrees,
     extended_target,
     record_version,
     same_arrangement,
+    same_owned_version,
     split_version,
 )
 
@@ -202,4 +202,4 @@ def _same_version(t: Track, version: Version) -> bool:
     """A library track's stored mix agrees with `version` (a track with no mix is taken as agreeing). The
     library keeps no release name, so a remaster filed as "Original Mix" reads as the original: asked for
     again, it is fetched once more rather than an original standing in for it."""
-    return not t.mix_name or agrees(split_version(t.mix_name), version)
+    return not t.mix_name or same_owned_version(split_version(t.mix_name), version)

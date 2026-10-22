@@ -9,6 +9,7 @@ from flackey.version import (
     extended_mix_name,
     file_cut,
     record_version,
+    same_owned_version,
     split_version,
     with_remaster,
 )
@@ -165,12 +166,22 @@ def test_an_extended_cut_is_never_the_original_and_never_the_radio_edit():
     assert not agrees(Version(), split_version("Extended Mix"))
     assert not agrees(split_version("Extended Mix"), Version())
     assert not agrees(split_version("Radio Edit"), split_version("Extended Mix"))
-    # two words for one cut
-    assert agrees(split_version("Extended Mix"), split_version("Club Mix"))
-    assert agrees(split_version("Extended Mix"), split_version("12'' Version"))
-    # a remix and its extended cut are two versions: owning one must not hide the other
-    assert not agrees(split_version("Bad Company Remix"), split_version("Bad Company Extended Remix"))
-    assert agrees(split_version("Bad Company Extended Remix"), split_version("Bad Company Extended Mix"))
+    # a club mix is a version of its own, to match and to own (both are still read as an extended cut)
+    assert split_version("Club Mix").cut == split_version("Extended Mix").cut == "extended"
+    assert not agrees(split_version("Extended Mix"), split_version("Club Mix"))
+    assert not same_owned_version(split_version("Extended Mix"), split_version("Club Mix"))
+
+
+def test_a_remix_s_extended_cut_still_matches_the_remix_but_is_owned_apart():
+    """Matching reads "X Extended Remix" as "X Remix", as it always has: a request for the remix may
+    still be answered by a candidate named for its extended cut. The library keeps them apart: owning one
+    does not hide the other (issue #187)."""
+    remix, extended = split_version("Bad Company Remix"), split_version("Bad Company Extended Remix")
+    assert agrees(remix, extended) and agrees(extended, remix)
+    assert not same_owned_version(remix, extended) and not same_owned_version(extended, remix)
+    assert same_owned_version(remix, split_version("Bad Company Remix"))
+    assert same_owned_version(Version(), split_version("Original Mix"))
+    assert not same_owned_version(split_version("Radio Edit"), split_version("Extended Mix"))
 
 
 def test_context_never_makes_a_cut():

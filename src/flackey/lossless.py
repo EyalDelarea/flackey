@@ -189,6 +189,18 @@ def own_extended(f: LosslessFile, ref: Reference) -> bool:
     return have.cut == EXTENDED and same_arrangement(extended_target(ref.mix_name), have.arrangement)
 
 
+def downloaded_mix(f: LosslessFile, ref: Reference, tags: dict[str, str] | None = None) -> str | None:
+    """The name a downloaded extended cut gives itself, to file it under: its file name's version text,
+    else its mix or title tag's. "Club Mix" stays a club mix and "Made by Pete Extended Remix" that remix's
+    extended cut. None when nothing names it in words of its own (issue #187)."""
+    tags = tags or {}
+    for text in (file_title(f.name, ref.artist)[1], tags.get("mix"), parse_version(tags.get("title") or "")[1]):
+        if text and says_extended(text):
+            text = " ".join(text.split())
+            return text.title() if text == text.lower() else text
+    return None
+
+
 def downloaded_cut(f: LosslessFile, ref: Reference, tags: dict[str, str] | None = None) -> str:
     """The cut a downloaded file is, as far as the asked arrangement goes: "extended" when its own name, or
     failing that its mix or title tag, names an extended cut of it (`own_extended`), else "". The
