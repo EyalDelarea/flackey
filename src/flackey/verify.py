@@ -78,15 +78,14 @@ def _input(path: Path, tool: str) -> list[str]:
     if tool_path(tool) is None:
         raise ToolMissing(f"{tool} is not installed")
     try:
+        # A file with nothing in it is a transfer that never arrived, whatever its first bytes say -- and
+        # there is nothing for the tool to read, so it is not run.
+        if arrived_empty(path):
+            raise VerifyError("nothing arrived: the file is empty or only zero bytes")
         return input_args(path)
     except WrongFormat as e:
-        # Bytes under the wrong name are a disguise, whatever they turn out to be. Only a file with nothing in
-        # it is a transfer that never arrived.
-        try:
-            empty = arrived_empty(path)
-        except OSError:
-            empty = True
-        raise (VerifyError if empty else Disguised)(str(e)) from e
+        # Anything else under the wrong name is a disguise, whatever it turns out to be.
+        raise Disguised(str(e)) from e
     except OSError as e:
         raise VerifyError(str(e)) from e
 
