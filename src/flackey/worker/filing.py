@@ -3,6 +3,7 @@ track to a lossless one."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import shutil
 import time
@@ -237,7 +238,11 @@ class FilingMixin:
         record's ISRC, usually answers with the original album. Asked here, at filing, rather than before the
         download: it only ever moves a year. The Deezer record the bot downloaded counts as well, when its ISRC
         is the record's. A remaster -- the record's or the request's -- keeps its own year, so it asks nothing."""
-        if not catalog.isrc or is_remaster(catalog.title, catalog.mix_name, catalog.release_name, req.query_version):
+        if is_remaster(catalog.title, catalog.mix_name, catalog.release_name, req.query_version):
+            # The record is shared: another request may have stored the original's year on it. A remaster's
+            # file wants its own, so that stored date is set aside here, never saved back.
+            return dataclasses.replace(catalog, original_date=None) if catalog.original_date else catalog
+        if not catalog.isrc:
             return catalog
         also: list[str | None] = []
         if cand.isrc and cand.isrc.upper() == catalog.isrc.upper() and _same_length(cand.duration_s, catalog):

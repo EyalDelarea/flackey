@@ -860,6 +860,14 @@ async def test_a_remaster_request_keeps_its_year_and_asks_deezer_nothing(env, mo
     # A record that does not call itself one is still the remaster the request asked for.
     plain = CatalogTrack(**{**DP_REISSUE.__dict__, "release_date": "2021-02-22"})
     assert await w._dated(store.get_request(rid), dp_cand(), plain) is plain and asked == []
+    # A shared record another request already dated by the original album: read back on a retry or a
+    # restart, the remaster still gets its own year, and the stored date stays for the plain requests.
+    store.upsert_catalog_track(CatalogTrack(**{**plain.__dict__, "original_date": "2001-03-07"}))
+    stored = store.get_catalog_track(plain.id)
+    assert stored.original_date == "2001-03-07"
+    resumed = await w._dated(store.get_request(rid), dp_cand(), stored)
+    assert resumed.original_date is None and asked == []
+    assert store.get_catalog_track(plain.id).original_date == "2001-03-07"
 
 
 async def test_nothing_found_files_the_stand_in_as_before(env):
