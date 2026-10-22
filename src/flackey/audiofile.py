@@ -17,13 +17,7 @@ PROTOCOLS = ["-protocol_whitelist", "file,pipe"]
 
 
 class WrongFormat(ValueError):
-    """The file's bytes are not the format its extension claims. `actual` is the format they are, when they
-    are one of the four this module knows, and None when they are nothing recognisable at all -- which is
-    what a transfer that broke off in its first bytes looks like, rather than a disguise."""
-
-    def __init__(self, message: str, actual: str | None = None):
-        super().__init__(message)
-        self.actual = actual
+    """The file's bytes are not the format its extension claims."""
 
 
 def _id3_end(head: bytes) -> int:
@@ -69,8 +63,24 @@ def demuxer(path: Path) -> str | None:
         return None
     actual = sniff(path)
     if actual != claimed:
-        raise WrongFormat(f"{path.name} is not a {claimed} file" + (f" (it is {actual})" if actual else ""), actual)
+        raise WrongFormat(f"{path.name} is not a {claimed} file" + (f" (it is {actual})" if actual else ""))
     return claimed
+
+
+def arrived_empty(path: Path) -> bool:
+    """Nothing arrived to judge: a file shorter than any header, or nothing but zero bytes -- what a transfer
+    that never wrote its data leaves behind. A truncated transfer of a real file is not this: it keeps its
+    header and still reads as what it claims. So anything else under the wrong name is a disguise (an AAC,
+    an Ogg, an MP3 called .flac), not damage (issue #97)."""
+    with open(path, "rb") as f:
+        chunk = f.read(HEAD_BYTES)
+        if len(chunk) < HEAD_BYTES:
+            return True
+        while chunk:
+            if chunk.strip(b"\0"):
+                return False
+            chunk = f.read(1 << 20)
+    return True
 
 
 def input_args(path: Path) -> list[str]:

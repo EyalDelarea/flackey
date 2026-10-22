@@ -112,17 +112,28 @@ def test_verify_refuses_a_mismatched_file_before_running_anything(tmp_path: Path
     assert ran.cmds == []
 
 
-def test_a_disguise_and_a_broken_copy_are_told_apart(tmp_path: Path, monkeypatch):
-    """An MP3 named .flac says something about where the audio came from; bytes that are no format at all
-    are a transfer that broke off. The worker files the first under `verify_failed` and the second under
-    `damaged` (issue #97), so the error has to carry the difference."""
+M4A = b"\x00\x00\x00\x20ftypM4A \x00\x00\x02\x00" + b"\x00" * 64
+OGG = b"OggS\x00\x02" + b"\x00" * 22 + b"\x7fFLAC" + b"\x00" * 64
+
+
+@pytest.mark.parametrize(("payload", "said"), [(MP3_SYNC, "it is mp3"), (M4A, "not a flac"), (OGG, "not a flac")])
+def test_any_other_bytes_under_the_flac_name_are_a_disguise(tmp_path: Path, monkeypatch, payload: bytes, said: str):
+    """Not only an MP3: an AAC or an Ogg-wrapped FLAC called .flac is just as much not what the peer said.
+    The worker files a disguise under `verify_failed` and moves on; filed under `damaged` it would be
+    fetched again every six hours for three days (issue #97)."""
     monkeypatch.setattr(verify, "tool_path", lambda name: f"/bin/{name}")
-    with pytest.raises(verify.Disguised, match="it is mp3"):
-        verify.probe(put(tmp_path, "x.flac", MP3_SYNC))
-    for payload in (b"", b"not audio"):
-        with pytest.raises(verify.VerifyError) as e:
-            verify.probe(put(tmp_path, "y.flac", payload))
-        assert not isinstance(e.value, verify.Disguised | verify.ToolMissing)
+    with pytest.raises(verify.Disguised, match=said):
+        verify.probe(put(tmp_path, "x.flac", payload))
+
+
+@pytest.mark.parametrize("payload", [b"", b"fLaC\x00", b"not audio", b"\x00" * 70_000])
+def test_a_file_with_nothing_in_it_is_damage_not_a_disguise(tmp_path: Path, monkeypatch, payload: bytes):
+    """Empty, shorter than any header, or all zero bytes: nothing arrived to be disguised. A truncated real
+    FLAC is not here -- it keeps its header and probes as FLAC."""
+    monkeypatch.setattr(verify, "tool_path", lambda name: f"/bin/{name}")
+    with pytest.raises(verify.VerifyError) as e:
+        verify.probe(put(tmp_path, "y.flac", payload))
+    assert not isinstance(e.value, verify.Disguised | verify.ToolMissing)
 
 
 @pytest.mark.parametrize("name", ["x.bin", "x.m4a", "x"])

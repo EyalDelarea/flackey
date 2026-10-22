@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .audiofile import DEMUXERS, WrongFormat, input_args
+from .audiofile import DEMUXERS, WrongFormat, arrived_empty, input_args
 from .models import NO_EDGE_HZ, Verdict, edge_text
 from .tools import no_window, tool_path
 
@@ -34,7 +34,7 @@ class ToolMissing(VerifyError):
 
 
 class Disguised(VerifyError):
-    """The bytes are a different audio format than the name claims -- an MP3 called .flac. Unlike a plain
+    """The bytes are not the format the name claims -- an MP3, an AAC or an Ogg called .flac. Unlike a plain
     VerifyError this one does say something about the source, and it is the oldest trick there is."""
 
 
@@ -80,9 +80,13 @@ def _input(path: Path, tool: str) -> list[str]:
     try:
         return input_args(path)
     except WrongFormat as e:
-        # Bytes that are some other audio format are a disguise; bytes that are nothing at all are a copy
-        # that never arrived whole.
-        raise (Disguised if e.actual else VerifyError)(str(e)) from e
+        # Bytes under the wrong name are a disguise, whatever they turn out to be. Only a file with nothing in
+        # it is a transfer that never arrived.
+        try:
+            empty = arrived_empty(path)
+        except OSError:
+            empty = True
+        raise (VerifyError if empty else Disguised)(str(e)) from e
     except OSError as e:
         raise VerifyError(str(e)) from e
 

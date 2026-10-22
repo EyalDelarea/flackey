@@ -23,7 +23,7 @@ from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
-from flackey.verify import ToolMissing, VerifyError, probe
+from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -428,6 +428,22 @@ async def test_a_copy_that_cannot_be_read_through_is_damaged_not_fake(lenv, dete
     assert len(damaged) == 1 and "Invalid data" in damaged[0]["error"]
     assert not any(e["event"] == "verify_failed" for e in a.timeline)
     assert store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_disguised_copy_is_a_failed_check_not_damage(lenv, detector, tmp_path: Path):
+    """An AAC called .flac is a verdict on that copy, not a transfer that broke: `verify_failed`, so it is
+    not fetched again on the long wait the way a damaged copy is."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "aac.flac", seed=3),
+                                        Disguised("req1-lossless.flac is not a flac file"))
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    assert [e["event"] for e in a.timeline if e["event"] in ("damaged", "verify_failed")] == ["verify_failed"]
     assert not list(settings.tmp_dir.iterdir())
 
 
