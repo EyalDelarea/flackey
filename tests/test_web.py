@@ -2542,6 +2542,20 @@ def test_telegram_source_can_be_switched_on_while_signed_out_and_reads_as_paused
     assert health["source_enabled"] is True and health["telegram_authorized"] is False
 
 
+def test_telegram_source_cannot_be_switched_on_when_telegram_was_never_set_up(tmp_path: Path):
+    """No keys, no account: "signed out" and Reconnect would name an account that does not exist."""
+    status = Status(None, telegram_authorized=False, worker_running=False, setup_done=True,
+                    source_enabled=False)
+    app, _, settings = make(tmp_path, status=status, login=FakeLogin())
+    settings.source_enabled = False
+    settings.telegram_api_id, settings.telegram_api_hash = None, None
+    c = AppClient(app)
+    r = c.post("/api/telegram/source", json={"enabled": True})
+    assert r.status_code == 409 and "Telegram isn't set up yet" in r.json()["detail"]
+    assert settings.source_enabled is False
+    assert c.post("/api/telegram/source", json={"enabled": False}).status_code == 200
+
+
 def test_health_takes_the_source_flag_from_the_shared_status(tmp_path: Path):
     """A Telegram sign-in flips `source_enabled` in `status` (app.make_on_authorized); health has to
     read it from there, or the sidebar goes on saying "Telegram off" until the next restart."""

@@ -93,12 +93,15 @@ def router(login: TelegramLogin | None, status: dict,
     async def source(body: dict) -> dict:
         """Toggle the Deezer bot source without signing Telegram out and back in. On while Telegram is
         signed out is allowed: that is the paused bot the worker already handles when Telegram drops, and
-        signing back in picks it up. Settings keeps the switch beside a single Reconnect for exactly that."""
+        signing back in picks it up. Settings keeps the switch beside a single Reconnect for exactly that.
+        With no Telegram set up at all there is no account to pause on or reconnect, so that is refused."""
         if settings is None:
             raise HTTPException(503, "Settings are not available in this process")
         enabled = body.get("enabled")
         if not isinstance(enabled, bool):
             raise HTTPException(400, "enabled must be true or false")
+        if enabled and not settings.telegram_configured:
+            raise HTTPException(409, "Telegram isn't set up yet. Set it up before switching on the Deezer bot.")
         save_settings(settings, source_enabled=enabled)
         status["source_enabled"] = enabled
         return {"source_enabled": enabled}
