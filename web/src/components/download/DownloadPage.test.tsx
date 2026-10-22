@@ -150,19 +150,27 @@ describe('filter bar, remove and clear failed', () => {
 
   it('Cancel, or changing the filter, closes the confirm without removing anything', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     expect(screen.queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument()
     expect(api.removeRequests).not.toHaveBeenCalled()
   })
 
+  it('counts one row as one track, not "1 tracks"', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
+    expect(screen.getByText('Downloads · 1 track')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove 1 track' })).toBeInTheDocument()
+    expect(screen.getByText('Whole batch · 1 track')).toBeInTheDocument()
+    expect(screen.queryByText(/\b1 tracks\b|Remove these 1\b/)).not.toBeInTheDocument()
+  })
+
   it('says so when some of the rows could not be removed', async () => {
     vi.mocked(api.removeRequests).mockResolvedValueOnce({ removed: [], skipped: [1] })
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove these 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 track' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove 1' }))
     expect(await screen.findByText('One track was not removed — a file was being checked or filed. Try again in a moment.')).toBeInTheDocument()
   })
@@ -802,6 +810,22 @@ it('files the copy the owner listened to, and reloads the row that just changed 
   fireEvent.click(screen.getByText('Keep it anyway'))
   await waitFor(() => expect(api.accept).toHaveBeenCalledWith(7))
   await waitFor(() => expect(refresh).toHaveBeenCalled())
+})
+
+it('turns a refused Keep it anyway into a sentence rather than printing the worker reason as it is', async () => {
+  vi.mocked(api.accept).mockRejectedValueOnce(new ApiError(400,
+    'this copy is also a different recording (best score 0.64 below 0.80), so it was not filed'))
+  const rejected: Bundle = {
+    request: { ...baseRequest, state: 'rejected' }, candidates: [], catalog: null, track: null,
+    rejection: { id: 4, request_id: 7, reason: 'cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source',
+      bitrate_kbps: 320, cutoff_hz: 15500, spectrogram_path: null, created_at: '', kind: 'quality',
+      audio_path: '/data/rejected/req7-1.mp3' },
+  }
+  render(<DownloadPage live={makeLive([rejected])} />)
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  expect(screen.getByText(/^Nothing above 15\.5 kHz, below the 18 kHz Flackey asks of an MP3\./)).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  expect(await screen.findByText('This copy is also a different recording (64% match), so it was not filed')).toBeInTheDocument()
 })
 
 it('keeps stopped tracks individually retryable but out of the sweep when filtering by stage', async () => {

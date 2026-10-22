@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 
@@ -78,9 +78,22 @@ def load(store: Store, request_id: int) -> FailureRecord:
         candidate=candidate)
 
 
+def cap(text: str, n: int) -> str:
+    """`text` in at most `n` characters, ending in "…" when it had to be cut. The cut goes back to the last
+    space so a subject never stops mid-word ("…lossy copy to fa…"); a single word longer than half the
+    room is cut inside itself instead, or a long link would leave next to nothing."""
+    if len(text) <= n:
+        return text
+    head = text[:n - 1]
+    if not text[n - 1].isspace():
+        m = re.match(r"(.*)\s", head, re.DOTALL)
+        if m and len(m.group(1)) >= n // 2:
+            head = m.group(1)
+    return head.rstrip(" \t\n,;:") + "…"
+
+
 def _cap(text: str, n: int = DIAGNOSIS_CHARS) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+    return cap(" ".join(text.split()), n)
 
 
 def _count(n: int, one: str, many: str) -> str:
@@ -252,6 +265,32 @@ _RECORD_START = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d{3} (\w+)
 # access log's `/api/requests/12/...` for what the owner pressed on the row.
 _ANY_REQUEST = re.compile(r"\breq[#=]\d+|/requests/\d+")
 _LOUD = {"WARNING", "ERROR", "CRITICAL"}
+_LINK = re.compile(r"https?://[^\s\"'<>]+")
+OTHER_LINK = "[other link]"
+# yt-dlp names a video by its id as well as by its link: "ERROR: [youtube] dQw4w9WgXcQ: Video unavailable",
+# "[youtube:tab] PL...: ...". The id is the token after the extractor tag, up to the colon.
+_EXTRACTOR_ID = re.compile(r"(\[[\w-]+(?::[\w-]+)?\] )([\w-]{6,})(?=:)")
+OTHER_ID = "[other id]"
+
+
+def _looks_like_id(token: str) -> bool:
+    """An id, as against a word yt-dlp also puts there ("[download] Destination:"): ids carry a digit, `_`
+    or `-`, or a capital past the first letter."""
+    return bool(re.search(r"[\d_-]", token)) or any(c.isupper() for c in token[1:])
+
+
+def _other_links_out(line: str, own: frozenset[str], own_ids: frozenset[str]) -> str:
+    """`line` with every link but this request's own replaced, and every video id yt-dlp printed but this
+    request's own. A warning that names no request can still name a track: the time window keeps it for its
+    context, not for the other link the owner pasted that hour."""
+    def link(m: re.Match) -> str:
+        url = m.group(0).rstrip(".,;:)]")
+        return m.group(0) if url in own else OTHER_LINK + m.group(0)[len(url):]
+
+    def video(m: re.Match) -> str:
+        token = m.group(2)
+        return m.group(0) if token in own_ids or not _looks_like_id(token) else m.group(1) + OTHER_ID
+    return _EXTRACTOR_ID.sub(video, _LINK.sub(link, line))
 
 
 def _parse_time(stamp: str) -> datetime:
@@ -263,20 +302,26 @@ def window(r: Request) -> tuple[datetime, datetime]:
     return _parse_time(r.created_at) - LOG_MARGIN, _parse_time(r.updated_at) + LOG_MARGIN
 
 
-def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: tzinfo | None = None) -> str:
+def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: tzinfo | None = None,
+               own_links: Iterable[str | None] = ()) -> str:
     """The records that are about this request: every one that names it, and every warning or error inside
     its lifetime that names no request at all -- Soulseek dropping, Beatport refusing, a crash in a provider
     -- which is the context a request's own lines usually lack. A line naming another request is left out
-    however loud it is. A traceback belongs to the record above it and comes along with it.
+    however loud it is. A traceback belongs to the record above it and comes along with it. In the records
+    kept for their timing alone, any link but `own_links` (the request's own) reads `[other link]`, and any
+    video id yt-dlp printed but theirs reads `[other id]`.
 
     The log stamps local time (`logsetup.DATEFMT`) and the store stamps UTC; `tz` is the log's zone, the
     machine's own when not given, which is the one the log was written in."""
     mine = re.compile(rf"\breq[#=]{request_id}(?!\d)|/requests/{request_id}(?!\d)")
+    own = frozenset(u.rstrip(".,;:)]") for u in own_links if u)
+    own_ids = frozenset(t for u in own for t in re.findall(r"[\w-]{6,}", u))
     out: list[str] = []
-    keep = False
+    keep = untagged = False
     for line in text.splitlines(keepends=True):
         m = _RECORD_START.match(line)
         if m:
+            untagged = False
             if mine.search(line):
                 keep = True
             elif _ANY_REQUEST.search(line) or m.group(2) not in _LOUD:
@@ -284,7 +329,7 @@ def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: t
             else:
                 naive = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
                 at = naive.replace(tzinfo=tz) if tz is not None else naive.astimezone()
-                keep = start <= at <= end
+                keep = untagged = start <= at <= end
         if keep:
-            out.append(line)
+            out.append(_other_links_out(line, own, own_ids) if untagged else line)
     return "".join(out)

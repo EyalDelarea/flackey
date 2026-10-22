@@ -1,5 +1,5 @@
 import { selectionKeys } from './selectionKeys'
-import type { Filter } from '../../presentation'
+import { plural, type Filter } from '../../presentation'
 
 type View = 'active' | 'history' | 'failed'
 interface Chip {
@@ -52,7 +52,7 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed, vie
   const chips = CHIPS.filter(c => c.views.includes(view) && !(c.hideAtZero && counts[c.key] === 0 && filter !== c.key))
   return (
     <div className={bare ? 'filterbar-row' : 'filterbar'}>
-      <span className="filter-scope">{view === 'active' ? 'Downloads' : view === 'failed' ? 'Failed' : 'History'} · {counts.all} tracks</span>
+      <span className="filter-scope">{view === 'active' ? 'Downloads' : view === 'failed' ? 'Failed' : 'History'} · {plural(counts.all, 'track')}</span>
       <div className="stage-filters" role="radiogroup" aria-label={`Filter ${view === 'active' ? 'downloads' : view}${view === 'history' ? ' by outcome' : ' by stage'}`} onKeyDown={selectionKeys}>
       {chips.map(c => {
         const count = counts[c.key]
@@ -68,7 +68,7 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed, vie
       })}
       </div>
       <button className="btn-secondary bulk-remove" disabled={removeCount === 0 || confirming} onClick={onRemoveThese}>
-        Remove these {removeCount}
+        {removeCount === 1 ? 'Remove 1 track' : `Remove these ${removeCount}`}
       </button>
       {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>}
     </div>

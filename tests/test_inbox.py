@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from flackey.config import Settings
-from flackey.inbox import NOT_A_LINK, SPOTIFY_FAIL, YT_FAIL, BadLink, Inbox
+from flackey.inbox import (
+    NOT_A_LINK,
+    SPOTIFY_FAIL,
+    SPOTIFY_UNREACHABLE,
+    YT_FAIL,
+    YT_UNREACHABLE,
+    BadLink,
+    Inbox,
+)
 from flackey.models import RequestKind, RequestState
 from flackey.spotify import SpotifyError, SpotifyPlaylist, SpotifyTrack
 from flackey.store import Store
@@ -19,6 +27,8 @@ def inbox(tmp_path: Path):
     async def fake_youtube(url: str):
         if "bad" in url:
             raise YouTubeError("boom")
+        if "offline" in url:
+            raise YouTubeError("Connection refused", network=True)
         if "gone" in url:
             return "Deleted video", []
         if "list=" in url:
@@ -32,12 +42,16 @@ def inbox(tmp_path: Path):
     async def fake_spotify(url: str):
         if "bad" in url:
             raise SpotifyError("boom")
+        if "offline" in url:
+            raise SpotifyError("ConnectError", network=True)
         return SpotifyTrack("11dFghVXANMlKmJXsNCbNl", "Cut To The Feeling", "Carly Rae Jepsen", 208,
                             "https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl")
 
     async def fake_spotify_playlist(url: str):
         if "bad" in url:
             raise SpotifyError("boom")
+        if "offline" in url:
+            raise SpotifyError("ConnectError", network=True)
         return SpotifyPlaylist("pl1", "Spotify Set", [
             SpotifyTrack("a", "Into The Void", "Astral Projection", 442, "https://open.spotify.com/track/a"),
             SpotifyTrack("b", "Y", "X", 300, "https://open.spotify.com/track/b"),
@@ -214,6 +228,18 @@ async def test_unreadable_links_are_bad_links(inbox):
         await ib.submit("https://open.spotify.com/track/bad")
     with pytest.raises(BadLink, match=SPOTIFY_FAIL):
         await ib.submit("https://open.spotify.com/playlist/bad")
+    assert store.list_requests() == []
+
+
+async def test_a_link_read_while_offline_blames_the_connection_not_yt_dlp(inbox):
+    ib, store = inbox
+    with pytest.raises(BadLink) as yt:
+        await ib.submit("https://www.youtube.com/watch?v=offline")
+    assert str(yt.value) == YT_UNREACHABLE and "yt-dlp" not in str(yt.value)
+    for link in ("https://open.spotify.com/track/offline", "https://open.spotify.com/playlist/offline"):
+        with pytest.raises(BadLink) as sp:
+            await ib.submit(link)
+        assert str(sp.value) == SPOTIFY_UNREACHABLE
     assert store.list_requests() == []
 
 

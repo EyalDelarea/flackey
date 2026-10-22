@@ -434,14 +434,22 @@ describe('the Connections section', () => {
     expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
   })
 
-  it('says a switched-off bot is signed out too, and offers the way back', () => {
+  it('says a switched-off bot is signed out too, with one Reconnect and the switch still there', async () => {
     const onReconnect = vi.fn()
+    vi.spyOn(api, 'telegramSource').mockResolvedValue({ source_enabled: true })
     render(<SettingsPage live={signedOut({ source_enabled: false })} onReconnect={onReconnect} />)
     const bot = connRow('Deezer bot')
     expect(within(bot).getByText('Off — and Telegram is signed out')).toBeInTheDocument()
     expect(dot(bot)).toHaveClass('off')
-    fireEvent.click(within(bot).getByRole('button', { name: 'Reconnect Telegram' }))
+    // One way back, on the account it fixes: not a second Reconnect stacked under the first.
+    expect(within(connections()).getAllByRole('button', { name: /Reconnect/ })).toHaveLength(1)
+    fireEvent.click(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' }))
     expect(onReconnect).toHaveBeenCalled()
+    // And the bot can still be switched back on; until Telegram is back it reads as paused.
+    const toggle = within(bot).getByRole('switch', { name: 'Deezer bot' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
   })
 
   it('files the format question with the folder, where it belongs', () => {

@@ -208,12 +208,18 @@ def test_the_report_says_which_build_sent_it(tmp_path, monkeypatch, system, froz
     assert dict(rep.summary)["Flackey"] == __version__ + label
 
 
-@pytest.mark.parametrize("system,window", [("darwin", "Finder"), ("win32", "File Explorer")])
-def test_the_email_names_the_window_the_zip_is_shown_in(tmp_path, monkeypatch, system, window):
+@pytest.mark.parametrize("system,where", [
+    ("darwin", "the Finder window Flackey opened"),
+    ("win32", "the File Explorer window Flackey opened"),
+    ("linux", "the window Flackey opened in your file manager"),
+])
+def test_the_email_names_the_window_the_zip_is_shown_in(tmp_path, monkeypatch, system, where):
     rep = build_report(settings_for(tmp_path), {}, ClientContext(), redact=Redactor([], home=HOME))
     monkeypatch.setattr(sys, "platform", system)
     email = compose_email(rep, "It broke", "", "z.zip", Redactor([], home=HOME))
-    assert f"drag it in from the {window} window Flackey opened" in email.body
+    assert f"If it's not attached yet, drag it in from {where}." in email.body
+    if system == "linux":
+        assert "Finder" not in email.body
 
 
 def test_key_value_secrets_are_redacted_by_shape():

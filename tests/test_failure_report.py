@@ -88,7 +88,7 @@ def test_the_diagnosis_names_the_failure_the_way_the_app_does(rec, want):
 def no_route(outcome: str) -> str:
     """What `_no_route` writes on the row: MISS_REASON's sentence, inside its own."""
     return (f"no way to fetch this track: {MISS_REASON[outcome]}, Deezer offered nothing to fall back on. "
-            "Use Try again in the app to search once more")
+            "Press Try again to search once more")
 
 
 @pytest.mark.parametrize("a, want", [
@@ -114,7 +114,7 @@ def test_a_soulseek_miss_is_diagnosed_from_its_attempt(a, want):
 
 def test_the_long_wait_giving_up_is_still_a_soulseek_miss():
     """`_wait_for_soulseek` words its last error differently from `_no_route`, around the same sentence."""
-    msg = f"{MISS_REASON['queued']}; looked 12 times over 72 h. Use Try again in the app to search once more"
+    msg = f"{MISS_REASON['queued']}; looked 12 times over 72 h. Press Try again to search once more"
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg),
                         attempts=[attempt("no_pick", seen=0, aid=1),
                                   attempt("queued", survivors=5, events=[("enqueue", {})], aid=2)])
@@ -167,6 +167,23 @@ def test_the_diagnosis_is_one_short_line():
     assert len(line) <= DIAGNOSIS_CHARS and line.endswith("x…") and "\n" not in line
 
 
+def test_a_long_diagnosis_and_its_subject_stop_at_a_word_not_inside_one(tmp_path: Path):
+    # Long enough that a plain cut lands inside "back" at 160 and inside "started" at the subject's 80.
+    msg = ("no way to fetch this track: the people who had it never started sending, the Deezer bot is switched "
+           "off, so there is no lossy copy to fall back on. Press Try again to search once more")
+    rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg))
+    line = diagnose(rec)
+    assert len(line) <= DIAGNOSIS_CHARS and line.endswith("…")
+    assert f"Error at download: {msg}".startswith(line[:-1]), "cut at the end, nothing dropped from the middle"
+    assert f"Error at download: {msg}"[len(line) - 1] == " ", "the cut lands on a space, not inside a word"
+    rep = build_report(settings_for(tmp_path), {}, ClientContext(), redact=Redactor([], home=HOME))
+    rep.diagnosis = line
+    subject = compose_email(rep, "", "", "z.zip", Redactor([], home=HOME)).subject
+    assert subject.startswith("Flackey failure: ") and subject.endswith("…")
+    cut = subject.removeprefix("Flackey failure: ")[:-1]
+    assert line.startswith(cut) and line[len(cut)] == " ", subject
+
+
 def test_an_unfinished_attempt_says_so():
     assert attempt_line(attempt(None)) == "Soulseek: the attempt never finished"
 
@@ -209,6 +226,36 @@ Traceback (most recent call last):
 ValueError: bad
 2026-10-20 10:04:00.000 INFO    uvicorn.access: 127.0.0.1:5 - "POST /api/requests/7/retry HTTP/1.1" 200
 """
+
+
+def test_a_warning_kept_for_its_timing_does_not_share_the_other_links_the_owner_pasted():
+    mine = "https://www.youtube.com/watch?v=MINE"
+    log = f"""\
+2026-10-20 10:00:01.000 DEBUG   flackey.worker.core: req#7 queued -> identifying {mine}
+2026-10-20 10:01:00.000 WARNING flackey.youtube: could not read https://www.youtube.com/watch?v=OTHER, retrying
+Traceback (most recent call last):
+yt_dlp.utils.DownloadError: (https://open.spotify.com/track/ELSE)
+2026-10-20 10:02:00.000 WARNING flackey.youtube: slow answer for {mine}.
+"""
+    start, end = datetime(2026, 10, 20, 9, 58, tzinfo=UTC), datetime(2026, 10, 20, 10, 7, tzinfo=UTC)
+    kept = narrow_log(log, 7, start, end, tz=UTC, own_links=[mine, None])
+    assert "OTHER" not in kept and "ELSE" not in kept
+    assert "could not read [other link], retrying" in kept
+    assert "DownloadError: ([other link])" in kept
+    assert f"identifying {mine}" in kept and f"slow answer for {mine}." in kept
+
+
+def test_a_kept_yt_dlp_warning_does_not_share_the_other_video_s_id():
+    log = ("2026-10-20 10:01:00.000 WARNING flackey.inbox: yt-dlp failed for "
+           "https://www.youtube.com/watch?v=OTHERID0001: ERROR: [youtube] OTHERID0001: Video unavailable\n"
+           "2026-10-20 10:01:01.000 WARNING flackey.reference: [youtube] MINEid00001: Video unavailable\n"
+           "2026-10-20 10:01:02.000 WARNING flackey.youtube: [download] Destination: x\n")
+    start, end = datetime(2026, 10, 20, 9, 58, tzinfo=UTC), datetime(2026, 10, 20, 10, 7, tzinfo=UTC)
+    kept = narrow_log(log, 7, start, end, tz=UTC, own_links=["https://www.youtube.com/watch?v=MINEid00001"])
+    assert "OTHERID0001" not in kept
+    assert "yt-dlp failed for [other link]: ERROR: [youtube] [other id]: Video unavailable" in kept
+    assert "[youtube] MINEid00001: Video unavailable" in kept
+    assert "[download] Destination: x" in kept
 
 
 def test_the_log_s_local_time_is_compared_in_its_own_zone():
@@ -297,6 +344,16 @@ def test_a_failure_report_carries_the_record_its_rows_and_its_own_log_lines(fail
     everything = "".join(rep.files.values())
     for leaked in ("slskd-key-9876", "84.12.3.4", str(Path.home())):
         assert leaked not in everything
+
+
+def test_a_failure_report_shares_this_track_s_link_and_no_other(failed):
+    settings, store, rid = failed
+    with (settings.data_dir / "flackey.log").open("a", encoding="utf-8") as f:
+        f.write("2026-10-20 10:04:02.000 WARNING flackey.youtube: slow: https://www.youtube.com/watch?v=abc, "
+                "https://www.youtube.com/watch?v=someone-elses\n")
+    rep = build_report(settings, {}, ClientContext(), failure=load(store, rid), log_tz=UTC)
+    assert rep.files[f"request-{rid}.log"].splitlines()[-1].endswith(
+        "slow: https://www.youtube.com/watch?v=abc, [other link]")
 
 
 def test_a_request_the_log_has_moved_past_says_so(failed):

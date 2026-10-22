@@ -31,12 +31,13 @@ from urllib.parse import quote, quote_plus, urlencode
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
-from ..config import Settings
+from ..config import Settings, platform_name
 from ..logsetup import BACKUPS, LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
 from ..store import Store
 from ..tools import missing_helpers
 from .failure import FailureRecord, diagnose, narrow_log, record_json, record_text, window
+from .failure import cap as cap_words
 from .failure import load as load_failure
 from .guard import from_the_app
 from .library import reveal_path
@@ -309,8 +310,15 @@ def os_summary() -> str:
 
 
 def file_browser() -> str:
-    """What the reporter calls the window the zip is shown in."""
-    return "File Explorer" if sys.platform == "win32" else "Finder"
+    """What the reporter calls the window the zip is shown in. Only the Mac and Windows have one name for it."""
+    return {"mac": "Finder", "windows": "File Explorer"}.get(platform_name(), "your file manager")
+
+
+def _drag_hint() -> str:
+    where = file_browser()
+    window = f"the {where} window Flackey opened" if where != "your file manager" \
+        else "the window Flackey opened in your file manager"
+    return f"If it's not attached yet, drag it in from {window}."
 
 
 def _build_label() -> str:
@@ -384,7 +392,8 @@ def request_log(settings: Settings, failure: FailureRecord, tz: tzinfo | None = 
     and the narrowing is what keeps reading all of them cheap to send."""
     start, end = window(failure.request)
     names = [f"{LOG_FILE}.{n}" for n in range(BACKUPS, 0, -1)] + [LOG_FILE]
-    text = "".join(narrow_log(t, failure.request.id, start, end, tz)
+    r = failure.request
+    text = "".join(narrow_log(t, r.id, start, end, tz, own_links=(r.source_url, r.raw_text))
                    for t in (_read(settings.data_dir / n) for n in names) if t)
     return _cut(text) if text else "No log lines about this track are left: the log has moved on since.\n"
 
@@ -483,8 +492,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
     log goes in the zip, which the reporter attaches by dragging. Each piece is redacted on its own rather
     than the finished body, whose email redaction would take the To address with it."""
     def cap(text: str, n: int) -> str:
-        text = text.strip()
-        return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+        return cap_words(text.strip(), n)
 
     first = next((ln for ln in description.strip().splitlines() if ln.strip()), "Something went wrong")
     details = "\n".join(f"{k}: {v}" for k, v in report.summary)
@@ -507,7 +515,7 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
             parts += ["", "What I was doing just before:", cap(redact(steps), limit)]
         parts += ["", "-- Details from Flackey --", details, "",
                   f"Attached: {zip_name} ({attached}, with personal details removed).",
-                  f"If it's not attached yet, drag it in from the {file_browser()} window Flackey opened."]
+                  _drag_hint()]
         body = "\n".join(parts)
         url = _compose_url(via, subject, body)
         if len(url) <= URL_MAX or limit <= 50:

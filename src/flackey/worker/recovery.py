@@ -52,7 +52,7 @@ class RecoveryMixin:
         hours = LONG_RETRY_EVERY_S // 3600
         if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
             reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
-                      f"Use Try again in the app to search once more")
+                      f"Press Try again to search once more")
             self._set_state(req, RequestState.ERROR, attempts=attempts, error_message=reason)
             await self.notifier.send(f"Gave up: {req.raw_text}\n{reason}")
             return
@@ -73,7 +73,8 @@ class RecoveryMixin:
         What to say. The old line asserted that Soulseek "has already looked and found nothing" whatever had
         actually happened, which for the live failure this was written from was untrue three ways over: the
         peers had five perfect copies and were merely busy. The attempt row knows which outcome it really was
-        and `MISS_REASON` already words each one, so read it rather than guess. Likewise the bot is
+        and `MISS_REASON` already words each one, so read it rather than guess. Soulseek with no account
+        saved "isn't set up" -- it has no off switch to be "switched off" by. Likewise the bot is
         "switched off" when the owner switched it off, "paused" when this pass skipped it because Telegram
         was signed out, and only otherwise said to have offered nothing.
 
@@ -84,7 +85,8 @@ class RecoveryMixin:
         _, outcome = self._lossless_outcome(req.id)
         why = MISS_REASON.get(outcome) if outcome else None
         if why is None:
-            why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
+            # There is no off switch for Soulseek: no provider means no account was ever saved.
+            why = ("Soulseek isn't set up" if not (self.providers and self.settings.lossless_enabled)
                    else "Soulseek found no copy of it")
         paused = self.settings.source_enabled and req.id in self._bot_skipped
         if paused and self._bot_ready():
@@ -116,9 +118,9 @@ class RecoveryMixin:
         # "Try again" is the right advice for a miss a later search could answer differently -- but not for
         # one that cannot be checked at all: with no reference, or no ffmpeg, the next search reaches the same
         # dead end.
-        reason += (". Use Try again once it can be checked"
+        reason += (". Try again once it can be checked"
                    if outcome in ("fingerprint_unavailable", "verify_unavailable")
-                   else ". Use Try again in the app to search once more")
+                   else ". Press Try again to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
 
@@ -138,7 +140,7 @@ class RecoveryMixin:
         return self.store.lossless_outcome(request_id)
 
 
-    def _lossless_miss_line(self, req: Request) -> str | None:
+    def _lossless_miss_line(self, req: Request, *, from_find_lossless: bool = False) -> str | None:
         """The owner asked to be told, not just shown, when a track lands on the lossy copy. Only when a
         lossless attempt actually ran and missed: with the provider off or absent there is nothing to
         report, and saying "no lossless copy" then would blame Soulseek for a setting.
@@ -150,6 +152,9 @@ class RecoveryMixin:
         if attempt is None or outcome in (None, "filed"):
             return None
         why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
-        tail = ("It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES
-                else "Use Try again in the app to search Soulseek once more.")
+        # The track is filed, so its row has no Try again: Find lossless is the button that searches again.
+        # Said from that button's own result (`from_find_lossless`), it only needs to say it can be pressed again.
+        manual = ("Press it again later to search once more." if from_find_lossless
+                  else "Press Find lossless in your library to search Soulseek once more.")
+        tail = "It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES else manual
         return f"No lossless copy this time — {why}. {tail}"

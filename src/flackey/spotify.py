@@ -10,7 +10,15 @@ import httpx
 
 
 class SpotifyError(Exception):
-    pass
+    """`network` is set when Spotify was never reached, as against a page that came back unreadable."""
+
+    def __init__(self, message: str = "", *, network: bool = False):
+        super().__init__(message)
+        self.network = network
+
+
+# What "could not reach Spotify" means in httpx: no connection, no DNS, a timeout, a proxy that refused.
+_UNREACHABLE = (httpx.TimeoutException, httpx.NetworkError, httpx.ProxyError)
 
 
 @dataclass
@@ -113,7 +121,7 @@ async def fetch_spotify_track(url: str, client: httpx.AsyncClient | None = None)
     try:
         r = await http.get(f"https://open.spotify.com/embed/track/{track_id}")
     except httpx.HTTPError as e:
-        raise SpotifyError(str(e)) from e
+        raise SpotifyError(str(e), network=isinstance(e, _UNREACHABLE)) from e
     finally:
         if client is None:
             await http.aclose()
@@ -129,7 +137,7 @@ async def fetch_spotify_playlist(url: str, client: httpx.AsyncClient | None = No
     try:
         r = await http.get(f"https://open.spotify.com/embed/playlist/{playlist_id}")
     except httpx.HTTPError as e:
-        raise SpotifyError(str(e)) from e
+        raise SpotifyError(str(e), network=isinstance(e, _UNREACHABLE)) from e
     finally:
         if client is None:
             await http.aclose()

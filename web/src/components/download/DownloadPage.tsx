@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { bucketCounts, bucketOf, bulkRemoveOf, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
+import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
@@ -115,7 +115,9 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   const removable = bulkRemoveOf(groups)
   // A confirm counted against one tab or filter is not a question about the next one.
   useEffect(() => { setConfirmRemove(null) }, [view, filter])
-  const failMessage = (err: unknown) => err instanceof ApiError ? err.message : "That didn't work. Try again."
+  // A refused action's reason comes straight from the worker ("this copy is also a different recording…"), so
+  // it is made into a sentence before it heads a banner.
+  const failMessage = (err: unknown) => err instanceof ApiError ? asSentence(err.message) : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
   const retryAll = () => {
     setRetryingAll(true)
