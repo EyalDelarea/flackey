@@ -120,6 +120,7 @@ class PipelineMixin:
                 ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
                                               minimum=self.settings.lossless_fingerprint_min)
             log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
+        self._interpret(req, video, ident)   # labels the request in the background; changes nothing here
         chosen_obj = ident.chosen if ident is not None else decision.chosen
         if chosen_obj is not None and chosen_obj.isrc:
             # The source's recording ID disambiguates equally named Beatport releases. Never
@@ -248,6 +249,10 @@ class PipelineMixin:
             await self._retry_or_fail(req, f"could not fetch the video's audio: {acoustic.missing[7:]}",
                                       flag="video audio unavailable, will retry")
             return
+        # A request the bot had nothing for is compared here, where the video is in hand anyway rather than
+        # fetched for the comparison first; one `_identify` already started is not started again.
+        video = acoustic.reference if acoustic.reference is not None and acoustic.reference.kind == "youtube" else None
+        self._interpret(req, video)
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:
@@ -271,6 +276,14 @@ class PipelineMixin:
                 self._bot_skipped.add(req.id)
             await self._no_route(req)
             return
+        if hit is not None and hit.reference.from_query and cand.source == QUERY_SOURCE:
+            reading = self._reading_that_found(req, hit.reference)
+            if reading is not None:
+                # Another reading of the title found it, at the end of the spelling ladder. Those are the
+                # words a peer's file name and the fingerprint agree on; the request's own found nothing.
+                log.info("req#%d: filing on another reading of the title, %s - %s", req.id, reading.artist,
+                         reading.title)
+                cand = query_candidate(reading, req.id)
         if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
             # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
             # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers

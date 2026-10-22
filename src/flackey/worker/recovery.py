@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from ..models import MISS_REASON, Request, RequestState
+from ..models import MISS_REASON, LosslessAttempt, Request, RequestState
 from .policy import (
     BOT_PAUSED,
     LONG_RETRY_EVERY_S,
@@ -81,8 +81,7 @@ class RecoveryMixin:
         search again, and after a definitive one it would repeat this pass's work to reach this pass's answer
         -- three passes, two "retrying" messages, no searches. Say it once and stop, the same way a track
         neither side can identify lands terminally rather than burning the backoff schedule."""
-        attempt = self.store.get_attempt_for_request(req.id)
-        outcome = attempt.outcome if attempt else None
+        _, outcome = self._lossless_outcome(req.id)
         why = MISS_REASON.get(outcome) if outcome else None
         if why is None:
             why = ("Soulseek is switched off" if not (self.providers and self.settings.lossless_enabled)
@@ -127,11 +126,16 @@ class RecoveryMixin:
     def _lossless_allowed(self, req: Request) -> bool:
         if not self.providers or not self.settings.lossless_enabled:
             return False
-        last = self.store.get_attempt_for_request(req.id)
+        last, outcome = self._lossless_outcome(req.id)
         # Spec §5 stops the *worker* going back to a provider on its own after a definitive miss. It does
         # not bind the owner: `retry()` grants `lossless_retry` on a failed request, which is the button
         # `_lossless_miss_line` points them at. `upgrade()` skips this check outright for the same reason.
-        return last is None or last.outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
+        return last is None or outcome in SEARCH_AGAIN_AFTER or bool(req.lossless_retry)
+
+
+    def _lossless_outcome(self, request_id: int) -> tuple[LosslessAttempt | None, str | None]:
+        """`Store.lossless_outcome`: what the last pass concluded, not just its last row."""
+        return self.store.lossless_outcome(request_id)
 
 
     def _lossless_miss_line(self, req: Request) -> str | None:
@@ -142,10 +146,10 @@ class RecoveryMixin:
         The outcome is the whole test. A successful hit always finishes its attempt as "filed" before
         `_try_lossless` returns it, so an extra `hit is None` guard at the call site would be a branch no
         input can reach - and this way the line stays right however the file was obtained."""
-        attempt = self.store.get_attempt_for_request(req.id)
-        if attempt is None or attempt.outcome in (None, "filed"):
+        attempt, outcome = self._lossless_outcome(req.id)
+        if attempt is None or outcome in (None, "filed"):
             return None
-        why = MISS_REASON.get(attempt.outcome, f"the lossless attempt ended in {attempt.outcome}")
-        tail = ("It will try again on its own." if attempt.outcome in RETRY_LOSSLESS_OUTCOMES
+        why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
+        tail = ("It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES
                 else "Use Try again in the app to search Soulseek once more.")
         return f"No lossless copy this time — {why}. {tail}"

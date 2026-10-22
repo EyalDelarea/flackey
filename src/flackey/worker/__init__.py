@@ -1,8 +1,9 @@
 """The download worker: takes each queued request through identify, fetch, verify and file.
 
 `Worker` lives in `core` and is assembled from one mixin per stage -- `pipeline` (identify and choose),
-`acoustic` (the fingerprint reference), `lossless_attempt` (the Soulseek path), `filing` (verify, file,
-upgrade) and `recovery` (what a pass that filed nothing does next). The retry numbers and outcome sets
+`acoustic` (the fingerprint reference), `interpret` (the readings of a noisy title, compared in shadow),
+`lossless_attempt` (the Soulseek path), `filing` (verify, file, upgrade) and `recovery` (what a pass that
+filed nothing does next). The retry numbers and outcome sets
 are in `policy`; stand-in candidates and the small value types are in `records`."""
 from .core import Worker
 from .policy import (

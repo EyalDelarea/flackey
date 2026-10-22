@@ -3,7 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from flackey.cli import app
-from flackey.models import RequestKind
+from flackey.models import Query, RequestKind
 from flackey.store import Store
 
 runner = CliRunner()
@@ -28,6 +28,24 @@ def test_status_and_export(tmp_path: Path):
     store.add_playlist_track(store.upsert_playlist("u", "Goa Set"), tid, 1)
     r = runner.invoke(app, ["--env", str(env), "export"])
     assert r.exit_code == 0 and (tmp_path / "lib" / "Playlists" / "Goa Set.m3u8").exists()
+
+
+def test_status_counts_the_labels_of_noisy_titles(tmp_path: Path):
+    env = _env(tmp_path)
+    store = Store(tmp_path / "data" / "flackey.sqlite")
+    r = runner.invoke(app, ["--env", str(env), "status"])
+    assert "noisy titles" not in r.output                       # nothing to say until there is something
+    two = [Query(raw="x", artist="L", title="A - T"), Query(raw="x", artist="A", title="T")]
+    for klass, reading in [("confirmed", 1), ("confirmed", 0), ("agreed", None), ("ambiguous", None),
+                           ("skipped", None)]:
+        store.set_interpretation_outcome(store.add_request("x", RequestKind.YT_TRACK, interpretations=two),
+                                         klass, reading)
+    r = runner.invoke(app, ["--env", str(env), "status"])
+    assert r.exit_code == 0
+    assert ("noisy titles: 5 (readings compared in the background; nothing was changed)\n"
+            "  confirmed: 2 (1 by a reading other than the one searched)\n"
+            "  agreed: 1\n  ambiguous: 1\n  skipped: 1\n  pending: 0\n"
+            "  would ask: 1 of 4 (25%)\n") in r.output
 
 
 def test_add_rejects_plain_text(tmp_path: Path):

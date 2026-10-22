@@ -1,5 +1,7 @@
 """The request's own audio as fingerprints (issue #67). `fingerprint` itself is faked here -- what these
 tests are about is which excerpt is taken, how many needles come back, and that the audio is deleted."""
+import asyncio
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,10 +16,12 @@ from flackey.models import Candidate
 from flackey.reference import (
     EXCERPT_S,
     IDENTIFY_MAX,
+    DeezerSearchError,
     deezer_needles,
     deezer_reference,
     find_deezer_record,
     identify_record,
+    search_deezer,
     youtube_reference,
 )
 
@@ -164,7 +168,7 @@ async def test_identify_record_picks_the_first_preview_that_is_the_video(tmp_pat
                 8: [NOT_THE_VIDEO],         # every bit differs
                 9: [FULL[10:250]]}          # also the video, but 7 is tried first and wins
 
-    async def fake_needles(deezer_id, http, tmp_dir):
+    async def fake_needles(deezer_id, http, tmp_dir, *, cpu=None):
         if deezer_id == 6:
             raise FingerprintError("deezer has no preview for this track")
         return previews[deezer_id]
@@ -177,7 +181,7 @@ async def test_identify_record_picks_the_first_preview_that_is_the_video(tmp_pat
 
 
 async def test_identify_record_refuses_when_no_preview_matches(tmp_path: Path, monkeypatch):
-    async def fake_needles(deezer_id, http, tmp_dir):
+    async def fake_needles(deezer_id, http, tmp_dir, *, cpu=None):
         return [NOT_THE_VIDEO]
 
     monkeypatch.setattr(ref_mod, "deezer_needles", fake_needles)
@@ -189,7 +193,7 @@ async def test_identify_record_refuses_when_no_preview_matches(tmp_path: Path, m
 async def test_identify_record_says_so_when_no_candidate_carries_a_deezer_id(tmp_path: Path, monkeypatch):
     """33 certified tracks have no Deezer id at all. Identification was never possible there, and the
     reason the owner reads must say that rather than blame the audio."""
-    async def fake_needles(deezer_id, http, tmp_dir):
+    async def fake_needles(deezer_id, http, tmp_dir, *, cpu=None):
         raise AssertionError("nothing to fetch")
 
     monkeypatch.setattr(ref_mod, "deezer_needles", fake_needles)
@@ -200,7 +204,7 @@ async def test_identify_record_says_so_when_no_candidate_carries_a_deezer_id(tmp
 
 async def test_identify_record_separates_an_unfetchable_preview_from_a_mismatch(tmp_path: Path, monkeypatch):
     """Every preview failed to download: the audio never spoke, so the reason may not say it disagreed."""
-    async def fake_needles(deezer_id, http, tmp_dir):
+    async def fake_needles(deezer_id, http, tmp_dir, *, cpu=None):
         raise FingerprintError("preview download http 403")
 
     monkeypatch.setattr(ref_mod, "deezer_needles", fake_needles)
@@ -210,7 +214,7 @@ async def test_identify_record_separates_an_unfetchable_preview_from_a_mismatch(
 
 
 async def test_identify_record_never_raises_on_an_unexpected_failure(tmp_path: Path, monkeypatch):
-    async def fake_needles(deezer_id, http, tmp_dir):
+    async def fake_needles(deezer_id, http, tmp_dir, *, cpu=None):
         raise RuntimeError("something nobody predicted")
 
     monkeypatch.setattr(ref_mod, "deezer_needles", fake_needles)
@@ -295,3 +299,87 @@ async def test_deezer_down_is_a_reason_not_an_exception():
     async with httpx.AsyncClient() as http:
         found, why = await find_deezer_record(VOID, http)
     assert found is None and why.startswith("deezer search failed")
+
+
+async def test_a_preview_lookup_refused_with_a_200_is_a_lookup_failure_not_no_preview(tmp_path: Path):
+    """The track lookup gets the same 200-and-an-error-body quota answer. Read as "no preview", a Spotify
+    request was told its record has no sample, and the shadow comparison counted a refused preview as a
+    record that is not the video."""
+    asked = []
+
+    def quota(request):
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"error": {"type": "Exception", "message": "Quota limit exceeded",
+                                                   "code": 4}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(quota)) as http:
+        with pytest.raises(FingerprintError, match="deezer lookup failed: .*Quota limit exceeded"):
+            await deezer_needles(5, http, tmp_path)
+        with pytest.raises(FingerprintError, match="deezer lookup failed"):
+            await deezer_reference(5, http, tmp_path)
+        got = await identify_record(VIDEO, [_cand(5)], http, tmp_path, minimum=0.9)
+    assert got.chosen is None and got.tried == [(5, None)] and "could be fetched" in got.reason
+    assert len(asked) == 3                                  # one lookup each: a refusal is not retried
+    assert not list(tmp_path.glob("preview-*"))
+
+
+async def test_a_deezer_search_refused_with_a_200_is_an_error_not_an_empty_answer():
+    """Deezer answers its quota with HTTP 200 and an error body. Read as "no results", every reading of a
+    noisy title would have found nothing, and the request counted as ambiguous."""
+    def quota(request):
+        return httpx.Response(200, json={"error": {"type": "Exception", "message": "Quota limit exceeded",
+                                                   "code": 4}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(quota)) as http:
+        with pytest.raises(DeezerSearchError, match="Quota limit exceeded"):
+            await search_deezer("x y", http)
+        found, why = await find_deezer_record(Candidate("query", "q", "A", "T"), http)
+    assert found is None and why.startswith("deezer search failed")
+
+
+async def test_deezer_search_keeps_only_previewable_records():
+    def answer(request):
+        return httpx.Response(200, json={"data": [
+            {"id": 1, "title": "T", "artist": {"name": "A"}, "duration": 200, "preview": "https://p/1.mp3"},
+            {"id": 2, "title": "T", "artist": {"name": "A"}, "duration": 200, "preview": ""}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        assert [c.deezer_id for c in await search_deezer("A T", http)] == [1]
+
+
+async def test_the_cpu_slot_is_held_for_fpcalc_only_and_a_cancel_waits_for_it(tmp_path: Path, monkeypatch):
+    """The slot is for fpcalc, not for Deezer's network. And a thread cannot be stopped: a cancel arriving
+    while fpcalc runs waits for it, so the slot is not handed on while fpcalc still holds the CPU, and the
+    preview is not deleted from under it."""
+    cpu = asyncio.Semaphore(1)
+    held: list[tuple[str, bool]] = []
+    started, release = threading.Event(), threading.Event()
+
+    async def fake_url(deezer_id, http):
+        held.append(("url", cpu.locked()))
+        return "https://p/1.mp3"
+
+    async def fake_download(url, http):
+        held.append(("download", cpu.locked()))
+        return b"ID3 preview"
+
+    def fake_needles(path, start_s, length_s):
+        held.append(("fpcalc", cpu.locked()))
+        started.set()
+        release.wait(5)
+        held.append(("preview still there", path.exists()))
+        return [[1, 2, 3]]
+
+    monkeypatch.setattr(ref_mod, "_preview_url", fake_url)
+    monkeypatch.setattr(ref_mod, "_download_preview", fake_download)
+    monkeypatch.setattr(ref_mod, "_needles", fake_needles)
+    task = asyncio.create_task(deezer_needles(1, None, tmp_path, cpu=cpu))
+    await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done() and cpu.locked()          # still waiting on fpcalc, still holding its slot
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert held == [("url", False), ("download", False), ("fpcalc", True), ("preview still there", True)]
+    assert not cpu.locked() and not list(tmp_path.glob("preview-*"))

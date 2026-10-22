@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -69,7 +70,12 @@ async def _preview_url(deezer_id: int, http: httpx.AsyncClient) -> str | None:
             last = type(e).__name__
         else:
             if r.status_code == 200:
-                return r.json().get("preview") or None
+                body = r.json()
+                if "error" in body:
+                    # A refusal (its quota above all) comes back as a 200 with an error body. Read as "no
+                    # preview" it would say something about the record that is only true of the moment.
+                    raise FingerprintError(f"deezer lookup failed: {body['error']}")
+                return body.get("preview") or None
             last = f"deezer http {r.status_code}"
             if r.status_code < 500:
                 break
@@ -119,10 +125,12 @@ async def _read_capped(r: httpx.Response) -> bytes:
     return bytes(body)
 
 
-async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path) -> list[list[int]]:
+async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path, *,
+                         cpu: AbstractAsyncContextManager | None = None) -> list[list[int]]:
     """The Deezer preview at each sub-frame trim. Unique file name per call: two requests for one
     recording can be here at once. Raises FingerprintError when Deezer has no preview or the download
-    fails."""
+    fails. `cpu`, when given (a semaphore, or anything held the same way), is held around fpcalc only, not
+    around the downloads."""
     tmp_dir.mkdir(parents=True, exist_ok=True)
     preview = tmp_dir / f"preview-{deezer_id}-{uuid4().hex[:8]}.mp3"
     try:
@@ -132,15 +140,54 @@ async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path)
         preview.write_bytes(await _download_preview(url, http))
         # No length bound: the preview is already 30 s, and asking ffmpeg to cut it would re-encode the
         # trim-0 needle that today's check reads straight off the file.
-        return await asyncio.to_thread(_needles, preview, 0.0, None)
+        if cpu is None:
+            return await _to_thread_settled(_needles, preview, 0.0, None)
+        async with cpu:
+            return await _to_thread_settled(_needles, preview, 0.0, None)
     finally:
         preview.unlink(missing_ok=True)
+
+
+async def _to_thread_settled(fn, *args):
+    """`asyncio.to_thread`, except that a cancelled caller still waits for the thread to finish. A thread
+    cannot be stopped: without this a cancel released the CPU slot while fpcalc kept running, and deleted
+    the preview from under it (which Windows refuses outright)."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait([task])
+        raise
 
 
 async def deezer_reference(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path) -> AcousticReference:
     """The Deezer preview as the reference, for a request that has no audio of its own."""
     needles = await deezer_needles(deezer_id, http, tmp_dir)
     return AcousticReference("deezer", str(deezer_id), needles, needles[0], 0.0, EXCERPT_S)
+
+
+class DeezerSearchError(Exception):
+    """Deezer's public search did not answer, or answered with something that is not a result list."""
+
+
+async def search_deezer(text: str, http: httpx.AsyncClient, *, limit: int = LOOKUP_LIMIT) -> list[Candidate]:
+    """Deezer's public text search as candidates, in Deezer's own order, keeping only the records with a
+    preview -- the only ones that can be checked against audio. One request, no retries: every caller has
+    another way on without it. Raises DeezerSearchError."""
+    try:
+        r = await http.get(DEEZER_SEARCH, params={"q": text, "limit": limit}, timeout=20)
+        r.raise_for_status()
+        body = r.json()
+        if "error" in body:
+            # Deezer answers a refused search -- its quota above all -- with a 200 and an error body. Read
+            # as "no results" it would count as a reading that found nothing.
+            raise DeezerError(str(body["error"]))
+        found = [parse_track_json(item) for item in body.get("data") or []]
+    except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise DeezerSearchError(str(e) or type(e).__name__) from e
+    return [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
+                      mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, isrc=t.isrc, rank=i)
+            for i, t in enumerate(found) if t.preview_url]
 
 
 async def find_deezer_record(cand: Candidate, http: httpx.AsyncClient) -> tuple[int | None, str]:
@@ -163,14 +210,9 @@ async def find_deezer_record(cand: Candidate, http: httpx.AsyncClient) -> tuple[
             log.info("deezer lookup: isrc %s: %s", cand.isrc, e or type(e).__name__)
     want = candidate_query(cand)
     try:
-        r = await http.get(DEEZER_SEARCH, params={"q": want.search_text(), "limit": LOOKUP_LIMIT}, timeout=20)
-        r.raise_for_status()
-        found = [parse_track_json(item) for item in r.json().get("data") or []]
-    except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError) as e:
-        return None, f"deezer search failed: {e or type(e).__name__}"
-    cands = [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
-                       mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, rank=i)
-             for i, t in enumerate(found) if t.preview_url]
+        cands = await search_deezer(want.search_text(), http)
+    except DeezerSearchError as e:
+        return None, f"deezer search failed: {e}"
     if not cands:
         return None, f"deezer has no previewable record for '{want.search_text()}'"
     decision = decide(want, cands, None)
@@ -189,7 +231,8 @@ class Identification:
 
 
 async def identify_record(reference: AcousticReference, cands: list[Candidate], http: httpx.AsyncClient,
-                          tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX) -> Identification:
+                          tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX,
+                          cpu: AbstractAsyncContextManager | None = None) -> Identification:
     """Which Deezer candidate is the recording the owner pointed at (issue #68): the first whose 30 s preview
     is found inside the reference's full fingerprint at or above `minimum`. The preview is the needle and
     the reference's full fingerprint is the hay -- the other way round `compare` would return 0.0 for
@@ -200,7 +243,7 @@ async def identify_record(reference: AcousticReference, cands: list[Candidate], 
     tried: list[tuple[int, float | None]] = []
     for cand in [c for c in cands if c.deezer_id][:limit]:
         try:
-            needles = await deezer_needles(cand.deezer_id, http, tmp_dir)
+            needles = await deezer_needles(cand.deezer_id, http, tmp_dir, cpu=cpu)
             score = round(max(compare(n, reference.full)[0] for n in needles), 3)
         except FingerprintError as e:
             log.info("identify: deezer:%d preview unavailable: %s", cand.deezer_id, e)

@@ -52,6 +52,15 @@ def _no_public_deezer_lookup(monkeypatch):
 
     monkeypatch.setattr("flackey.worker.acoustic.find_deezer_record", none)
 
+    # The same for the shadow comparison of a noisy title's readings (`worker.interpret`): a request
+    # submitted through the inbox can carry readings, and each would be a public Deezer search.
+    from flackey.reference import DeezerSearchError
+
+    async def no_search(text, http, *, limit=10):
+        raise DeezerSearchError("no deezer search in tests")
+
+    monkeypatch.setattr("flackey.worker.interpret.search_deezer", no_search)
+
 
 @pytest.fixture(autouse=True)
 def _never_open_the_real_installer(monkeypatch):

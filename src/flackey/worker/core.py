@@ -21,6 +21,7 @@ from ..tag import fetch_artwork
 from ..tag_lookup import TagLookup
 from .acoustic import AcousticMixin
 from .filing import FilingMixin
+from .interpret import InterpretMixin
 from .lossless_attempt import LosslessMixin
 from .pipeline import PipelineMixin
 from .policy import (
@@ -38,7 +39,7 @@ from .recovery import RecoveryMixin
 log = logging.getLogger(__name__)
 
 
-class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin):
+class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin, InterpretMixin):
     def __init__(self, store: Store, source: Source, catalog: CatalogLike, notifier: Notifier,
                  settings: Settings,
                  artwork_fetch: Callable[[str], Awaitable[bytes | None]] = fetch_artwork,
@@ -77,6 +78,12 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
         # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
         self._catalog_blocked = False
+        # The shadow comparison of a noisy title's readings (`interpret`): request id -> its background task,
+        # one comparison at a time so a playlist of noisy titles is a queue rather than a burst, and when
+        # it last called Deezer's API.
+        self._shadow_tasks: dict[int, asyncio.Task] = {}
+        self._shadow = asyncio.Semaphore(1)
+        self._deezer_last = 0.0
         # Requests whose current pass went without the bot because Telegram was signed out. Kept per pass
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
@@ -256,7 +263,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     async def _stop_all(self) -> None:
-        tasks = list(self._tasks.values())
+        tasks = list(self._tasks.values()) + list(self._shadow_tasks.values())
         for t in tasks:
             t.cancel()
         if tasks:
@@ -292,6 +299,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         task = self._tasks.get(request_id)
         if task is not None:
             task.cancel()
+        self.forget_comparison(request_id)
         return self.store.get_request(request_id)
 
 

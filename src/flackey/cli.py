@@ -55,6 +55,21 @@ def status() -> None:
     typer.echo(f"tracks: {st['tracks']}")
     typer.echo(f"rejections: {st['rejections']}")
     typer.echo(f"library: {st['bytes'] / 1e6:.1f} MB at {s.library_root}")
+    readings = st["interpretations"]
+    total = sum(n for k, n in readings.items() if k != "confirmed_by_other")
+    if total:
+        # The shadow comparison of noisy titles' readings: `ambiguous` is the share that would have needed
+        # the owner to say which reading they meant, out of the ones the comparison could judge.
+        typer.echo(f"noisy titles: {total} (readings compared in the background; nothing was changed)")
+        for klass in ("confirmed", "agreed", "ambiguous", "skipped", "pending"):
+            n = readings.get(klass, 0)
+            other = readings["confirmed_by_other"]
+            extra = f" ({other} by a reading other than the one searched)" if klass == "confirmed" and other else ""
+            typer.echo(f"  {klass}: {n}{extra}")
+        judged = sum(readings.get(k, 0) for k in ("confirmed", "agreed", "ambiguous"))
+        if judged:
+            ambiguous = readings.get("ambiguous", 0)
+            typer.echo(f"  would ask: {ambiguous} of {judged} ({ambiguous / judged:.0%})")
 
 
 @app.command()

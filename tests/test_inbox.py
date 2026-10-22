@@ -215,3 +215,34 @@ async def test_unreadable_links_are_bad_links(inbox):
     with pytest.raises(BadLink, match=SPOTIFY_FAIL):
         await ib.submit("https://open.spotify.com/playlist/bad")
     assert store.list_requests() == []
+
+
+async def test_a_noisy_youtube_title_keeps_its_other_readings(tmp_path: Path):
+    """The readings need the uploader, which the request does not keep, so they are written at submit --
+    for a single video and for each playlist entry, and only when there is more than one."""
+    store = Store(tmp_path / "t.sqlite")
+
+    async def fake_youtube(url: str):
+        if "list=" in url:
+            return "Set", [YouTubeEntry("https://www.youtube.com/watch?v=a", "Label - Artist - Title", "Label", 300),
+                           YouTubeEntry("https://www.youtube.com/watch?v=b", "Artist - Other", "Artist", 200)]
+        return "Bicep Glue", [YouTubeEntry(url, "Bicep Glue", "Ninja Tune", 269)]
+
+    ib = Inbox(store, youtube=fake_youtube)
+    [rid] = (await ib.submit("https://youtu.be/abc")).request_ids
+    r = store.get_request(rid)
+    assert (r.query_artist, r.query_title) == ("Ninja Tune", "Bicep Glue")        # the search is unchanged
+    assert [(q.artist, q.title, q.duration_s) for q in store.get_interpretations(rid)] == [
+        ("Ninja Tune", "Bicep Glue", 269), (None, "Bicep Glue", 269)]
+    noisy, clean = (await ib.submit("https://www.youtube.com/playlist?list=PL9")).request_ids
+    assert [(q.artist, q.title) for q in store.get_interpretations(noisy)] == [
+        ("Label", "Artist - Title"), ("Artist", "Title")]
+    assert store.get_interpretations(clean) == []
+    assert store.conn.execute("SELECT interpretations FROM requests WHERE id=?", (clean,)).fetchone()[0] is None
+
+
+async def test_a_spotify_or_topic_track_has_no_other_readings(inbox):
+    ib, store = inbox
+    yt = (await ib.submit("https://youtu.be/abc")).request_ids[0]           # "- Topic": the channel is the artist
+    sp = (await ib.submit("https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl")).request_ids[0]
+    assert store.get_interpretations(yt) == [] and store.get_interpretations(sp) == []

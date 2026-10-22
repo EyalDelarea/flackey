@@ -53,6 +53,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         """One request row and the evidence files it owns. Never the filed track: see `delete_request`."""
         rejection = store.get_rejection_for_request(rid)
         attempt = store.get_attempt_for_request(rid)
+        worker.forget_comparison(rid)
         store.delete_request(rid)
         unlink_evidence(rejection)
         unlink_evidence(attempt)
@@ -227,6 +228,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         rejections = [store.get_rejection_for_request(req.id) for req in failed]
         attempts = [store.get_attempt_for_request(req.id) for req in failed]
         removed = store.delete_requests(FAILED_STATES)
+        for rid in removed:
+            worker.forget_comparison(rid)
         for rejection in rejections:
             unlink_evidence(rejection)
         for attempt in attempts:

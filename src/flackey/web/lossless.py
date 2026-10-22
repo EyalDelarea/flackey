@@ -69,8 +69,8 @@ def router(store: Store, worker=None) -> APIRouter:
         of "handle L.S.D-like events": a miss is a row here rather than a thing that quietly happened once."""
         out = []
         for t in store.lossy_tracks(limit=limit):
-            attempt = store.get_attempt_for_request(t.request_id) if t.request_id is not None else None
-            outcome = attempt.outcome if attempt else None
+            # the pass's verdict, as the worker reads it, rather than its last row
+            attempt, outcome = store.lossless_outcome(t.request_id) if t.request_id is not None else (None, None)
             out.append({
                 "track_id": t.id, "artist": t.artist, "title": t.title, "mix_name": t.mix_name,
                 "fmt": t.fmt, "bitrate_kbps": t.bitrate_kbps, "added_at": t.added_at,

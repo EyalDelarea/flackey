@@ -59,6 +59,16 @@ def duration_agrees(advertised_s: float | None, probed_s: float) -> bool:
     return abs(probed_s - advertised_s) <= max(DURATION_SLACK_S, advertised_s * DURATION_SLACK_FRACTION)
 
 
+def pass_outcome(outcomes: list[str | None]) -> str | None:
+    """What a pass through the spelling ladder found, from each spelling's outcome in order. The last one,
+    except that "nothing matched" never hides an earlier "the copies offered were a different recording":
+    a later spelling finding nothing says nothing about the copies an earlier one did find. Read as
+    `no_pick`, that pass used to come back in 15 minutes to download the same wrong files again, and told
+    the owner nothing had matched; as `fingerprint_failed` it waits for the people online to change."""
+    last = outcomes[-1] if outcomes else None
+    return "fingerprint_failed" if last == "no_pick" and "fingerprint_failed" in outcomes else last
+
+
 class LosslessMixin:
     """Part of `Worker`, which supplies the state these methods read."""
 
@@ -73,9 +83,10 @@ class LosslessMixin:
     def _search_references(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> list[Reference]:
         """What to type into the network, in order: Beatport's spelling (clean, and for a channel-name artist
         such as `ShpongleMusic` the only text that finds anything), then the chosen record's, then the
-        request's own words -- each only when its tokens differ from what came before. A wrong Beatport
-        record redirects the first search to a different track (`Power Of Celtic` was searched as `The Power
-        Of The Dark Side`); the fingerprint rejecting that search is what lets the next spelling run.
+        request's own words, then the other readings of a noisy title -- each only when its tokens differ from
+        what came before. A wrong Beatport record redirects the first search to a different track (`Power Of
+        Celtic` was searched as `The Power Of The Dark Side`); the fingerprint rejecting that search is what
+        lets the next spelling run.
 
         Every reference keeps `_reference`'s meaning of `from_query` -- these words are the request's own --
         so whichever one comes back attached to the hit says where the tags belong."""
@@ -87,6 +98,9 @@ class LosslessMixin:
         query = req.query()
         if query.artist and query.title:
             refs.append(self._reference(req, query_candidate(query, req.id), None))
+        # Then the title's other readings (`identify.interpretations`), last: they are guesses at a noisy
+        # title, so each costs a search only after every spelling above has missed.
+        refs.extend(self._reference(req, c, None) for c in self._reading_spellings(req))
         seen: list[set[str]] = []
         out: list[Reference] = []
         for ref in refs:
@@ -110,6 +124,10 @@ class LosslessMixin:
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
             log.exception("req#%d could not build a lossless reference/policy", req.id)
             return None
+        # Cleared first, so a pass that is cut short (the app closing mid-search) leaves the readers on its
+        # own attempt rows rather than on the verdict of the pass before it.
+        self.store.set_lossless_verdict(req.id, None)
+        outcomes: list[str | None] = []
         for ref in refs:
             query = search_text(ref)
             outcome: str | None = None
@@ -140,13 +158,16 @@ class LosslessMixin:
                     # request's bar: the other tracks are still downloading.
                     self._publish_progress(req.id, None)
                 if hit is not None:
+                    self.store.set_lossless_verdict(req.id, "filed")
                     return hit
                 if rec is not None:
                     outcome = self.store.get_attempt(rec.id).outcome
-            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's,
-            # which is the one `_no_route` and `_lossless_miss_line` will read back.
+            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's.
+            outcomes.append(outcome)
             if outcome not in SECOND_SEARCH_AFTER:
                 break
+        # What `_no_route`, `_lossless_allowed` and `_lossless_miss_line` read back for this pass
+        self.store.set_lossless_verdict(req.id, pass_outcome(outcomes))
         return None
 
 
