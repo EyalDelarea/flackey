@@ -115,8 +115,10 @@ function AppBody({ live }: { live: Live }) {
   }
   const update = live.update
   const banners: ReactNode[] = []
+  // Only the bot stops: Soulseek has nothing to do with Telegram and keeps downloading. The old line,
+  // "Reconnect to keep digging", was true when the whole worker waited on Telegram, which it no longer does.
   if (sourceOn && !authorized) {
-    banners.push(<Banner key="telegram" tone="amber" text="Telegram signed out. Reconnect to keep digging — tracks already filed are untouched." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
+    banners.push(<Banner key="telegram" tone="amber" text="Deezer bot paused — Telegram is signed out. Soulseek keeps downloading; reconnect to get the bot's MP3 copies back." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
   }
   // Only when there is something to click: a newer tag with no installer yet is detail for the
   // Settings page, not a launch-time nag with nowhere for the click to go. `live.update` is null when

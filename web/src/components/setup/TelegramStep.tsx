@@ -193,7 +193,7 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
       {/* Outside the mode ternary, like the footnote under it: the offer to leave Telegram off belongs to
           the step, not to whichever of the two sign-in screens happens to be showing. */}
       {skipRow}
-      <div className="footnote">You are signing in with your own Telegram account. Unofficial apps are occasionally flagged by Telegram; a spare number works too.</div>
+      <div className="footnote">Optional — Telegram is only how Flackey reaches the Deezer bot, for MP3 copies of what Soulseek doesn't have. You can connect it later from Settings. You are signing in with your own Telegram account. Unofficial apps are occasionally flagged by Telegram; a spare number works too.</div>
     </div>
   </div>)
 }
