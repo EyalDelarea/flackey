@@ -162,6 +162,10 @@ class FakeProvider:
     async def health(self):
         return {"status": self.health_status, "username": "flackey-dj"}
 
+    def begin_run(self, previous=None):
+        self.runs = getattr(self, "runs", [])
+        self.runs.append(previous)
+
     async def search(self, text, *, wait_s, on_raw=None):
         self.searches.append(text)
         if self.search_error:
@@ -988,6 +992,79 @@ async def test_an_unexpected_answer_from_the_sidecar_never_stops_the_loop(tmp_pa
     await w.startup()
     assert not w._leftovers and not w._unscanned
     assert "could not cancel old downloads" in caplog.text and "rescan failed" in caplog.text
+
+
+async def test_each_worker_start_begins_a_run_on_every_provider(tmp_path: Path):
+    """`supervise_worker` restarts the loop on the same providers: each start is a new run, so what the
+    crashed one enqueued is swept like any other leftover rather than kept as "ours" (#178)."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    sidecar = FakeProvider(tmp_path / "dl")
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient())
+    await w.startup()
+    await w.startup()
+    assert sidecar.runs == [None, None] and sidecar.cancelled == 2
+
+
+async def test_a_reconnect_hands_an_owed_sweep_and_rescan_to_the_new_provider(tmp_path: Path):
+    """The wizard rebuilds the providers while the old one's sweep is still owed (#178): the new one
+    takes the sweep and the rescan over, and is told which provider it replaces."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    old = BootingSidecar(tmp_path / "dl", log=[])
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[old], http=httpx.AsyncClient())
+    await w.startup()
+    assert w._leftovers == [old] and w._unscanned == [old]
+    new = BootingSidecar(tmp_path / "dl", log=[])
+    w.replace_providers([new])
+    assert w.providers == [new] and w._leftovers == [new] and w._unscanned == [new]
+    assert new.runs == [old]
+    new.up = True
+    await w._cancel_leftovers()
+    await w._maintenance()
+    assert new.log == ["cancel", "rescan"] and old.log == []
+
+
+async def test_a_reconnect_after_the_sweep_owes_nothing(tmp_path: Path):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    old = FakeProvider(tmp_path / "dl")
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[old], http=httpx.AsyncClient())
+    await w.startup()
+    assert not w._leftovers and not w._unscanned
+    new = FakeProvider(tmp_path / "dl")
+    w.replace_providers([new])
+    assert not w._leftovers and not w._unscanned and not getattr(new, "runs", [])
+
+
+async def test_a_provider_new_to_the_run_is_swept(tmp_path: Path):
+    """Soulseek switched on in the wizard after a start without it: its sidecar's old transfers are leftovers."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[], http=httpx.AsyncClient())
+    await w.startup()
+    new = FakeProvider(tmp_path / "dl")
+    w.replace_providers([new])
+    assert w._leftovers == [new] and new.runs == [None]
+    await w._cancel_leftovers()
+    assert new.cancelled == 1 and not w._leftovers
+
+
+async def test_a_swap_during_a_sweep_does_not_break_the_tick(tmp_path: Path):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    new = FakeProvider(tmp_path / "dl")
+
+    class Swapping(FakeProvider):
+        async def cancel_all(self):
+            w.replace_providers([new])          # the wizard reconnects while this sweep is awaiting slskd
+            return 0
+
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[Swapping(tmp_path / "dl")], http=httpx.AsyncClient())
+    await w.startup()
+    assert w._leftovers == [new]               # still owed, by the provider now in use
+    await w._cancel_leftovers()
+    assert new.cancelled == 1 and not w._leftovers
 
 
 @requires_ffmpeg

@@ -161,6 +161,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
     async def startup(self) -> None:
         """on_start plus the async parts: cancel transfers the sidecar kept running, then the first maintenance."""
         self.on_start()
+        for p in self.providers:
+            p.begin_run()
         self._leftovers, self._leftovers_since = list(self.providers), self.clock()
         await self._cancel_leftovers()
         await self._maintenance(force=True)
@@ -196,8 +198,24 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 else:
                     if n:
                         log.info("cancelled %d %s downloads left from the previous run", n, p.name)
-                self._leftovers.remove(p)
+                if p in self._leftovers:    # a reconnect may have swapped it out while it was sweeping
+                    self._leftovers.remove(p)
 
+
+    def replace_providers(self, providers: list[LosslessProvider]) -> None:
+        """Swap in providers rebuilt mid-run (the setup wizard's reconnect). A sweep or rescan still owed
+        by an old provider passes to the new one of the same name: left on the old object, it would run
+        against a sidecar handle that is gone, and the sweep would not know what the new one enqueued
+        (#178). A provider new to this run owes a sweep too. One whose sweep is done owes nothing, and is
+        not told to record what it enqueues, since no sweep would ever clear it."""
+        old = {p.name: p for p in self.providers}
+        owed = {p.name for p in self._leftovers}
+        unscanned = {p.name for p in self._unscanned}
+        self.providers = list(providers)
+        self._leftovers = [p for p in self.providers if p.name in owed or p.name not in old]
+        for p in self._leftovers:
+            p.begin_run(previous=old.get(p.name))
+        self._unscanned = [p for p in self.providers if p.name in unscanned]
 
     async def refresh_lossless_health(self, force: bool = False) -> None:
         """Keep `status["lossless_provider"]` answering "can we reach Soulseek *now*" rather than "could we
@@ -240,7 +258,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 log.warning("%s: rescan failed: %s", p.name, e)
             except Exception:   # on the loop's tick: never out of here
                 log.exception("%s: rescan failed", p.name)
-            self._unscanned.remove(p)
+            if p in self._unscanned:    # as in `_cancel_leftovers`: a reconnect may have swapped it out
+                self._unscanned.remove(p)
 
 
     def _start_due(self) -> None:

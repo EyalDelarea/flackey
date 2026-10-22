@@ -250,12 +250,91 @@ async def test_cancel_all_leaves_this_runs_own_downloads_alone(provider):
         return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
 
     respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[land])
+    p.begin_run()
     await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
     ours, old = transfer("InProgress", 5), transfer("InProgress", 5, username="other")
     respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[ours, old]))
     mine = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
     theirs = respx.delete(f"{BASE}/transfers/downloads/other/t1").mock(return_value=httpx.Response(204))
     assert await p.cancel_all() == 1 and theirs.called and not mine.called
+
+
+def _landing(dest: Path, f):
+    def land(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x" * f.size)
+        return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
+    return land
+
+
+@respx.mock
+async def test_a_restarted_worker_sweeps_what_the_crashed_run_left(provider):
+    """`supervise_worker` restarts the loop on the same provider. The crashed run's transfers are the new
+    run's leftovers, so they must not stay protected as "this run's own" (#178), and the record of what
+    was enqueued must not outlive the sweep it is for."""
+    p, _clock, downloads = provider
+    f = flac_file(size=1000)
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[_landing(dest, f)])
+    listing = respx.get(f"{BASE}/transfers/downloads")
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
+
+    p.begin_run()                                           # run 1
+    await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
+    listing.mock(return_value=httpx.Response(200, json=[transfer("InProgress", 5)]))
+    assert await p.cancel_all() == 0 and not cancel.called  # run 1's own transfer survives its late sweep
+    assert not p._enqueued                                  # swept: nothing left to protect, nothing kept
+
+    p.begin_run()                                           # run 2, after the crash
+    assert await p.cancel_all() == 1 and cancel.called      # run 1's orphan is run 2's leftover
+
+
+@respx.mock
+async def test_a_restarted_run_keeps_its_own_transfer_through_a_late_sweep(provider):
+    """Run 2 starts with slskd down, a track enqueues once it answers, then the retried sweep lands."""
+    p, _clock, downloads = provider
+    f = flac_file(size=1000)
+    listing = respx.get(f"{BASE}/transfers/downloads")
+    listing.mock(return_value=httpx.Response(200, json=[]))
+    p.begin_run()
+    assert await p.cancel_all() == 0                        # run 1 swept with nothing to do
+
+    p.begin_run()                                           # run 2
+    listing.mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(LosslessUnavailable):
+        await p.cancel_all()
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[_landing(dest, f)])
+    await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
+    listing.mock(side_effect=None, return_value=httpx.Response(200, json=[transfer("InProgress", 5)]))
+    mine = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
+    assert await p.cancel_all() == 0 and not mine.called
+
+
+@respx.mock
+async def test_a_provider_with_no_sweep_owed_records_nothing(provider):
+    """One built after the sweep, by a reconnect with nothing pending: no sweep will ever clear its record."""
+    p, _clock, downloads = provider
+    f = flac_file(size=1000)
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[_landing(dest, f)])
+    await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
+    assert not p._enqueued
+
+
+def test_a_rebuilt_provider_shares_the_record_of_the_one_it_replaces(provider, tmp_path: Path):
+    """A reconnect rebuilds the provider while the old one's sweep is still owed: the new one sweeps, and
+    must know what the old one enqueued -- and still enqueues, from passes already under way."""
+    old, _clock, downloads = provider
+    old.begin_run()
+    old._enqueued.add(("peer-alpha", "a.flac"))
+    new = SoulseekProvider(old.client, downloads)
+    new.begin_run(previous=old)
+    old._enqueued.add(("peer-beta", "b.flac"))
+    assert new._enqueued == {("peer-alpha", "a.flac"), ("peer-beta", "b.flac")}
 
 
 @respx.mock
@@ -781,3 +860,34 @@ async def test_a_slow_transfer_slskd_stopped_despite_an_error_is_still_the_switc
     with pytest.raises(TooSlow) as e:
         await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
     assert e.value.outcome == "too_slow" and e.value.pct == 4 and not dest.exists()
+
+
+@respx.mock
+async def test_the_replaced_providers_late_sweep_leaves_the_new_ones_record(provider):
+    """The old provider's sweep can still land after the swap; the record it shares is the new one's now."""
+    old, _clock, downloads = provider
+    old.begin_run()
+    new = SoulseekProvider(old.client, downloads)
+    new.begin_run(previous=old)
+    new._enqueued.add(("peer-alpha", "a.flac"))
+    respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[]))
+    assert await old.cancel_all() == 0
+    assert new._enqueued == {("peer-alpha", "a.flac")}
+
+
+@respx.mock
+async def test_a_sweep_refused_for_good_stops_the_record(provider):
+    """The worker gives up a sweep slskd refuses (a 401, an answer it cannot read) and never asks again, so
+    the record must stop there too, or it grows for the life of the process (#184 review). One refused
+    only because slskd is not up yet stays owed, and keeps recording."""
+    p, _clock, _downloads = provider
+    listing = respx.get(f"{BASE}/transfers/downloads")
+    p.begin_run()
+    listing.mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(LosslessUnavailable):
+        await p.cancel_all()
+    assert p._recording
+    listing.mock(side_effect=None, return_value=httpx.Response(200, text="not json"))
+    with pytest.raises(ValueError):
+        await p.cancel_all()
+    assert not p._recording and not p._enqueued
