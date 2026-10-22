@@ -57,7 +57,7 @@ def router(login: TelegramLogin | None, status: dict,
     @r.post("/logout")
     async def logout() -> dict:
         await need().log_out()
-        status["telegram_authorized"] = False
+        status.update(telegram_authorized=False, telegram_unreachable=False)
         return {"ok": True}
 
     @r.post("/keys")

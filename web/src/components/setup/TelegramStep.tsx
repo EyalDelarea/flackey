@@ -57,6 +57,8 @@ export default function TelegramStep({ onDone, onSkip, pollMs = 1500 }: { onDone
       try {
         const q = await api.qrStart()
         if (cancelled) return
+        // Telegram answered this time, and the account was signed in all along: nothing to scan.
+        if (q.state === 'done') { setConnected(q.phone_masked ?? ''); return }
         const url = await QRCode.toDataURL(q.url, { margin: 0, width: 216, color: { dark: '#111111', light: '#ffffff' } })
         if (cancelled) return
         setImg(url)

@@ -37,9 +37,10 @@ function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: 
    whose Telegram had dropped that the thing was working. Off is grey rather than amber because the owner
    chose it and nothing is wrong; on-but-unreachable is amber and "paused" -- the worker skips it and
    carries on with Soulseek -- and names Telegram rather than the bot, because Telegram is where the fix is. */
-function deezerBotLine(authorized: boolean, enabled: boolean): { dot: Dot; text: string } {
-  if (!enabled) return { dot: ' off', text: authorized ? 'Off — requests use Soulseek only' : 'Off — and Telegram is signed out' }
-  if (!authorized) return { dot: ' amber', text: 'Paused — Telegram is signed out' }
+function deezerBotLine(authorized: boolean, enabled: boolean, unreachable = false): { dot: Dot; text: string } {
+  const why = unreachable ? "can't reach Telegram" : 'Telegram is signed out'
+  if (!enabled) return { dot: ' off', text: authorized ? 'Off — requests use Soulseek only' : `Off — and ${why}` }
+  if (!authorized) return { dot: ' amber', text: `Paused — ${why}` }
   return { dot: '', text: 'On — searches and fetches through Telegram' }
 }
 
@@ -145,9 +146,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .catch(err => setSetupResetError(getErrorMessage(err, 'Could not restart setup. Try again.')))
       .finally(() => setResettingSetup(false))
   }
-  const telegramLine = authorized ? (tg?.phone_masked ? `Connected as ${tg.phone_masked}` : 'Connected') : 'Signed out'
+  const unreachable = live.health?.telegram_unreachable ?? false
+  const telegramLine = authorized ? (tg?.phone_masked ? `Connected as ${tg.phone_masked}` : 'Connected')
+    : unreachable ? "Can't reach Telegram" : 'Signed out'
   const sourceEnabled = live.health?.source_enabled ?? true
-  const bot = deezerBotLine(authorized, sourceEnabled)
+  const bot = deezerBotLine(authorized, sourceEnabled, unreachable)
   const setTelegramSource = (on: boolean) => {
     setSourceBusy(true); setSourceError(null)
     api.telegramSource(on)

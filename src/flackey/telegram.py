@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import sys
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -20,6 +19,8 @@ from telethon.errors import (
     UnauthorizedError,
 )
 
+from .config import platform_name
+
 log = logging.getLogger(__name__)
 
 # Telethon's connect() and qr_login() retry underneath us and have no deadline of their own, so on a
@@ -34,6 +35,39 @@ QR_START_TIMEOUT_S = 20.0
 # would hang the worker exactly when the worker most needs to get on with deciding what happened.
 # Overridden in tests.
 PROBE_TIMEOUT_S = 8.0
+
+# The same missing deadline for the connections nobody is waiting on a QR for: the one at startup
+# (app.connect_telegram), and the reconnects after new keys or a sign-out. A network that takes the
+# connection and then answers nothing -- a firewall, a censoring ISP -- leaves Telethon waiting for a
+# handshake that never comes, and at startup that wait sat in front of the server and the worker, so
+# the app never opened and Soulseek never downloaded either. A healthy connection is done in a second
+# or two, and Telethon gives a single dial 10 s of its own, so this leaves room for a slow link. It
+# also has to be short: this, Telethon's up to 10 s to close the socket afterwards and the server
+# starting must fit inside the `WEB_SERVER_START_TIMEOUT_S` + 5 that the window waits before it gives
+# up on the app. Overridden in tests.
+CONNECT_TIMEOUT_S = 15.0
+
+
+async def connect_or_close(client: LoginClient) -> None:
+    """`client.connect()`, closing whatever it opened when it does not return -- the deadline around it
+    fired, or the socket failed.
+
+    `is_connected()` afterwards cannot tell a finished connect() from a cut-short one. With a saved
+    sign-in Telethon reports connected as soon as the socket is open, and starts the loop that delivers
+    replies (`_update_loop`) only at the very end of connect(). Cut short in between, the client says
+    connected, answers plain requests, never sees a bot's reply -- and every later connect() returns at
+    once, because it is "already connected", so nothing short of a restart mended it. Closed, the next
+    attempt starts from nothing."""
+    try:
+        await client.connect()
+    except BaseException:
+        await client.disconnect()
+        raise
+
+
+def _this_computer() -> str:
+    # The same words the page uses (`thisComputer` in platform.ts): the Mac by name, anything else a PC.
+    return "this Mac" if platform_name() == "mac" else "this PC"
 
 
 async def probe_authorized(client: LoginClient) -> bool | None:
@@ -59,7 +93,7 @@ async def probe_authorized(client: LoginClient) -> bool | None:
                 # client this is called on is usually already disconnected and could otherwise only
                 # ever answer "cannot tell". `GetConfig` needs no auth, so connecting proves nothing on
                 # its own -- the get_me() below is what decides.
-                await client.connect()
+                await connect_or_close(client)
             me = await client.get_me()
     except (UnauthorizedError, AuthKeyError):
         # Telegram itself saying no. `get_me()` swallows UnauthorizedError, so in the wild this clause
@@ -111,8 +145,12 @@ class TelegramLogin:
     Telegram Desktop does: QR first, phone + code as fallback, two-step password when the account has one."""
 
     def __init__(self, client: LoginClient, configured: bool, on_authorized: Callable[[], None] = lambda: None,
-                 make_client: Callable[[], LoginClient] | None = None):
+                 make_client: Callable[[], LoginClient] | None = None,
+                 on_answer: Callable[[bool], None] = lambda signed_in: None):
         self.client, self.configured, self.on_authorized = client, configured, on_authorized
+        # Telegram itself just said whether the session is signed in. Not `on_authorized`: nobody signed
+        # in, so a Deezer bot the owner switched off stays off.
+        self.on_answer = on_answer
         self.make_client = make_client
         self._qr: dict[str, dict] = {}          # id -> {"qr": QRLogin, "state": str, "task": Task}
         self._code_hash: dict[str, str] = {}    # phone -> phone_code_hash
@@ -125,7 +163,13 @@ class TelegramLogin:
         # Not `is_user_authorized()`: it answers from a cache that a revoked session never clears, so
         # the Settings page and the sidebar used to keep saying "connected" for the rest of the run
         # after Telegram had thrown this session out (issue #91). The probe asks Telegram.
-        authorized = await probe_authorized(self.client)
+        client = self.client
+        authorized = await probe_authorized(client)
+        if authorized is not None and self.client is client:
+            # The answer that may lift the pause a start without Telegram put on the Deezer bot
+            # (app.connect_telegram): this is what Reconnect asks first, and what Settings asks on
+            # every visit.
+            self.on_answer(authorized)
         if authorized is None:
             # Telegram was not reached, so we know nothing new -- and putting a "sign in again" screen
             # over a working session because the wifi dropped is worse than saying nothing changed.
@@ -134,7 +178,10 @@ class TelegramLogin:
             # of its own, which fails on the same dead socket -- and a client that has never signed in
             # is, correctly, not signed in.
             try:
-                authorized = await self.client.is_user_authorized()
+                # Bounded for the same reason as the probe: with nothing cached this is a request, and
+                # on a connected socket nobody answers it waits forever, and so would the page.
+                async with asyncio.timeout(PROBE_TIMEOUT_S):
+                    authorized = await self.client.is_user_authorized()
             except Exception:
                 # The page needs an answer and "no" is the safe one: it offers a sign-in.
                 log.warning("could not reach Telegram to check the session", exc_info=True)
@@ -166,7 +213,14 @@ class TelegramLogin:
             await self.client.disconnect()
         self.client = self.make_client()
         self.configured = True
-        await self.client.connect()
+        try:
+            async with asyncio.timeout(CONNECT_TIMEOUT_S):
+                await connect_or_close(self.client)
+        except TimeoutError:
+            # The keys are saved either way; saving them again tries again.
+            log.warning("Telegram did not answer within %gs of the new keys", CONNECT_TIMEOUT_S)
+            raise LoginError(f"Telegram did not answer in time. Check {_this_computer()}'s internet "
+                             "connection and try again.") from None
         log.info("Telegram client rebuilt with the keys just saved")
 
     def _authorized(self) -> None:
@@ -190,23 +244,32 @@ class TelegramLogin:
             log.warning("Telegram sign-in requested without API keys")
             raise LoginError("This copy of Flackey isn't set up to connect to Telegram yet.")
         self._cancel_qr()  # one live QR at a time
+        client = self.client
         try:
             async with asyncio.timeout(QR_START_TIMEOUT_S):
-                if not self.client.is_connected():
+                if not client.is_connected():
                     # Telethon disconnects on its own when Telegram drops the session
                     # (AuthKeyUnregistered); a QR on a disconnected client fails with "Cannot send
                     # requests while disconnected".
-                    await self.client.connect()
-                qr = await self.client.qr_login()
+                    await connect_or_close(client)
+                # Starting a QR login on an account that is already signed in makes Telegram drop that
+                # session. The page asks status() first for that reason, but a session Telegram could
+                # not be asked about reads there as signed out -- and this is the request the
+                # Reconnect screen makes next. get_me(), not is_user_authorized(): see probe_authorized.
+                me = await client.get_me()
+                if me is None:
+                    qr = await client.qr_login()
         except TimeoutError:
             # Nothing was recorded in `_qr` yet, so there is no half-started login to clean up --
             # whatever the timeout interrupted is dropped with the cancelled task.
             log.warning("Telegram did not answer a QR sign-in within %ss", QR_START_TIMEOUT_S)
-            # "this PC" on Windows, the same words the page uses there (`thisComputer` in platform.ts).
-            computer = "this PC" if sys.platform == "win32" else "this Mac"
             raise LoginError(
-                f"Telegram did not answer in time. Check {computer}'s internet connection and try "
-                "again, or sign in with your phone number instead.") from None
+                f"Telegram did not answer in time. Check {_this_computer()}'s internet connection and "
+                "try again, or sign in with your phone number instead.") from None
+        if me is not None:
+            if self.client is client:
+                self.on_answer(True)
+            return {"state": "done", "phone_masked": mask_phone(getattr(me, "phone", None))}
         qr_id = uuid.uuid4().hex
         entry = {"qr": qr, "state": "waiting", "task": None}
         entry["task"] = asyncio.create_task(self._wait_qr(entry))
@@ -278,8 +341,9 @@ class TelegramLogin:
             self.client = self.make_client()
             if self.configured:
                 try:
-                    await self.client.connect()
+                    async with asyncio.timeout(CONNECT_TIMEOUT_S):
+                        await connect_or_close(self.client)
                 except Exception as e:  # noqa: BLE001 - log_out() must still report success to the caller;
                     # a start_qr() on the still-disconnected client will surface through guard()'s 503.
-                    log.warning("could not reconnect the rebuilt Telegram client: %s", e)
+                    log.warning("could not reconnect the rebuilt Telegram client: %r", e)
             log.info("Telegram client rebuilt after sign-out")
