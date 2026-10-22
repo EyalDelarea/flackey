@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from flackey.identify import (
@@ -65,6 +67,25 @@ def test_classify_canonical_spotify_playlist_url():
     ("Into the Void (Someone Refix)", ("Into the Void", "Someone Refix")),
     ("Into the Void (Flipside)", ("Into the Void (Flipside)", None)),  # whole words only
     ("Into the Void (Refixation)", ("Into the Void (Refixation)", None)),
+    ("Into the Void (Someone Mash Up)", ("Into the Void", "Someone Mash Up")),
+    ("Into the Void (Someone Refix 2023)", ("Into the Void", "Someone Refix 2023")),
+    ("Into the Void - Someone Flip", ("Into the Void", "Someone Flip")),
+    ("Into the Void (Remixed by XYZ Music)", ("Into the Void", "Remixed by XYZ Music")),
+    # a feature credit is not a version, whatever the name in it
+    ("Like A Pimp (feat. Lil Flip)", ("Like A Pimp (feat. Lil Flip)", None)),
+    ("Into the Void (feat. Flip)", ("Into the Void (feat. Flip)", None)),
+    ("Into the Void (ft. DJ Flip)", ("Into the Void (ft. DJ Flip)", None)),
+    ("Into the Void (feat. Club Dogo)", ("Into the Void (feat. Club Dogo)", None)),
+    # flip is a version only as the last word, after whoever made it
+    ("Into the Void (Flip Flop)", ("Into the Void (Flip Flop)", None)),
+    ("Into the Void (Flip It)", ("Into the Void (Flip It)", None)),
+    ("Into the Void (Flip The Switch)", ("Into the Void (Flip The Switch)", None)),
+    ("Into the Void (Flip Side)", ("Into the Void (Flip Side)", None)),
+    ("Into the Void - Flip Side", ("Into the Void - Flip Side", None)),
+    ("Into the Void (Flip The Script)", ("Into the Void (Flip The Script)", None)),
+    ("Into the Void (The Flip)", ("Into the Void (The Flip)", None)),
+    ("Into the Void (Lil Flip)", ("Into the Void (Lil Flip)", None)),
+    ("Into the Void (Mash Up The Dance)", ("Into the Void (Mash Up The Dance)", None)),
 ])
 def test_parse_version(title, expected):
     assert parse_version(title) == expected
@@ -140,7 +161,7 @@ def test_split_ignores_a_dash_inside_brackets():
     ("Artist - Track (SGR053) (Original Mix)", ("Artist", "Track", "Original Mix")),
     ("Artist - Track [AUM-042]", ("Artist", "Track", None)),
     ("Artist - Track [Label Records] (Someone Remix)", ("Artist", "Track", "Someone Remix")),
-    ("Artist - Track (Armada Music) [Extended Mix]", ("Artist", "Track", "Extended Mix")),
+    ("Artist - Track [Anjunadeep Music] (Extended Mix)", ("Artist", "Track", "Extended Mix")),
     ("Artist - Track (Black Hole Recordings) (feat. Someone)", ("Artist", "Track (feat. Someone)", None)),
     ("Artist - Track.wav", ("Artist", "Track", None)),
     ("Artist - Track.WAV (Someone Remix)", ("Artist", "Track", "Someone Remix")),
@@ -190,6 +211,82 @@ def test_parse_youtube_title_cleanup_leaves_real_names_alone(title, expected):
 def test_cleanup_never_leaves_an_empty_title(title, expected):
     q = parse_youtube_title(title, "x")
     assert (q.artist, q.title, q.version) == expected
+
+
+@pytest.mark.parametrize("title,expected", [
+    # a leading catalogue-shaped artist before a dash-version is the artist ("A - T - Extended Mix")
+    ("UFO361 - Track - Remix", ("UFO361", "Track", "Remix")),
+    ("BLINK-182 - All The Small Things - Live", ("BLINK-182", "All The Small Things", "Live")),
+    ("DJ 3000 - Track - Original Mix", ("DJ 3000", "Track", "Original Mix")),
+    ("DJ3000 - Track - Extended Mix", ("DJ3000", "Track", "Extended Mix")),
+    ("ATB 2000 - Track - Remix", ("ATB 2000", "Track", "Remix")),
+    ("ABC123 - Track - Extended Mix", ("ABC123", "Track", "Extended Mix")),
+    ("TR 909 - Track - Extended Mix", ("TR 909", "Track", "Extended Mix")),
+    ("ABBA1974 - Waterloo - Live", ("ABBA1974", "Waterloo", "Live")),
+    ("SGR053 - Artist - Track - Extended Mix", ("Artist", "Track", "Extended Mix")),
+    ("David Banner - Like A Pimp (feat. Lil Flip)", ("David Banner", "Like A Pimp (feat. Lil Flip)", None)),
+    # versions glued to digits or written as rmx are not catalogue numbers
+    ("Artist - Track (VIP2019)", ("Artist", "Track (VIP2019)", None)),
+    ("Artist - Track (RMX 2023)", ("Artist", "Track (RMX 2023)", None)),
+    ("Artist - Track (RMX2019)", ("Artist", "Track (RMX2019)", None)),
+    ("Artist - Track (Remixed by XYZ Music)", ("Artist", "Track", "Remixed by XYZ Music")),
+    # an artist credited as Premiere
+    ("Artist & Premiere - Track", ("Artist & Premiere", "Track", None)),
+    ("Artist ft. Premiere - Track", ("Artist ft. Premiere", "Track", None)),
+    ("Artist x Premiere - Track", ("Artist x Premiere", "Track", None)),
+    # "Music" in parentheses is a word, not a label
+    ("Joey Negro - Make A Move On Me (Feel The Music)", ("Joey Negro", "Make A Move On Me (Feel The Music)", None)),
+    ("Todd Terry - Weekend (House Music)", ("Todd Terry", "Weekend (House Music)", None)),
+    ("Artist - Track (Theme Music)", ("Artist", "Track (Theme Music)", None)),
+    ("Artist - Track (Body Music) (Extended Mix)", ("Artist", "Track (Body Music)", "Extended Mix")),
+    ("Artist - Track (Field Recordings)", ("Artist", "Track (Field Recordings)", None)),
+    ("Artist - Track [Anjunadeep Music]", ("Artist", "Track", None)),
+    # numbered parts, gear and places are not catalogue numbers
+    ("Artist - Track (VOLUME 12)", ("Artist", "Track (VOLUME 12)", None)),
+    ("Artist - Track (NUMBER 12)", ("Artist", "Track (NUMBER 12)", None)),
+    ("Artist - Track (PART12)", ("Artist", "Track (PART12)", None)),
+    ("Artist - Track (PARTE 012)", ("Artist", "Track (PARTE 012)", None)),
+    ("Artist - Track (CD 012)", ("Artist", "Track (CD 012)", None)),
+    ("Artist - Track (DISC 012)", ("Artist", "Track (DISC 012)", None)),
+    ("Artist - Track (TR-808)", ("Artist", "Track (TR-808)", None)),
+    ("Artist - Track (TB303)", ("Artist", "Track (TB303)", None)),
+    ("Artist - Track (UB40)", ("Artist", "Track (UB40)", None)),
+    ("Artist - Track (AREA 51)", ("Artist", "Track (AREA 51)", None)),
+    ("Artist - Track (KISS 100)", ("Artist", "Track (KISS 100)", None)),
+    ("Chopin - Nocturne (BWV 1007)", ("Chopin", "Nocturne (BWV 1007)", None)),
+    ("Artist - Track (ADE2019)", ("Artist", "Track (ADE2019)", None)),
+    ("Artist - Up/Unreleased Love", ("Artist", "Up/Unreleased Love", None)),
+    # what a removed prefix or tag leaves behind
+    ("FREE DL: Artist - Track", ("Artist", "Track", None)),
+    ("FREE DOWNLOAD: Artist - Track", ("Artist", "Track", None)),
+    ("FREE DOWNLOAD | Artist - Track", ("Artist", "Track", None)),
+    ("Artist - Track 【FREE DL】", ("Artist", "Track", None)),
+    ("Artist - Track.mp3 - Extended Mix", ("Artist", "Track", "Extended Mix")),
+    ("Artist - Track - * - Extended Mix", ("Artist", "Track", "Extended Mix")),
+    ("Artist - Track (Live) / Unreleased", ("Artist", "Track", "Live")),
+    # cleanup that takes the whole title side keeps the artist and the title as written
+    ("Artist - .mp3", ("Artist", ".mp3", None)),
+    ("Artist - *", ("Artist", "*", None)),
+    ("Artist - Free Dl", ("Artist", "Free Dl", None)),
+])
+def test_parse_youtube_title_review_cases(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
+def test_music_in_parentheses_is_a_label_when_it_is_the_channel():
+    q = parse_youtube_title("Artist - Track (Armada Music) (Extended Mix)", "Armada Music")
+    assert (q.artist, q.title, q.version) == ("Artist", "Track", "Extended Mix")
+
+
+def test_a_long_run_of_spaces_parses_quickly():
+    start = time.perf_counter()
+    q = parse_youtube_title("Artist -" + " " * 20_000 + "Track (FREE DL) [NM022]", "x")
+    assert time.perf_counter() - start < 0.5
+    assert (q.artist, q.title) == ("Artist", "Track")
+    parse_youtube_title(" " * 20_000, "x")
+    parse_youtube_title("( " * 10_000 + "premiere", "x")
+    assert time.perf_counter() - start < 1
 
 
 def test_a_leading_catalogue_number_that_is_the_channel_stays_the_artist():
