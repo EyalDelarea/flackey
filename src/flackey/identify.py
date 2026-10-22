@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .models import Query, RequestKind, norm
@@ -19,6 +20,15 @@ _NOISE_WORDS = r"official|music|video|audio|visuali[sz]er|lyrics?|hd|hq|[48]k|10
 _NOISE_BRACKET_RE = re.compile(
     r"\s*[\(\[【]\s*(?=[^\)\]】]*\b(?:official|visuali[sz]er|lyrics?|hd|hq|[48]k|1080p|720p)\b)"
     rf"(?:(?:{_NOISE_WORDS})\b\s*)+[\)\]】]\s*", re.IGNORECASE)
+# A bracket that mixes them with other words, "(Official Video Remastered)", "(Live in 4K)": the version in
+# it stays, as "(Remastered)" and "(Live)", and the rest goes; word by word, "(Live in 4K)" left "(Live in".
+_MIXED_BRACKET_RE = re.compile(r"[\(\[【]([^()\[\]【】]*)[\)\]】]")
+_STRONG_NOISE_RE = re.compile(r"\b(?:official|visuali[sz]er|lyrics?|hd|hq|[48]k|1080p|720p)\b", re.IGNORECASE)
+_NOISE_PHRASE_RE = re.compile(
+    r"\b(?:official(?:\s+(?:music|lyric))?(?:\s+(?:video|audio|visuali[sz]er))?|(?:music|lyric)\s+video|video|"
+    r"audio|lyrics?|visuali[sz]er|hd|hq|[48]k|1080p|720p)\b", re.IGNORECASE)
+_DANGLING_RE = re.compile(r"^(?:[\s,&+/:-]|\b(?:in|at|on|and|with)\b)+|(?:[\s,&+/:-]|\b(?:in|at|on|and|with)\b)+$",
+                          re.IGNORECASE)
 # "TB Premiere: A - T", "[XYZ Premiere] A - T": the whole tag, or _NOISE_RE leaves its "TB :" behind.
 # No dash before "premiere", so "A - T (World Premiere)" is left to _NOISE_RE.
 _PREMIERE_PREFIX_RE = re.compile(
@@ -61,7 +71,7 @@ _GENRES = frozenset({
     "hardcore", "rawstyle", "frenchcore", "minimal", "ambient", "downtempo", "breaks", "breakbeat", "garage", "ukg",
     "electro", "electronica", "electronic", "edm", "idm", "jungle", "trap", "disco", "nudisco", "chillout",
     "chillstep", "lofi", "synthwave", "bass", "neurofunk", "dance", "psybient", "psychill", "darkpsy", "riddim",
-    "glitch"})
+    "glitch", "eurodance", "italo", "hinrg", "oldschool", "eurobeat"})
 # Words of a genre's name that are no genre alone: "Deep House", "Drum & Bass", "D&B", "Nu-Disco", "Lo-Fi"
 _GENRE_MODIFIERS = frozenset({
     "deep", "tech", "hard", "melodic", "afro", "organic", "uk", "future", "acid", "dark", "dub", "peak", "time",
@@ -74,7 +84,7 @@ _SUFFIX_TAG = (
     r"letra|lyrics?|paroles|tradu[cç](?:[aã]o|ci[oó]n)|traduzione|(?:deutsche\s+)?[üu]bersetzung|"
     r"sub(?:titulado|titulada|s)?|en\s+espa[ñn]ol|espa[ñn]ol|english|legendado|legendada|vietsub|terjemahan|lirik|"
     r"가사|歌詞(?:付き)?|和訳|текст\s+песни|הקליפ\s+הרשמי|karaoke|(?:piano|guitar|drum|acoustic|vocal)\s+"
-    r"(?:cover|tutorial)|cover|tutorial|reaction|sped\s+up|slowed|reverb|nightcore|8d(?:\s+audio)?|m/?v|topic|"
+    r"(?:cover|tutorial)|cover|tutorial|vevo(?:\s+(?:lift|dscvr|ctrl|presents|live))?|reaction|sped\s+up|slowed|reverb|nightcore|8d(?:\s+audio)?|m/?v|topic|"
     r"ncs(?:\s+release)?|(?:official\s+)?(?:music\s+)?video(?:\s+(?:oficial|official))?|videoclip|clip\s+officiel|"
     r"(?:official\s+)?audio(?:\s+oficial)?|(?:mtv\s+)?unplugged|the\s+first\s+take|\d+\s+hours?|bass\s+boosted|"
     r"full\s+album|acoustic|(?:19|20)\d\d")
@@ -89,6 +99,16 @@ _LABEL_PART_RE = re.compile(
     r"(?:guitar|piano|drum|bass)\s+(?:lesson|cover))\b|"
     r"\b(?:mix|set)(?:\s+(?:19|20)\d\d)?$|^\s*(?:live|remix|reaction|reacting\s+to|cover|#\d+|0\d)\s*$",
     re.IGNORECASE)
+# Labels and promo channels whose names say nothing of it. Whole names only: "Anjunadeep" is a label, not every
+# title ending in "deep" ("Rolling in the Deep"); "Selected." and "Lowly." need their dot, "Selected" is a track.
+_LABEL_NAME_RE = re.compile(
+    r"ninja\s+tune|warp|kitsun[ée]|ed\s+banger|proximity|ncs|mixmag|selected\.|lowly\.|insomniac|monstercat"
+    r"(?:\s+(?:uncaged|instinct|silk|release))?|anjuna(?:deep|beats)|defected|drumcode|ukf|cercle|boiler\s+room|"
+    r"spinnin'?|mrsuicidesheep|mr\.?\s+suicide\s+sheep|majestic\s+casual|cloudkid|dim\s+mak|mau5trap|owsla|"
+    r"diynamic|kompakt|hospital|this\s+never\s+happened|stmpd(?:\s+rcrds)?|future\s+house\s+cloud",
+    re.IGNORECASE)
+_CHANNEL_WORDS = frozenset({"nation", "city", "uncaged", "network", "tv", "radio", "sounds", "vibes", "channel",
+                            "world", "kingdom", "universe", "society", "empire"})
 _FREE_DL_RE = re.compile(r"\bfree\s*(?:download|dl|d/l)\b", re.IGNORECASE)
 
 
@@ -171,10 +191,45 @@ def _drop_catno(m: re.Match[str]) -> str:
     return m.group(0) if keep else " "
 
 
+def _genre_words(text: str) -> list[str]:
+    """The words of a genre's name, the ones written apart joined: "Old School", "Hi-NRG", "90's"."""
+    t = re.sub(r"\bold[\s-]*school\b", "oldschool", text.lower())
+    t = re.sub(r"\bhi[\s-]*nrg\b", "hinrg", t)
+    return re.findall(r"[a-z0-9]+", re.sub(r"\b(\d0)'s\b", r"\1s", t))
+
+
+def _is_genre_word(w: str) -> bool:
+    return w in _GENRES or bool(re.fullmatch(r"(?:19)?\d0s", w))  # "90s", "1980s"
+
+
 def _is_genre(text: str) -> bool:
-    words = re.findall(r"[a-z0-9]+", text.lower())
-    return bool(words) and all(w in _GENRES or w in _GENRE_MODIFIERS for w in words) \
-        and any(w in _GENRES for w in words)
+    words = _genre_words(text)
+    return bool(words) and all(_is_genre_word(w) or w in _GENRE_MODIFIERS for w in words) \
+        and any(_is_genre_word(w) for w in words)
+
+
+def _is_label_name(part: str) -> bool:
+    """A label's or a promo channel's name before "| Artist - Title": a known one ("Ninja Tune", "Selected."),
+    or a genre's name and a channel word ("Trap City", "Chill Nation", "Deep House Nation"; "Sin City" is a
+    song). "NEW" only in capitals, since "New Rules" is a song."""
+    if _LABEL_NAME_RE.fullmatch(part.strip()) or re.fullmatch(r"\s*NEW!*\s*", part):
+        return True
+    words = _genre_words(part)
+    return len(words) >= 2 and words[-1] in _CHANNEL_WORDS \
+        and all(_is_genre_word(w) or w in _GENRE_MODIFIERS for w in words[:-1])
+
+
+def _thin_bracket(m: re.Match[str]) -> str:
+    """A bracket with a noise word in it, less the noise: its version or feature credit if it has one, else
+    nothing. A bracket without one is left whole."""
+    inner = m.group(1)
+    if not _STRONG_NOISE_RE.search(inner):
+        return m.group(0)
+    rest = _DANGLING_RE.sub("", _NOISE_PHRASE_RE.sub(" ", inner))
+    rest = " ".join(rest.split())
+    if rest and _keeps_version(rest):
+        return f" {m.group(0)[0]}{rest}{m.group(0)[-1]} "
+    return " "
 
 
 def _reads_artist_title(s: str) -> bool:
@@ -208,13 +263,47 @@ def _channels_series(part: str, channel: str) -> bool:
     return min(len(a), len(b)) >= 3 and (a.startswith(b) or b.startswith(a))
 
 
-def _pipe_parts(s: str, channel: str) -> tuple[str, str | None]:
-    """The part of a `|`-separated title that holds the track, cleaned, and another reading of the title that
-    its "|" makes as likely (None when there is none)."""
+class _PipeRead(NamedTuple):
+    text: str          # the part of the title that holds the track, cleaned (or "Artist - Song" made of two)
+    others: list[str]  # the other readings its "|" makes as likely, in that form
+    raw: str           # that part before cleanup, for `_read`'s fallback
+
+
+def _is_artist_channel(channel: str) -> bool:
+    """A channel that is an artist's own whatever its name: "DuaLipaVEVO", "Queen Official"."""
+    return bool(re.search(r"(?:vevo|official)$", re.sub(r"\W|_", "", channel.lower())))
+
+
+def _tagged_name(raw: str) -> bool:
+    """A part that is a name and a re-upload or official-video tag: "Dua Lipa - Official Video"."""
+    name, rest = _split_artist_title(raw.strip())
+    return name is not None and bool(_SUFFIX_TAGS_RE.fullmatch(rest))
+
+
+def _owners_part(owner: str, raw: str, part: str, channel: str) -> _PipeRead:
+    """The part left beside the channel's own name, on what is likely the artist's channel: "Dua Lipa |
+    Houdini" [DuaLipaVEVO]. The name is the artist, unless what is left reads "Artist - Title" itself and the
+    channel may as well be a promo channel's: "LOST IN RAVE | Artist - Track" [LOST IN RAVE]."""
+    if not _reads_artist_title(part):
+        return _PipeRead(f"{owner} - {part}", [], raw)
+    song, rest = _split_artist_title(part)
+    owned = f"{owner} - {song}"
+    raw_rest = _split_artist_title(raw.strip())[1]
+    if _SUFFIX_TAGS_RE.fullmatch(raw_rest) or _SUFFIX_TAGS_RE.fullmatch(rest) or _is_artist_channel(channel):
+        # "Taylor Swift | Anti-Hero - Vevo LIFT", "Ado | うっせぇわ - MV", "Pink Floyd | Comfortably Numb - Pulse"
+        return _PipeRead(owned, [part], raw)
+    if _LABEL_PART_RE.search(owner) or _is_label_name(owner) or parse_version(part)[1]:
+        return _PipeRead(part, [], raw)  # a label's channel, or a release upload: "Proximity | A - T (Remix)"
+    return _PipeRead(part, [owned], raw)
+
+
+def _pipe_parts(s: str, channel: str) -> _PipeRead:
+    """The part of a `|`-separated title that holds the track, and the other readings of the title that its
+    "|" makes as likely."""
     s = _PREMIERE_PREFIX_RE.sub("", s)  # before the "|" cut, which would take "TB Premiere | A - T" whole
     parts = s.split("|")
     if len(parts) == 1:
-        return _scrub(s, channel), None
+        return _PipeRead(_scrub(s, channel), [], s)
     # "Title | Official Audio", but "FREE DOWNLOAD | A - T" keeps its second part, and so does the channel's
     # own name ("Some Channel | A - T") and a bare genre before an "Artist - Title" ("HARD TECHNO | A - T",
     # where "Jungle | Fred again.." is a song)
@@ -225,30 +314,44 @@ def _pipe_parts(s: str, channel: str) -> tuple[str, str | None]:
         keep = [(p, c) for p, c in scrubbed if re.search(r"\w", c) and not _same_name(c, channel)]
         dashed = [(p, c) for p, c in keep[1:] if _reads_artist_title(c)]
     if not keep:
-        return _scrub(next((p for p in parts if re.search(r"\w", _NOISE_RE.sub(" ", p))), parts[0]), channel), None
-    first = keep[0][1]
+        raw = next((p for p in parts if re.search(r"\w", _NOISE_RE.sub(" ", p))), parts[0])
+        return _PipeRead(_scrub(raw, channel), [], raw)
+    first_raw, first = keep[0]
+    # the channel's own name beside the track, and nothing else: the artist's, as likely as not
+    owner = next((c for _, c in scrubbed if re.search(r"\w", c) and _same_name(c, channel)), None)
+    if owner and len(keep) == 1:
+        return _owners_part(owner, first_raw, first, channel)
     # "Label | A - T" or "Song | Artist - Album": the one later part that reads "Artist - Title", if any
-    if _split_artist_title(first)[0] is not None or len(dashed) != 1:
-        return first, None
+    if _split_artist_title(first)[0] is not None or len(dashed) > 1:
+        return _PipeRead(first, [], first_raw)
+    if not dashed:
+        # "Houdini | Dua Lipa - Official Video": cleanup took the whole tag after the artist
+        tagged = [c for p, c in keep[1:] if _tagged_name(p)]
+        if len(tagged) == 1 and _split_artist_title(tagged[0])[0] is None and len(keep) == 2:
+            return _PipeRead(f"{tagged[0]} - {first}", [f"{first} - {tagged[0]}"], first_raw)
+        return _PipeRead(first, [], first_raw)
     raw, part = dashed[0]
     artist, rest = _split_artist_title(part)
     song = f"{artist} - {first}"
     raw_rest = _split_artist_title(raw.strip())[1]
     if _same_name(artist or "", channel):
-        return song, None  # the artist's own channel: "Perfect | Ed Sheeran - Acoustic" [Ed Sheeran]
+        # the artist's own channel: "Perfect | Ed Sheeran - Acoustic" [Ed Sheeran]
+        return _PipeRead(song, [], first_raw)
     if _same_name(raw_rest, channel) or _SUFFIX_TAGS_RE.fullmatch(raw_rest) or _SUFFIX_TAGS_RE.fullmatch(rest):
         # a lyric, cover or re-upload tag after the dash: "Perfect | Ed Sheeran - Letra", and the other way
         # round as often, "Bad Bunny | Tití Me Preguntó - Video Oficial"
-        return song, f"{first} - {artist}"
-    if _LABEL_PART_RE.search(first) or _channels_series(first, channel) or _FREE_DL_RE.search(raw) \
-            or parse_version(part)[1]:
+        return _PipeRead(song, [f"{first} - {artist}"], first_raw)
+    if _LABEL_PART_RE.search(first) or _is_label_name(first) or _channels_series(first, channel) \
+            or _FREE_DL_RE.search(raw) or parse_version(part)[1]:
         # a label's or a series' name first, or a release upload: "Label | A - T (Extended Mix)"
-        return part, song
-    return song, part  # "Blinding Lights | The Weeknd - After Hours", as likely as "Label | A - T"
+        return _PipeRead(part, [song], raw)
+    # "Blinding Lights | The Weeknd - After Hours", as likely as "Label | A - T" and, the other way round,
+    # "Pink Floyd | Comfortably Numb - Pulse"
+    return _PipeRead(song, [part, f"{first} - {artist}"], first_raw)
 
 
 def _strip_noise(s: str, channel: str = "") -> str:
-    return _pipe_parts(s, channel)[0]
+    return _pipe_parts(s, channel).text
 
 
 def _scrub(s: str, channel: str) -> str:
@@ -261,6 +364,7 @@ def _scrub(s: str, channel: str) -> str:
 
     s = _UNRELEASED_RE.sub(" ", s)
     s = _NOISE_BRACKET_RE.sub(" ", s)
+    s = _MIXED_BRACKET_RE.sub(_thin_bracket, s)
     prev = None
     while prev != s:
         prev = s
@@ -316,22 +420,25 @@ def _strip_label_tag(s: str, uploader: str | None) -> str:
     return s
 
 
-def _clean(title: str, uploader: str | None) -> tuple[str, str]:
-    """The title as `parse_youtube_title` reads it -- whitespace collapsed and capped -- and that with the
-    upload junk taken out."""
+def _clean(title: str, uploader: str | None) -> tuple[str, _PipeRead]:
+    """The title as `parse_youtube_title` reads it -- whitespace collapsed and capped -- and how its "|"
+    parts read with the upload junk taken out."""
     # One space per run and a cap far above YouTube's 100 characters: some of the patterns above are
     # quadratic or worse on long runs of spaces
     text = " ".join(title.split())[:300]
-    return text, _strip_label_tag(_strip_noise(text, _channel(uploader).lower()), uploader)
+    pipe = _pipe_parts(text, _channel(uploader).lower())
+    return text, pipe._replace(text=_strip_label_tag(pipe.text, uploader))
 
 
-def _read(cleaned: str, text: str, title: str, uploader: str | None, duration_s: int | None) -> Query:
+def _read(cleaned: str, text: str, title: str, uploader: str | None, duration_s: int | None,
+          raw: str | None = None) -> Query:
     """One cleaned title read the way `parse_youtube_title` reads it: the first dash splits, the channel
     stands in for a missing artist, and `text` (the title before cleanup) is what is searched when cleanup
-    leaves nothing."""
+    leaves nothing. `raw` is the "|" part `cleaned` came from, before cleanup (the whole title if omitted)."""
     channel = _channel(uploader)
     artist, rest = _split_artist_title(cleaned)
-    raw_artist, raw_rest = _split_artist_title(text)
+    # within that part only: "As It Was | Harry Styles - Official Video" is no artist "As It Was | Harry Styles"
+    raw_artist, raw_rest = _split_artist_title((raw or text).strip())
     if artist is None and raw_artist and re.search(r"\w", cleaned) \
             and not re.search(r"\w", _strip_noise(raw_rest, channel.lower())):
         # cleanup took the whole title side ("A - Free Dl", "A - .mp3"): keep the artist, search the title as is
@@ -349,8 +456,8 @@ def _read(cleaned: str, text: str, title: str, uploader: str | None, duration_s:
 
 
 def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int | None = None) -> Query:
-    text, cleaned = _clean(title, uploader)
-    return _read(cleaned, text, title, uploader, duration_s)
+    text, pipe = _clean(title, uploader)
+    return _read(pipe.text, text, title, uploader, duration_s, pipe.raw)
 
 
 MAX_READINGS = 4
@@ -407,20 +514,20 @@ def interpretations(title: str, uploader: str | None = None, duration_s: int | N
     same words could also mean -- a leftover bracket that is a tag rather than part of the title, the artist
     after a label, the other way round a "Song | Artist - Album" or "Label | Artist - Title" reads, a
     collaboration under its first name. A title with only one sensible reading answers with just that one, which is the case for most."""
-    text, cleaned = _clean(title, uploader)
-    baseline = _read(cleaned, text, title, uploader, duration_s)
+    text, pipe = _clean(title, uploader)
+    cleaned = pipe.text
+    baseline = _read(cleaned, text, title, uploader, duration_s, pipe.raw)
     readings = [baseline]
     debracketed = " ".join(_BRACKET_RE.sub(lambda m: m.group(0) if _keeps_version(m.group(1)) else " ",
                                            cleaned).split())
     if debracketed and debracketed != cleaned:
-        readings.append(_read(debracketed, text, title, uploader, duration_s))
+        readings.append(_read(debracketed, text, title, uploader, duration_s, pipe.raw))
     alt = _alternative_split(cleaned, title, uploader, duration_s)
     if alt is not None:
         readings.append(alt)
     # "X | A - Y" is "Label | A - Title" as often as "Title | A - Album": whichever was not read first
-    other = _pipe_parts(text, _channel(uploader).lower())[1]
-    if other is not None:
-        readings.append(_read(_strip_label_tag(other, uploader), text, title, uploader, duration_s))
+    for other in pipe.others:
+        readings.append(_read(_strip_label_tag(other, uploader), text, title, uploader, duration_s, other))
     for r in list(readings):
         if r.artist and _CREDIT_SPLIT_RE.search(r.artist):
             first = _CREDIT_SPLIT_RE.split(r.artist, maxsplit=1)[0].strip()
