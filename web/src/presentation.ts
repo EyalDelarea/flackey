@@ -220,24 +220,35 @@ export const soulseekWait = (flag: string | null | undefined): string | null =>
 
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
 
+/** A spectral cutoff in kHz to one decimal, the one rounding every place that prints one uses. Cutoffs come
+ *  in 50 Hz steps, so half of them land on a .x5, where `toFixed` (15.45 is 15.4499… in binary) and
+ *  `Math.round` disagree: the status line said 15.4 while the caption under it said 15.5. */
+export const cutoffKhz = (hz: number) => Math.round(hz / 100) / 10
+
 /* The worker's reasons are written once, for the log and the failure report, and stored as they are:
    "cutoff at 15500 Hz, below 18000: ...". Where one is the main sentence on screen it is reworded here, at
    display time, and never in the store. Shapes from src/flackey/verify.py and fingerprint.py; one these do
    not know -- a reworded reason, an older row -- still reads as a sentence, just a plainer one. */
-const khz = (hz: string) => `${Number((Number(hz) / 1000).toFixed(1))} kHz`
+const khz = (hz: string) => `${cutoffKhz(Number(hz))} kHz`
+// Not anchored: a reason can arrive inside another sentence ("the kept copy no longer passes the quality
+// check: cutoff at …"). Worded in lower case for that reason; `asSentence` capitalises the start.
 const REWORDED: [RegExp, (...m: string[]) => string][] = [
-  [/^cutoff at (\d+) Hz, below (\d+): consistent with a lower-bitrate source/i,
-    (_, hz, min) => `Nothing above ${khz(hz)}, below the ${khz(min)} a 320 kbps MP3 reaches`],
-  [/^lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
-    (_, hz) => `Nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
-  [/^bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `Only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
+  [/cutoff at (\d+) Hz, below (\d+): consistent with a lower-bitrate source/i,
+    (_, hz, min) => `nothing above ${khz(hz)}, below the ${khz(min)} Flackey asks of an MP3`],
+  [/lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
+    (_, hz) => `nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
+  [/bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
   [/best score (\d+(?:\.\d+)?) below \d+(?:\.\d+)?/gi, (_, score) => `${Math.round(Number(score) * 100)}% match`],
 ]
+/* Capitalised only when it opens on one of the plain words the worker's sentences start with. A reason can
+   just as well open on an artist ("deadmau5 - Strobe is already the lossless copy"), and that name is
+   spelled the way its owner spells it. */
+const OPENS_ON_A_WORD = /^(?:a|an|another|being|bitrate|candidate|cannot|could|cutoff|enabled|every|ids|it|lossless|no|none|not|nothing|only|request|that|the|there|these|this|those|unknown|unsupported)\b/
 /** A worker reason or server error, as the sentence the owner reads: reworded where the shape is known,
- *  and always starting with a capital. */
+ *  and starting with a capital where it opens on an ordinary word. */
 export function asSentence(text: string): string {
   const t = REWORDED.reduce((s, [re, fn]) => s.replace(re, fn as (...m: string[]) => string), text.trim())
-  return t.charAt(0).toUpperCase() + t.slice(1)
+  return OPENS_ON_A_WORD.test(t) ? t.charAt(0).toUpperCase() + t.slice(1) : t
 }
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
@@ -368,7 +379,7 @@ function checksFor(b: Bundle): CheckView[] {
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
   const filed = b.track != null && !overruled
   if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
-    : { label: filed ? 'Content to' : 'Audio only to', value: `${(hz / 1000).toFixed(1)} kHz`, ok: filed })
+    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
   return out
 }
 
@@ -619,7 +630,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.status = `${asSentence(reason).replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
       // One decimal, as the status line above it and the Checks row put it: 15.5 kHz is not 16.
-      const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 100) / 10 : null
+      const khz = b.rejection?.cutoff_hz ? cutoffKhz(b.rejection.cutoff_hz) : null
       // Two different refusals, two different explanations. The upscale line is about the spectral check
       // and quotes its cutoff; saying it over a file that failed the *fingerprint* would call a genuine
       // 320 kbps file a fake. `kind` is what the worker wrote, not something guessed from the prose --

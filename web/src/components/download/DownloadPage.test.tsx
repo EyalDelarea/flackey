@@ -823,7 +823,7 @@ it('turns a refused Keep it anyway into a sentence rather than printing the work
   }
   render(<DownloadPage live={makeLive([rejected])} />)
   fireEvent.click(screen.getByRole('tab', { name: 'History' }))
-  expect(screen.getByText(/^Nothing above 15\.5 kHz, below the 18 kHz a 320 kbps MP3 reaches\./)).toBeInTheDocument()
+  expect(screen.getByText(/^Nothing above 15\.5 kHz, below the 18 kHz Flackey asks of an MP3\./)).toBeInTheDocument()
   fireEvent.click(screen.getByText('Keep it anyway'))
   expect(await screen.findByText('This copy is also a different recording (64% match), so it was not filed')).toBeInTheDocument()
 })

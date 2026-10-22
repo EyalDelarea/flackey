@@ -1,4 +1,4 @@
-import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -10,9 +10,24 @@ const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
   ({ request: { ...base, ...r }, candidates: [], catalog: null, track: null, rejection: null, ...rest })
 
 describe('formatting', () => {
+  it('cutoffKhz rounds the same way everywhere, on the 50 Hz steps cutoffs come in', () => {
+    expect(cutoffKhz(15450)).toBe(15.5); expect(cutoffKhz(19950)).toBe(20); expect(cutoffKhz(16000)).toBe(16)
+    for (const hz of [15450, 19950]) {
+      const rejection = { id: 7, request_id: 1, reason: `cutoff at ${hz} Hz, below 18000: consistent with a lower-bitrate source`,
+        bitrate_kbps: 320, cutoff_hz: hz, spectrogram_path: '/x.png', created_at: '', kind: 'quality' }
+      const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
+      const shown = String(cutoffKhz(hz))
+      expect(v.status.startsWith(`Nothing above ${shown} kHz,`), v.status).toBe(true)
+      expect(v.rejection!.caption.startsWith(`Nothing above ${shown} kHz.`), v.rejection!.caption).toBe(true)
+      expect(v.checks).toContainEqual({ label: 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: false })
+    }
+  })
   it('asSentence', () => {
     expect(asSentence('cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source'))
-      .toBe('Nothing above 15.5 kHz, below the 18 kHz a 320 kbps MP3 reaches')
+      .toBe('Nothing above 15.5 kHz, below the 18 kHz Flackey asks of an MP3')
+    expect(asSentence('the kept copy no longer passes the quality check: cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source'))
+      .toBe('The kept copy no longer passes the quality check: nothing above 15.5 kHz, below the 18 kHz Flackey asks of an MP3')
+    expect(asSentence('deadmau5 - Strobe is already the lossless copy')).toBe('deadmau5 - Strobe is already the lossless copy')
     expect(asSentence('lossless container but cutoff at 16000 Hz: consistent with a lossy source'))
       .toBe('Nothing above 16 kHz in a lossless file, which points to a lossy source')
     expect(asSentence('this copy is also a different recording (best score 0.64 below 0.80), so it was not filed'))
@@ -220,7 +235,7 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
     expect(v.samples).toEqual({ found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
       reference: null, video: null, kind: 'listen' })
-    expect(v.status).toBe('Nothing above 16 kHz, below the 18 kHz a 320 kbps MP3 reaches. Kept aside for you to hear, not added to your library.')
+    expect(v.status).toBe('Nothing above 16 kHz, below the 18 kHz Flackey asks of an MP3. Kept aside for you to hear, not added to your library.')
     // The stored reason is the worker's, untouched: only what is drawn is reworded.
     expect(v.rejection?.reason).toBe(rejection.reason)
     // And the caption under the picture quotes the same figure as the status line, not a rounder one.
