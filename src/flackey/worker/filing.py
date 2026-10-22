@@ -312,7 +312,7 @@ class FilingMixin:
         acoustic = await self._acoustic_reference(req, cand)
         hit = await self._try_lossless(req, cand, catalog, acoustic)
         if hit is None:
-            miss = self._lossless_miss_line(req)
+            miss = self._lossless_miss_line(req, from_find_lossless=True)
             return miss or "No lossless copy turned up this time."
         try:
             return await self._replace_with(t, req, cand, catalog, hit)

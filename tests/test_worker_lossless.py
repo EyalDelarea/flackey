@@ -1127,6 +1127,8 @@ async def test_a_miss_on_upgrade_leaves_the_lossy_file_exactly_where_it_was(lenv
     after = store.get_track(before.id)
     assert after.path == before.path and after.path.stat().st_size == size and after.source_fmt is None
     assert "No lossless copy this time" in msg
+    # Said from Find lossless's own result, so it does not send the owner off to find that very button.
+    assert msg.endswith("Press it again later to search once more.") and "in your library" not in msg
 
 
 async def test_upgrade_replaces_the_fingerprint_evidence_rather_than_stacking_it(lenv):

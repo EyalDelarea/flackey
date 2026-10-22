@@ -140,7 +140,7 @@ class RecoveryMixin:
         return self.store.lossless_outcome(request_id)
 
 
-    def _lossless_miss_line(self, req: Request) -> str | None:
+    def _lossless_miss_line(self, req: Request, *, from_find_lossless: bool = False) -> str | None:
         """The owner asked to be told, not just shown, when a track lands on the lossy copy. Only when a
         lossless attempt actually ran and missed: with the provider off or absent there is nothing to
         report, and saying "no lossless copy" then would blame Soulseek for a setting.
@@ -153,6 +153,8 @@ class RecoveryMixin:
             return None
         why = MISS_REASON.get(outcome, f"the lossless attempt ended in {outcome}")
         # The track is filed, so its row has no Try again: Find lossless is the button that searches again.
-        tail = ("It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES
-                else "Press Find lossless in your library to search Soulseek once more.")
+        # Said from that button's own result (`from_find_lossless`), it only needs to say it can be pressed again.
+        manual = ("Press it again later to search once more." if from_find_lossless
+                  else "Press Find lossless in your library to search Soulseek once more.")
+        tail = "It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES else manual
         return f"No lossless copy this time — {why}. {tail}"
