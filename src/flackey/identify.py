@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from .models import Query, RequestKind
+from .models import Query, RequestKind, norm
 
 _URL_RE = re.compile(r"https?://[^\s]+")
 _NOISE_RE = re.compile(
@@ -161,8 +161,13 @@ def _strip_label_tag(s: str, uploader: str | None) -> str:
     return s
 
 
-def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int | None = None) -> Query:
-    cleaned = _strip_label_tag(_strip_noise(title), uploader)
+def _clean(title: str, uploader: str | None) -> str:
+    return _strip_label_tag(_strip_noise(title), uploader)
+
+
+def _read(cleaned: str, title: str, uploader: str | None, duration_s: int | None) -> Query:
+    """One cleaned title read the way `parse_youtube_title` reads it: the first dash splits, the channel
+    stands in for a missing artist."""
     artist, rest = _split_artist_title(cleaned)
     if artist and _CATNO_LEAD_RE.fullmatch(artist) and artist.lower() != _channel(uploader).lower() \
             and _split_artist_title(rest)[0] is not None:  # "SGR053 - A - T", never "A - T"
@@ -173,3 +178,87 @@ def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int
     if not re.search(r"\w", t):  # cleanup ate it all ("[FREE DL]", "Premiere:"): search for what was there
         t, version = (rest if re.search(r"\w", rest) else title.strip()), None
     return Query(raw=title, artist=artist, title=t, version=version, duration_s=duration_s)
+
+
+def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int | None = None) -> Query:
+    return _read(_clean(title, uploader), title, uploader, duration_s)
+
+
+MAX_READINGS = 4
+_BRACKET_RE = re.compile(r"\s*[\[(]([^()\[\]]*)[\])]")
+# "A x B", "A & B", "A vs B": the first name alone is what a catalogue files a collaboration under more often
+# than not. Spaces on both sides, so "Malcolm X" and "AC/DC" stay whole.
+_CREDIT_SPLIT_RE = re.compile(r"\s+(?:x|&|vs\.?)\s+", re.IGNORECASE)
+
+
+def _segments(s: str) -> list[str]:
+    """The cleaned title cut at every dash that is not inside brackets (see `_split_artist_title`)."""
+    out, depth, start = [], 0, 0
+    for m in _SPLIT_TOKENS.finditer(s):
+        tok = m.group(0)
+        if tok in ("(", "["):
+            depth += 1
+        elif tok in (")", "]"):
+            depth = max(depth - 1, 0)
+        elif depth == 0:
+            out.append(s[start:m.start()].strip())
+            start = m.end()
+    out.append(s[start:].strip())
+    return out
+
+
+def _alternative_split(cleaned: str, title: str, uploader: str | None, duration_s: int | None) -> Query | None:
+    """The other place the artist could be. With two dashes ("Label - Artist - Title") the first one is as
+    likely a label, a blog or a mix series as an artist, so the last dash splits and what sits between is
+    the artist. With none, the channel the baseline borrowed is as likely a label's as the artist's (a
+    "- Topic" channel is YouTube's own and always the artist), so the title alone is the other reading."""
+    segs = _segments(cleaned)
+    version = None
+    # "A - T - Extended Mix" is two segments and a version; "A - B - T (Extended Mix)" is three
+    if len(segs) >= 3 and _VERSION_WORDS.search(segs[-1]) and not re.search(r"[\[(]", segs[-1]):
+        version = segs.pop()
+    if len(segs) >= 3:
+        t, v = parse_version(segs[-1])
+        artist = " - ".join(segs[1:-1])
+        return Query(raw=title, artist=artist, title=t, version=version or v, duration_s=duration_s)
+    if len(segs) == 1 and uploader and not re.search(r"-\s*Topic$", uploader, re.IGNORECASE):
+        t, v = parse_version(cleaned)
+        return Query(raw=title, artist=None, title=t, version=v, duration_s=duration_s)
+    return None
+
+
+def _reading_key(q: Query) -> tuple[frozenset[str], ...]:
+    version = None if q.version and re.search(r"\boriginal\b", q.version, re.IGNORECASE) else q.version
+    return tuple(frozenset(norm(part).split()) for part in (q.artist, q.title, version))
+
+
+def interpretations(title: str, uploader: str | None = None, duration_s: int | None = None) -> list[Query]:
+    """The plausible readings of a noisy title, most likely first, and never more than MAX_READINGS. The
+    first is always `parse_youtube_title`'s, the query the pipeline searches with; the others are what the
+    same words could also mean -- a leftover bracket that is a tag rather than part of the title, the artist
+    after a label, a collaboration under its first name. A title with only one sensible reading answers
+    with just that one, which is the case for most."""
+    cleaned = _clean(title, uploader)
+    baseline = _read(cleaned, title, uploader, duration_s)
+    readings = [baseline]
+    debracketed = " ".join(_BRACKET_RE.sub(_unless_version, cleaned).split())
+    if debracketed and debracketed != cleaned:
+        readings.append(_read(debracketed, title, uploader, duration_s))
+    alt = _alternative_split(cleaned, title, uploader, duration_s)
+    if alt is not None:
+        readings.append(alt)
+    for r in list(readings):
+        if r.artist and _CREDIT_SPLIT_RE.search(r.artist):
+            first = _CREDIT_SPLIT_RE.split(r.artist, maxsplit=1)[0].strip()
+            if first:
+                readings.append(Query(raw=title, artist=first, title=r.title, version=r.version,
+                                      duration_s=duration_s))
+    seen: set[tuple[frozenset[str], ...]] = set()
+    out: list[Query] = []
+    for r in readings:
+        key = _reading_key(r)
+        if key in seen or not re.search(r"\w", r.title or ""):
+            continue
+        seen.add(key)
+        out.append(r)
+    return out[:MAX_READINGS] if len(out) >= 2 else [baseline]

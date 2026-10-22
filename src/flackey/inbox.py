@@ -4,7 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from .identify import classify, parse_version, parse_youtube_title
+from .identify import classify, interpretations, parse_version
 from .models import Query, RequestKind, RequestState
 from .spotify import (
     SpotifyError,
@@ -54,14 +54,15 @@ class Inbox:
         self.spotify_track = spotify_track
         self.spotify_playlist = spotify_playlist
 
-    def _queue_track(self, name: str, kind: RequestKind, url: str, query: Query) -> Submission:
+    def _queue_track(self, name: str, kind: RequestKind, url: str, query: Query,
+                     readings: list[Query] | None = None) -> Submission:
         # The same link pasted again while the first is still open would be a second row racing the first
         # for the same file -- five copies of one track, four of them parked for six hours, is what a user
         # sent in. Playlists already skip these; a single paste now does too. A stopped or failed request
         # is terminal and does not count, so pasting after a Stop is still how you ask again.
         if self.store.open_request_for_url(url):
             return Submission(name=name, total=1, already_queued=1)
-        rid = self.store.add_request(name, kind, source_url=url, query=query)
+        rid = self.store.add_request(name, kind, source_url=url, query=query, interpretations=readings)
         return Submission(name=name, request_ids=[rid], total=1)
 
     def _add_existing_playlist_track(self, playlist_id: int, source_url: str, position: int) -> bool:
@@ -80,6 +81,13 @@ class Inbox:
                                   attempts=0, retry_after=None, error_message=None, flag_reason=None,
                                   failed_stage=None, lossless_retry=1)
         return previous.id
+
+    @staticmethod
+    def _youtube_readings(e: YouTubeEntry) -> tuple[Query, list[Query] | None]:
+        """The query to search with, and every reading of the title when it has more than one. Read here,
+        once: the uploader the readings need is not stored with the request."""
+        readings = interpretations(e.title, e.uploader, e.duration_s)
+        return readings[0], (readings if len(readings) >= 2 else None)
 
     @staticmethod
     def _spotify_query(track: SpotifyTrack) -> Query:
@@ -146,12 +154,12 @@ class Inbox:
             raise BadLink(YT_FAIL)
         if kind == RequestKind.YT_TRACK:
             e = entries[0]
-            q = parse_youtube_title(e.title, e.uploader, e.duration_s)
-            return self._queue_track(e.title, RequestKind.YT_TRACK, url, q)
+            q, readings = self._youtube_readings(e)
+            return self._queue_track(e.title, RequestKind.YT_TRACK, url, q, readings)
         pid = self.store.upsert_playlist(url, name)
         sub = Submission(name=name, playlist_id=pid, total=len(entries))
         for pos, e in enumerate(entries, start=1):
-            q = parse_youtube_title(e.title, e.uploader, e.duration_s)
+            q, readings = self._youtube_readings(e)
             if self._add_existing_playlist_track(pid, e.url, pos):
                 sub.already_in_library += 1
                 continue
@@ -170,5 +178,6 @@ class Inbox:
                 sub.already_queued += 1
                 continue
             sub.request_ids.append(self.store.add_request(
-                e.title, RequestKind.YT_TRACK, source_url=e.url, playlist_id=pid, playlist_position=pos, query=q))
+                e.title, RequestKind.YT_TRACK, source_url=e.url, playlist_id=pid, playlist_position=pos, query=q,
+                interpretations=readings))
         return sub

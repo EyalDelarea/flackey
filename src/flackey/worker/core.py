@@ -21,6 +21,7 @@ from ..tag import fetch_artwork
 from ..tag_lookup import TagLookup
 from .acoustic import AcousticMixin
 from .filing import FilingMixin
+from .interpret import InterpretMixin
 from .lossless_attempt import LosslessMixin
 from .pipeline import PipelineMixin
 from .policy import (
@@ -37,7 +38,7 @@ from .recovery import RecoveryMixin
 log = logging.getLogger(__name__)
 
 
-class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin):
+class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin, InterpretMixin):
     def __init__(self, store: Store, source: Source, catalog: CatalogLike, notifier: Notifier,
                  settings: Settings,
                  artwork_fetch: Callable[[str], Awaitable[bytes | None]] = fetch_artwork,

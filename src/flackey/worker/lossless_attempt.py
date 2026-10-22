@@ -73,9 +73,10 @@ class LosslessMixin:
     def _search_references(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> list[Reference]:
         """What to type into the network, in order: Beatport's spelling (clean, and for a channel-name artist
         such as `ShpongleMusic` the only text that finds anything), then the chosen record's, then the
-        request's own words -- each only when its tokens differ from what came before. A wrong Beatport
-        record redirects the first search to a different track (`Power Of Celtic` was searched as `The Power
-        Of The Dark Side`); the fingerprint rejecting that search is what lets the next spelling run.
+        request's own words, then the other readings of a noisy title -- each only when its tokens differ from
+        what came before. A wrong Beatport record redirects the first search to a different track (`Power Of
+        Celtic` was searched as `The Power Of The Dark Side`); the fingerprint rejecting that search is what
+        lets the next spelling run.
 
         Every reference keeps `_reference`'s meaning of `from_query` -- these words are the request's own --
         so whichever one comes back attached to the hit says where the tags belong."""
@@ -87,6 +88,9 @@ class LosslessMixin:
         query = req.query()
         if query.artist and query.title:
             refs.append(self._reference(req, query_candidate(query, req.id), None))
+        # Then the title's other readings (`identify.interpretations`), last: they are guesses at a noisy
+        # title, so each costs a search only after every spelling above has missed.
+        refs.extend(self._reference(req, c, None) for c in self._reading_spellings(req))
         seen: list[set[str]] = []
         out: list[Reference] = []
         for ref in refs:

@@ -143,6 +143,25 @@ async def deezer_reference(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Pat
     return AcousticReference("deezer", str(deezer_id), needles, needles[0], 0.0, EXCERPT_S)
 
 
+class DeezerSearchError(Exception):
+    """Deezer's public search did not answer, or answered with something that is not a result list."""
+
+
+async def search_deezer(text: str, http: httpx.AsyncClient, *, limit: int = LOOKUP_LIMIT) -> list[Candidate]:
+    """Deezer's public text search as candidates, in Deezer's own order, keeping only the records with a
+    preview -- the only ones that can be checked against audio. One request, no retries: every caller has
+    another way on without it. Raises DeezerSearchError."""
+    try:
+        r = await http.get(DEEZER_SEARCH, params={"q": text, "limit": limit}, timeout=20)
+        r.raise_for_status()
+        found = [parse_track_json(item) for item in r.json().get("data") or []]
+    except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise DeezerSearchError(str(e) or type(e).__name__) from e
+    return [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
+                      mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, isrc=t.isrc, rank=i)
+            for i, t in enumerate(found) if t.preview_url]
+
+
 async def find_deezer_record(cand: Candidate, http: httpx.AsyncClient) -> tuple[int | None, str]:
     """A Deezer id for the recording `cand` describes, from Deezer's public API, which needs no account.
     This is what gives a request with no audio of its own (a Spotify link, typed text) a reference when the
@@ -163,14 +182,9 @@ async def find_deezer_record(cand: Candidate, http: httpx.AsyncClient) -> tuple[
             log.info("deezer lookup: isrc %s: %s", cand.isrc, e or type(e).__name__)
     want = candidate_query(cand)
     try:
-        r = await http.get(DEEZER_SEARCH, params={"q": want.search_text(), "limit": LOOKUP_LIMIT}, timeout=20)
-        r.raise_for_status()
-        found = [parse_track_json(item) for item in r.json().get("data") or []]
-    except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError) as e:
-        return None, f"deezer search failed: {e or type(e).__name__}"
-    cands = [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
-                       mix_name=t.title_version, duration_s=t.duration_s or None, deezer_id=t.id, rank=i)
-             for i, t in enumerate(found) if t.preview_url]
+        cands = await search_deezer(want.search_text(), http)
+    except DeezerSearchError as e:
+        return None, f"deezer search failed: {e}"
     if not cands:
         return None, f"deezer has no previewable record for '{want.search_text()}'"
     decision = decide(want, cands, None)

@@ -141,6 +141,13 @@ class Store:
         # genuinely not recorded for them and a guess reads worse than an honest gap.
         self._ensure_column("requests", "failed_stage", "TEXT")
         self._ensure_column("requests", "reviewed", "INTEGER NOT NULL DEFAULT 0")
+        # The other readings of a noisy YouTube title, written at submit (the uploader they need is not kept),
+        # and what comparing them against Deezer and the video concluded. Shadow data: nothing chooses by
+        # it yet, it is here to count how often a title is genuinely ambiguous. Kept off `Request` -- see
+        # `_SHADOW_COLUMNS`. NULL on every row with a single reading and on every row written before them.
+        self._ensure_column("requests", "interpretations", "TEXT")
+        self._ensure_column("requests", "interpret_class", "TEXT")
+        self._ensure_column("requests", "interpret_reading", "INTEGER")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
         # would disappear from under the owner the moment they answered the question they came back to.
@@ -171,22 +178,30 @@ class Store:
     # ---- requests -------------------------------------------------------
     def add_request(self, raw_text: str, kind: RequestKind, *, source_url: str | None = None,
                     playlist_id: int | None = None, playlist_position: int | None = None,
-                    query: Query | None = None) -> int:
+                    query: Query | None = None, interpretations: list[Query] | None = None) -> int:
         q = query or Query(raw=raw_text)
+        readings = (json.dumps([{"artist": r.artist, "title": r.title, "version": r.version} for r in interpretations])
+                    if interpretations else None)
         cur = self.conn.execute(
             "INSERT INTO requests (created_at, updated_at, raw_text, kind, state, playlist_id, "
-            "playlist_position, source_url, query_artist, query_title, query_version, query_duration_s) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "playlist_position, source_url, query_artist, query_title, query_version, query_duration_s, "
+            "interpretations) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (_now(), _now(), raw_text, str(kind), str(RequestState.QUEUED), playlist_id,
-             playlist_position, source_url, q.artist, q.title, q.version, q.duration_s),
+             playlist_position, source_url, q.artist, q.title, q.version, q.duration_s, readings),
         )
         self.conn.commit()
         rid = int(cur.lastrowid)
         self._emit("request", rid)
         return rid
 
+    # Columns `Request` does not carry. The queue endpoint sends every field of every Request to the page on
+    # each refresh, and these are worker-only: read them through `get_interpretations`.
+    _SHADOW_COLUMNS = ("interpretations", "interpret_class", "interpret_reading")
+
     def _row_to_request(self, r: sqlite3.Row) -> Request:
         d = dict(r)
+        for col in self._SHADOW_COLUMNS:
+            d.pop(col, None)
         d["kind"] = RequestKind(d["kind"])
         d["state"] = RequestState(d["state"])
         return Request(**d)
@@ -308,6 +323,28 @@ class Store:
             self.conn.commit()
             self._emit("queue", 0)
         return sorted(ids)
+
+    def get_interpretations(self, request_id: int) -> list[Query]:
+        """The request's readings, the query it searches with first, each carrying the video's length; an
+        empty list for a request that has only the one."""
+        r = self.conn.execute("SELECT raw_text, query_duration_s, interpretations FROM requests WHERE id=?",
+                              (request_id,)).fetchone()
+        if r is None or not r["interpretations"]:
+            return []
+        return [Query(raw=r["raw_text"], artist=x.get("artist"), title=x.get("title"), version=x.get("version"),
+                      duration_s=r["query_duration_s"]) for x in json.loads(r["interpretations"])]
+
+    def get_interpretation_outcome(self, request_id: int) -> tuple[str | None, int | None]:
+        r = self.conn.execute("SELECT interpret_class, interpret_reading FROM requests WHERE id=?",
+                              (request_id,)).fetchone()
+        return (None, None) if r is None else (r["interpret_class"], r["interpret_reading"])
+
+    def set_interpretation_outcome(self, request_id: int, klass: str, reading: int | None = None) -> None:
+        """Not through `update_request`: this changes nothing the page draws, so it neither bumps
+        `updated_at` nor wakes the listeners."""
+        self.conn.execute("UPDATE requests SET interpret_class=?, interpret_reading=? WHERE id=?",
+                          (klass, reading, request_id))
+        self.conn.commit()
 
     # ---- candidates -----------------------------------------------------
     def add_candidates(self, request_id: int, candidates: list[Candidate]) -> list[Candidate]:
@@ -664,9 +701,16 @@ class Store:
         per_week = [(r[0], r[1]) for r in self.conn.execute(
             "SELECT strftime('%Y-W%W', created_at), COUNT(*) FROM requests GROUP BY 1 ORDER BY 1")]
         by_source = {r[0]: r[1] for r in self.conn.execute("SELECT source, COUNT(*) FROM tracks GROUP BY source")}
+        # Requests whose title had more than one reading, by what comparing the readings concluded; "pending"
+        # is one not compared yet. `confirmed_by_other` counts the confirmed ones the video matched through a
+        # reading other than the one the pipeline searched with: the titles the parse got wrong.
+        interpretations = {r[0] or "pending": r[1] for r in self.conn.execute(
+            "SELECT interpret_class, COUNT(*) FROM requests WHERE interpretations IS NOT NULL GROUP BY 1")}
+        interpretations["confirmed_by_other"] = self.conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE interpret_class='confirmed' AND interpret_reading > 0").fetchone()[0]
         return {"requests_by_state": by_state, "tracks": tracks[0], "bytes": tracks[1],
                 "rejections": rejections, "by_genre": by_genre, "by_label": by_label,
-                "requests_per_week": per_week, "by_source": by_source}
+                "requests_per_week": per_week, "by_source": by_source, "interpretations": interpretations}
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         r = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()

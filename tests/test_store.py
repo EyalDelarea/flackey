@@ -410,3 +410,60 @@ def test_deleting_a_request_takes_its_acoustic_reference_with_it(store: Store):
     assert store.delete_requests({RequestState.ERROR}) == [bulk]
     assert store.get_reference(bulk) is None
     assert store.get_reference(kept) is not None
+
+
+# The requests table as it shipped before the readings of a noisy title were kept.
+REQUESTS_BEFORE_INTERPRETATIONS = """
+CREATE TABLE requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  raw_text TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL,
+  playlist_id INTEGER, playlist_position INTEGER, source_url TEXT,
+  query_artist TEXT, query_title TEXT, query_version TEXT, query_duration_s INTEGER,
+  chosen_candidate_id INTEGER, catalog_track_id INTEGER, confidence INTEGER,
+  flag_reason TEXT, error_message TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_after TEXT, track_id INTEGER,
+  lossless_retry INTEGER NOT NULL DEFAULT 0
+)"""
+
+
+def test_a_database_written_before_interpretations_gains_the_columns(tmp_path: Path):
+    db = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(db)
+    conn.executescript(REQUESTS_BEFORE_INTERPRETATIONS)
+    conn.execute("INSERT INTO requests (created_at, updated_at, raw_text, kind, state) "
+                 "VALUES ('t', 't', 'A - B', 'yt_track', 'done')")
+    conn.commit()
+    conn.close()
+
+    store = Store(db)
+    cols = {r[1] for r in store.conn.execute("PRAGMA table_info(requests)")}
+    assert {"interpretations", "interpret_class", "interpret_reading"} <= cols
+    assert store.get_request(1).raw_text == "A - B"
+    assert store.get_interpretations(1) == [] and store.get_interpretation_outcome(1) == (None, None)
+    assert store.stats()["interpretations"] == {"confirmed_by_other": 0}
+
+
+def test_interpretations_round_trip_and_stay_off_the_request(store: Store):
+    readings = [Query(raw="L - A - T", artist="L", title="A - T", duration_s=300),
+                Query(raw="L - A - T", artist="A", title="T", version="X Remix", duration_s=300)]
+    rid = store.add_request("L - A - T", RequestKind.YT_TRACK, query=readings[0], interpretations=readings)
+    assert store.get_interpretations(rid) == readings
+    before = store.get_request(rid).updated_at
+    store.set_interpretation_outcome(rid, "confirmed", 1)
+    assert store.get_interpretation_outcome(rid) == ("confirmed", 1)
+    # The page is sent every Request field on each refresh; none of this is for it
+    r = store.get_request(rid)
+    assert not {"interpretations", "interpret_class", "interpret_reading"} & set(vars(r))
+    assert r.updated_at == before
+
+
+def test_stats_count_the_labels_of_noisy_titles(store: Store):
+    two = [Query(raw="x", artist="L", title="A - T"), Query(raw="x", artist="A", title="T")]
+    for klass, reading in [("confirmed", 0), ("confirmed", 1), ("agreed", None), ("ambiguous", None),
+                           ("skipped", None), (None, None)]:
+        rid = store.add_request("x", RequestKind.YT_TRACK, interpretations=two)
+        if klass:
+            store.set_interpretation_outcome(rid, klass, reading)
+    store.add_request("plain", RequestKind.YT_TRACK)
+    assert store.stats()["interpretations"] == {"confirmed": 2, "agreed": 1, "ambiguous": 1, "skipped": 1,
+                                                 "pending": 1, "confirmed_by_other": 1}
