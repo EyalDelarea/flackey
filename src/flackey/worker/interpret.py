@@ -157,6 +157,27 @@ def _summary(i: int, r: ReadingResult) -> str:
     return f'r{i} "{_label(r.reading)}": {hit}'
 
 
+class _OffTheClock:
+    """A semaphore held like one, except that waiting for it stops `budget`'s clock. The budget is for the
+    comparison's own work; a slot the real requests are busy with is not that."""
+
+    def __init__(self, slot: asyncio.Semaphore, budget: asyncio.Timeout):
+        self.slot, self.budget = slot, budget
+
+    async def __aenter__(self) -> None:
+        loop = asyncio.get_running_loop()
+        deadline, start = self.budget.when(), loop.time()
+        self.budget.reschedule(None)
+        try:
+            await self.slot.acquire()
+        finally:
+            if deadline is not None:
+                self.budget.reschedule(deadline + loop.time() - start)
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.slot.release()
+
+
 class InterpretMixin:
     """Part of `Worker`, which supplies the state these methods read -- including `_shadow` (one comparison
     at a time), `_shadow_tasks` and `_deezer_last`."""
@@ -178,7 +199,21 @@ class InterpretMixin:
             return
         task = asyncio.create_task(self._compare(req.id, readings, video, ident))
         self._shadow_tasks[req.id] = task
-        task.add_done_callback(lambda t, rid=req.id: self._shadow_tasks.pop(rid, None))
+        task.add_done_callback(lambda t, rid=req.id: self._shadow_done(rid, t))
+
+    def _shadow_done(self, request_id: int, task: asyncio.Task) -> None:
+        if self._shadow_tasks.get(request_id) is task:     # not a newer comparison for the same request
+            del self._shadow_tasks[request_id]
+        # `_compare` catches what it can see coming; anything else would otherwise surface only as
+        # "Task exception was never retrieved", with no request id on it.
+        if not task.cancelled() and task.exception() is not None:
+            log.error("req#%d: comparing the title's readings failed", request_id, exc_info=task.exception())
+
+    def forget_comparison(self, request_id: int) -> None:
+        """A stopped or removed request is not worth comparing: drop its comparison, queued or running."""
+        task = self._shadow_tasks.pop(request_id, None)
+        if task is not None:
+            task.cancel()
 
     async def _shadow_settled(self) -> None:
         """Wait for every comparison started so far (tests, and nothing else, need to)."""
@@ -189,15 +224,19 @@ class InterpretMixin:
                        ident: Identification | None) -> None:
         async with self._shadow:
             try:
-                async with asyncio.timeout(BUDGET_S):
-                    outcome, results, tried = await self._arbitrate(readings, video, ident)
+                async with asyncio.timeout(BUDGET_S) as budget:
+                    outcome, results, tried = await self._arbitrate(readings, video, ident, budget)
             except TimeoutError:
                 outcome, results, tried = Outcome(SKIPPED, None, f"took longer than {BUDGET_S} s"), [], 0
             except Exception:
                 # Shadow work: a bug here is a missing label, never a failed request.
                 log.exception("req#%d: comparing the title's readings failed", request_id)
                 return
-        self.store.set_interpretation_outcome(request_id, outcome.klass, outcome.reading)
+        try:
+            self.store.set_interpretation_outcome(request_id, outcome.klass, outcome.reading)
+        except Exception:
+            log.exception("req#%d: could not record the comparison of the title's readings", request_id)
+            return
         detail = " | ".join(_summary(i, r) for i, r in enumerate(results)) or f"{len(readings)} readings"
         log.info("req#%d interpretations: %s%s (%s); previews %d | %s", request_id, outcome.klass,
                  f" by r{outcome.reading}" if outcome.reading is not None else "", outcome.why, tried, detail)
@@ -210,8 +249,8 @@ class InterpretMixin:
             await asyncio.sleep(wait)
         self._deezer_last = loop.time()
 
-    async def _arbitrate(self, readings: list[Query], video: AcousticReference,
-                         ident: Identification | None) -> tuple[Outcome, list[ReadingResult], int]:
+    async def _arbitrate(self, readings: list[Query], video: AcousticReference, ident: Identification | None,
+                         budget: asyncio.Timeout | None = None) -> tuple[Outcome, list[ReadingResult], int]:
         results: list[ReadingResult] = []
         searched: dict[str, list[Candidate] | str] = {}   # readings that are the same words search once
         for reading in readings:
@@ -234,17 +273,25 @@ class InterpretMixin:
             if outcome.klass == CONFIRMED:
                 return outcome, results, 0
         known = {deezer_id for deezer_id, _ in ident.tried} if ident is not None else set()
-        tried = 0
+        # The CPU slot is the real requests' first: time spent waiting for it is theirs, not this budget's
+        cpu = self._cpu if budget is None else _OffTheClock(self._cpu, budget)
+        tried, unscored = 0, 0
         for cand in preview_order(results, known):
             # One at a time, so each preview's Deezer lookup takes its turn, and the CPU slot is held for
             # fpcalc alone -- never across a download, where it would starve the real requests' checks.
             await self._deezer_turn()
             check = await identify_record(video, [cand], self.http, self.settings.tmp_dir,
-                                          minimum=self.settings.lossless_fingerprint_min, limit=1, cpu=self._cpu)
+                                          minimum=self.settings.lossless_fingerprint_min, limit=1, cpu=cpu)
             tried += 1
             if check.chosen is not None:
                 return classify(results, check.chosen.deezer_id), results, tried
-        return classify(results, None), results, tried
+            unscored += sum(score is None for _, score in check.tried)
+        outcome = classify(results, None)
+        if unscored:
+            # A preview that could not be fetched (Deezer refusing the lookup, a download failing) might have
+            # been the match: what the readings found cannot be told apart from what went unchecked.
+            outcome = Outcome(SKIPPED, None, f"{unscored} of {tried} previews could not be checked")
+        return outcome, results, tried
 
     def _reading_spellings(self, req: Request) -> list[Candidate]:
         """The other readings of the title as stand-in candidates, for Soulseek's spelling ladder to try

@@ -2691,3 +2691,43 @@ def test_health_reports_the_sharing_state(tmp_path: Path):
     status["sharing"] = {"port": 50300, "enabled": True}
     app, _, _ = make(tmp_path, status=status)
     assert AppClient(app).get("/api/health").json()["sharing"] == {"port": 50300, "enabled": True}
+
+
+def test_the_page_words_what_the_lossless_pass_concluded_not_its_last_row(client):
+    """One pass, two spellings: the first found copies of a different recording, the second found nothing.
+    The worker waits on the different recording (`Store.lossless_outcome`); the request page and the
+    upgradable list must say the same, not "nothing matched"."""
+    c, store, settings = client
+    rid = store.add_request("L - A - T", RequestKind.YT_TRACK)
+    _attempt(store, rid, "fingerprint_failed")
+    last = _attempt(store, rid, "no_pick", peer=None)
+    store.set_lossless_verdict(rid, "fingerprint_failed")
+    bundle = c.get(f"/api/requests/{rid}").json()
+    assert bundle["attempt"]["id"] == last and bundle["attempt"]["outcome"] == "fingerprint_failed"
+    tid = store.add_track(path=settings.library_root / "x.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=20000,
+                          file_size=1, artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
+                          catalog_track_id=None, request_id=rid)
+    [row] = [t for t in c.get("/api/lossless/upgradable").json()["tracks"] if t["track_id"] == tid]
+    assert row["outcome"] == "fingerprint_failed" and "different recording" in row["reason"]
+    store.set_lossless_verdict(rid, None)                  # a pass still running: its own row, as before
+    assert c.get(f"/api/requests/{rid}").json()["attempt"]["outcome"] == "no_pick"
+
+
+def test_removing_a_request_drops_its_queued_title_comparison(client_with_worker):
+    c, worker = client_with_worker
+
+    class Pending:
+        cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    one, many = Pending(), Pending()
+    gone = worker.store.add_request("a", RequestKind.YT_TRACK)
+    worker.store.set_state(gone, RequestState.DONE)
+    failed = worker.store.add_request("b", RequestKind.YT_TRACK)
+    worker.store.set_state(failed, RequestState.ERROR)
+    worker._shadow_tasks.update({gone: one, failed: many})
+    assert c.delete(f"/api/requests/{gone}").json() == {"ok": True}
+    assert c.post("/api/requests/clear-failed").json() == {"removed": [failed]}
+    assert one.cancelled and many.cancelled and not worker._shadow_tasks

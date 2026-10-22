@@ -63,8 +63,16 @@ class Bundles:
         return {"request": to_dict(r), "candidates": to_dict(self.store.get_candidates(rid)),
                 "catalog": to_dict(catalog), "track": track,
                 "rejection": to_dict(self.store.get_rejection_for_request(rid)),
-                "attempt": to_dict(self.store.get_attempt_for_request(rid)),
+                "attempt": self.attempt(rid),
                 "reference": self.reference(rid)}
+
+    def attempt(self, rid: int) -> dict | None:
+        """The latest lossless attempt, its `outcome` being what the whole pass concluded
+        (`Store.lossless_outcome`). The page words that outcome; worded from the last row alone it said
+        "nothing matched" for a pass whose earlier spelling found a different recording, while the worker
+        was already waiting on the different recording."""
+        attempt, outcome = self.store.lossless_outcome(rid)
+        return None if attempt is None else to_dict(dataclasses.replace(attempt, outcome=outcome))
 
     def reference(self, rid: int) -> dict | None:
         """What this request was fingerprinted against, as the page needs it: which audio, and where in it

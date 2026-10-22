@@ -116,12 +116,8 @@ class RecoveryMixin:
 
 
     def _lossless_outcome(self, request_id: int) -> tuple[LosslessAttempt | None, str | None]:
-        """The latest attempt row, and the outcome to act on: the last pass's verdict across all its
-        spellings (`lossless_attempt.pass_outcome`), or the row's own outcome where no verdict was kept --
-        a pass still running or cut short, and every request from before the verdict existed."""
-        attempt = self.store.get_attempt_for_request(request_id)
-        verdict = self.store.get_lossless_verdict(request_id) if attempt is not None else None
-        return attempt, verdict or (attempt.outcome if attempt else None)
+        """`Store.lossless_outcome`: what the last pass concluded, not just its last row."""
+        return self.store.lossless_outcome(request_id)
 
 
     def _lossless_miss_line(self, req: Request) -> str | None:

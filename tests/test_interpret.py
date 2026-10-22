@@ -3,17 +3,23 @@ them (`worker.interpret`). Nothing here may change what a request searches for f
 files, except that the other readings are tried on Soulseek after every spelling it already had."""
 import asyncio
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 import pytest
 
+from flackey import reference as ref_mod
+from flackey.config import Settings
 from flackey.fingerprint import AcousticReference, FingerprintResult
 from flackey.identify import interpretations, parse_youtube_title
 from flackey.lossless import search_text
 from flackey.models import Candidate, Query, RequestKind, RequestState
+from flackey.notify import MemoryNotifier
 from flackey.reference import DeezerSearchError, Identification
 from flackey.source import SourceNotFound
+from flackey.store import Store
+from flackey.worker import Worker
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import interpret as interpret_mod
 from flackey.worker import pipeline as pipeline_mod
@@ -579,3 +585,122 @@ async def test_comparisons_run_one_at_a_time_and_space_out_their_deezer_calls(le
     assert [store.get_interpretation_outcome(rid)[0] for rid in rids] == [AGREED] * 3
     assert most == 1 and len(calls) == 3 * 3                     # two searches and one preview each
     assert min(b - a for a, b in pairwise(calls)) >= 0.03 - 0.005
+
+
+# ---- the comparison's own machinery: a real Worker, no audio tools needed ---------------------------------
+
+
+@pytest.fixture
+def bare(tmp_path, monkeypatch):
+    """A Worker and a noisy request, with Deezer's search answering one record both readings accept."""
+    settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", library_root=tmp_path / "lib",
+                        data_dir=tmp_path / "data")
+    store = Store(settings.db_path)
+    w = Worker(store, FakeSource(), FakeCatalog(), MemoryNotifier(), settings)
+    monkeypatch.setattr(interpret_mod, "DEEZER_INTERVAL_S", 0)
+
+    async def search(text, http, *, limit=10):
+        return [_dz(55)]
+
+    monkeypatch.setattr(interpret_mod, "search_deezer", search)
+    readings = interpretations(NOISY, "Label", 3)
+    rid = store.add_request(NOISY, RequestKind.YT_TRACK, source_url=URL, query=readings[0], interpretations=readings)
+    return w, store, store.get_request(rid)
+
+
+VIDEO = AcousticReference("youtube", "abc", [[1]], [1, 2, 3, 4], 0.0, 30.0)
+
+
+async def test_waiting_for_the_cpu_slot_does_not_spend_the_budget(bare, monkeypatch):
+    """The real requests hold the CPU slot longer than the whole budget; the comparison waits its turn and
+    still finishes, rather than being written off as `skipped` on a busy machine."""
+    w, store, req = bare
+    monkeypatch.setattr(interpret_mod, "BUDGET_S", 0.3)
+    w._cpu = asyncio.Semaphore(1)                          # a small machine: one slot, and it is taken
+
+    async def preview_url(deezer_id, http):
+        return "https://p/55.mp3"
+
+    async def download(url, http):
+        return b"ID3"
+
+    monkeypatch.setattr(ref_mod, "_preview_url", preview_url)
+    monkeypatch.setattr(ref_mod, "_download_preview", download)
+    monkeypatch.setattr(ref_mod, "_needles", lambda path, start, length: [[1, 2, 3]])
+    monkeypatch.setattr(ref_mod, "compare", lambda needle, hay: (0.99, 0))
+
+    async def busy():
+        async with w._cpu:
+            await asyncio.sleep(1.0)
+
+    holder = asyncio.create_task(busy())
+    await asyncio.sleep(0)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    await holder
+    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 0)
+
+
+async def test_a_preview_that_could_not_be_checked_is_skipped_not_ambiguous(bare, monkeypatch, caplog):
+    """Deezer refusing the preview lookup (its quota) is not "this record is not the video": whatever the
+    readings found cannot be told apart from what went unchecked."""
+    w, store, req = bare
+    caplog.set_level(logging.INFO, logger="flackey.worker.interpret")
+
+    async def unfetchable(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+        return Identification(None, None, [(c.deezer_id, None) for c in cands], "none could be fetched")
+
+    monkeypatch.setattr(interpret_mod, "identify_record", unfetchable)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (SKIPPED, None)
+    assert "1 of 1 previews could not be checked" in caplog.text
+
+
+async def test_a_failed_write_is_logged_with_its_request_not_lost_in_the_task(bare, monkeypatch, caplog):
+    w, store, req = bare
+
+    async def no_match(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+        return Identification(None, None, [(c.deezer_id, 0.1) for c in cands], "none")
+
+    def locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(interpret_mod, "identify_record", no_match)
+    monkeypatch.setattr(store, "set_interpretation_outcome", locked)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert f"req#{req.id}: could not record the comparison" in caplog.text and not w._shadow_tasks
+
+    async def boom():
+        raise RuntimeError("unforeseen")
+
+    task = asyncio.create_task(boom())
+    await asyncio.wait([task])
+    w._shadow_tasks[req.id] = task
+    w._shadow_done(req.id, task)                          # what the done callback does with an escaped error
+    assert f"req#{req.id}: comparing the title's readings failed" in caplog.text and not w._shadow_tasks
+
+
+async def test_stopping_a_request_drops_its_comparison_queued_or_running(bare, monkeypatch):
+    w, store, req = bare
+    gate = asyncio.Event()
+
+    async def stuck(text, http, *, limit=10):
+        await gate.wait()
+        return []
+
+    monkeypatch.setattr(interpret_mod, "search_deezer", stuck)
+    readings = store.get_interpretations(req.id)
+    other = store.get_request(store.add_request(NOISY, RequestKind.YT_TRACK, source_url=URL + "2",
+                                                query=readings[0], interpretations=readings))
+    w._interpret(req, VIDEO)
+    w._interpret(other, VIDEO)                             # queued behind the first
+    await asyncio.sleep(0.01)
+    running, queued = w._shadow_tasks[req.id], w._shadow_tasks[other.id]
+    await w.cancel(req.id)
+    w.forget_comparison(other.id)
+    await asyncio.wait([running, queued])
+    assert running.cancelled() and queued.cancelled() and not w._shadow_tasks
+    assert store.get_interpretation_outcome(req.id) == (None, None)
+    assert not w._shadow.locked()                          # the next comparison can still have its turn

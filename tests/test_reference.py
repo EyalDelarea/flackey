@@ -301,6 +301,28 @@ async def test_deezer_down_is_a_reason_not_an_exception():
     assert found is None and why.startswith("deezer search failed")
 
 
+async def test_a_preview_lookup_refused_with_a_200_is_a_lookup_failure_not_no_preview(tmp_path: Path):
+    """The track lookup gets the same 200-and-an-error-body quota answer. Read as "no preview", a Spotify
+    request was told its record has no sample, and the shadow comparison counted a refused preview as a
+    record that is not the video."""
+    asked = []
+
+    def quota(request):
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"error": {"type": "Exception", "message": "Quota limit exceeded",
+                                                   "code": 4}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(quota)) as http:
+        with pytest.raises(FingerprintError, match="deezer lookup failed: .*Quota limit exceeded"):
+            await deezer_needles(5, http, tmp_path)
+        with pytest.raises(FingerprintError, match="deezer lookup failed"):
+            await deezer_reference(5, http, tmp_path)
+        got = await identify_record(VIDEO, [_cand(5)], http, tmp_path, minimum=0.9)
+    assert got.chosen is None and got.tried == [(5, None)] and "could be fetched" in got.reason
+    assert len(asked) == 3                                  # one lookup each: a refusal is not retried
+    assert not list(tmp_path.glob("preview-*"))
+
+
 async def test_a_deezer_search_refused_with_a_200_is_an_error_not_an_empty_answer():
     """Deezer answers its quota with HTTP 200 and an error body. Read as "no results", every reading of a
     noisy title would have found nothing, and the request counted as ambiguous."""

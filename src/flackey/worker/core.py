@@ -256,6 +256,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         task = self._tasks.get(request_id)
         if task is not None:
             task.cancel()
+        self.forget_comparison(request_id)
         return self.store.get_request(request_id)
 
 

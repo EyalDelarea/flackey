@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -69,7 +70,12 @@ async def _preview_url(deezer_id: int, http: httpx.AsyncClient) -> str | None:
             last = type(e).__name__
         else:
             if r.status_code == 200:
-                return r.json().get("preview") or None
+                body = r.json()
+                if "error" in body:
+                    # A refusal (its quota above all) comes back as a 200 with an error body. Read as "no
+                    # preview" it would say something about the record that is only true of the moment.
+                    raise FingerprintError(f"deezer lookup failed: {body['error']}")
+                return body.get("preview") or None
             last = f"deezer http {r.status_code}"
             if r.status_code < 500:
                 break
@@ -120,10 +126,11 @@ async def _read_capped(r: httpx.Response) -> bytes:
 
 
 async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path, *,
-                         cpu: asyncio.Semaphore | None = None) -> list[list[int]]:
+                         cpu: AbstractAsyncContextManager | None = None) -> list[list[int]]:
     """The Deezer preview at each sub-frame trim. Unique file name per call: two requests for one
     recording can be here at once. Raises FingerprintError when Deezer has no preview or the download
-    fails. `cpu`, when given, is held around fpcalc only, not around the downloads."""
+    fails. `cpu`, when given (a semaphore, or anything held the same way), is held around fpcalc only, not
+    around the downloads."""
     tmp_dir.mkdir(parents=True, exist_ok=True)
     preview = tmp_dir / f"preview-{deezer_id}-{uuid4().hex[:8]}.mp3"
     try:
@@ -225,7 +232,7 @@ class Identification:
 
 async def identify_record(reference: AcousticReference, cands: list[Candidate], http: httpx.AsyncClient,
                           tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX,
-                          cpu: asyncio.Semaphore | None = None) -> Identification:
+                          cpu: AbstractAsyncContextManager | None = None) -> Identification:
     """Which Deezer candidate is the recording the owner pointed at (issue #68): the first whose 30 s preview
     is found inside the reference's full fingerprint at or above `minimum`. The preview is the needle and
     the reference's full fingerprint is the hay -- the other way round `compare` would return 0.0 for

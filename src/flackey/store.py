@@ -370,6 +370,15 @@ class Store:
         r = self.conn.execute("SELECT lossless_verdict FROM requests WHERE id=?", (request_id,)).fetchone()
         return None if r is None else r["lossless_verdict"]
 
+    def lossless_outcome(self, request_id: int) -> tuple[LosslessAttempt | None, str | None]:
+        """The latest attempt row, and the outcome to act on and to tell the owner: the last pass's verdict
+        across all its spellings (`lossless_attempt.pass_outcome`), or the row's own outcome where no verdict
+        was kept -- a pass still running or cut short, and every request from before the verdict existed.
+        The worker's retry decisions and the page both read this, so they cannot disagree."""
+        attempt = self.get_attempt_for_request(request_id)
+        verdict = self.get_lossless_verdict(request_id) if attempt is not None else None
+        return attempt, verdict or (attempt.outcome if attempt else None)
+
     def set_lossless_verdict(self, request_id: int, outcome: str | None) -> None:
         self.conn.execute("UPDATE requests SET lossless_verdict=? WHERE id=?", (outcome, request_id))
         self.conn.commit()
