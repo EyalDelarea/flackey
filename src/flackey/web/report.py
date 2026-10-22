@@ -215,11 +215,15 @@ def _redact_value(m: re.Match) -> str:
 
 def known_secrets(settings: Settings) -> list[str | None]:
     """Every credential flackey itself holds. `read_*` never raise, so a missing slskd.yml is just fewer
-    values here rather than a report that cannot be built."""
-    web = read_web_credentials(settings.data_dir) or (None, None)
+    values here rather than a report that cannot be built.
+
+    The password of slskd's web login, never its username: that is the constant flackey writes
+    (`slskd_config.FLACKEY_WEB_USERNAME`), unlocks nothing on its own, and as a known value took every
+    "flackey" out of the report -- each logger name read `<redacted>.worker.core`."""
+    web = read_web_credentials(settings.data_dir)
     return [str(settings.telegram_api_id) if settings.telegram_api_id else None,
             settings.telegram_api_hash, settings.slskd_api_key, read_api_key(settings.data_dir),
-            read_username(settings.data_dir), read_password(settings.data_dir), *web]
+            read_username(settings.data_dir), read_password(settings.data_dir), web[1] if web else None]
 
 
 def display_summary() -> str:
