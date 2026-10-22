@@ -392,7 +392,8 @@ def request_log(settings: Settings, failure: FailureRecord, tz: tzinfo | None = 
     and the narrowing is what keeps reading all of them cheap to send."""
     start, end = window(failure.request)
     names = [f"{LOG_FILE}.{n}" for n in range(BACKUPS, 0, -1)] + [LOG_FILE]
-    text = "".join(narrow_log(t, failure.request.id, start, end, tz)
+    r = failure.request
+    text = "".join(narrow_log(t, r.id, start, end, tz, own_links=(r.source_url, r.raw_text))
                    for t in (_read(settings.data_dir / n) for n in names) if t)
     return _cut(text) if text else "No log lines about this track are left: the log has moved on since.\n"
 

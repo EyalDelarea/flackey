@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 
@@ -265,6 +265,17 @@ _RECORD_START = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d{3} (\w+)
 # access log's `/api/requests/12/...` for what the owner pressed on the row.
 _ANY_REQUEST = re.compile(r"\breq[#=]\d+|/requests/\d+")
 _LOUD = {"WARNING", "ERROR", "CRITICAL"}
+_LINK = re.compile(r"https?://[^\s\"'<>]+")
+OTHER_LINK = "[other link]"
+
+
+def _other_links_out(line: str, own: frozenset[str]) -> str:
+    """`line` with every link but this request's own replaced. A warning that names no request can still name
+    a track: the time window keeps it for its context, not for the other link the owner pasted that hour."""
+    def sub(m: re.Match) -> str:
+        url = m.group(0).rstrip(".,;:)]")
+        return m.group(0) if url in own else OTHER_LINK + m.group(0)[len(url):]
+    return _LINK.sub(sub, line)
 
 
 def _parse_time(stamp: str) -> datetime:
@@ -276,20 +287,24 @@ def window(r: Request) -> tuple[datetime, datetime]:
     return _parse_time(r.created_at) - LOG_MARGIN, _parse_time(r.updated_at) + LOG_MARGIN
 
 
-def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: tzinfo | None = None) -> str:
+def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: tzinfo | None = None,
+               own_links: Iterable[str | None] = ()) -> str:
     """The records that are about this request: every one that names it, and every warning or error inside
     its lifetime that names no request at all -- Soulseek dropping, Beatport refusing, a crash in a provider
     -- which is the context a request's own lines usually lack. A line naming another request is left out
-    however loud it is. A traceback belongs to the record above it and comes along with it.
+    however loud it is. A traceback belongs to the record above it and comes along with it. In the records
+    kept for their timing alone, any link but `own_links` (the request's own) reads `[other link]`.
 
     The log stamps local time (`logsetup.DATEFMT`) and the store stamps UTC; `tz` is the log's zone, the
     machine's own when not given, which is the one the log was written in."""
     mine = re.compile(rf"\breq[#=]{request_id}(?!\d)|/requests/{request_id}(?!\d)")
+    own = frozenset(u.rstrip(".,;:)]") for u in own_links if u)
     out: list[str] = []
-    keep = False
+    keep = untagged = False
     for line in text.splitlines(keepends=True):
         m = _RECORD_START.match(line)
         if m:
+            untagged = False
             if mine.search(line):
                 keep = True
             elif _ANY_REQUEST.search(line) or m.group(2) not in _LOUD:
@@ -297,7 +312,7 @@ def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: t
             else:
                 naive = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
                 at = naive.replace(tzinfo=tz) if tz is not None else naive.astimezone()
-                keep = start <= at <= end
+                keep = untagged = start <= at <= end
         if keep:
-            out.append(line)
+            out.append(_other_links_out(line, own) if untagged else line)
     return "".join(out)

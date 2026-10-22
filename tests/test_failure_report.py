@@ -228,6 +228,23 @@ ValueError: bad
 """
 
 
+def test_a_warning_kept_for_its_timing_does_not_share_the_other_links_the_owner_pasted():
+    mine = "https://www.youtube.com/watch?v=MINE"
+    log = f"""\
+2026-10-20 10:00:01.000 DEBUG   flackey.worker.core: req#7 queued -> identifying {mine}
+2026-10-20 10:01:00.000 WARNING flackey.youtube: could not read https://www.youtube.com/watch?v=OTHER, retrying
+Traceback (most recent call last):
+yt_dlp.utils.DownloadError: (https://open.spotify.com/track/ELSE)
+2026-10-20 10:02:00.000 WARNING flackey.youtube: slow answer for {mine}.
+"""
+    start, end = datetime(2026, 10, 20, 9, 58, tzinfo=UTC), datetime(2026, 10, 20, 10, 7, tzinfo=UTC)
+    kept = narrow_log(log, 7, start, end, tz=UTC, own_links=[mine, None])
+    assert "OTHER" not in kept and "ELSE" not in kept
+    assert "could not read [other link], retrying" in kept
+    assert "DownloadError: ([other link])" in kept
+    assert f"identifying {mine}" in kept and f"slow answer for {mine}." in kept
+
+
 def test_the_log_s_local_time_is_compared_in_its_own_zone():
     """The store writes UTC and the log writes the machine's clock: a request at 10:00 UTC logged in
     UTC+3 is at 13:00 in the file, and a window that ignored the difference would miss every warning."""
@@ -314,6 +331,16 @@ def test_a_failure_report_carries_the_record_its_rows_and_its_own_log_lines(fail
     everything = "".join(rep.files.values())
     for leaked in ("slskd-key-9876", "84.12.3.4", str(Path.home())):
         assert leaked not in everything
+
+
+def test_a_failure_report_shares_this_track_s_link_and_no_other(failed):
+    settings, store, rid = failed
+    with (settings.data_dir / "flackey.log").open("a", encoding="utf-8") as f:
+        f.write("2026-10-20 10:04:02.000 WARNING flackey.youtube: slow: https://www.youtube.com/watch?v=abc, "
+                "https://www.youtube.com/watch?v=someone-elses\n")
+    rep = build_report(settings, {}, ClientContext(), failure=load(store, rid), log_tz=UTC)
+    assert rep.files[f"request-{rid}.log"].splitlines()[-1].endswith(
+        "slow: https://www.youtube.com/watch?v=abc, [other link]")
 
 
 def test_a_request_the_log_has_moved_past_says_so(failed):
