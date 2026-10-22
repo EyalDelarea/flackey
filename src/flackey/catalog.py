@@ -11,6 +11,7 @@ from urllib.parse import quote
 from rapidfuzz import fuzz
 
 from .models import TITLE_FLOOR, CatalogTrack, Query, norm
+from .version import agrees, record_version, says_remaster, split_version
 
 _NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL)
 BROWSER = "chrome"
@@ -155,16 +156,21 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
     if not tracks:
         return None
     want_version = _norm(query.version) if query.version else None
+    # The asked version against each record's, its release name counted for a remaster request: Beatport
+    # files some remasters as "Original Mix" on a release that says "Remastered" (issue #172)
+    asked = split_version(query.version)
     pinned = _length_pins_a_version(query, tracks)
     scored: list[tuple[float, CatalogTrack]] = []
+    agreeing: dict[int, bool] = {}
     for t in tracks:
-        if want_version and fuzz.token_set_ratio(want_version, _norm(t.mix_name)) < 80:
+        agreeing[t.id] = agrees(asked, record_version(t, asked))
+        if want_version and not agreeing[t.id]:
             continue
         if query.artist and query.title:
             # token_sort for the artist: "Hallucinogen In Dub" must not equal "Hallucinogen"
             a = fuzz.token_sort_ratio(_norm(query.artist), _norm(t.artist))
             ti = fuzz.token_set_ratio(_norm(query.title), _norm(t.title))
-            if ti < TITLE_FLOOR and not _same_isrc(t, preferred_isrc):
+            if ti < TITLE_FLOOR and not (_same_isrc(t, preferred_isrc) and agreeing[t.id]):
                 # A weighted average lets artist 100 carry title 44 over the bar. The source's ISRC is
                 # the one thing that outranks the title: it names the recording itself.
                 continue
@@ -186,7 +192,10 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
     # equal scores: the earliest release (the original album, not a later compilation), then the lowest id
     # Identical artist/title/mix releases can have different masters and labels. When the source
     # identifies the recording by ISRC, that evidence outranks a release-date tie-breaker.
-    scored.sort(key=lambda x: (-round(x[0], 3),
+    # A remaster can share the original's ISRC, so the ISRC only counts for the asked version, and an
+    # original request takes the original release over its remaster on a tie.
+    scored.sort(key=lambda x: (-round(x[0], 3), not agreeing[x[1].id],
+                               says_remaster(x[1].release_name) != asked.remaster,
                                not _same_isrc(x[1], preferred_isrc),
                                x[1].release_date or "9999", x[1].id))
     s, t = scored[0]
@@ -195,12 +204,10 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
 
 #: A remaster names itself in its title, mix or release ("Remastered 2024", "2011 Remaster"). Its year is
 #: the point of it, so nothing here dates one back to the original.
-_REMASTER_RE = re.compile(r"\bremaster", re.IGNORECASE)
 _DATE_RE = re.compile(r"(?:19|20)\d{2}(?:-\d{2}-\d{2})?")
 
 
-def is_remaster(*texts: str | None) -> bool:
-    return any(t and _REMASTER_RE.search(t) for t in texts)
+is_remaster = says_remaster
 
 
 def _date(value: str | None) -> str | None:

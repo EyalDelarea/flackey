@@ -22,6 +22,7 @@ from flackey.fingerprint import AcousticReference, FingerprintError, Fingerprint
 from flackey.lossless import LosslessFile
 from flackey.models import (
     NO_EDGE_HZ,
+    Candidate,
     CatalogTrack,
     Query,
     RequestKind,
@@ -632,7 +633,8 @@ async def test_a_recording_the_fingerprint_refused_is_not_fetched_again_from_ano
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     await w.process(rid)
-    assert provider.downloaded[:2] == ["a", "c"] and "b" not in provider.downloaded
+    # "c" first: the request asks the original, and a path that says remaster ranks last (issue #172)
+    assert provider.downloaded[:2] == ["c", "a"] and "b" not in provider.downloaded
     a = attempt_of(store, rid)
     skips = [e["detail"] for e in a.timeline if e["event"] == "skip_same_recording"]
     assert [d["peer"] for d in skips] == ["b"]
@@ -2674,3 +2676,70 @@ async def test_a_record_picked_in_review_is_not_fetched_through_a_bot_switched_o
     assert empty.searches and source.fetched == []
     assert r.state == RequestState.QUEUED and "the Deezer bot is switched off" in r.flag_reason
     assert worker_mod.BOT_PAUSED not in r.flag_reason
+
+
+# ---- the file's own version evidence (issue #172) -------------------------------------------------------
+# The fingerprint proves the recording, not the release, so a remaster request reads the peer's path and the
+# file's tags after the match: confirmed when either says remaster (or the date is the remaster's year or
+# later), filed with a visible "version unconfirmed" otherwise -- never rejected, never claimed.
+
+def _remaster_cand() -> Candidate:
+    return Candidate(source="deezer_bot", source_ref="dz_track:2:send", artist="Hallucinogen", title="LSD",
+                     duration_s=3, deezer_id=2, rank=1, album="The Albums Remastered")
+
+
+def _tagged(path: Path, tags: dict[str, str]) -> Path:
+    from mutagen.flac import FLAC
+    f = FLAC(path)
+    for k, v in tags.items():
+        f[k.upper()] = v
+    f.save()
+    return path
+
+
+@pytest.mark.parametrize("tags, status", [({}, "unconfirmed"), ({"album": "The Albums Remastered"}, "confirmed"),
+                                          ({"date": "2024-01-01"}, "confirmed")])
+async def test_a_plain_named_remaster_is_filed_with_what_its_tags_say(lenv, tmp_path: Path, tags, status):
+    _, store, notifier, provider, _, _ = lenv
+    audio = _tagged(_flac(tmp_path / "lsd.flac"), tags)
+    provider.files = [lf("a", path="Twisted\\01. Hallucinogen - LSD.flac")]
+    provider.audio = {"a": audio}
+    w = make(lenv, source=FakeSource([_remaster_cand()]), catalog=FakeCatalog([]))
+    rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.downloaded == ["a"]
+    assert provider.searches[0] == "Hallucinogen LSD Remastered"
+    kinds = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert kinds["version_check"]["status"] == status
+    assert ("version unconfirmed" in notifier.sent[-1][0]) == (status == "unconfirmed")
+    a = attempt_of(store, rid)
+    assert [e["detail"]["status"] for e in a.timeline if e["event"] == "version"] == [status]
+
+
+async def test_an_original_filed_from_a_file_named_remaster_is_flagged(lenv):
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = [lf("a", path="x\\02. Astral Projection - Into the Void (2011 Remaster).flac")]
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    assert {e.kind: e.value for e in store.list_evidence(r.track_id)}["version_check"]["status"] == "unconfirmed"
+    assert "version unconfirmed" in notifier.sent[-1][0]
+
+
+async def test_a_remastered_folder_alone_does_not_question_an_original(lenv):
+    """A peer's folder is about a whole album, often a compilation: only the file's own name or tags count."""
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = [lf("a", path="The Albums Remastered (2023)\\02. Astral Projection - Into the Void.flac")]
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}
+    assert "version unconfirmed" not in notifier.sent[-1][0]
+
+
+async def test_an_original_with_nothing_saying_remaster_carries_no_version_check(lenv):
+    _, store, _, _, _, _ = lenv
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}

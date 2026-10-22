@@ -134,6 +134,30 @@ def test_find_duplicate_isrc_shared_by_a_remaster_is_not_a_duplicate(tmp_path: P
     assert find_duplicate(store, original, cand).path == tmp_path / "lsd.aiff"
 
 
+def test_find_duplicate_reads_a_remaster_off_the_album_or_the_release(tmp_path: Path):
+    """Issue #172: Deezer lists the "LSD" remaster with no version text, and Beatport may file it as "Original
+    Mix" on "The Albums Remastered". Asked for the remaster, neither is the original already in the library,
+    though all share an ISRC. Asked for the track, the album says nothing: classic catalogue sits on
+    remastered albums, and the copy already filed is the one meant."""
+    store = Store(tmp_path / "s.sqlite")
+    (tmp_path / "lsd.aiff").write_bytes(b"x")
+    store.add_track(path=tmp_path / "lsd.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=1,
+                    artist="Hallucinogen", title="LSD", mix_name="Original Mix", duration_s=403,
+                    isrc="USA2P0300457", catalog_track_id=None, request_id=None)
+    deezer_remaster = Candidate(source="deezer_bot", source_ref="r", artist="Hallucinogen", title="LSD",
+                                duration_s=403, isrc="USA2P0300457", album="The Albums Remastered")
+    assert find_duplicate(store, None, deezer_remaster, "Remastered 2024") is None
+    assert find_duplicate(store, None, deezer_remaster).path == tmp_path / "lsd.aiff"
+    assert find_duplicate(store, None, deezer_remaster, "Original Mix").path == tmp_path / "lsd.aiff"
+    beatport_remaster = CatalogTrack(id=3, isrc="USA2P0300457", artist="Hallucinogen", title="LSD",
+                                     mix_name="Original Mix", label="Twisted", genre="Psy-Trance",
+                                     release_name="The Albums Remastered", duration_ms=403000)
+    assert find_duplicate(store, beatport_remaster, deezer_remaster, "Remastered 2024") is None
+    assert find_duplicate(store, beatport_remaster, deezer_remaster).path == tmp_path / "lsd.aiff"
+    deezer_original = Candidate(**{**deezer_remaster.__dict__, "album": "Twisted"})
+    assert find_duplicate(store, None, deezer_original).path == tmp_path / "lsd.aiff"
+
+
 def _add(store, path, title="Into the Void", duration_s=443):
     return store.add_track(path=path, fmt="mp3", bitrate_kbps=320, cutoff_hz=19800, file_size=1,
                            artist="Hallucinogen", title=title, mix_name="Original Mix", duration_s=duration_s,

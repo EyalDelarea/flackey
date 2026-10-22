@@ -10,6 +10,7 @@ from ..fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from ..lossless import Reference
 from ..match import candidate_version
 from ..models import Candidate, CatalogTrack, Query, Verdict, source_label
+from ..version import VersionCheck
 from ..youtube import YouTubeError
 
 
@@ -88,6 +89,9 @@ class LosslessHit:
     attempt_id: int
     reference: Reference     # the spelling that actually found this file; `from_query` says whose words
                              # they were, which is what decides the tags when no record was chosen
+    # What the file's own path and tags said about its version before conversion replaced them (issue #172);
+    # None when nothing was in question
+    version_check: VersionCheck | None = None
 
 
 def format_line(verdict: Verdict, source: str, source_fmt: str | None) -> str:

@@ -322,3 +322,30 @@ def test_a_feature_credit_inside_a_bracket_stops_at_its_end():
     asked radio edit (#184 review)."""
     q = Query(raw="", artist="Darude", title="Sandstorm (Radio Edit)", duration_s=232)
     assert not _is_the_song(q, _ct(1, "Darude", title="Sandstorm (Radio feat. Singer) Remix", dur_s=231))
+
+
+# ---- the version from the release, and an ISRC a remaster shares (issue #172) -------------------------
+LSD_ISRC = "USA2P0300457"
+
+
+def _lsd(id, mix="Original Mix", release="Twisted", date="1995-06-01"):
+    return CatalogTrack(id=id, isrc=LSD_ISRC, artist="Hallucinogen", title="LSD", mix_name=mix, label="Twisted",
+                        genre="Psy-Trance", release_name=release, release_date=date, duration_ms=403000)
+
+
+def test_a_remaster_request_matches_a_record_whose_release_says_remaster():
+    """Beatport files some remasters as "Original Mix" on a release called "Remastered"."""
+    q = Query(raw="", artist="Hallucinogen", title="LSD", version="Remastered 2024", duration_s=403)
+    original, remaster = _lsd(1), _lsd(2, release="The Albums Remastered", date="2023-11-24")
+    assert best_match(q, [original, remaster]) is remaster
+    assert best_match(q, [original]) is None
+
+
+def test_a_shared_isrc_does_not_pull_an_original_request_onto_the_remaster():
+    """The source's ISRC breaks ties between equal releases, but a remaster carries the original's ISRC too:
+    it only counts for the version asked for, and an original request takes the original on a tie."""
+    q = Query(raw="", artist="Hallucinogen", title="LSD", duration_s=403)
+    original = _lsd(5, date="1995-06-01")
+    remaster = _lsd(4, release="The Albums Remastered", date="1990-01-01")   # earlier date and lower id: ties go its way
+    assert best_match(q, [remaster, original], preferred_isrc=LSD_ISRC) is original
+    assert best_match(q, [remaster, original]) is original

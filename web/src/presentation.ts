@@ -381,6 +381,10 @@ function checksFor(b: Bundle): CheckView[] {
   // reads as the failure it was rather than as a pass.
   const overruled = b.track?.evidence?.some(e => e.kind === 'quality_check' && e.value.status === 'failed') ?? false
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
+  // The fingerprint proves the recording, not which release of it (issue #172): when nothing in the file's
+  // name or tags said it is the version asked for -- a remaster above all -- the track says so.
+  const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
+  if (unconfirmed) out.push({ label: 'Version', value: 'unconfirmed', ok: false })
   const filed = b.track != null && !overruled
   if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
     : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })

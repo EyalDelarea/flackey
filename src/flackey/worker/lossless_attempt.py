@@ -24,7 +24,9 @@ from ..lossless import (
 )
 from ..models import Candidate, CatalogTrack, Request, norm
 from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
+from ..tag import tags_as_arrived
 from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
+from ..version import check_version, split_version
 from .policy import (
     MAX_SLOW_SWITCHES,
     PEER_STUCK_OUTCOMES,
@@ -106,7 +108,7 @@ class LosslessMixin:
         """`from_query` says the words in this reference are the request's own. That is a fact about where
         `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
         match still searches and tags from the record, because the catalog wins inside `reference_for`."""
-        ref = reference_for(catalog, cand, req.query_duration_s)
+        ref = reference_for(catalog, cand, req.query_duration_s, req.query_version)
         return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
 
 
@@ -439,6 +441,12 @@ class LosslessMixin:
             # Nothing acoustic vouched for the file. Not a fact about this peer, so not SECOND_PICK_AFTER:
             # the reference is missing for every survivor alike (issue #68).
             return None, "fingerprint_unavailable"
+        # The fingerprint proved the recording, not the release (issue #172): the peer's path and the file's
+        # own tags are read for the version now, before the conversion and the tagging replace them
+        tags = await asyncio.to_thread(tags_as_arrived, tmp)
+        version = check_version(split_version(ref.mix_name, req.query_version), path=file.path, tags=tags)
+        if version is not None:
+            rec.event("version", status=version.status, reason=version.reason)
         self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None
@@ -464,7 +472,7 @@ class LosslessMixin:
                 out.unlink(missing_ok=True)
             return None, "convert_failed"
         rec.event("convert", fmt=verdict.fmt, ms=int((self.clock() - t0) * 1000))
-        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref), "filed"
+        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref, version), "filed"
 
 
     def _publish_phase(self, request_id: int, phase: str) -> None:

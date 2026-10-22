@@ -1,5 +1,14 @@
-from flackey.match import THRESHOLD, candidate_version, decide, score_candidate
+from flackey.match import (
+    THRESHOLD,
+    candidate_release,
+    candidate_version,
+    decide,
+    identification_order,
+    same_version,
+    score_candidate,
+)
 from flackey.models import Candidate, CatalogTrack, Query
+from flackey.version import split_version
 
 CT = CatalogTrack(id=16552105, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="L", genre="G", duration_ms=442816)
@@ -139,3 +148,88 @@ def test_remix_matching_video_length_still_parks_when_an_original_also_matches()
     remix = cand(mix_name="Vini Vici Remix", duration_s=442, source_ref="dz_track:2:send", rank=1)
     d = decide(q, [remix, cand(rank=2)], CT)
     assert d.auto and d.chosen.source_ref == "dz_track:1:send"
+
+
+# ---- which version: from metadata, not the fingerprint (issue #172) -------------------------------------
+# Hallucinogen's "LSD": the 1995 original on "Twisted" and the 2024 remaster on "The Albums Remastered"
+# share an ISRC, a length within 0.2 s and a fingerprint (0.96 each against the 2024 video). Deezer lists
+# the remaster with no title_version, so only its album says which one it is.
+LSD_ISRC = "USA2P0300457"
+LSD_RECORD = CatalogTrack(id=7, isrc=LSD_ISRC, artist="Hallucinogen", title="LSD", mix_name="Original Mix",
+                          label="Twisted", genre="Psy-Trance", release_name="Twisted", duration_ms=403000)
+LSD_REMASTER_Q = Query(raw="Hallucinogen - LSD (Remastered 2024)", artist="Hallucinogen", title="LSD",
+                       version="Remastered 2024", duration_s=403)
+LSD_Q = Query(raw="Hallucinogen - LSD", artist="Hallucinogen", title="LSD", duration_s=403)
+
+
+def lsd_pair() -> tuple[Candidate, Candidate]:
+    original = Candidate(source="deezer_bot", source_ref="dz:1", artist="Hallucinogen", title="LSD", duration_s=403,
+                         deezer_id=1, isrc=LSD_ISRC, rank=0, album="Twisted", release_date="1995-06-01")
+    remaster = Candidate(source="deezer_bot", source_ref="dz:2", artist="Hallucinogen", title="LSD", duration_s=403,
+                         deezer_id=2, isrc=LSD_ISRC, rank=1, album="The Albums Remastered",
+                         release_date="2023-11-24")
+    return original, remaster
+
+
+def test_an_album_that_says_remaster_names_the_version_only_for_a_remaster_request():
+    """Classic catalogue sits on "Remastered" albums: for any other request the album says nothing, so the
+    copy already filed as "Original Mix" is still that track."""
+    original, remaster = lsd_pair()
+    assert candidate_version(original) == candidate_version(remaster) == "Original Mix"
+    assert candidate_release(remaster, split_version("Remastered 2024")).remaster
+    assert not candidate_release(remaster).remaster
+    assert not candidate_release(remaster, split_version("Extended Mix")).remaster
+
+
+def test_an_original_request_never_takes_a_titled_remaster_on_length():
+    """A record whose own title says remaster is turned down for a request that names no version, even when
+    its length is the closer one (as before issue #172)."""
+    original = Candidate(source="deezer_bot", source_ref="dz:1", artist="Hallucinogen", title="LSD", duration_s=395,
+                         deezer_id=1, rank=0)
+    titled = Candidate(source="deezer_bot", source_ref="dz:2", artist="Hallucinogen", title="LSD (Remastered 2024)",
+                       duration_s=403, deezer_id=2, rank=1)
+    d = decide(LSD_Q, [titled, original], None)
+    assert d.chosen is original
+    alone = decide(LSD_Q, [titled], None)
+    assert not alone.auto                                 # to the owner, as before
+
+
+def test_a_remaster_request_picks_the_remaster_on_the_text_path():
+    original, remaster = lsd_pair()
+    d = decide(LSD_REMASTER_Q, [original, remaster], None)
+    assert d.chosen is remaster and d.auto
+
+
+def test_an_original_request_picks_the_original_and_still_takes_a_lone_remaster():
+    original, remaster = lsd_pair()
+    d = decide(LSD_Q, [remaster, original], None)
+    assert d.chosen is original and d.auto
+    # A remaster is the original arrangement: alone, it is no "only remixes" refusal
+    alone = decide(LSD_Q, [remaster], None)
+    assert alone.auto and alone.chosen is remaster
+
+
+def test_a_remaster_request_tries_only_the_remaster_preview_on_the_youtube_path():
+    """The fingerprint matches both previews alike, so the one tried first is the one filed: the original's
+    preview must not be tried at all for a remaster video."""
+    original, remaster = lsd_pair()
+    cands = [original, remaster]
+    decide(LSD_REMASTER_Q, cands, None)                       # scores them, as the pipeline does first
+    assert identification_order(LSD_REMASTER_Q, cands) == [remaster]
+    decide(LSD_Q, cands, None)
+    assert identification_order(LSD_Q, cands) == [original, remaster]   # no version: the original first
+    assert identification_order(LSD_REMASTER_Q, [original]) == []
+
+
+def test_a_shared_isrc_settles_a_match_only_when_the_versions_agree():
+    original, remaster = lsd_pair()
+    assert score_candidate(LSD_Q, original, LSD_RECORD).isrc
+    assert not score_candidate(LSD_REMASTER_Q, remaster, LSD_RECORD).isrc
+    remaster_record = CatalogTrack(**{**LSD_RECORD.__dict__, "id": 8, "release_name": "The Albums Remastered"})
+    assert score_candidate(LSD_REMASTER_Q, remaster, remaster_record).isrc
+
+
+def test_same_version_reads_the_album_and_the_release():
+    original, remaster = lsd_pair()
+    assert same_version(original, LSD_RECORD) and not same_version(remaster, LSD_RECORD, "Remastered 2024")
+    assert same_version(remaster, LSD_RECORD)       # the album alone, for a request that names no version

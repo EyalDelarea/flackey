@@ -73,7 +73,7 @@ layers = [
   "attempts : reference : tag_lookup",
   "library : export : tag : verify : store : catalog : deezer : youtube : spotify : source : telegram : convert : fingerprint",
   "lossless",
-  "match : identify",
+  "match : identify : version",
   "notify : config : models : logsetup",
   "tools : audiofile",
   "slskd_process",

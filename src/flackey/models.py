@@ -135,6 +135,9 @@ class Candidate:
     # The Deezer record's release date (its album's), from the same enrichment call. Only ever used to date a
     # recording's first release earlier than the Beatport release it is tagged from (`catalog.with_original_date`).
     release_date: str | None = None
+    # The Deezer record's album title, from the same call: where a remaster with no version text of its own
+    # says what it is ("The Albums Remastered"), see `version` (issue #172).
+    album: str | None = None
 
 
 @dataclass
