@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
-import { bucketOf, canRetry, gb, plural, soulseekWait } from '../../presentation'
+import { asSentence, bucketOf, canRetry, gb, plural, soulseekWait } from '../../presentation'
 import { revealLabel, usePlatform } from '../../platform'
 import Icon from '../Icon'
 import Banner from '../Banner'
@@ -144,7 +144,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       setNote(`${t.artist} – ${t.title}: ${res.message}`)
       if (res.upgraded) setTracks(await api.library(q, selectedPlaylist))
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Couldn't search for a lossless copy. Try again.")
+      setActionError(err instanceof ApiError ? asSentence(err.message) : "Couldn't search for a lossless copy. Try again.")
     } finally {
       live.setUpgradeActivity(null)
     }

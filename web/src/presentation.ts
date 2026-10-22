@@ -220,6 +220,26 @@ export const soulseekWait = (flag: string | null | undefined): string | null =>
 
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
 
+/* The worker's reasons are written once, for the log and the failure report, and stored as they are:
+   "cutoff at 15500 Hz, below 18000: ...". Where one is the main sentence on screen it is reworded here, at
+   display time, and never in the store. Shapes from src/flackey/verify.py and fingerprint.py; one these do
+   not know -- a reworded reason, an older row -- still reads as a sentence, just a plainer one. */
+const khz = (hz: string) => `${Number((Number(hz) / 1000).toFixed(1))} kHz`
+const REWORDED: [RegExp, (...m: string[]) => string][] = [
+  [/^cutoff at (\d+) Hz, below (\d+): consistent with a lower-bitrate source/i,
+    (_, hz, min) => `Nothing above ${khz(hz)}, below the ${khz(min)} a 320 kbps MP3 reaches`],
+  [/^lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
+    (_, hz) => `Nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
+  [/^bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `Only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
+  [/best score (\d+(?:\.\d+)?) below \d+(?:\.\d+)?/gi, (_, score) => `${Math.round(Number(score) * 100)}% match`],
+]
+/** A worker reason or server error, as the sentence the owner reads: reworded where the shape is known,
+ *  and always starting with a capital. */
+export function asSentence(text: string): string {
+  const t = REWORDED.reduce((s, [re, fn]) => s.replace(re, fn as (...m: string[]) => string), text.trim())
+  return t.charAt(0).toUpperCase() + t.slice(1)
+}
+
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
    value of ATTEMPT_OUTCOMES has an entry: a miss with no explanation is the thing this exists to stop. */
 const MISS_REASON: Record<string, string> = {
@@ -596,9 +616,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       // #92, #97). The row must not announce a deletion while a play button for that very file sits under
       // it -- nor promise a copy that was never kept (a format Flackey cannot file, an older row).
       const kept = hasKeptCopy(b.rejection)
-      v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
+      v.status = `${asSentence(reason).replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
-      const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
+      // One decimal, as the status line above it and the Checks row put it: 15.5 kHz is not 16.
+      const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 100) / 10 : null
       // Two different refusals, two different explanations. The upscale line is about the spectral check
       // and quotes its cutoff; saying it over a file that failed the *fingerprint* would call a genuine
       // 320 kbps file a fake. `kind` is what the worker wrote, not something guessed from the prose --

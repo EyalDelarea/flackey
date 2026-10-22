@@ -812,6 +812,22 @@ it('files the copy the owner listened to, and reloads the row that just changed 
   await waitFor(() => expect(refresh).toHaveBeenCalled())
 })
 
+it('turns a refused Keep it anyway into a sentence rather than printing the worker reason as it is', async () => {
+  vi.mocked(api.accept).mockRejectedValueOnce(new ApiError(400,
+    'this copy is also a different recording (best score 0.64 below 0.80), so it was not filed'))
+  const rejected: Bundle = {
+    request: { ...baseRequest, state: 'rejected' }, candidates: [], catalog: null, track: null,
+    rejection: { id: 4, request_id: 7, reason: 'cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source',
+      bitrate_kbps: 320, cutoff_hz: 15500, spectrogram_path: null, created_at: '', kind: 'quality',
+      audio_path: '/data/rejected/req7-1.mp3' },
+  }
+  render(<DownloadPage live={makeLive([rejected])} />)
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  expect(screen.getByText(/^Nothing above 15\.5 kHz, below the 18 kHz a 320 kbps MP3 reaches\./)).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  expect(await screen.findByText('This copy is also a different recording (64% match), so it was not filed')).toBeInTheDocument()
+})
+
 it('keeps stopped tracks individually retryable but out of the sweep when filtering by stage', async () => {
   vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [2], skipped: [] })
   render(<DownloadPage live={makeLive([mk(1, 'cancelled'), mk(2, 'not_found')])} />)

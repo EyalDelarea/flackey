@@ -1,4 +1,4 @@
-import { bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -10,6 +10,16 @@ const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
   ({ request: { ...base, ...r }, candidates: [], catalog: null, track: null, rejection: null, ...rest })
 
 describe('formatting', () => {
+  it('asSentence', () => {
+    expect(asSentence('cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source'))
+      .toBe('Nothing above 15.5 kHz, below the 18 kHz a 320 kbps MP3 reaches')
+    expect(asSentence('lossless container but cutoff at 16000 Hz: consistent with a lossy source'))
+      .toBe('Nothing above 16 kHz in a lossless file, which points to a lossy source')
+    expect(asSentence('this copy is also a different recording (best score 0.64 below 0.80), so it was not filed'))
+      .toBe('This copy is also a different recording (64% match), so it was not filed')
+    expect(asSentence('unsupported format ogg')).toBe('Unsupported format ogg')
+    expect(asSentence('Already a sentence.')).toBe('Already a sentence.')
+  })
   it('plural', () => {
     expect(plural(1, 'track')).toBe('1 track'); expect(plural(0, 'track')).toBe('0 tracks')
     expect(plural(3, 'copy', 'copies')).toBe('3 copies'); expect(plural(1200, 'line')).toBe('1,200 lines')
@@ -166,7 +176,7 @@ describe('presentRow', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording: best score 0.61 below 0.79',
       bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: '/x.png', created_at: '', kind: 'different_recording' }
     const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
-    expect(v.status).toBe('a different recording: best score 0.61 below 0.79. Deleted, not added to your library.')
+    expect(v.status).toBe('A different recording: 61% match. Deleted, not added to your library.')
     expect(v.rejection).toEqual({ reason: 'a different recording: best score 0.61 below 0.79', cutoffKhz: null,
       spectrogramUrl: '/api/rejections/7/spectrogram.png',
       caption: 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.' })
@@ -182,7 +192,7 @@ describe('presentRow', () => {
       audio_path: '/data/rejected/req1-1.mp3' }
     const reference = { kind: 'deezer' as const, ref: '1109731', excerpt_start_s: 95 }
     const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference }), opts)
-    expect(v.status).toBe('a different recording: best score 0.77 below 0.79. Kept aside for you to hear, not added to your library.')
+    expect(v.status).toBe('A different recording: 77% match. Kept aside for you to hear, not added to your library.')
     expect(v.rejection?.caption).toMatch(/still here, so you can hear it/)
     expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('Keep it anyway files this very copy') })
     expect(v.samples).toEqual({
@@ -210,7 +220,15 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
     expect(v.samples).toEqual({ found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
       reference: null, video: null, kind: 'listen' })
-    expect(v.status).toMatch(/Kept aside for you to hear, not added/)
+    expect(v.status).toBe('Nothing above 16 kHz, below the 18 kHz a 320 kbps MP3 reaches. Kept aside for you to hear, not added to your library.')
+    // The stored reason is the worker's, untouched: only what is drawn is reworded.
+    expect(v.rejection?.reason).toBe(rejection.reason)
+    // And the caption under the picture quotes the same figure as the status line, not a rounder one.
+    const halfway = presentRow(bundle({ state: 'rejected' }, { rejection: { ...rejection, cutoff_hz: 15500,
+      reason: 'cutoff at 15500 Hz, below 18000: consistent with a lower-bitrate source' } }), opts)
+    expect(halfway.status).toMatch(/^Nothing above 15\.5 kHz,/)
+    expect(halfway.rejection?.cutoffKhz).toBe(15.5)
+    expect(halfway.rejection?.caption).toMatch(/^Nothing above 15\.5 kHz\./)
     expect(v.rejection?.caption).toMatch(/^Nothing above 16 kHz\. .* still here, so you can hear it and decide\.$/)
     expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('evidence, not proof') })
   })
@@ -221,7 +239,7 @@ describe('presentRow', () => {
       spectrogram_path: '/x.png', created_at: '', kind: 'quality', audio_path: '/data/rejected/req1-1.mp3' }
     const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
     expect(v.samples).toBeNull()
-    expect(v.status).toBe('bitrate 128 kbps below 320. Deleted, not added to your library.')
+    expect(v.status).toBe('Only 128 kbps, below the 320 kbps Flackey keeps. Deleted, not added to your library.')
     expect(v.outcome?.note).not.toMatch(/evidence, not proof/)
     expect(v.outcome?.note).toMatch(/checked, failed and deleted/)
     expect(v.rejection?.caption).toBe('The file did not pass the quality check.')
