@@ -8,12 +8,26 @@ from .models import Query, RequestKind
 _URL_RE = re.compile(r"https?://[^\s]+")
 _NOISE_RE = re.compile(
     r"\s*[\(\[\|]?\s*\b(official\s*(music\s*)?(video|audio|visualizer|lyric\s*video)?|hd|hq|4k|"
-    r"lyrics?|visualizer|full\s*track|free\s*download|out\s*now|premiere)\b\s*[\)\]]?\s*",
+    r"lyrics?|visualizer|full\s*track|free\s*(download|dl|d/l)|out\s*now|premiere)\b\s*[\)\]]?\s*",
     re.IGNORECASE,
 )  # the \b anchors matter: without them "Lyrical Assassin" loses its "Lyric"
+# "TB Premiere: A - T", "[XYZ Premiere] A - T": the whole tag, or _NOISE_RE leaves its "TB :" behind.
+# No dash before "premiere", so "A - T (World Premiere)" is left to _NOISE_RE.
+_PREMIERE_PREFIX_RE = re.compile(
+    r"^\s*(?:[^-–—:|\[\]()]{0,40}?\bpremiere\s*[:|–—-]|[\[(][^\])]{0,40}?\bpremiere\s*[\])])\s*", re.IGNORECASE)
+# Upper case on purpose: "[NM022]", "(SGR053)" are catalogue numbers, "(2019 Remaster)", "(1998)" and
+# (via the lookahead) an all-caps "(PART 12)" are not
+_CATNO = r"[A-Z]{2,6}\s?-?\d{2,5}[A-Z]?"
+_CATNO_TAG_RE = re.compile(r"\s*[\[(]\s*(?!(?:PART|PT|VOL|NO|EP)[\s\d-])(" + _CATNO + r")\s*[\])]")
+# A bare leading "SGR053 - A - T" needs 3+ digits: "UB40 - Red Red Wine - Live" is a band, not a label
+_CATNO_LEAD_RE = re.compile(r"[A-Z]{2,6}\s?-?\d{3,5}[A-Z]?")
+_LABEL_TAG_RE = re.compile(r"\s*[\[(]([^()\[\]]*\b(?:records|recordings|music))\s*[\])]", re.IGNORECASE)
+_FILE_EXT_RE = re.compile(r"\.(?:wav|mp3|flac|aiff?|m4a)(?=\s*(?:[\[(]|$))", re.IGNORECASE)
+_UNRELEASED_RE = re.compile(r"\s*(?:/\s*unreleased\b|[\[(]\s*unreleased\s*[\])])", re.IGNORECASE)
+# Not "rmx": lossless.file_title leaves "(Space Tribe Rmx)" in the title tokens for its own version rule
 _VERSION_WORDS = re.compile(
-    r"\b(remix|mix|edit|version|dub|rework|bootleg|remaster(ed)?|live|instrumental|acapella|"
-    r"extended|radio|club|vip|original)\b", re.IGNORECASE)
+    r"\b(remix|mix|edit|version|dub|rework|refix|bootleg|flip|mash-?up|remaster(ed)?|live|instrumental|"
+    r"acapella|extended|radio|club|vip|original)\b", re.IGNORECASE)
 _TRAIL_RE = re.compile(r"\s*[\(\[]([^\)\]]+)[\)\]]\s*$")
 _DASH_VERSION_RE = re.compile(r"\s+[-–—]\s+([^-–—]+)$")
 _SPLIT_TOKENS = re.compile(r"[(\[]|[)\]]|\s+[-–—]\s+")
@@ -82,12 +96,23 @@ def parse_version(title: str) -> tuple[str, str | None]:
     return t, None
 
 
+def _unless_version(m: re.Match[str]) -> str:
+    """Drop a bracketed tag, but never one that names a version or a featured artist ("(VIP 2019)")."""
+    return m.group(0) if _VERSION_WORDS.search(m.group(1)) or _FEAT_RE.search(m.group(1)) else " "
+
+
 def _strip_noise(s: str) -> str:
+    s = _PREMIERE_PREFIX_RE.sub("", s)  # before the "|" cut, which would take "TB Premiere | A - T" whole
     s = re.sub(r"\s*\|.*$", "", s)  # "Title | Official Audio"
+    s = _UNRELEASED_RE.sub(" ", s)
     prev = None
     while prev != s:
         prev = s
         s = _NOISE_RE.sub(" ", s)
+    s = _CATNO_TAG_RE.sub(_unless_version, s)
+    s = _LABEL_TAG_RE.sub(_unless_version, s)
+    s = _FILE_EXT_RE.sub("", s)
+    s = re.sub(r"(?<!\S)\*+(?!\S)", " ", s)  # what "*PREMIERE*" leaves; "*NSYNC" keeps its star
     s = re.sub(r"\(\s*\)|\[\s*\]", "", s)
     return " ".join(s.split()).strip(" -–—")
 
@@ -118,13 +143,17 @@ def parse_text(raw: str) -> Query:
 _FEAT_RE = re.compile(r"\b(feat|ft|featuring)\b\.?", re.IGNORECASE)
 
 
+def _channel(uploader: str | None) -> str:
+    return re.sub(r"\s*-\s*Topic$", "", uploader or "").strip()
+
+
 def _strip_label_tag(s: str, uploader: str | None) -> str:
     """Drop a trailing [Label Name] / (Channel Name) that is neither a version nor a feature credit."""
     m = _TRAIL_RE.search(s)
     if not m:
         return s
     inner = m.group(1)
-    channel = re.sub(r"\s*-\s*Topic$", "", uploader or "").strip().lower()
+    channel = _channel(uploader).lower()
     if _VERSION_WORDS.search(inner) or _FEAT_RE.search(inner):
         return s
     if inner.strip().lower() == channel or m.group(0).lstrip().startswith("[") or "records" in inner.lower():
@@ -135,7 +164,10 @@ def _strip_label_tag(s: str, uploader: str | None) -> str:
 def parse_youtube_title(title: str, uploader: str | None = None, duration_s: int | None = None) -> Query:
     cleaned = _strip_label_tag(_strip_noise(title), uploader)
     artist, rest = _split_artist_title(cleaned)
+    if artist and _CATNO_LEAD_RE.fullmatch(artist) and artist.lower() != _channel(uploader).lower() \
+            and _split_artist_title(rest)[0] is not None:  # "SGR053 - A - T", never "A - T"
+        artist, rest = _split_artist_title(rest)
     if artist is None and uploader:
-        artist = re.sub(r"\s*-\s*Topic$", "", uploader).strip() or None
+        artist = _channel(uploader) or None
     t, version = parse_version(rest)
     return Query(raw=title, artist=artist, title=t, version=version, duration_s=duration_s)

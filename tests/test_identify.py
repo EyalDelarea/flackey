@@ -59,6 +59,12 @@ def test_classify_canonical_spotify_playlist_url():
     ("Into the Void [Radio Edit]", ("Into the Void", "Radio Edit")),
     ("Into the Void (Live at Ozora)", ("Into the Void", "Live at Ozora")),
     ("Into the Void (feat. Someone)", ("Into the Void (feat. Someone)", None)),
+    ("Into the Void (Louis Futon Flip)", ("Into the Void", "Louis Futon Flip")),
+    ("Into the Void (Someone Mashup)", ("Into the Void", "Someone Mashup")),
+    ("Into the Void (Someone Mash-Up)", ("Into the Void", "Someone Mash-Up")),
+    ("Into the Void (Someone Refix)", ("Into the Void", "Someone Refix")),
+    ("Into the Void (Flipside)", ("Into the Void (Flipside)", None)),  # whole words only
+    ("Into the Void (Refixation)", ("Into the Void (Refixation)", None)),
 ])
 def test_parse_version(title, expected):
     assert parse_version(title) == expected
@@ -116,6 +122,67 @@ def test_split_ignores_a_dash_inside_brackets():
     assert (q.artist, q.title) == ("Artist [Live - 1997]", "Title")
     q = parse_text("Artist [a (b) - c] - Title")  # nested: depth, not an in-bracket flag
     assert (q.artist, q.title) == ("Artist [a (b) - c]", "Title")
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Artist - Track (FREE DL) [Label Records] [NM022]", ("Artist", "Track", None)),
+    ("TB Premiere: Artist - Track", ("Artist", "Track", None)),
+    ("Premiere: Artist - Track", ("Artist", "Track", None)),
+    ("Some Blog Premiere | Artist - Track", ("Artist", "Track", None)),
+    ("Some Blog Premiere - Artist - Track (Someone Remix)", ("Artist", "Track", "Someone Remix")),
+    ("[XYZ Premiere] Artist - Track", ("Artist", "Track", None)),
+    ("*PREMIERE* Artist - Track [FREE DL]", ("Artist", "Track", None)),
+    ("Artist - Track *FREE DOWNLOAD*", ("Artist", "Track", None)),
+    ("Artist - Track (free d/l)", ("Artist", "Track", None)),
+    ("SGR053 - Artist - Track", ("Artist", "Track", None)),
+    ("SGR053 - Artist - Track (Someone Remix) [FREE DL]", ("Artist", "Track", "Someone Remix")),
+    ("[SGR053] Artist - Track", ("Artist", "Track", None)),
+    ("Artist - Track (SGR053) (Original Mix)", ("Artist", "Track", "Original Mix")),
+    ("Artist - Track [AUM-042]", ("Artist", "Track", None)),
+    ("Artist - Track [Label Records] (Someone Remix)", ("Artist", "Track", "Someone Remix")),
+    ("Artist - Track (Armada Music) [Extended Mix]", ("Artist", "Track", "Extended Mix")),
+    ("Artist - Track (Black Hole Recordings) (feat. Someone)", ("Artist", "Track (feat. Someone)", None)),
+    ("Artist - Track.wav", ("Artist", "Track", None)),
+    ("Artist - Track.WAV (Someone Remix)", ("Artist", "Track", "Someone Remix")),
+    ("Artist - Track.aiff", ("Artist", "Track", None)),
+    ("Artist - Track /unreleased", ("Artist", "Track", None)),
+    ("Artist - Track [unreleased]", ("Artist", "Track", None)),
+    ("Artist - Track (Unreleased) (Someone Edit)", ("Artist", "Track", "Someone Edit")),
+    ("Artist - Track (Louis Futon Flip)", ("Artist", "Track", "Louis Futon Flip")),
+])
+def test_parse_youtube_title_strips_upload_junk(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Rusko - Lyrical Assassin", ("Rusko", "Lyrical Assassin", None)),
+    ("Artist - Track (feat. Someone)", ("Artist", "Track (feat. Someone)", None)),
+    ("Artist ft. Someone - Track [Iboga Records]", ("Artist ft. Someone", "Track", None)),
+    ("Artist - Track (Live at Ozora)", ("Artist", "Track", "Live at Ozora")),
+    ("Artist - Track (2019 Remaster)", ("Artist", "Track", "2019 Remaster")),
+    ("Artist - Track (VIP)", ("Artist", "Track", "VIP")),
+    ("Artist - Track (VIP 2019)", ("Artist", "Track", "VIP 2019")),  # catalogue-shaped, but a version
+    ("Artist - Track (1998)", ("Artist", "Track (1998)", None)),
+    ("Artist - Track (PART 12)", ("Artist", "Track (PART 12)", None)),
+    ("Artist - Track (Original Mix)", ("Artist", "Track", "Original Mix")),
+    ("Artist - Records of the Past", ("Artist", "Records of the Past", None)),
+    ("Artist - Track (Live at Abbey Road Music)", ("Artist", "Track", "Live at Abbey Road Music")),
+    ("K-391 - Summertime", ("K-391", "Summertime", None)),
+    ("MK2 - Track - Extended Mix", ("MK2", "Track", "Extended Mix")),
+    ("UB40 - Red Red Wine - Live", ("UB40", "Red Red Wine", "Live")),  # a band, not a catalogue number
+    ("*NSYNC - Bye Bye Bye", ("*NSYNC", "Bye Bye Bye", None)),
+    ("Artist - Unreleased Dreams", ("Artist", "Unreleased Dreams", None)),
+    ("Artist - World Premiere", ("Artist", "World", None)),  # as before: "premiere" is noise anywhere
+])
+def test_parse_youtube_title_cleanup_leaves_real_names_alone(title, expected):
+    q = parse_youtube_title(title, "x")
+    assert (q.artist, q.title, q.version) == expected
+
+
+def test_a_leading_catalogue_number_that_is_the_channel_stays_the_artist():
+    q = parse_youtube_title("ABC123 - Track - Extended Mix", "ABC123 - Topic")
+    assert (q.artist, q.title, q.version) == ("ABC123", "Track", "Extended Mix")
 
 
 @pytest.mark.parametrize("url", [
