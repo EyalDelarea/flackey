@@ -86,6 +86,29 @@ def test_a_session_file_name_is_left_alone():
     assert Redactor([], home=HOME)(line) == line
 
 
+@pytest.mark.parametrize("text", [
+    "error: login failed for s3cr3tPassw",                  # the stored message ends mid-secret
+    'error: login failed for s3cr3tPassw\nnext line',
+    '{"error_message": "login failed for s3cr3tPassw"}',   # ...and as request-N.json carries it
+    "login failed for s3cr3tPa…",
+    "login failed for s3cr3tPassword%2",                   # cut inside its URL spelling
+])
+def test_a_known_secret_cut_off_at_the_end_of_a_value_still_goes(text):
+    """The worker keeps an exception's text to 500 characters, so a secret straddling the cut is stored as
+    its first half; the whole-secret match would let that half through."""
+    out = Redactor(["s3cr3tPassword!"], home=HOME)(text)
+    assert "s3cr3tP" not in out and "<redacted>" in out
+
+
+@pytest.mark.parametrize("text", [
+    "s3cr3tPa and more after it",       # a prefix in the middle of a value is not a cut-off one
+    "s3cr3t at the end",                # shorter than the eight characters that count
+    "s3cr3tPasXword",                   # starts the same, then is something else
+])
+def test_only_a_real_cut_off_prefix_is_taken(text):
+    assert Redactor(["s3cr3tPassword!"], home=HOME)(text) == text
+
+
 def test_a_secret_is_matched_whole_not_inside_another_word():
     r = Redactor(["beatz"], home=HOME)
     assert r("Beatzone - beatzilla (beatz edit)") == "Beatzone - beatzilla (<redacted> edit)"

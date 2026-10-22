@@ -241,6 +241,12 @@ describe('presentRow', () => {
     const e = presentRow(bundle({ state: 'error', error_message: 'boom' }), opts)
     expect(e.status).toBe('Failed — boom'); expect(e.statusTone).toBe('red'); expect(e.action).toEqual({ label: 'Try again', kind: 'retry' })
   })
+  it('offers a failure report on the failures the pipeline reached, not on a track the owner stopped', () => {
+    const reportable = (state: Request['state']) => presentRow(bundle({ state }), opts).reportable
+    expect(['rejected', 'not_found', 'error'].every(s => reportable(s as Request['state']))).toBe(true)
+    expect(['cancelled', 'done', 'duplicate', 'queued', 'fetching', 'awaiting_review']
+      .some(s => reportable(s as Request['state']))).toBe(false)
+  })
   it('backoff row counts down and paused rows say so when Telegram is signed out', () => {
     const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)
     expect(v.status).toBe('Previous attempt: Beatport unreachable'); expect(v.retryInSeconds).toBe(25)
