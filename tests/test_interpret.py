@@ -108,6 +108,9 @@ def test_a_title_with_one_sensible_reading_answers_with_just_that_one(title):
 @pytest.mark.parametrize("title,uploader", [
     ("Label - Artist - Title (Extended Mix)", "Label"), ("Bicep Glue", "Ninja Tune"),
     ("TB Premiere: Artist - Track [FREE DL]", "TB"), ("C & D - A x B - Title (Ibiza Anthem)", "Mixes"),
+    ("Label   -  Artist \t-   Title  (Ibiza Anthem)", "Label"),     # the same whitespace collapse
+    ("Artist - Free Dl", "Label"), ("Label - Artist - .mp3", "Label"),  # the fallback that keeps the artist
+    ("Label - Artist - " + "Title " * 80, "Label"),                   # the same 300-character cap
 ])
 def test_the_first_reading_is_always_the_query_the_pipeline_searches_with(title, uploader):
     assert interpretations(title, uploader, 99)[0] == parse_youtube_title(title, uploader, 99)
