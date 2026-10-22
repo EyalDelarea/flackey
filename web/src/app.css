@@ -211,7 +211,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* Final rows lose the "Try again" button, so this line is the whole of their right-hand side. The extra
    step to secondary is what stops that emptiness reading as a row that simply has not loaded yet. */
 .row .outcome.final { color: var(--secondary); }
-.row .report-failure { display: block; margin-top: 3px; font-size: 11px; }
+/* Starts where the note above it starts. `.row-text` is a column flexbox, which stretches a button to the
+   full width, and a button centres its label -- so the link sat on its own in the middle of the row. */
+.row .report-failure { align-self: flex-start; text-align: left; font-size: 11px; }
 .row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 /* A live row can carry a pill or tag, Stop and Remove at once, which is more than the rail holds; on a row
    with a ladder the overflow would land on top of it, so those rows wrap the buttons onto a second line.
