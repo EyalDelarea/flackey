@@ -90,6 +90,19 @@ async def test_fetch_spotify_track_http_error():
 
 
 @respx.mock
+@pytest.mark.parametrize("error, network", [
+    (httpx.ConnectError("refused"), True), (httpx.ReadTimeout("slow"), True),
+    (httpx.TooManyRedirects("loop"), False),
+], ids=["refused", "timeout", "redirects"])
+async def test_an_unreachable_spotify_is_told_apart_from_an_unreadable_page(error, network):
+    respx.get("https://open.spotify.com/embed/track/1").mock(side_effect=error)
+    async with httpx.AsyncClient() as c:
+        with pytest.raises(SpotifyError) as e:
+            await fetch_spotify_track("https://open.spotify.com/track/1", c)
+    assert e.value.network is network
+
+
+@respx.mock
 async def test_fetch_spotify_playlist_uses_embed_page():
     respx.get("https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M").mock(
         return_value=httpx.Response(200, text=embed_html(PLAYLIST_ENTITY)))

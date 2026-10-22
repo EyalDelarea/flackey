@@ -90,6 +90,9 @@ export interface PresentOpts {
   fetchProgress?: FetchProgress[] | null
 }
 
+/** "1 track", "3 tracks": every count the page prints beside a noun goes through here, so none of them
+ *  reads "1 tracks". `many` for the nouns that do not just take an s. */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
 export const mmss = (s: number | null | undefined) => s == null ? '?:??' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
 // `done` is the last index, not one past it: the old value indexed past STEPS, so the Done rung could never
@@ -188,8 +191,10 @@ export const sweptByRetryAll = (state: RequestState): boolean => FINALITY_OF[sta
    failure state lands in the list mute. */
 const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>> = {
   error: {
-    tally: 'gave up after several tries',
-    note: 'Flackey tried this several times and stopped. Try again starts the search over from the beginning, Soulseek included.',
+    tally: 'gave up',
+    // Follows the count of tries `outcomeOf` puts in front of it: one error stops a track after a single
+    // pass as often as the retry ladder runs out, and "several times" over one try is a claim the row can check.
+    note: 'Try again starts the search over from the beginning, Soulseek included.',
   },
   not_found: {
     tally: 'found no copy anywhere',
@@ -214,6 +219,37 @@ export const soulseekWait = (flag: string | null | undefined): string | null =>
   flag && /^waiting for Soulseek/i.test(flag) ? flag.replace(/^waiting/i, 'Waiting') : null
 
 const versionOf = (c: Candidate) => c.mix_name || 'Original Mix'
+
+/** A spectral cutoff in kHz to one decimal, the one rounding every place that prints one uses. Cutoffs come
+ *  in 50 Hz steps, so half of them land on a .x5, where `toFixed` (15.45 is 15.4499… in binary) and
+ *  `Math.round` disagree: the status line said 15.4 while the caption under it said 15.5. */
+export const cutoffKhz = (hz: number) => Math.round(hz / 100) / 10
+
+/* The worker's reasons are written once, for the log and the failure report, and stored as they are:
+   "cutoff at 15500 Hz, below 18000: ...". Where one is the main sentence on screen it is reworded here, at
+   display time, and never in the store. Shapes from src/flackey/verify.py and fingerprint.py; one these do
+   not know -- a reworded reason, an older row -- still reads as a sentence, just a plainer one. */
+const khz = (hz: string) => `${cutoffKhz(Number(hz))} kHz`
+// Not anchored: a reason can arrive inside another sentence ("the kept copy no longer passes the quality
+// check: cutoff at …"). Worded in lower case for that reason; `asSentence` capitalises the start.
+const REWORDED: [RegExp, (...m: string[]) => string][] = [
+  [/cutoff at (\d+) Hz, below (\d+): consistent with a lower-bitrate source/i,
+    (_, hz, min) => `nothing above ${khz(hz)}, below the ${khz(min)} Flackey asks of an MP3`],
+  [/lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
+    (_, hz) => `nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
+  [/bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
+  [/best score (\d+(?:\.\d+)?) below \d+(?:\.\d+)?/gi, (_, score) => `${Math.round(Number(score) * 100)}% match`],
+]
+/* Capitalised only when it opens on one of the plain words the worker's sentences start with. A reason can
+   just as well open on an artist ("deadmau5 - Strobe is already the lossless copy"), and that name is
+   spelled the way its owner spells it. */
+const OPENS_ON_A_WORD = /^(?:a|an|another|being|bitrate|candidate|cannot|could|cutoff|enabled|every|ids|it|lossless|no|none|not|nothing|only|request|that|the|there|these|this|those|unknown|unsupported)\b/
+/** A worker reason or server error, as the sentence the owner reads: reworded where the shape is known,
+ *  and starting with a capital where it opens on an ordinary word. */
+export function asSentence(text: string): string {
+  const t = REWORDED.reduce((s, [re, fn]) => s.replace(re, fn as (...m: string[]) => string), text.trim())
+  return OPENS_ON_A_WORD.test(t) ? t.charAt(0).toUpperCase() + t.slice(1) : t
+}
 
 /* Why the lossless upgrade did not happen, in the owner's words rather than the attempt table's. Every
    value of ATTEMPT_OUTCOMES has an entry: a miss with no explanation is the thing this exists to stop. */
@@ -343,7 +379,7 @@ function checksFor(b: Bundle): CheckView[] {
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
   const filed = b.track != null && !overruled
   if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
-    : { label: filed ? 'Content to' : 'Audio only to', value: `${(hz / 1000).toFixed(1)} kHz`, ok: filed })
+    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
   return out
 }
 
@@ -389,13 +425,26 @@ const KEPT_QUALITY_NOTE = 'The spectrum looks like a lossy source — that is ev
 const hasKeptCopy = (rj: Bundle['rejection']): boolean =>
   !!rj?.audio_path && (rj.kind === 'different_recording' || !!rj.cutoff_hz)
 
+/** How many passes an errored row had, as the row says it. `attempts` is 0 on a run that crashed outright,
+ *  which was still one try. A message that already counts its own looks -- the long wait for Soulseek ends
+ *  "looked 12 times over 72 h" while `attempts` holds 15, the quick ladder's three included -- keeps its
+ *  number, and the note does not set a second one beside it. */
+const triedText = (n: number, message: string | null) =>
+  /\b\d+ times\b/.test(message ?? '') ? 'Flackey stopped trying.'
+    : n >= 2 ? `Flackey tried this ${n} times and stopped.` : 'Flackey tried this once and stopped.'
+/* The note under every errored row already says what Try again does, so the message above it drops the
+   worker's own "Press Try again to search once more" rather than say it twice. "Try again once it can be
+   checked" stays: that one says when, which the note does not. */
+const TRY_AGAIN_TAIL = /\.?\s*Press Try again to search (?:Soulseek )?once more\.?$/
+
 function outcomeOf(b: Bundle): OutcomeView | null {
   const state = b.request.state
   if (state === 'rejected' && hasKeptCopy(b.rejection)) {
     return { retryable: false, note: b.rejection!.kind === 'different_recording' ? KEPT_COPY_NOTE : KEPT_QUALITY_NOTE }
   }
   const copy = FAILED_COPY[state]
-  return copy ? { retryable: canRetry(state), note: copy.note } : null
+  if (!copy) return null
+  return { retryable: canRetry(state), note: state === 'error' ? `${triedText(b.request.attempts, b.request.error_message)} ${copy.note}` : copy.note }
 }
 
 /* `rejected` is one state and two refusals, and the summary must not merge them: telling the owner a track
@@ -586,9 +635,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       // #92, #97). The row must not announce a deletion while a play button for that very file sits under
       // it -- nor promise a copy that was never kept (a format Flackey cannot file, an older row).
       const kept = hasKeptCopy(b.rejection)
-      v.status = `${reason.replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
+      v.status = `${asSentence(reason).replace(/\.$/, '')}. ${kept ? 'Kept aside for you to hear, not added to your library.' : 'Deleted, not added to your library.'}`
       v.statusTone = 'red'; v.rejected = true
-      const khz = b.rejection?.cutoff_hz ? Math.round(b.rejection.cutoff_hz / 1000) : null
+      // One decimal, as the status line above it and the Checks row put it: 15.5 kHz is not 16.
+      const khz = b.rejection?.cutoff_hz ? cutoffKhz(b.rejection.cutoff_hz) : null
       // Two different refusals, two different explanations. The upscale line is about the spectral check
       // and quotes its cutoff; saying it over a file that failed the *fingerprint* would call a genuine
       // 320 kbps file a fake. `kind` is what the worker wrote, not something guessed from the prose --
@@ -613,7 +663,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       v.status = `No downloadable match found${r.error_message ? ' — ' + r.error_message : ''}`
       break
     case 'error':
-      v.status = `Failed — ${r.error_message || 'unknown error'}`; v.statusTone = 'red'
+      v.status = `Failed — ${r.error_message?.replace(TRY_AGAIN_TAIL, '') || 'unknown error'}`; v.statusTone = 'red'
       break
   }
   // One place decides which rows get a retry button, and it is the same `canRetry` the Failed tab counts

@@ -3,6 +3,7 @@ import { api, ApiError, type BugContext, type BugPreview, type BugSent } from '.
 import CopyButton from './CopyButton'
 import Icon from './Icon'
 import { fileManager, thisComputer, usePlatform } from '../platform'
+import { plural } from '../presentation'
 
 const getErrorMessage = (e: unknown, fallback: string): string => e instanceof ApiError ? e.message : fallback
 
@@ -131,8 +132,8 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
                 <li><Icon name="check" size={12} stroke={2.4} />Flackey {version} on {summary.get('System') ?? thisComputer(platform)}</li>
                 <li><Icon name="check" size={12} stroke={2.4} />Your displays, and that you were on {summary.get('Was on') ?? 'an unknown screen'}</li>
                 <li><Icon name="check" size={12} stroke={2.4} />{failure
-                  ? `Flackey's log lines about this track (${preview.log_lines.toLocaleString()} lines)`
-                  : `Flackey's recent activity log (${preview.log_lines.toLocaleString()} lines)`}</li>
+                  ? `Flackey's log lines about this track (${plural(preview.log_lines, 'line')})`
+                  : `Flackey's recent activity log (${plural(preview.log_lines, 'line')})`}</li>
               </ul>) : previewError ? <div className="err">{previewError}</div>
                 : <div className="muted">Gathering details…</div>}
               <p className="faint">Your phone number, email addresses, passwords and {platform === 'mac' ? 'Mac user name' : 'user name'} are taken out of these first.</p>

@@ -249,7 +249,7 @@ class Request:
     failed_stage: str | None = None
     # One manual pass at the lossless providers, granted by `Worker.retry` on a failed request and spent by
     # the next fetch. Spec §5 bars the *worker* from going back after a definitive miss; this is the owner
-    # asking, which `_lossless_miss_line` tells them to do.
+    # asking, which `_no_route`'s advice tells them to do.
     lossless_retry: int = 0
     # Set once, the first time the request is parked for the owner to choose, and never cleared. Every other
     # field that marks the pause is gone by the time they have picked: `flag_reason` is cleared by `choose`,

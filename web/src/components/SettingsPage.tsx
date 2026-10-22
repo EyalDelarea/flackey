@@ -281,13 +281,13 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions">{authorized ? <button className="btn-secondary" onClick={signOut} disabled={signingOut}>Sign out</button>
             : <button className="btn-secondary" onClick={onReconnect}>Reconnect</button>}</div></div>
         {/* The bot is a chat Flackey holds inside the Telegram account, not a fourth account to sign into,
-            and the key says so in three words rather than with an indent the reader has to decode. */}
+            and the key says so in three words rather than with an indent the reader has to decode. Its
+            switch is always there and Reconnect lives on the Telegram row alone: two Reconnects stacked one
+            above the other read as two different fixes. Switched on while signed out, it reads as paused. */}
         <div className="srow"><div className="srow-body"><div className="k">Deezer bot <span className="k-note">· uses Telegram</span></div>
           <div className="v"><span className={`status-dot${bot.dot}`} />{bot.text}</div>
           {sourceError && <div className="err">{sourceError}</div>}</div>
-          <div className="actions">{!sourceEnabled && !authorized
-            ? <button className="btn-secondary" onClick={onReconnect}>Reconnect Telegram</button>
-            : <Switch label="Deezer bot" checked={sourceEnabled} onChange={setTelegramSource} busy={sourceBusy} />}</div></div>
+          <div className="actions"><Switch label="Deezer bot" checked={sourceEnabled} onChange={setTelegramSource} busy={sourceBusy} /></div></div>
         <div className="srow"><div className="srow-body"><div className="k">Soulseek</div>
           <div className="v"><span className={`status-dot${soulseek.dot}`} />{soulseek.text}</div>
           {soulseek.hint && <div className="v">{soulseek.hint}</div>}
