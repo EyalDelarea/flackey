@@ -530,7 +530,9 @@ class SoulseekProvider:
             if not str(t.get("state", "")).startswith("Completed"):
                 await self.client.cancel_download(t["username"], t["id"])
                 n += 1
-        self._enqueued.clear()
+        # A fresh set rather than `clear()`: after a reconnect the set may be shared with the provider that
+        # replaced this one, whose own sweep is still owed and still needs it.
+        self._enqueued = set()
         self._recording = False
         return n
 

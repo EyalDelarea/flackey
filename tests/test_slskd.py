@@ -860,3 +860,16 @@ async def test_a_slow_transfer_slskd_stopped_despite_an_error_is_still_the_switc
     with pytest.raises(TooSlow) as e:
         await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
     assert e.value.outcome == "too_slow" and e.value.pct == 4 and not dest.exists()
+
+
+@respx.mock
+async def test_the_replaced_providers_late_sweep_leaves_the_new_ones_record(provider):
+    """The old provider's sweep can still land after the swap; the record it shares is the new one's now."""
+    old, _clock, downloads = provider
+    old.begin_run()
+    new = SoulseekProvider(old.client, downloads)
+    new.begin_run(previous=old)
+    new._enqueued.add(("peer-alpha", "a.flac"))
+    respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[]))
+    assert await old.cancel_all() == 0
+    assert new._enqueued == {("peer-alpha", "a.flac")}
