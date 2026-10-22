@@ -243,6 +243,31 @@ const burnedOnRevoke: Bundle[] = [
     error_message: 'Cannot send requests while disconnected' }),
 ]
 
+/* Issue #187, the owner preferring extended mixes: one track whose extended mix was found and filed under
+   its own name and length, one with none on Soulseek that got the normal version and says so. The record
+   behind both is the radio edit. */
+const radioRecord = (id: number, artist: string, title: string) => ({ id, artist, title, mix_name: 'Original Mix',
+  label: 'Ultra', genre: 'Dance', isrc: null, sub_genre: null, catalog_number: null, release_name: title,
+  release_date: '2012-03-01', bpm: 128, key: '8A', duration_ms: 206000, artwork_url: null })
+const extendedDone = (id: number, artist: string, title: string, mix_name: string, duration_s: number,
+  found: boolean): Bundle => {
+  const t = track({ id, artist, title, mix_name, duration_s, cutoff_hz: 22050, request_id: id,
+    path: `/Users/dj/Music/DJ Library/${artist}/${artist} - ${title} (${mix_name}).aiff`, fmt: 'aiff',
+    catalog: radioRecord(id, artist, title),
+    format: { fmt: 'aiff', bit_depth: 16, sample_rate: 44100, source: 'soulseek', source_fmt: 'flac',
+      label: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek' },
+    evidence: [{ kind: 'extended', value: { sought: true, found, mix_name } }] })
+  return failure(id, 'done', { query_artist: artist, query_title: title, track_id: id, catalog_track_id: id },
+    { catalog: radioRecord(id, artist, title), track: t,
+      attempt: { id, request_id: id, provider: 'soulseek', created_at: '', query: 'q', outcome: 'filed',
+        fingerprint: { status: 'matched', score: 0.94, offset_s: 61, reason: null },
+        spectrogram_path: null, first_byte_ms: 2000, total_ms: 30000 } } as Partial<Bundle>)
+}
+const extendedRows: Bundle[] = [
+  extendedDone(61, 'Calvin Harris', 'Feel So Close', 'Extended Mix', 330, true),
+  extendedDone(62, 'Avicii', 'Levels', 'Original Mix', 203, false),
+]
+
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
@@ -254,7 +279,8 @@ function scenarioSetup() {
     : scenario === 'stages' ? staged
     : scenario === 'choose' ? choices
     : scenario === 'telegram-revoked' ? pausedOnLogin
-    : scenario === 'telegram-revoked-before' ? burnedOnRevoke : [] as Bundle[])
+    : scenario === 'telegram-revoked-before' ? burnedOnRevoke
+    : scenario === 'extended' ? extendedRows : [] as Bundle[])
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -265,6 +291,20 @@ function scenarioSetup() {
         track({ id: 1, path: '/lib/Example Artist/Track One.flac', artist: 'Example Artist', title: 'Track One' }),
         track({ id: 2, path: '/lib/Example Artist/Track Two.mp3', artist: 'Example Artist', title: 'Track Two', fmt: 'mp3', bitrate_kbps: 320, source_fmt: null, catalog: null }),
         track({ id: 3, path: '/lib/Other Artist/Track Three.flac', artist: 'Other Artist', title: 'Track Three' }),
+      ])
+      break
+    case 'extended':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [
+        track({ id: 61, artist: 'Calvin Harris', title: 'Feel So Close', mix_name: 'Extended Mix', duration_s: 330,
+          path: '/lib/Calvin Harris/Calvin Harris - Feel So Close (Extended Mix).aiff', fmt: 'aiff',
+          catalog: { ...radioRecord(61, 'Calvin Harris', 'Feel So Close'), mix_name: 'Extended Mix', duration_ms: 330000 } }),
+        track({ id: 63, artist: 'Calvin Harris', title: 'Feel So Close', mix_name: 'Radio Edit', duration_s: 206,
+          path: '/lib/Calvin Harris/Calvin Harris - Feel So Close (Radio Edit).aiff', fmt: 'aiff',
+          catalog: { ...radioRecord(63, 'Calvin Harris', 'Feel So Close'), mix_name: 'Radio Edit' } }),
+        track({ id: 62, artist: 'Avicii', title: 'Levels', mix_name: 'Original Mix', duration_s: 203,
+          path: '/lib/Avicii/Avicii - Levels.aiff', fmt: 'aiff',
+          catalog: radioRecord(62, 'Avicii', 'Levels') }),
       ])
       break
     case 'library-empty':

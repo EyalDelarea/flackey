@@ -71,6 +71,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
               show -- how much of how big, from whom, how fast. */}
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}
           {v.fallback && <div className="fallback" title={v.fallback.reason}>{v.fallback.reason}</div>}
+          {v.extendedNote && <div className="extended-note">{v.extendedNote}</div>}
           {/* The status line above says what happened; this one says whether it is over. Every failed row
               carries it, on the Failed tab and in History alike -- "why is this here and can it come back"
               is the same question wherever the row is read. */}

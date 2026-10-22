@@ -317,6 +317,27 @@ it('shows automatic update checks as off when the setting is saved that way', as
   expect(screen.getByRole('switch', { name: 'Automatic update checks' })).toHaveAttribute('aria-checked', 'false')
 })
 
+it('keeps extended mixes off until the owner turns them on, beside the library settings', async () => {
+  const liveSettings = (live as unknown as { settings: AppSettings }).settings
+  const result = { ...liveSettings, prefer_extended: true }
+  vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  const toggle = within(section('Library')).getByRole('switch', { name: 'Prefer extended mixes' })
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  expect(within(section('Library')).getByText(
+    'Look for the extended or club version first. If there is none, you get the normal one.')).toBeInTheDocument()
+  fireEvent.click(toggle)
+  await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(liveSettings.library_root, { prefer_extended: true }))
+  expect(mockSetSettings).toHaveBeenCalledWith(result)
+})
+
+it('shows extended mixes as on when the setting is saved that way', async () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const on = makeLive({ ...current, settings: { ...current.settings, prefer_extended: true } })
+  render(<SettingsPage live={on} onReconnect={() => {}} />)
+  expect(screen.getByRole('switch', { name: 'Prefer extended mixes' })).toHaveAttribute('aria-checked', 'true')
+})
+
 it('shows error message when saveSettings fails with ApiError', async () => {
   const errorMsg = 'Invalid path'
   vi.spyOn(api, 'saveSettings').mockRejectedValue(new ApiError(400, errorMsg))

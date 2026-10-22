@@ -66,6 +66,8 @@ export interface RowView {
   reportable: boolean
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
+  /** The owner prefers extended mixes and none turned up: what was filed instead (issue #187). */
+  extendedNote: string | null
   samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
@@ -385,6 +387,8 @@ function checksFor(b: Bundle): CheckView[] {
   // name or tags said it is the version asked for -- a remaster above all -- the track says so.
   const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
   if (unconfirmed) out.push({ label: 'Version', value: 'unconfirmed', ok: false })
+  // Asked for because the owner prefers extended mixes (issue #187); a miss is said in its own line instead
+  if (extendedOf(b)?.found) out.push({ label: 'Extended mix', value: 'found', ok: true })
   const filed = b.track != null && !overruled
   if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
     : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
@@ -407,9 +411,23 @@ function lengthNote(c: Candidate, videoS: number | null): string {
   return `${mmss(Math.abs(d))} ${d < 0 ? 'shorter' : 'longer'} than the video`
 }
 
+/* The worker's word on an extended mix it went looking for (issue #187), or null when it did not look. */
+function extendedOf(b: Bundle): { found: boolean; mix_name: string | null } | null {
+  const e = b.track?.evidence?.find(x => x.kind === 'extended')
+  return e ? { found: !!e.value.found, mix_name: typeof e.value.mix_name === 'string' ? e.value.mix_name : null } : null
+}
+
+function extendedNoteOf(b: Bundle): string | null {
+  const e = extendedOf(b)
+  if (!e || e.found) return null
+  return `No extended mix found, so this is the ${e.mix_name || 'Original Mix'}.`
+}
+
 function titleOf(b: Bundle): { title: string; version: string | null } {
   const r = b.request
-  if (b.catalog) return { title: `${b.catalog.artist} – ${b.catalog.title}`, version: b.catalog.mix_name }
+  // The filed track's own mix name first: an extended file found for a radio-edit record is filed as the
+  // extended mix, and the record still says radio edit (issue #187)
+  if (b.catalog) return { title: `${b.catalog.artist} – ${b.catalog.title}`, version: b.track?.mix_name || b.catalog.mix_name }
   if (r.query_artist && r.query_title) return { title: `${r.query_artist} – ${r.query_title}`, version: r.query_version }
   return { title: r.raw_text, version: null }
 }
@@ -549,7 +567,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed' || STOPPABLE.includes(r.state), sweepable: sweptByRetryAll(r.state),
     reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
-    progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
+    progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b), extendedNote: extendedNoteOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)

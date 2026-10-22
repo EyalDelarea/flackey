@@ -90,6 +90,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const [updateChecking, setUpdateChecking] = useState(true)
   const [autoUpdateBusy, setAutoUpdateBusy] = useState(false)
   const [autoUpdateError, setAutoUpdateError] = useState<string | null>(null)
+  const [extendedBusy, setExtendedBusy] = useState(false)
+  const [extendedError, setExtendedError] = useState<string | null>(null)
   const [installStarting, setInstallStarting] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
   const [releaseBusy, setReleaseBusy] = useState(false)
@@ -191,6 +193,14 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .then(next => live.setSettings(next))
       .catch(e => setLayoutError(getErrorMessage(e, 'Could not save that layout.')))
       .finally(() => setLayoutBusy(false))
+  }
+  const preferExtended = s.prefer_extended === true
+  const setPreferExtended = (on: boolean) => {
+    setExtendedBusy(true); setExtendedError(null)
+    api.saveSettings(s.library_root, { prefer_extended: on })
+      .then(next => live.setSettings(next))
+      .catch(e => setExtendedError(getErrorMessage(e, 'Could not save that setting.')))
+      .finally(() => setExtendedBusy(false))
   }
   const saveKeys = () => {
     setKeysBusy(true); setKeysError(null); setKeysSaved(false)
@@ -325,6 +335,12 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           {formatError && <div className="err">{formatError}</div>}</div>
           <div className="actions"><Segmented label="File format" options={formatOptions} value={currentFormat}
             onChange={saveFormat} busy={formatBusy} /></div></div>
+        {/* Issue #187. Off, every download is the version asked for, exactly as before. */}
+        <div className="srow"><div className="srow-body"><div className="k">Prefer extended mixes</div>
+          <div className="v">Look for the extended or club version first. If there is none, you get the normal one.</div>
+          {extendedError && <div className="err">{extendedError}</div>}</div>
+          <div className="actions"><Switch label="Prefer extended mixes" checked={preferExtended}
+            onChange={setPreferExtended} busy={extendedBusy} /></div></div>
       </div>
       <h2>Updates</h2>
       <div className="group" ref={updateRow}>

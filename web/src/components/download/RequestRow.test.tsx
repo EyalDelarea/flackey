@@ -14,7 +14,8 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, reportable: false, samples: null }
+  formatLabel: null, checks: [], progress: null, fallback: null, extendedNote: null, outcome: null, sweepable: false, reportable: false,
+  samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
   // The note is the only thing on a final row that says what is left to do -- there is no button beside

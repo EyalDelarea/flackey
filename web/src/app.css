@@ -33,6 +33,7 @@
   .platter.waiting .arc { animation: none; }
 }
 .fallback { margin-top: 4px; font-size: 12px; color: var(--orange-text); }
+.extended-note { margin-top: 4px; font-size: 12px; color: var(--secondary); }
 .tag.amber { color: var(--orange-text); font-weight: 500; }
 
 /* ---- Shell ---- */
