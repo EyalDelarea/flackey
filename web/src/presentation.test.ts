@@ -448,6 +448,13 @@ describe('failed states say why they are failed and whether they can come back',
     expect(canRetry('cancelled')).toBe(true)
   })
 
+  it('counts the tries an errored row had instead of claiming several', () => {
+    expect(presentRow(bundle({ state: 'error', attempts: 1 }), opts).outcome!.note).toMatch(/^Flackey tried this once and stopped\. Try again/)
+    expect(presentRow(bundle({ state: 'error', attempts: 0 }), opts).outcome!.note).toMatch(/^Flackey tried this once and stopped\./)
+    expect(presentRow(bundle({ state: 'error', attempts: 3 }), opts).outcome!.note).toMatch(/^Flackey tried this 3 times and stopped\./)
+    expect(presentRow(bundle({ state: 'error', attempts: 1 }), opts).outcome!.note).not.toMatch(/several/)
+  })
+
   it('points a final row at the one thing that does work: submitting the link again', () => {
     expect(presentRow(bundle({ state: 'rejected' }), opts).outcome!.note).toMatch(/paste the link again/i)
   })

@@ -188,8 +188,10 @@ export const sweptByRetryAll = (state: RequestState): boolean => FINALITY_OF[sta
    failure state lands in the list mute. */
 const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>> = {
   error: {
-    tally: 'gave up after several tries',
-    note: 'Flackey tried this several times and stopped. Try again starts the search over from the beginning, Soulseek included.',
+    tally: 'gave up',
+    // Follows the count of tries `outcomeOf` puts in front of it: one error stops a track after a single
+    // pass as often as the retry ladder runs out, and "several times" over one try is a claim the row can check.
+    note: 'Try again starts the search over from the beginning, Soulseek included.',
   },
   not_found: {
     tally: 'found no copy anywhere',
@@ -389,13 +391,18 @@ const KEPT_QUALITY_NOTE = 'The spectrum looks like a lossy source — that is ev
 const hasKeptCopy = (rj: Bundle['rejection']): boolean =>
   !!rj?.audio_path && (rj.kind === 'different_recording' || !!rj.cutoff_hz)
 
+/** How many passes an errored row had, as the row says it. `attempts` is 0 on a run that crashed outright,
+ *  which was still one try. */
+const triedText = (n: number) => n >= 2 ? `Flackey tried this ${n} times and stopped.` : 'Flackey tried this once and stopped.'
+
 function outcomeOf(b: Bundle): OutcomeView | null {
   const state = b.request.state
   if (state === 'rejected' && hasKeptCopy(b.rejection)) {
     return { retryable: false, note: b.rejection!.kind === 'different_recording' ? KEPT_COPY_NOTE : KEPT_QUALITY_NOTE }
   }
   const copy = FAILED_COPY[state]
-  return copy ? { retryable: canRetry(state), note: copy.note } : null
+  if (!copy) return null
+  return { retryable: canRetry(state), note: state === 'error' ? `${triedText(b.request.attempts)} ${copy.note}` : copy.note }
 }
 
 /* `rejected` is one state and two refusals, and the summary must not merge them: telling the owner a track
