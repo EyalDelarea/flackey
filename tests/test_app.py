@@ -240,7 +240,7 @@ def test_on_authorized_turns_the_source_back_on_in_status_and_on_disk(tmp_path):
     make_on_authorized(settings, status)()
 
     assert status["source_enabled"] is True and status["telegram_authorized"] is True
-    assert published == [{"telegram_authorized": True, "source_enabled": True}]
+    assert published == [{"telegram_authorized": True, "telegram_unreachable": False, "source_enabled": True}]
     assert settings.source_enabled is True
     assert json.loads(settings.settings_path.read_text())["source_enabled"] is True
 
@@ -575,8 +575,8 @@ async def test_the_app_opens_and_downloads_when_telegram_never_answers(tmp_path,
         assert "Telegram did not answer within 0.2s; starting with the Deezer bot paused" in caplog.text
         assert "Telegram login required" not in caplog.text     # nobody said the session was gone
         client = SilentTelegram.made[-1]
-        # A connect() cut short is closed rather than left half-open; one that finished is kept.
-        assert client.disconnects == (1 if hang == "connect" else 0)
+        # Closed either way, whatever `is_connected()` says: the next attempt starts from nothing.
+        assert client.disconnects == 1 and not client.is_connected()
         port = handle.server.servers[0].sockets[0].getsockname()[1]
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
                                      headers={"x-flackey-token": "k" * 40}) as http:
@@ -585,6 +585,7 @@ async def test_the_app_opens_and_downloads_when_telegram_never_answers(tmp_path,
 
             first = await health()
             assert first["telegram_authorized"] is False and first["telegram_configured"] is True
+            assert first["telegram_unreachable"] is True       # "can't reach", not "signed out"
             for _ in range(100):
                 if (await health())["worker_running"]:
                     break
@@ -597,17 +598,23 @@ async def test_the_app_opens_and_downloads_when_telegram_never_answers(tmp_path,
 
             client.answer()
             assert (await http.get("/api/telegram/status")).json()["authorized"] is True
-            assert (await health())["telegram_authorized"] is True
+            back = await health()
+            assert back["telegram_authorized"] is True and back["telegram_unreachable"] is False
     finally:
         handle.stop()
         await asyncio.wait_for(task, 5.0)
 
 
-async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, monkeypatch):
+@pytest.mark.parametrize("signed_in", [False, True])
+async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, monkeypatch, signed_in):
     """The real Telethon, offline: a server that takes the connection and never says a word, which is
     what a firewall dropping Telegram looks like from here. `connect_telegram` gives up, and what
     Telethon had started for the connection -- the socket, the tasks that read and write it -- is
-    gone, so a later attempt starts clean instead of beside a leftover."""
+    gone, so a later attempt starts clean instead of beside a leftover.
+
+    `signed_in` is a saved session: with an auth key Telethon reports connected as soon as the socket
+    opens and stalls further in, before the loop that delivers replies exists -- the case where
+    `is_connected()` said yes over a client nothing would ever mend."""
     from telethon import TelegramClient
 
     from flackey import telegram as telegram_module
@@ -635,6 +642,13 @@ async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, mon
 
     client = TelegramClient(str(tmp_path / "session"), 12345, "h" * 32)
     client.session.set_dc(2, "127.0.0.1", port)
+    if signed_in:
+        import os
+
+        from telethon.crypto import AuthKey
+
+        client.session.auth_key = AuthKey(os.urandom(256))
+        client._sender.auth_key.key = client.session.auth_key.key
     try:
         for attempt in (1, 2):
             assert await connect_telegram(client) is None

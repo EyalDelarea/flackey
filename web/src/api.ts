@@ -66,6 +66,9 @@ export interface Health { ok:boolean; version:string; telegram_authorized:boolea
   /** Whether this copy has Telegram API keys at all, and whether the owner left the source switched on.
       Optional so a fixture written before they existed still type-checks. */
   telegram_configured?:boolean; source_enabled?:boolean
+  /** Paused because Telegram did not answer, not because the account is signed out: the same pause,
+      but signing in is not what fixes it. Absent in fixtures written before it existed. */
+  telegram_unreachable?:boolean
   /** Pushed on every `status` event, so a panel reading it re-renders without polling. Null before the
       sharing loop has published anything, absent in fixtures written before it existed. */
   sharing?:SharingState|null
@@ -93,7 +96,10 @@ export interface Upload { id:string|null; peer:string; file:string; folder:strin
 export interface UploadSummary { total:number; active:number; completed:number; peers:number; bytes:number }
 export interface UploadFeed { enabled:boolean; provider:string|null; uploads:Upload[]; summary:UploadSummary; error:string|null }
 export interface TelegramStatus { authorized:boolean; configured:boolean; phone_masked:string|null }
-export interface QrStart { id:string; url:string; expires_at:string }
+/** A code to scan -- or, when the account turns out to be signed in already, word that there is nothing
+    to scan. A status check that could not reach Telegram says "not signed in", so the QR is asked for. */
+export type QrStart = { state?: undefined; id:string; url:string; expires_at:string }
+  | { state:'done'; phone_masked:string|null }
 export interface SoulseekSetup { configured: boolean; username: string | null }
 export interface SoulseekPassword { username: string | null; password: string }
 export interface SoulseekConnect { state: 'idle' | 'connecting' | 'connected' | 'failed'

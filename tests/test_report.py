@@ -285,6 +285,14 @@ def test_the_report_carries_redacted_logs_and_a_summary(tmp_path: Path):
     assert rep.log_lines == 5
 
 
+def test_the_report_tells_an_unreachable_telegram_from_a_signed_out_one(tmp_path: Path):
+    settings = settings_for(tmp_path)
+    seed_logs(settings)
+    rep = build_report(settings, {"telegram_authorized": False, "telegram_unreachable": True},
+                       ClientContext(screen="Settings"), "", "")
+    assert dict(rep.summary)["Deezer bot (Telegram)"] == "not reachable"
+
+
 def test_a_long_log_is_cut_from_the_front_on_a_line_boundary(tmp_path: Path, monkeypatch):
     settings = settings_for(tmp_path)
     settings.data_dir.mkdir(parents=True)

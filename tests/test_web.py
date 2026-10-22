@@ -87,7 +87,7 @@ def test_health(client):
     from flackey.config import platform_name
     from flackey.fingerprint import fpcalc_available
     assert c.get("/api/health").json() == {"ok": True, "version": __version__, "platform": platform_name(),
-                                          "telegram_authorized": True,
+                                          "telegram_authorized": True, "telegram_unreachable": False,
                                           "worker_running": False, "setup_done": False,
                                           "telegram_configured": True, "source_enabled": True,
                                           "sharing": None,

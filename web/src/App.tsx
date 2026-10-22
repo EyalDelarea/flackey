@@ -117,8 +117,11 @@ function AppBody({ live }: { live: Live }) {
   const banners: ReactNode[] = []
   // Only the bot stops: Soulseek has nothing to do with Telegram and keeps downloading. The old line,
   // "Reconnect to keep digging", was true when the whole worker waited on Telegram, which it no longer does.
+  // Not "signed out" when Telegram simply did not answer: telling a signed-in owner to sign in sends them
+  // after the wrong fix. Reconnect still is the way back -- it asks Telegram again first.
   if (sourceOn && !authorized) {
-    banners.push(<Banner key="telegram" tone="amber" text="Deezer bot paused — Telegram is signed out. Soulseek keeps downloading; reconnect to get the bot's MP3 copies back." action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
+    const why = h.telegram_unreachable ? "can't reach Telegram" : 'Telegram is signed out'
+    banners.push(<Banner key="telegram" tone="amber" text={`Deezer bot paused — ${why}. Soulseek keeps downloading; reconnect to get the bot's MP3 copies back.`} action={{ label: 'Reconnect', onClick: () => setReconnecting(true) }} />)
   }
   // Only when there is something to click: a newer tag with no installer yet is detail for the
   // Settings page, not a launch-time nag with nowhere for the click to go. `live.update` is null when

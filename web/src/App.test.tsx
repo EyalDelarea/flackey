@@ -98,6 +98,16 @@ describe('the Telegram banner', () => {
     expect(await screen.findByText('Scan with the Telegram app on your phone')).toBeInTheDocument()
   })
 
+  it('says Telegram could not be reached, not that it signed out, when it never answered', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_unreachable: true, source_enabled: true }))
+    render(<App />)
+    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    expect(banner).toHaveTextContent("can't reach Telegram")
+    expect(banner).not.toHaveTextContent('signed out')
+    expect(banner).toHaveTextContent('Soulseek keeps downloading')
+    expect(within(banner).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+  })
+
   it('stays away when the bot is switched off, since nothing then needs Telegram', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: false }))
     render(<App />)
