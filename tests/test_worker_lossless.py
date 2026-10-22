@@ -934,6 +934,42 @@ async def test_a_refusal_that_is_not_the_sidecar_being_down_is_still_reported(tm
     assert "soulseek: could not cancel old downloads: http 401" in caplog.text and not w._leftovers
 
 
+async def test_a_sidecar_that_never_answers_is_reported_once(tmp_path: Path, caplog):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    sidecar = BootingSidecar(tmp_path / "dl", log=[])
+    now = [0.0]
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient(), clock=lambda: now[0])
+    await w.startup()
+    for t in (60.0, 179.0, 181.0, 240.0, 600.0):
+        now[0] = t
+        await w._cancel_leftovers()
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING and "still unreachable" in r.message]
+    assert len(warned) == 1 and w._leftovers == [sidecar]          # said once, and still owed
+    sidecar.up = True
+    await w._cancel_leftovers()
+    assert sidecar.log == ["cancel"] and not w._leftovers
+
+
+async def test_an_unexpected_answer_from_the_sidecar_never_stops_the_loop(tmp_path: Path, caplog):
+    """A non-JSON 4xx raises a JSONDecodeError out of the client. On the loop's tick that used to end
+    `run_forever` and every request with it."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+
+    class Garbled(FakeProvider):
+        async def cancel_all(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        async def rescan_shares(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[Garbled(tmp_path / "dl")], http=httpx.AsyncClient())
+    await w.startup()
+    assert not w._leftovers and not w._unscanned
+    assert "could not cancel old downloads" in caplog.text and "rescan failed" in caplog.text
+
+
 @requires_ffmpeg
 async def test_a_pass_sweeps_the_previous_runs_downloads_before_its_first_search(lenv):
     settings, store, _, _, _, _ = lenv

@@ -80,5 +80,8 @@ LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "dama
 LONG_RETRY_EVERY_S = 6 * 3600
 LONG_RETRY_TIMES = 12            # 3 days at 6 h
 MAINTENANCE_EVERY_S = 86_400
+# How long the worker waits quietly for slskd to answer at startup before it says so once: the sidecar's own
+# start timeout (`slskd_process.SLSKD_START_TIMEOUT_S`), past which it has given up starting.
+SIDECAR_PATIENCE_S = 180
 LOSSLESS_HEALTH_EVERY_S = 60        # once the provider answers "ok"
 LOSSLESS_HEALTH_SETTLING_S = 5      # while it is still connecting, or has gone away

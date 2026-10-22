@@ -37,6 +37,7 @@ from .policy import (
     LOSSLESS_HEALTH_EVERY_S,
     LOSSLESS_HEALTH_SETTLING_S,
     MAINTENANCE_EVERY_S,
+    SIDECAR_PATIENCE_S,
     STAGE_OF_STATE,
 )
 from .records import CatalogLike
@@ -103,6 +104,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._leftovers: list[LosslessProvider] = []
         self._unscanned: list[LosslessProvider] = []
         self._leftovers_lock = asyncio.Lock()
+        self._leftovers_since: float | None = None      # when startup first asked; None once warned
 
 
     def _bot_ready(self) -> bool:
@@ -152,7 +154,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
     async def startup(self) -> None:
         """on_start plus the async parts: cancel transfers the sidecar kept running, then the first maintenance."""
         self.on_start()
-        self._leftovers = list(self.providers)
+        self._leftovers, self._leftovers_since = list(self.providers), self.clock()
         await self._cancel_leftovers()
         await self._maintenance(force=True)
         await self.refresh_lossless_health(force=True)
@@ -162,8 +164,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         """Cancel what each provider still had going from the previous run, once it answers. A sidecar that
         is not up yet is not a failure: the app starts slskd alongside the worker, so on every launch it
         was "could not cancel old downloads: slskd unreachable" and the transfers were never cancelled.
-        Retried on each tick and before each lossless pass, under a lock, so a sidecar that answers is swept
-        before this run enqueues anything on it."""
+        Retried on each tick and before each lossless pass, under a lock. A provider's `cancel_all` leaves
+        this run's own transfers alone, so a sweep that lands late takes only the previous run's. Never
+        raises: it runs on the loop's tick, where an exception would stop every request."""
         if not self._leftovers:
             return
         async with self._leftovers_lock:
@@ -171,10 +174,18 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 try:
                     n = await p.cancel_all()
                 except LosslessUnavailable as e:
-                    log.debug("%s: old downloads not cancelled yet, %s", p.name, e)
+                    since = self._leftovers_since
+                    if since is not None and self.clock() - since >= SIDECAR_PATIENCE_S:
+                        log.warning("%s: still unreachable %d s after startup (%s); its old downloads are "
+                                    "cancelled once it answers", p.name, SIDECAR_PATIENCE_S, e)
+                        self._leftovers_since = None
+                    else:
+                        log.debug("%s: old downloads not cancelled yet, %s", p.name, e)
                     continue
                 except LosslessError as e:
                     log.warning("%s: could not cancel old downloads: %s", p.name, e)
+                except Exception:   # an answer that is not what slskd sends (a non-JSON 4xx, say)
+                    log.exception("%s: could not cancel old downloads", p.name)
                 else:
                     if n:
                         log.info("cancelled %d %s downloads left from the previous run", n, p.name)
@@ -220,6 +231,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 continue
             except LosslessError as e:
                 log.warning("%s: rescan failed: %s", p.name, e)
+            except Exception:   # on the loop's tick: never out of here
+                log.exception("%s: rescan failed", p.name)
             self._unscanned.remove(p)
 
 
