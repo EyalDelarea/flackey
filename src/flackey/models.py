@@ -178,6 +178,17 @@ class Verdict:
     sample_rate: int | None = None
 
 
+# What `verify.spectral_cutoff_hz` answers when it finds no edge: Nyquist of its 44.1 kHz analysis. It is the
+# absence of a measurement, not one -- silence produces it too -- so it is never printed as a frequency
+# ("verified to 22.1 kHz" claimed content up there that nobody had seen, issue #97).
+NO_EDGE_HZ = 22_050
+
+
+def edge_text(cutoff_hz: int) -> str:
+    """The spectral check's finding in words: where the content stops, or that no edge was found."""
+    return "no edge found" if cutoff_hz >= NO_EDGE_HZ else f"content to {cutoff_hz / 1000:.1f} kHz"
+
+
 @dataclass
 class Track:
     id: int
@@ -311,7 +322,9 @@ MISS_REASON = {
     "first_byte_timeout": "the people who had it never started sending",
     "queued": "the people who had it are busy and their queue has not reached us yet",
     "transfer_timeout": "the people who had it stopped sending part-way through",
-    "verify_failed": "the copies offered were not really lossless",
+    # Evidence, not a verdict on anyone's honesty: a cutoff is consistent with a lossy source and can also
+    # come from a resampler or a mastering filter (issue #97).
+    "verify_failed": "the copies offered did not pass the lossless check",
     # A transfer problem, not a verdict on the audio: the bytes could not be read to the end (issue #97).
     "damaged": "the copies that arrived were damaged or incomplete",
     "verify_unavailable": "ffmpeg is missing, so the audio could not be checked",

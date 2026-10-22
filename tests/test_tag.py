@@ -95,6 +95,13 @@ def test_comment_for():
     assert comment_for(V, CT) == "flackey: verified 320 kbps · cutoff 19.8 kHz · beatport 16552105 · via Deezer"
 
 
+def test_comment_says_no_edge_rather_than_quoting_the_sentinel():
+    """22050 is the check's answer when it found no edge at all; "cutoff 22.1 kHz" in a player's comment
+    column would quote a measurement nobody made (issue #97)."""
+    clean = Verdict(True, "aiff", 1411, 22_050, "r", bit_depth=16, sample_rate=44100)
+    assert comment_for(clean, CT) == "flackey: verified aiff · no edge found · beatport 16552105 · via Deezer"
+
+
 def test_comment_names_the_fallback_tag_source():
     """A stand-in's negative id is Flackey's own, not Beatport's: the comment says where its tags came from
     (issue #146), or nothing when no catalogue knew the track."""

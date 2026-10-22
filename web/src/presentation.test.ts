@@ -105,7 +105,17 @@ describe('presentRow', () => {
     expect(v.formatLabel).toBe('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')
     expect(v.checks).toEqual([
       { label: 'Same recording', value: '98.5% match', ok: true },
-      { label: 'Verified to', value: '22.1 kHz', ok: true }])
+      { label: 'Spectrum', value: 'no edge found', ok: true }])
+  })
+  // 22050 is what the check answers when it found no edge -- silence answers it too -- so it is never shown
+  // as "22.1 kHz", which claimed content up there that nobody had seen (issue #97).
+  it('a measured edge on a filed track is evidence, not verification', () => {
+    const track = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 19800, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: 44100,
+      catalog: null }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks)
+      .toEqual([{ label: 'Content to', value: '19.8 kHz', ok: true }])
   })
   it('a failed fingerprint reads as a failed check, and a rejection still reports its cutoff', () => {
     const attempt = { id: 5, request_id: 1, provider: 'soulseek', created_at: '', query: 'q', outcome: 'fingerprint_failed',
@@ -142,7 +152,7 @@ describe('presentRow', () => {
     expect(v.status).toBe('Sounds like a 128 kbps upscale. Deleted, not added to your library.'); expect(v.statusTone).toBe('red')
     expect(v.rejected).toBe(true); expect(v.steps).toBeNull(); expect(v.action).toEqual({ label: 'See why', kind: 'why' })
     expect(v.rejection).toEqual({ reason: 'Sounds like a 128 kbps upscale', cutoffKhz: 16, spectrogramUrl: '/api/rejections/2/spectrogram.png',
-      caption: 'A real 320 kbps file has sound up to 20 kHz. This one stops at 16 kHz — it was blown up from a smaller file.' })
+      caption: 'Nothing above 16 kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.' })
     expect(presentRow(bundle({ state: 'rejected' }, { rejection }), { ...opts, whyOpen: true }).action?.label).toBe('Hide why')
   })
   // Issue #61 added a second reason a file can be refused: it is genuine 320 kbps audio of the *wrong
@@ -229,7 +239,7 @@ describe('presentRow', () => {
       fingerprint: { status: 'failed', score: 0.61, offset_s: null, reason: 'below 0.79' }, spectrogram_path: null,
       first_byte_ms: null, total_ms: null }
     expect(presentRow(bundle({ state: 'done', track_id: 11 }, { track, attempt }), opts).checks)
-      .toEqual([{ label: 'Verified to', value: '20.5 kHz', ok: true }])
+      .toEqual([{ label: 'Content to', value: '20.5 kHz', ok: true }])
   })
   it('duplicate, cancelled, not found, error', () => {
     expect(presentRow(bundle({ state: 'duplicate' }), opts).status).toBe('Already in your library — skipped, nothing downloaded twice')

@@ -12,7 +12,7 @@ from pathlib import Path
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
-from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict
+from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import write_tags
 from ..tag_lookup import fill_missing
 from ..verify import verify
@@ -118,7 +118,7 @@ class FilingMixin:
                 kept = self._keep_rejected(req, tmp)
                 # No cutoff on this one. This branch is only reached with `verdict.passed` already true, so
                 # `verdict.cutoff_hz` here is a *healthy* number -- and the page turns any cutoff it is given
-                # into "it stops at N kHz, it was blown up from a smaller file", which would tell the owner a
+                # into "consistent with a copy blown up from a smaller file", which would tell the owner a
                 # genuine 320 kbps file is a fake and quote a frequency that is fine as the proof. What this
                 # file failed is the fingerprint, so the row says so in `kind` and carries no spectral
                 # evidence it did not fail on. The spectrogram stays: it is a true picture of the audio, and
@@ -232,7 +232,7 @@ class FilingMixin:
         self._set_state(req, RequestState.DONE, track_id=track_id)
         conf = self.store.get_request(req.id).confidence
         parts = [f"Done: {catalog.artist} – {catalog.title} ({catalog.mix_name})", _mmss(catalog.duration_s or cand.duration_s),
-                 format_line(verdict, source, source_fmt), f"content to {verdict.cutoff_hz / 1000:.1f} kHz",
+                 format_line(verdict, source, source_fmt), edge_text(verdict.cutoff_hz),
                  f"{catalog.genre} / {catalog.label}"]
         if conf is not None:
             parts.append(f"{conf}%")

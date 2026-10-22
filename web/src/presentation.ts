@@ -13,7 +13,7 @@ export const STEP_TIPS: Record<string, string> = {
   Search: 'Working out which track this is. Beatport gives the official title, remix name and release; Deezer says who has a copy.',
   Choose: 'More than one copy could be the right one and none of them won outright, so it is waiting on you. Most tracks skip this.',
   Download: "Pulling the file down. Soulseek first for a lossless copy, which can mean waiting in a stranger's queue; Deezer as the fallback. A Soulseek copy is also checked and fingerprinted here, before it moves on.",
-  Verify: 'Reading the spectrogram to make sure the file is really lossless. An MP3 re-wrapped as FLAC has a hard cutoff around 16 kHz that real music never has.',
+  Verify: 'Reading the spectrogram for signs of a lossy source. An MP3 re-wrapped as FLAC usually shows a sharp edge, often around 16 kHz, where the encoder threw the top away. A clean spectrum is consistent with lossless, not proof of it.',
   Done: 'Tagged with artist, title, remix and artwork, and filed under the artist\'s folder. No BPM or key — Rekordbox works those out on import.',
 }
 /** `paused` is the parked row's rung: a hollow ring where `current` is a filled pulsing dot. Without it a
@@ -217,7 +217,7 @@ const MISS_REASON: Record<string, string> = {
   first_byte_timeout: 'the people who had it never started sending',
   queued: 'the people who had it are busy and their queue has not reached us yet',
   transfer_timeout: 'the people who had it stopped sending part-way through',
-  verify_failed: 'the copies offered were not really lossless',
+  verify_failed: 'the copies offered did not pass the lossless check',
   damaged: 'the copies that arrived were damaged or incomplete',
   verify_unavailable: 'ffmpeg is missing, so the audio could not be checked',
   fingerprint_failed: 'the copies offered were a different recording',
@@ -247,7 +247,7 @@ const mb = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
    because FETCHING is the one the owner may still stop -- so without these the platter sits at 100% and the
    label says nothing while they run. The worker publishes the key; the words live here with the rest of them. */
 const PHASE_TEXT: Record<string, string> = {
-  verifying: 'Checking the audio is really lossless',
+  verifying: 'Checking the audio for signs of a lossy source',
   fingerprinting: 'Checking it is the same recording',
   converting: 'Converting it for your library',
 }
@@ -303,8 +303,11 @@ function stepsFor(r: Request): StepView[] | null {
   return skipsChoice(r) ? rungs.filter(s => s.name !== 'Choose') : rungs
 }
 
-/** What proves the file is the real thing: the Chromaprint match against Deezer, and the spectrogram cutoff.
+/** The evidence about the file: the Chromaprint match against Deezer, and where the spectrogram stops.
  *  Both already ride along in the bundle - the UI simply never showed them. */
+/* The spectral check's "no edge found": Nyquist of its 44.1 kHz analysis, the same `NO_EDGE_HZ` as
+   src/flackey/models.py (`test_the_no_edge_value_matches_the_ui` keeps the two equal). */
+const NO_EDGE_HZ = 22050
 function checksFor(b: Bundle): CheckView[] {
   const out: CheckView[] = []
   // `attempt.fingerprint` scores the file the *Soulseek attempt* pulled down, which is not always the file
@@ -320,11 +323,12 @@ function checksFor(b: Bundle): CheckView[] {
   const fp = aboutThisFile ? attempt!.fingerprint : null
   if (fp && fp.score != null) out.push({ label: 'Same recording', value: `${(fp.score * 100).toFixed(1)}% match`, ok: fp.status !== 'failed' })
   const hz = b.track?.cutoff_hz ?? b.rejection?.cutoff_hz ?? null
-  // "Verified to 22.1 kHz", not "Audio to": the number is the highest frequency carrying real content, and
-  // 22.1 kHz means no encoder lowpass was found anywhere, which is the point the line is making. A file
-  // that failed is not verified to anything, so it says what it is instead.
-  if (hz) out.push({ label: b.track != null ? 'Verified to' : 'Audio only to',
-                     value: `${(hz / 1000).toFixed(1)} kHz`, ok: b.track != null })
+  // What the spectral check saw, not what it proved (issue #97). It used to read "Verified to 22.1 kHz", but
+  // 22050 is the check's answer when it found no edge at all -- silence gives the same number -- so that one
+  // value is said in words. Any other number is where the content stops: evidence on a filed track, and on a
+  // refused one the reason it was refused.
+  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
+    : { label: b.track != null ? 'Content to' : 'Audio only to', value: `${(hz / 1000).toFixed(1)} kHz`, ok: b.track != null })
   return out
 }
 
@@ -565,7 +569,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         caption: b.rejection?.kind === 'different_recording'
           ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
             : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
-          : khz != null ? `A real 320 kbps file has sound up to 20 kHz. This one stops at ${khz} kHz — it was blown up from a smaller file.`
+          : khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
           : 'The file did not pass the quality check.',
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,
       }

@@ -83,7 +83,7 @@ it('fires the row action and candidate choice', () => {
 
 it('shows the spectrogram well when why is open', () => {
   const view: RowView = { ...base, rejected: true, statusTone: 'red', action: { label: 'Hide why', kind: 'why' },
-    rejection: { reason: 'upscale', cutoffKhz: 16, caption: 'A real 320 kbps file has sound up to 20 kHz. This one stops at 16 kHz — it was blown up from a smaller file.', spectrogramUrl: '/api/rejections/2/spectrogram.png' } }
+    rejection: { reason: 'upscale', cutoffKhz: 16, caption: 'Nothing above 16 kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.', spectrogramUrl: '/api/rejections/2/spectrogram.png' } }
   render(<RequestRow view={view} whyOpen onAction={() => {}} onChoose={() => {}} {...preview} />)
   expect(screen.getByText('nothing above 16 kHz')).toBeInTheDocument()
   expect(screen.getByRole('img', { name: /spectrogram/i })).toHaveAttribute('src', '/api/rejections/2/spectrogram.png')

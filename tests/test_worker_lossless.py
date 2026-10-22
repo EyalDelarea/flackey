@@ -258,7 +258,10 @@ async def test_hit_files_aiff_with_evidence_done_line_and_raw_record(lenv):
     assert kinds["recording_match"]["score"] == 0.98 and kinds["recording_match"]["reference"] == "deezer:1754956977"
     assert kinds["fingerprint"]["frames"] == [4, 5, 6]
     done = notifier.sent[-1][0]
-    assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
+    assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done
+    # The detector found no edge (22050), which is the absence of a measurement: said in words, never as
+    # "content to 22.1 kHz" (issue #97).
+    assert "no edge found" in done and "22.1" not in done
     assert store.stats()["by_source"] == {"soulseek": 1}
     assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "flackey-dj"}
 
@@ -564,7 +567,7 @@ async def test_the_lossy_fallback_is_rejected_when_it_is_a_different_recording(l
     assert "best score 0.61" in rj.reason
     # The row has to say *what* was wrong, not just in prose. This file passed the spectral check -- it is
     # genuine 320 kbps audio of the wrong track -- so it carries no cutoff to be misread as an upscale
-    # (the page turns any cutoff into "it stops at N kHz, it was blown up from a smaller file"), and its
+    # (the page turns any cutoff into "consistent with a copy blown up from a smaller file"), and its
     # kind is the fingerprint, not the quality. The spectrogram stays: deleting the row is what deletes it.
     assert rj.kind == "different_recording"
     assert rj.cutoff_hz is None and rj.bitrate_kbps == 320
@@ -916,6 +919,15 @@ def test_miss_reasons_match_the_ui():
     assert set(MISS_REASON) == set(ATTEMPT_OUTCOMES) - {"filed"}, "every non-filed outcome needs a reason"
     for outcome, reason in MISS_REASON.items():
         assert f"{outcome}: '{reason}'" in ts, f"presentation.ts disagrees about {outcome}"
+
+
+def test_the_no_edge_value_matches_the_ui():
+    """The page says "no edge found" instead of printing this number; a different number there would print
+    the sentinel as a frequency again (issue #97)."""
+    from flackey.models import NO_EDGE_HZ
+    from flackey.verify import SR
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
+    assert NO_EDGE_HZ == SR // 2 and f"const NO_EDGE_HZ = {NO_EDGE_HZ}\n" in ts
 
 
 async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv):
