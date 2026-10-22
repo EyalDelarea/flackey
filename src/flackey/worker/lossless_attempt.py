@@ -21,7 +21,7 @@ from ..lossless import (
 )
 from ..models import Candidate, CatalogTrack, Request, norm
 from ..source import LosslessError, LosslessProvider, TransferProgress
-from ..verify import VerifyError, probe, verify
+from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
 from .policy import PEER_STUCK_OUTCOMES, SECOND_PICK_AFTER, SECOND_SEARCH_AFTER
 from .records import (
     CATALOG_SOURCE,
@@ -302,9 +302,20 @@ class LosslessMixin:
                     rec.event("duration_mismatch", advertised_s=file.length_s, probed_s=round(probed.duration_s, 1))
                     return None, "verify_failed"
                 verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
-        except VerifyError as e:
+        except ToolMissing as e:
+            # This computer cannot check anything, so neither can the next pick: end the attempt here rather
+            # than download every survivor to fail it the same way.
+            rec.event("verify_unavailable", error=str(e))
+            return None, "verify_unavailable"
+        except Disguised as e:
             rec.event("verify_failed", error=str(e))
             return None, "verify_failed"
+        except VerifyError as e:
+            # The file could not be read through -- a transfer cut short, a copy broken at the peer. That is a
+            # fact about these bytes, not about where the audio came from, and it used to land in
+            # `verify_failed` and reach the owner as "not really lossless" (issue #97).
+            rec.event("damaged", error=str(e))
+            return None, "damaged"
         if verdict.spectrogram_path:
             self.store.update_attempt(rec.id, spectrogram_path=str(verdict.spectrogram_path))
         rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason)

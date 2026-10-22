@@ -6,7 +6,7 @@ tagged, Rekordbox-ready track in your DJ library — automatically.
 
 Paste the link into the app; a worker running on your computer matches the track
 on Beatport, fetches it from Soulseek (lossless) or through a Telegram source bot
-(using your own accounts), verifies it is genuine 320 kbps or better, tags it and
+(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it and
 files it in your DJ Library (by default one folder per artist,
 `~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
 BPM and key are left to Rekordbox's analysis; genre and label are in the tags.
@@ -163,14 +163,18 @@ database. Rekordbox stays the source of truth for performance metadata.
 <details>
 <summary><strong>📡 Notes on Telegram behaviour</strong></summary>
 
+- **Telegram is optional**: it is only how Flackey reaches the Deezer bot.
+  Soulseek downloads never wait on it.
 - **Session expiry**: if the owner's Telethon session goes missing or
-  expires, `flackey start` does not exit — the web UI keeps running so links
-  still queue, but the worker pauses. `/api/health` reports
-  `telegram_authorized: false`, and the UI shows an amber "Telegram signed
-  out" banner with a Reconnect button. Reconnecting takes you through the
+  expires, `flackey start` does not exit and the worker keeps going — only
+  the Deezer bot pauses. Soulseek downloads carry on; a track Soulseek
+  doesn't have fails with "the Deezer bot is paused because Telegram is
+  signed out" instead of falling back to the bot's MP3. `/api/health`
+  reports `telegram_authorized: false`, and the UI shows an amber "Deezer bot
+  paused" banner with a Reconnect button. Reconnecting takes you through the
   same sign-in screen as first-time setup (QR code or phone number), without
-  restarting `flackey start`; the worker resumes automatically once you're
-  signed back in.
+  restarting `flackey start`; once you're signed back in, the tracks the
+  paused bot left without a file go back on the queue by themselves.
 
 </details>
 
@@ -178,7 +182,7 @@ database. Rekordbox stays the source of truth for performance metadata.
 <summary><strong>🎼 Lossless via Soulseek</strong></summary>
 
 Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every request first asks the
-Soulseek network for a FLAC of the matched track. The file is verified (spectral cutoff), proven to be the
+Soulseek network for a FLAC of the matched track. The file is checked for the spectral cutoff a lossy source leaves, proven to be the
 same recording as what you asked for with a Chromaprint fingerprint against the request's own audio (the
 YouTube video, or the matched record's 30 s preview), converted to your filing format (AIFF, WAV or FLAC;
 audio untouched, peer tags dropped) and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same
@@ -265,8 +269,8 @@ read it. To use it from another machine (`-p 8765:8765`), open it by the host's 
 host names you use in `WEB_ALLOWED_HOSTS` (comma-separated, e.g. `WEB_ALLOWED_HOSTS=nas.local`); any
 other name is refused.
 
-Open the printed link and sign in to Telegram from the setup screen
-(QR code or phone number). The Telethon session is stored in the `/data`
+Open the printed link and go through the setup screen. To use the Deezer bot, sign in to Telegram there
+(QR code or phone number); skip it for Soulseek only. The Telethon session is stored in the `/data`
 volume, so this only needs to happen once. `uv run flackey login` also works
 as a terminal-only alternative, run once beforehand:
 

@@ -188,7 +188,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(lossless.router(store, worker))
     app.include_router(sharing_web.router(sharing))
     app.include_router(update.router(status, settings, quit_app=quit_app))
-    app.include_router(report.router(settings, status, **({"opener": opener} if opener else {})))
+    app.include_router(report.router(settings, status, store=store, **({"opener": opener} if opener else {})))
 
     if ui_dir is not None and ui_dir.exists():
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")

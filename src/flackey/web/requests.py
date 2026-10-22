@@ -41,8 +41,8 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
                 log.debug("could not remove %s: %s", file, e)
 
     def unlink_evidence(rejection) -> None:
-        """Both files a rejection can leave behind: the spectrogram PNG, and - on a different-recording
-        verdict - the refused copy itself, which is kept so the owner can listen before deciding. `attempt`
+        """Both files a rejection can leave behind: the spectrogram PNG, and the refused copy itself, which
+        is kept so the owner can listen before deciding. `attempt`
         rows reach here too and carry only the PNG, so the audio half is read defensively."""
         if not rejection:
             return
@@ -145,7 +145,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
 
     @r.post("/requests/{rid}/accept")
     async def accept(rid: int) -> dict:
-        """"Keep it anyway" on a rejected row: file the copy the recording check refused."""
+        """"Keep it anyway" on a rejected row: file the copy the recording or quality check refused."""
         return await act(rid, lambda: worker.accept_rejection(rid))
 
     @r.post("/requests/{rid}/cancel")

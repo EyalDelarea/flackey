@@ -1223,7 +1223,7 @@ def test_accept_answers_400_when_there_is_no_copy_to_keep(client):
     store.set_state(rid, RequestState.REJECTED)
     store.clear_rejection_audio(rj)
     r = c.post(f"/api/requests/{rid}/accept")
-    assert r.status_code == 400 and "no copy of it to keep" in r.json()["detail"]
+    assert r.status_code == 400 and "no copy of this track was kept" in r.json()["detail"]
     assert c.post("/api/requests/999/accept").status_code == 404
 
 
@@ -1589,7 +1589,7 @@ def test_rejected_audio_serves_the_copy_that_was_kept(client):
 
 
 def test_rejected_audio_404s_when_there_is_nothing_to_play(client, tmp_path: Path):
-    """Three ways to have no copy, one answer. A quality rejection never kept one; a kept one can be
+    """Three ways to have no copy, one answer. A rejection may never have kept one; a kept one can be
     filed or cleaned up out from under the row; and a path outside `rejected_dir` is not this route's to
     read, whichever build or hand wrote it there."""
     c, store, settings = client

@@ -73,7 +73,7 @@ async def probe_authorized(client: LoginClient) -> bool | None:
         return None
     except Exception:
         # Anything else is a surprise, and a surprise is not evidence that the owner has been signed
-        # out. Guessing "signed out" here would pause the worker and cover the app in a sign-in banner
+        # out. Guessing "signed out" here would pause the bot and cover the app in a sign-in banner
         # for what may be a bug in this line; "cannot tell" costs a retry.
         log.warning("could not check whether the Telegram session is still signed in", exc_info=True)
         return None

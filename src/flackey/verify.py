@@ -8,8 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .audiofile import DEMUXERS, WrongFormat, input_args
-from .models import Verdict
+from .audiofile import DEMUXERS, WrongFormat, arrived_empty, input_args
+from .models import NO_EDGE_HZ, Verdict, edge_text
 from .tools import no_window, tool_path
 
 MIN_MP3_BITRATE = 320
@@ -19,12 +19,23 @@ LOSSLESS = {"flac", "wav", "aiff"}
 SR = 44_100
 FRAME = 4096
 BAND_HZ = 250
-CLIFF_DB = 20        # an encoder lowpass drops at least this much within 500 Hz; music never does
+CLIFF_DB = 20        # an encoder lowpass drops at least this much within 500 Hz; music rarely does
 CLIFF_SEARCH_FROM_HZ = 8_000
 
 
 class VerifyError(Exception):
-    pass
+    """The file could not be read through: a decode that failed, a transfer cut short, a tool that timed out.
+    Says nothing about where the audio came from, only that this copy could not be checked (issue #97)."""
+
+
+class ToolMissing(VerifyError):
+    """ffmpeg or ffprobe is not on this machine. A fact about the computer, not the file: every other copy
+    would fail the same way, so the caller must not read it as one more bad download."""
+
+
+class Disguised(VerifyError):
+    """The bytes are not the format the name claims -- an MP3, an AAC or an Ogg called .flac. Unlike a plain
+    VerifyError this one does say something about the source, and it is the oldest trick there is."""
 
 
 @dataclass
@@ -49,7 +60,7 @@ def _run(cmd: list[str]) -> bytes:
         # Say it here rather than handing `subprocess` a bare name and letting FileNotFoundError travel
         # up as a failed row whose message is a filename. `tool_path` has already looked in the bundle,
         # on the PATH and in both Homebrew prefixes, so None means the machine really does not have it.
-        raise VerifyError(f"{name} is not installed")
+        raise ToolMissing(f"{name} is not installed")
     cmd = [found, *cmd[1:]]
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
@@ -65,10 +76,17 @@ def _input(path: Path, tool: str) -> list[str]:
     A missing `tool` is still the first thing reported: it is what a machine without the helpers needs
     to hear, whatever the file is."""
     if tool_path(tool) is None:
-        raise VerifyError(f"{tool} is not installed")
+        raise ToolMissing(f"{tool} is not installed")
     try:
+        # A file with nothing in it is a transfer that never arrived, whatever its first bytes say -- and
+        # there is nothing for the tool to read, so it is not run.
+        if arrived_empty(path):
+            raise VerifyError("nothing arrived: the file is empty or only zero bytes")
         return input_args(path)
-    except (WrongFormat, OSError) as e:
+    except WrongFormat as e:
+        # Anything else under the wrong name is a disguise, whatever it turns out to be.
+        raise Disguised(str(e)) from e
+    except OSError as e:
         raise VerifyError(str(e)) from e
 
 
@@ -117,11 +135,13 @@ def band_levels_db(path: Path, window_s: int = 60, duration_s: float | None = No
 
 
 def spectral_cutoff_hz(path: Path, window_s: int = 60, duration_s: float | None = None) -> int:
-    """Frequency of the encoder lowpass cliff, or Nyquist (22050) when the content reaches the top.
+    """Frequency of the encoder lowpass cliff, or NO_EDGE_HZ (Nyquist, 22050) when none is found.
 
     A lossy encoder zeroes everything above its lowpass, so the level falls by tens of dB within
-    a few hundred hertz. Natural music rolls off gradually, a few dB per band, and never makes such
-    a step. We take the *highest* cliff so a notch lower in the spectrum cannot masquerade as the edge.
+    a few hundred hertz. Natural music usually rolls off gradually, a few dB per band. Usually, not
+    always: a resampler or a mastering lowpass can make the same step, so a cliff is evidence of a
+    lossy source rather than proof, and no cliff is not proof of a lossless one either (issue #97).
+    We take the *highest* cliff so a notch lower in the spectrum cannot masquerade as the edge.
     """
     starts, levels = band_levels_db(path, window_s, duration_s)
     region = starts >= CLIFF_SEARCH_FROM_HZ
@@ -129,7 +149,7 @@ def spectral_cutoff_hz(path: Path, window_s: int = 60, duration_s: float | None 
     drops = db[:-2] - db[2:]                      # level lost across two adjacent bands (500 Hz)
     cliffs = np.where(drops >= CLIFF_DB)[0]
     if len(cliffs) == 0:
-        return SR // 2
+        return NO_EDGE_HZ
     i = int(cliffs[-1])
     return int(round(hz[i + 1] / 50) * 50)
 
@@ -162,13 +182,13 @@ def verify(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdic
     if pr.fmt == "mp3":
         if cutoff < MIN_MP3_CUTOFF:
             return Verdict(False, pr.fmt, pr.bitrate_kbps, cutoff,
-                           f"cutoff {cutoff} Hz below {MIN_MP3_CUTOFF}: upsampled from a lower bitrate", png,
-                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
-        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"genuine {pr.bitrate_kbps} kbps, content to {cutoff} Hz", png,
+                           f"cutoff at {cutoff} Hz, below {MIN_MP3_CUTOFF}: consistent with a lower-bitrate source",
+                           png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"{pr.bitrate_kbps} kbps, {edge_text(cutoff)}", png,
                        bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
     if cutoff < MIN_LOSSLESS_CUTOFF:
         return Verdict(False, pr.fmt, pr.bitrate_kbps, cutoff,
-                       f"lossless container but cutoff {cutoff} Hz: lossy source", png,
+                       f"lossless container but cutoff at {cutoff} Hz: consistent with a lossy source", png,
                        bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
-    return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"lossless, content to {cutoff} Hz", png,
+    return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"lossless, {edge_text(cutoff)}", png,
                    bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)

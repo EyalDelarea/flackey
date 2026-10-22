@@ -1,5 +1,7 @@
 """The worker's lossless step with a fake provider. Every test asserts the attempt row's outcome, that the
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
+import asyncio
+import hashlib
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -17,11 +19,21 @@ from flackey.config import Settings
 from flackey.convert import ConvertError
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
-from flackey.models import CatalogTrack, Query, RequestKind, RequestState
+from flackey.models import (
+    NO_EDGE_HZ,
+    CatalogTrack,
+    Query,
+    RequestKind,
+    RequestState,
+    Verdict,
+    edge_text,
+)
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
+from flackey.verify import Disguised, ToolMissing, VerifyError, probe
+from flackey.verify import verify as real_verify
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -29,27 +41,78 @@ from flackey.worker import lossless_attempt as lossless_attempt_mod
 from flackey.worker import pipeline as pipeline_mod
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
-from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
+from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, good_cand, no_art
 
 pytestmark = requires_ffmpeg
 CT3 = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
 
 
-def _flac(path: Path, seconds: int = 3) -> Path:
+def _flac(path: Path, seconds: int = 3, seed: int = 2) -> Path:
     # -sample_fmt s16: anoisesrc is float and ffmpeg's flac encoder otherwise picks 24-bit for it; this is
-    # meant to be the 16-bit CD-quality file `lf()` describes.
+    # meant to be the 16-bit CD-quality file `lf()` describes. `seed` is what makes two of them different
+    # bytes, which is all `FakeDetector` tells files apart by.
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-                    f"anoisesrc=color=white:seed=2:sample_rate=44100:duration={seconds}", "-ac", "2", "-c:a", "flac",
-                    "-sample_fmt", "s16", str(path)], check=True)
+                    f"anoisesrc=color=white:seed={seed}:sample_rate=44100:duration={seconds}", "-ac", "2",
+                    "-c:a", "flac", "-sample_fmt", "s16", str(path)], check=True)
     return path
 
 
-def _fake_flac(path: Path) -> Path:
-    """A lossy source inside a FLAC container: verify rejects it (cutoff far below 20 kHz)."""
-    mp3 = _mp3(path.with_suffix(".mp3"), kbps=64)
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(mp3), "-c:a", "flac", str(path)], check=True)
-    mp3.unlink()
-    return path
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class FakeDetector:
+    """The spectral verdict, decided by the test instead of by `verify.verify` (issue #97).
+
+    These tests are about the pick loop, the budget and the fallback. They used to reach a failed check by
+    handing the real detector a FLAC made from a 64 kbps MP3, which tied every one of them to the detector's
+    rule: change how a cutoff is measured and four tests about *which peer is asked next* went red. Here a
+    file fails because the test said so, and the audio that pins the detector itself lives in
+    test_verify.py. Everything around the verdict still runs for real -- ffprobe reads the format, bit depth
+    and sample rate the conversion needs -- so only the judgement is borrowed.
+
+    A file is known by its bytes, not its name: the worker copies a download to `req<N>-lossless.flac`
+    before checking it, so the name a test gave it never reaches this."""
+
+    def __init__(self):
+        self.refused: set[str] = set()
+        self.raises: dict[str, Exception] = {}
+
+    def refuse(self, path: Path) -> Path:
+        """Have every check of these bytes, wherever they are copied to, come back as a lossy source."""
+        self.refused.add(_digest(path))
+        return path
+
+    def fail(self, path: Path, error: Exception) -> Path:
+        """Have every check of these bytes raise `error` instead of answering: a decode that broke off, a
+        missing ffmpeg."""
+        self.raises[_digest(path)] = error
+        return path
+
+    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+        if (error := self.raises.get(_digest(path))) is not None:
+            raise error
+        pr = probe(path)
+        png = spectrogram_dir / f"{name or path.stem}.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(b"\x89PNG")              # a row only ever holds the path; nothing here draws it
+        if _digest(path) in self.refused:
+            return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000,
+                           "lossless container but cutoff at 11000 Hz: consistent with a lossy source", png,
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+        cutoff = 20_000 if pr.fmt == "mp3" else NO_EDGE_HZ
+        head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
+        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"{head}, {edge_text(cutoff)}", png,
+                       bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+
+
+@pytest.fixture(autouse=True)
+def detector(monkeypatch) -> FakeDetector:
+    """Both places the worker asks for a verdict: inside the Soulseek attempt, and on the lossy fallback."""
+    fake = FakeDetector()
+    monkeypatch.setattr(lossless_attempt_mod, "verify", fake)
+    monkeypatch.setattr(filing_mod, "verify", fake)
+    return fake
 
 
 def lf(username: str = "a", **kw) -> LosslessFile:
@@ -207,7 +270,10 @@ async def test_hit_files_aiff_with_evidence_done_line_and_raw_record(lenv):
     assert kinds["recording_match"]["score"] == 0.98 and kinds["recording_match"]["reference"] == "deezer:1754956977"
     assert kinds["fingerprint"]["frames"] == [4, 5, 6]
     done = notifier.sent[-1][0]
-    assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done and "content to" in done and "kHz" in done
+    assert "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek" in done
+    # The detector found no edge (22050), which is the absence of a measurement: said in words, never as
+    # "content to 22.1 kHz" (issue #97).
+    assert "no edge found" in done and "22.1" not in done
     assert store.stats()["by_source"] == {"soulseek": 1}
     assert w.status["lossless_provider"] == {"name": "soulseek", "status": "ok", "username": "flackey-dj"}
 
@@ -291,10 +357,26 @@ async def test_a_rejected_transfer_still_files_from_the_next_peer(lenv):
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_verify_failure_tries_the_second_pick(lenv, tmp_path: Path):
+async def test_a_genuine_flac_passes_the_real_check_and_is_filed(lenv, monkeypatch):
+    """One run of the Soulseek attempt through the real detector, so the path from a download to a filed
+    track is not only ever exercised against a stand-in. White noise has content to the top; how the
+    detector judges harder material is test_verify.py's question, not this one's."""
+    settings, store, _, _, _, _ = lenv
+    monkeypatch.setattr(lossless_attempt_mod, "verify", real_verify)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and store.get_track(r.track_id).source == "soulseek"
+    verdict = next(e["detail"] for e in a.timeline if e["event"] == "verify")
+    assert verdict["passed"] is True and Path(a.spectrogram_path).stat().st_size > 1_000
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_verify_failure_tries_the_second_pick(lenv, detector, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
     provider.files = [lf("a"), lf("b", queue_length=1)]
-    provider.audio["a"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["a"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -342,9 +424,9 @@ async def test_a_transfer_is_not_enqueued_without_room_for_it(lenv, monkeypatch)
     assert settings.slskd_downloads in seen
 
 
-async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, tmp_path: Path):
+async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, detector, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
-    fake = _fake_flac(tmp_path / "fake.flac")
+    fake = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     provider.files = [lf("a"), lf("b"), lf("c")]
     provider.audio = {"a": fake, "b": fake, "c": fake}
     w = make(lenv)
@@ -357,10 +439,110 @@ async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(l
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_second_pick_needs_budget(lenv, tmp_path: Path):
+async def test_a_copy_that_cannot_be_read_through_is_damaged_not_fake(lenv, detector, tmp_path: Path):
+    """A decode that breaks off is a transfer problem. It used to end as `verify_failed`, which the owner
+    reads as "the copies offered were not really lossless" -- calling a broken download a fraud (issue #97).
+    It is still a fact about this one file, so the next pick is tried."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "broken.flac", seed=3),
+                                        VerifyError("Invalid data found when processing input"))
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    damaged = [e["detail"] for e in a.timeline if e["event"] == "damaged"]
+    assert len(damaged) == 1 and "Invalid data" in damaged[0]["error"]
+    assert not any(e["event"] == "verify_failed" for e in a.timeline)
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_disguised_copy_is_a_failed_check_not_damage(lenv, detector, tmp_path: Path):
+    """An AAC called .flac is a verdict on that copy, not a transfer that broke: `verify_failed`, so it is
+    not fetched again on the long wait the way a damaged copy is."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "aac.flac", seed=3),
+                                        Disguised("req1-lossless.flac is not a flac file"))
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    assert [e["event"] for e in a.timeline if e["event"] in ("damaged", "verify_failed")] == ["verify_failed"]
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_every_copy_damaged_says_so_when_the_lossy_copy_is_filed(lenv, detector, tmp_path: Path):
+    settings, store, notifier, provider, _, _ = lenv
+    broken = detector.fail(_flac(tmp_path / "broken.flac", seed=3), VerifyError("truncated"))
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": broken, "b": broken}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
+    assert attempt_of(store, rid).outcome == "damaged" and provider.downloaded == ["a", "b"]
+    done = notifier.sent[-1][0]
+    assert "damaged or incomplete" in done and "lossless check" not in done
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_every_copy_damaged_with_nothing_to_fall_back_on_waits_for_the_next_transfer(lenv, detector,
+                                                                                            tmp_path: Path):
+    """The same answer as `transfer_failed`: the copies broke on the way, and tomorrow's transfer is a fresh
+    roll, so the request parks on the long wait for Soulseek rather than failing for good."""
+    settings, store, _, provider, _, _ = lenv
+    broken = detector.fail(_flac(tmp_path / "broken.flac", seed=3), VerifyError("truncated"))
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": broken, "b": broken}
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "damaged"
+    assert r.state == RequestState.QUEUED and r.retry_after is not None and r.lossless_retry == 1
+    assert r.flag_reason.startswith("waiting for Soulseek: the copies that arrived were damaged or incomplete")
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_missing_ffmpeg_with_nothing_to_fall_back_on_fails_once_instead_of_waiting(lenv, detector,
+                                                                                            tmp_path: Path):
+    """No amount of waiting installs ffmpeg: the row stops at once, says what is missing, and points at Try
+    again for when it is there -- not the long wait a transfer problem gets."""
+    settings, store, _, provider, _, _ = lenv
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "x.flac", seed=3), ToolMissing("ffmpeg is not installed"))
+    w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert attempt_of(store, rid).outcome == "verify_unavailable"
+    assert r.state == RequestState.ERROR and r.retry_after is None
+    assert "ffmpeg is missing" in r.error_message
+    assert r.error_message.endswith("Use Try again once it can be checked")
+
+
+async def test_a_missing_ffmpeg_ends_the_attempt_instead_of_failing_every_peer(lenv, detector, tmp_path: Path):
+    """Not one more bad download: the computer cannot check anything, so the next pick would fail the same
+    way after a transfer of its own."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": detector.fail(_flac(tmp_path / "x.flac", seed=3), ToolMissing("ffmpeg is not installed")),
+                      "b": provider.audio["b"]}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "verify_unavailable" and provider.downloaded == ["a"]
+    assert [e["detail"]["error"] for e in a.timeline if e["event"] == "verify_unavailable"] == [
+        "ffmpeg is not installed"]
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_second_pick_needs_budget(lenv, detector, tmp_path: Path):
     _, store, _, provider, _, clock = lenv
     provider.files = [lf("a"), lf("b")]
-    provider.audio["a"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["a"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     original = provider.download
 
     async def slow(file, **kw):
@@ -461,7 +643,7 @@ async def test_the_lossy_fallback_is_rejected_when_it_is_a_different_recording(l
     assert "best score 0.61" in rj.reason
     # The row has to say *what* was wrong, not just in prose. This file passed the spectral check -- it is
     # genuine 320 kbps audio of the wrong track -- so it carries no cutoff to be misread as an upscale
-    # (the page turns any cutoff into "it stops at N kHz, it was blown up from a smaller file"), and its
+    # (the page turns any cutoff into "consistent with a copy blown up from a smaller file"), and its
     # kind is the fingerprint, not the quality. The spectrogram stays: deleting the row is what deletes it.
     assert rj.kind == "different_recording"
     assert rj.cutoff_hz is None and rj.bitrate_kbps == 320
@@ -813,6 +995,15 @@ def test_miss_reasons_match_the_ui():
     assert set(MISS_REASON) == set(ATTEMPT_OUTCOMES) - {"filed"}, "every non-filed outcome needs a reason"
     for outcome, reason in MISS_REASON.items():
         assert f"{outcome}: '{reason}'" in ts, f"presentation.ts disagrees about {outcome}"
+
+
+def test_the_no_edge_value_matches_the_ui():
+    """The page says "no edge found" instead of printing this number; a different number there would print
+    the sentinel as a frequency again (issue #97)."""
+    from flackey.models import NO_EDGE_HZ
+    from flackey.verify import SR
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "presentation.ts").read_text()
+    assert NO_EDGE_HZ == SR // 2 and f"const NO_EDGE_HZ = {NO_EDGE_HZ}\n" in ts
 
 
 async def test_every_progress_tick_is_pushed_to_the_browser_not_just_stored(lenv):
@@ -1272,7 +1463,8 @@ async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
     assert "never started sending" in r.flag_reason and "found nothing" not in r.flag_reason
 
 
-async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, tmp_path: Path):
+async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, detector,
+                                                                                               tmp_path: Path):
     """This reverses what `test_transfer_timeout_stops_at_that_peer` used to assert. Its reasoning was that
     a slow transfer "says something about the link rather than the peer, so the next one is no more likely",
     and the measurement on 2026-09-10 says otherwise: "Dog Days Bliss" was cut off at 90 % of a 67 MB FLAC
@@ -1280,7 +1472,7 @@ async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_end
     queued -- and 316 s of the attempt's budget was still unspent. Upload rate is a fact about the peer."""
     _, store, _, provider, _, _ = lenv
     provider.files = [lf("a"), lf("b")]
-    provider.audio["b"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["b"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     original = provider.download
 
     async def stalls(file, **kw):
@@ -1782,3 +1974,186 @@ async def test_a_peer_that_left_us_queued_is_not_asked_again_in_the_same_attempt
     rid = store.add_request(TEXT, RequestKind.TEXT)
     await w.process(rid)
     assert provider.downloaded == ["busy", "b"]
+
+
+# Telegram is optional: with the bot switched on and the account signed out, the bot is paused and
+# Soulseek carries on. The worker used to stop outright, Soulseek downloads included.
+
+def _public_deezer_record(monkeypatch):
+    """Without the bot a request still has Deezer's public catalogue for its reference (see
+    `test_with_the_bot_off_the_public_deezer_record_is_the_reference`); without one it would never file."""
+    async def lookup(cand, http):
+        return 1754956977, "deezer:1754956977 by search"
+
+    monkeypatch.setattr(acoustic_mod, "find_deezer_record", lookup)
+
+
+async def test_the_worker_files_from_soulseek_while_telegram_is_signed_out(lenv, monkeypatch):
+    settings, store, _, provider, _, _ = lenv
+    _public_deezer_record(monkeypatch)
+    source = FakeSource([good_cand()])
+    assert settings.source_enabled                       # the default: the bot is on
+    w = make(lenv, source=source, status={"telegram_authorized": False})
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    task = asyncio.create_task(w.run_forever(poll_s=0.01))
+    deadline = asyncio.get_running_loop().time() + 10
+    while store.get_request(rid).state != RequestState.DONE and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    assert not task.done()                               # still running, not stopped for want of Telegram
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    r = store.get_request(rid)
+    assert r.state == RequestState.DONE and provider.downloaded == ["a"]
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert (source.searches, source.fetched) == (0, [])  # the paused bot is never spoken to
+
+
+async def test_a_soulseek_miss_says_the_bot_is_paused_not_switched_off(lenv):
+    settings, store, notifier, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    source = FakeSource([good_cand()])
+    w = make(lenv, provider=empty, source=source, status={"telegram_authorized": False})
+
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1
+    assert worker_mod.BOT_PAUSED in r.flag_reason and "nothing on Soulseek matched" in r.flag_reason
+    assert "switched off" not in r.flag_reason
+    assert (source.searches, source.fetched) == (0, [])  # no search, and no MP3 fallback either
+
+    for _ in range(MAX_ATTEMPTS - 1):
+        store.update_request(rid, retry_after=None)
+        r = await w.process(rid)
+    # The six-hour wait shows its reason for hours at a time; the paused bot has to be in it too.
+    assert r.flag_reason.startswith("waiting for Soulseek") and worker_mod.BOT_PAUSED in r.flag_reason
+    assert "paused because Telegram is signed out" in notifier.sent[-1][0]
+
+
+async def test_a_record_the_bot_offered_earlier_is_not_fetched_while_telegram_is_signed_out(lenv):
+    """A record picked in review -- or kept when a fetch was cut short -- is a bot record, and the MP3
+    fallback for it goes through the bot. With Telegram gone that fetch is skipped rather than attempted."""
+    settings, store, _, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    source = FakeSource([good_cand()])
+    w = make(lenv, provider=empty, source=source, status={"telegram_authorized": False})
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    chosen = store.add_candidates(rid, [good_cand()])[0]
+    store.update_request(rid, chosen_candidate_id=chosen.id)
+
+    r = await w.process(rid)
+    assert empty.searches                                # Soulseek was asked as usual
+    assert source.fetched == []
+    assert r.state == RequestState.QUEUED and worker_mod.BOT_PAUSED in r.flag_reason
+
+
+async def test_telegram_coming_back_requeues_what_the_paused_bot_left_behind(lenv):
+    _, store, _, _, _, _ = lenv
+    status = {"telegram_authorized": False}
+    w = make(lenv, status=status)
+    paused = f"no way to fetch this track: the recording could not be checked acoustically, {worker_mod.BOT_PAUSED}"
+    failed = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(failed, state=RequestState.ERROR, error_message=paused, attempts=3)
+    not_found = store.add_request("q", RequestKind.TEXT)
+    store.update_request(not_found, state=RequestState.NOT_FOUND, error_message=f"could not identify this track: "
+                         f"{worker_mod.BOT_PAUSED} and no Beatport match; no artist and title could be read")
+    waiting = store.add_request(TEXT, RequestKind.TEXT)
+    later = (datetime.now(UTC) + timedelta(hours=6)).isoformat(timespec="seconds")
+    # Six hours into the Soulseek wait: the quick ladder is long spent.
+    store.update_request(waiting, retry_after=later, attempts=MAX_ATTEMPTS + 2, lossless_retry=1,
+                         flag_reason=f"waiting for Soulseek: x; {worker_mod.BOT_PAUSED}; 10 more looks")
+    unrelated = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(unrelated, state=RequestState.ERROR, error_message="boom")
+    # A failure whose last backoff was the paused bot's, and which then failed for another reason: the
+    # stale flag is not why it failed, so it is not given back.
+    stale = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(stale, state=RequestState.ERROR, error_message="disk full",
+                         flag_reason=f"no way to fetch this track: x, {worker_mod.BOT_PAUSED}")
+    stopped = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(stopped, state=RequestState.CANCELLED, error_message=paused)
+
+    await w._requeue_for_the_bot()                       # still signed out: nothing to give back
+    assert store.get_request(failed).state == RequestState.ERROR
+
+    status["telegram_authorized"] = True
+    await w._requeue_for_the_bot()
+    r = store.get_request(failed)
+    # Through `retry`, the same as Try again: a fresh budget and another look at Soulseek.
+    assert r.state == RequestState.QUEUED and r.attempts == 0 and r.lossless_retry and r.error_message is None
+    assert store.get_request(not_found).state == RequestState.QUEUED
+    w8 = store.get_request(waiting)
+    # Due now, and with the budget back: otherwise the bot's first timeout would end it in `error`.
+    assert (w8.retry_after, w8.attempts, w8.flag_reason) == (None, 0, None)
+    assert store.get_request(unrelated).state == RequestState.ERROR      # failed for another reason
+    assert store.get_request(stale).state == RequestState.ERROR
+    assert store.get_request(stopped).state == RequestState.CANCELLED    # stopped on purpose stays stopped
+
+    store.update_request(unrelated, error_message=paused)
+    await w._requeue_for_the_bot()                       # only on the tick it comes back, not every tick
+    assert store.get_request(unrelated).state == RequestState.ERROR
+
+
+async def test_telegram_coming_back_mid_pass_sends_the_request_round_again(lenv):
+    """The re-queue above runs on the tick Telegram returns. A pass already on Soulseek by then would
+    otherwise fail with "the bot is paused" after the bot was back, and stay failed."""
+    settings, store, _, _, _, _ = lenv
+    status = {"telegram_authorized": False}
+
+    def sign_in_meanwhile(text):
+        status["telegram_authorized"] = True
+        return []
+
+    empty = FakeProvider(settings.slskd_downloads, files_for=sign_in_meanwhile)
+    source = FakeSource([good_cand()])
+    w = make(lenv, provider=empty, source=source, status=status)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+
+    r = await w.process(rid)
+    assert source.searches == 0                          # paused when the pass began
+    assert r.state == RequestState.QUEUED and r.retry_after is None and r.attempts == 0
+    assert "Telegram is back" in r.flag_reason
+
+    await w.process(rid)
+    assert source.searches == 1                          # and asked on the next one
+
+
+async def test_a_sign_in_made_while_the_app_was_closed_requeues_on_the_first_tick(lenv, monkeypatch):
+    """`flackey login`, or a session that simply works again after a restart: there is no tick on which
+    Telegram "comes back" while the worker watches, so the first one has to count."""
+    _, store, _, _, _, _ = lenv
+    _public_deezer_record(monkeypatch)
+    source = FakeSource([good_cand()])
+    w = make(lenv, source=source, status={"telegram_authorized": True})
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(rid, state=RequestState.ERROR, attempts=3, error_message=f"no way to fetch this "
+                         f"track: nothing on Soulseek matched this track closely enough, {worker_mod.BOT_PAUSED}")
+
+    task = asyncio.create_task(w.run_forever(poll_s=0.01))
+    deadline = asyncio.get_running_loop().time() + 10
+    while store.get_request(rid).state != RequestState.DONE and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert store.get_request(rid).state == RequestState.DONE
+    assert source.searches == 1                          # and this time the bot was asked
+
+
+async def test_a_record_picked_in_review_is_not_fetched_through_a_bot_switched_off_since(lenv):
+    """The other half of the gate: Telegram is signed in, but the owner has switched the bot off. The
+    pass used to fetch the picked record through the bot anyway."""
+    settings, store, _, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    source = FakeSource([good_cand()])
+    w = make(lenv, provider=empty, source=source, status={"telegram_authorized": True},
+             settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    chosen = store.add_candidates(rid, [good_cand()])[0]
+    store.update_request(rid, chosen_candidate_id=chosen.id)
+
+    r = await w.process(rid)
+    assert empty.searches and source.fetched == []
+    assert r.state == RequestState.QUEUED and "the Deezer bot is switched off" in r.flag_reason
+    assert worker_mod.BOT_PAUSED not in r.flag_reason

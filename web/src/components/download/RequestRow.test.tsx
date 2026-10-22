@@ -12,7 +12,7 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, samples: null }
+  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, reportable: false, samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
   // The note is the only thing on a final row that says what is left to do -- there is no button beside
@@ -27,6 +27,17 @@ it('spells out whether a failed row can come back, and dresses the two answers d
     onAction={() => {}} onChoose={() => {}} {...preview} />)
   expect(screen.getByText('Try again starts the search over.')).not.toHaveClass('final')
   expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+})
+
+it('offers a report on a failed row, under the note and apart from the way out', () => {
+  const onAction = vi.fn()
+  const view: RowView = { ...base, bucket: 'failed', status: 'Failed — boom', reportable: true,
+    action: { label: 'Try again', kind: 'retry' }, outcome: { retryable: true, note: 'Try again starts over.' } }
+  const { rerender } = render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} {...preview} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Report this failure' }))
+  expect(onAction).toHaveBeenCalledWith('report', 1, undefined)
+  rerender(<RequestRow view={{ ...view, reportable: false }} onAction={onAction} onChoose={() => {}} {...preview} />)
+  expect(screen.queryByRole('button', { name: 'Report this failure' })).not.toBeInTheDocument()
 })
 
 it('renders title, status and tag', () => {
@@ -83,7 +94,7 @@ it('fires the row action and candidate choice', () => {
 
 it('shows the spectrogram well when why is open', () => {
   const view: RowView = { ...base, rejected: true, statusTone: 'red', action: { label: 'Hide why', kind: 'why' },
-    rejection: { reason: 'upscale', cutoffKhz: 16, caption: 'A real 320 kbps file has sound up to 20 kHz. This one stops at 16 kHz — it was blown up from a smaller file.', spectrogramUrl: '/api/rejections/2/spectrogram.png' } }
+    rejection: { reason: 'upscale', cutoffKhz: 16, caption: 'Nothing above 16 kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.', spectrogramUrl: '/api/rejections/2/spectrogram.png' } }
   render(<RequestRow view={view} whyOpen onAction={() => {}} onChoose={() => {}} {...preview} />)
   expect(screen.getByText('nothing above 16 kHz')).toBeInTheDocument()
   expect(screen.getByRole('img', { name: /spectrogram/i })).toHaveAttribute('src', '/api/rejections/2/spectrogram.png')
@@ -259,7 +270,7 @@ it('tags a failed row with where it stopped, and leaves a running row untagged',
 const kept: RowView['samples'] = {
   found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
   reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
-  video: null }
+  video: null, kind: 'compare' }
 
 it('lets a refused copy be heard against the reference, and filed anyway', () => {
   // Issue #92: the fingerprint says these are different recordings, and on old music mixed twice it can be
@@ -275,11 +286,26 @@ it('lets a refused copy be heard against the reference, and filed anyway', () =>
   expect(onAction).toHaveBeenCalledWith('accept', 1, undefined)
 })
 
+it('plays a copy the quality check refused on its own, and files it anyway', () => {
+  // Issue #97: nothing to compare it with, so no "What you asked for" row claiming there is no copy of it.
+  const onAction = vi.fn(); const onPlay = vi.fn()
+  render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true,
+    samples: { found: kept!.found, reference: null, video: null, kind: 'listen' } }}
+    onAction={onAction} onChoose={() => {}} player={idle} onPlay={onPlay} />)
+  expect(screen.getByText('Listen, then decide')).toBeInTheDocument()
+  expect(screen.queryByText('What you asked for')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the copy Flackey found' }))
+  expect(onPlay).toHaveBeenCalledWith('found:7', '/api/rejections/7/audio')
+  expect(screen.getByText(/marked unverified/)).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  expect(onAction).toHaveBeenCalledWith('accept', 1, undefined)
+})
+
 it('offers the video instead when the reference is one, and never Keep it anyway with nothing to keep', () => {
   // Half the comparison is still worth having: the block says what is missing rather than vanishing and
   // leaving the row with no explanation of why there is nothing to listen to.
   render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true,
-    samples: { found: null, reference: null, video: { url: 'https://www.youtube.com/watch?v=abc&t=95', at: '1:35' } } }}
+    samples: { found: null, reference: null, video: { url: 'https://www.youtube.com/watch?v=abc&t=95', at: '1:35' }, kind: 'compare' } }}
     onAction={() => {}} onChoose={() => {}} player={idle} onPlay={() => {}} />)
   expect(screen.getByRole('link', { name: 'Open your video at 1:35' })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=abc&t=95')
   expect(screen.getByText('The copy is no longer here')).toBeInTheDocument()

@@ -30,7 +30,10 @@ export interface Catalog { id:number; artist:string; title:string; mix_name:stri
 export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:number|null; source:string; source_fmt:string|null; label:string }
 export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number; cutoff_hz:number; file_size:number; artist:string; title:string; mix_name:string;
   duration_s:number|null; isrc:string|null; catalog_track_id:number|null; request_id:number|null; added_at:string; verified_at:string|null; spectrogram_path:string|null;
-  source:string; source_fmt:string|null; bit_depth:number|null; sample_rate:number|null; format?:TrackFormat; catalog:Catalog|null }
+  source:string; source_fmt:string|null; bit_depth:number|null; sample_rate:number|null; format?:TrackFormat; catalog:Catalog|null
+  /** What the file was checked against and how it came out. The page reads one kind: `quality_check`, written
+      only when the owner kept a copy the quality check refused (issue #97). */
+  evidence?:{ kind:string; value:Record<string, unknown> }[] }
 export interface Fingerprint { status:string; score:number|null; offset_s:number|null; reason:string|null }
 export interface Attempt { id:number; request_id:number; provider:string; created_at:string; query:string; outcome:string|null;
   fingerprint:Fingerprint|null; spectrogram_path:string|null; first_byte_ms:number|null; total_ms:number|null }
@@ -141,10 +144,14 @@ const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
 
 /** What only the page knows about where the bug happened. The server checks every field before it goes
     into the email or the zip, so this is a hint, not a claim. */
-export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number }
+export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number
+  /** Set for "Report this failure": the report is then about this one request (issue #165). */
+  request_id?: number }
 /** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
     shows the bytes that leave rather than a description of them. */
-export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number }
+export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number
+  /** The one-line diagnosis of a failure report; null for a general bug report. */
+  diagnosis?: string | null }
 export interface BugSent { file: string; to: string; subject: string; body: string }
 
 export const api = {
