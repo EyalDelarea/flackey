@@ -2,6 +2,7 @@
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
 import asyncio
 import hashlib
+import logging
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -30,7 +31,13 @@ from flackey.models import (
 )
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
-from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
+from flackey.source import (
+    LosslessError,
+    LosslessUnavailable,
+    SourceNotFound,
+    SourceTimeout,
+    TransferProgress,
+)
 from flackey.store import Store
 from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.verify import verify as real_verify
@@ -865,6 +872,77 @@ async def test_startup_marks_open_attempts_interrupted_cancels_and_rescans(lenv)
     assert store.get_attempt(open_id).outcome == "interrupted" and provider.cancelled == 1 and provider.rescans == 1
     r = await w.process(rid)                                   # interrupted does not block re-entry
     assert store.get_attempt_for_request(rid).outcome == "filed" and r.state == RequestState.DONE
+
+
+class BootingSidecar(FakeProvider):
+    """slskd as the app finds it at launch: started beside the worker, and not answering until `up`."""
+
+    def __init__(self, *a, log: list[str], **kw):
+        super().__init__(*a, **kw)
+        self.up, self.log = False, log
+
+    def _answer(self, what: str) -> None:
+        if not self.up:
+            raise LosslessUnavailable("slskd unreachable: ConnectError")
+        self.log.append(what)
+
+    async def cancel_all(self):
+        self._answer("cancel")
+        return await super().cancel_all()
+
+    async def rescan_shares(self):
+        self._answer("rescan")
+        await super().rescan_shares()
+
+    async def search(self, text, *, wait_s, on_raw=None):
+        self.log.append("search")
+        return await super().search(text, wait_s=wait_s, on_raw=on_raw)
+
+
+async def test_a_sidecar_still_starting_is_waited_for_not_warned_about(tmp_path: Path, caplog):
+    """The app starts slskd alongside the worker, so on every launch `startup` met it booting and logged
+    "could not cancel old downloads" and "rescan failed", and neither ever happened. Both now wait for it."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    sidecar = BootingSidecar(tmp_path / "dl", log=[])
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient())
+    caplog.set_level(logging.DEBUG, logger="flackey.worker.core")
+    await w.startup()
+    await w._cancel_leftovers()
+    await w._maintenance()                     # a tick: not due again, and the sidecar is still down
+    assert sidecar.log == [] and not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    sidecar.up = True
+    await w._cancel_leftovers()
+    await w._maintenance()
+    assert sidecar.log == ["cancel", "rescan"]
+    await w._cancel_leftovers()
+    await w._maintenance()
+    assert sidecar.log == ["cancel", "rescan"]                    # once each, not on every tick
+
+
+async def test_a_refusal_that_is_not_the_sidecar_being_down_is_still_reported(tmp_path: Path, caplog):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+
+    class Refusing(FakeProvider):
+        async def cancel_all(self):
+            raise LosslessError("http 401")
+
+    sidecar = Refusing(tmp_path / "dl")
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient())
+    await w.startup()
+    assert "soulseek: could not cancel old downloads: http 401" in caplog.text and not w._leftovers
+
+
+@requires_ffmpeg
+async def test_a_pass_sweeps_the_previous_runs_downloads_before_its_first_search(lenv):
+    settings, store, _, _, _, _ = lenv
+    sidecar = BootingSidecar(settings.slskd_downloads, [lf("a")], audio=lenv[3].audio, log=[])
+    w = make(lenv, provider=sidecar)
+    await w.startup()
+    sidecar.up = True                           # up between two ticks, before the loop's own sweep
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and sidecar.log[:2] == ["cancel", "search"]
 
 
 async def test_maintenance_runs_once_a_day(lenv, tmp_path: Path):

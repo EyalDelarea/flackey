@@ -127,6 +127,7 @@ class LosslessMixin:
         # Cleared first, so a pass that is cut short (the app closing mid-search) leaves the readers on its
         # own attempt rows rather than on the verdict of the pass before it.
         self.store.set_lossless_verdict(req.id, None)
+        await self._cancel_leftovers()      # the previous run's transfers go before this pass's first one
         outcomes: list[str | None] = []
         for ref in refs:
             query = search_text(ref)
