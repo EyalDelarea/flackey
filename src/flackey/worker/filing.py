@@ -15,7 +15,6 @@ from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
 from ..library import file_track, final_path, refile_path
-from ..match import candidate_version
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
@@ -267,8 +266,10 @@ class FilingMixin:
 
     async def _lossy_version(self, req: Request, cand: Candidate, tmp: Path) -> VersionCheck | None:
         """The version check for a file that came as the candidate's own record (the Deezer copy, or one the
-        owner kept): Deezer's album and title are evidence, and so are the file's tags (issue #172)."""
-        asked = split_version(candidate_version(cand), cand.album, req.query_version)
+        owner kept): Deezer's album and title are evidence, and so are the file's tags (issue #172). What was
+        asked is the request's version, or the record's own title saying remaster -- never its album, so an
+        original request filed from a record on a remastered album is flagged, not passed silently."""
+        asked = split_version(req.query_version, cand.title, cand.mix_name)
         tags = await asyncio.to_thread(tags_as_arrived, tmp)
         return check_version(asked, tags=tags, metadata=(cand.album, cand.title, cand.mix_name),
                              release_year=cand.release_date)

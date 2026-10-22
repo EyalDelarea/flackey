@@ -7,7 +7,7 @@ from rapidfuzz import fuzz
 
 from .identify import parse_version
 from .models import Candidate, CatalogTrack, Query, norm
-from .version import Version, agrees, record_version, says_remaster, split_version
+from .version import Version, agrees, record_version, release_counts, says_remaster, split_version
 
 THRESHOLD = 80
 LENGTH_SLACK_S = 3  # encoding slack between releases of one recording
@@ -43,22 +43,22 @@ def candidate_version(cand: Candidate) -> str:
     if cand.mix_name:
         return cand.mix_name
     _, v = parse_version(cand.title)
-    if v:
-        return v
-    # Deezer lists some remasters with no version text, on an album that says it (issue #172)
-    return "Remastered" if says_remaster(cand.album) else "Original Mix"
+    return v or "Original Mix"
 
 
-def candidate_release(cand: Candidate) -> Version:
-    """The candidate's version, its album and title counted: where Deezer's record says remaster."""
-    return split_version(candidate_version(cand), cand.title, cand.album)
+def candidate_release(cand: Candidate, asked: Version | None = None) -> Version:
+    """The candidate's version as far as `asked` goes: its title always counts, and Deezer's album when the
+    remaster was asked for -- Deezer lists some remasters with no version text, on an album that says it
+    (issue #172). An album alone never turns a track the owner already has into another version."""
+    return split_version(candidate_version(cand), cand.title, cand.album if release_counts(asked) else None)
 
 
 def eligible(query: Query, cand: Candidate) -> bool:
     """Is `cand` the version the query names? Every candidate is, when it names none."""
     if not query.version:
         return True
-    return agrees(split_version(query.version), candidate_release(cand))
+    asked = split_version(query.version)
+    return agrees(asked, candidate_release(cand, asked))
 
 
 def _candidate_title(cand: Candidate) -> str:
@@ -76,19 +76,23 @@ def versions_agree(a: str | None, b: str | None) -> bool:
     return fuzz.token_set_ratio(_norm(a), _norm(b)) >= 80
 
 
-def same_version(cand: Candidate, catalog: CatalogTrack) -> bool:
-    return agrees(candidate_release(cand), record_version(catalog))
+def same_version(cand: Candidate, catalog: CatalogTrack, asked: str | None = None) -> bool:
+    a = split_version(asked)
+    return agrees(candidate_release(cand, a), record_version(catalog, a))
 
 
 def _original(cand: Candidate) -> bool:
-    """The original arrangement, remastered or not: no remix, edit or dub."""
-    return candidate_release(cand).is_original
+    """What a request that names no version takes: the original arrangement, and not a record whose own
+    title says remaster ("LSD (Remastered 2024)" is turned down, as before issue #172). One on an album
+    that says remaster still counts -- classic catalogue sits there -- but loses ties (`_plain`) and is
+    filed flagged "version unconfirmed" (`filing._lossy_version`)."""
+    v = candidate_release(cand)
+    return v.is_original and not v.remaster
 
 
 def _plain(cand: Candidate) -> bool:
-    """The original arrangement, not a remaster: what a request that names no version means first."""
-    v = candidate_release(cand)
-    return v.is_original and not v.remaster
+    """`_original`, and on no album that says remaster either: first among equals for an original request."""
+    return _original(cand) and not says_remaster(cand.album)
 
 
 def _version_points(query: Query, cand: Candidate) -> int:
@@ -128,8 +132,9 @@ def score_candidate(query: Query, cand: Candidate, catalog: CatalogTrack | None)
     duration_pts = _duration_points(cand.duration_s, ref_dur, notes)
     # A remaster can carry the original's ISRC (Hallucinogen's "LSD", 2026-10-20): the ISRC names the
     # recording, so it settles the match only when the versions agree too.
+    asked = split_version(query.version)
     isrc = bool(catalog and catalog.isrc and cand.isrc and catalog.isrc == cand.isrc
-                and agrees(record_version(catalog), candidate_release(cand)))
+                and agrees(record_version(catalog, asked), candidate_release(cand, asked)))
     total = 100 if isrc else artist_pts + title_pts + version_pts + duration_pts
     return Score(total=total, artist=artist_pts, title=title_pts, version=version_pts,
                  duration=duration_pts, isrc=isrc, notes=notes)
@@ -180,7 +185,8 @@ def _within_slack(c: Candidate, ref_s: int | None) -> bool:
 
 
 def _pinned_by_length(query: Query, top: Candidate, eligible: list[Candidate]) -> bool:
-    """The video's length singles out `top` (an edit or a remix): it matches, and no original does."""
-    if _original(top) or not _within_slack(top, query.duration_s):
+    """The video's length singles out `top` (an edit or a remix): it matches, and no original does. Never a
+    remaster: it is the original's length, so the length cannot say the video was the remaster (issue #172)."""
+    if candidate_release(top).is_original or not _within_slack(top, query.duration_s):
         return False
     return not any(_original(c) and _within_slack(c, query.duration_s) for c in eligible)

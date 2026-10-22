@@ -2716,15 +2716,26 @@ async def test_a_plain_named_remaster_is_filed_with_what_its_tags_say(lenv, tmp_
     assert [e["detail"]["status"] for e in a.timeline if e["event"] == "version"] == [status]
 
 
-async def test_an_original_filed_from_a_remastered_folder_is_flagged(lenv):
+async def test_an_original_filed_from_a_file_named_remaster_is_flagged(lenv):
     _, store, notifier, provider, _, _ = lenv
-    provider.files = [lf("a", path="The Albums Remastered (2023)\\02. Astral Projection - Into the Void.flac")]
+    provider.files = [lf("a", path="x\\02. Astral Projection - Into the Void (2011 Remaster).flac")]
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE
     assert {e.kind: e.value for e in store.list_evidence(r.track_id)}["version_check"]["status"] == "unconfirmed"
     assert "version unconfirmed" in notifier.sent[-1][0]
+
+
+async def test_a_remastered_folder_alone_does_not_question_an_original(lenv):
+    """A peer's folder is about a whole album, often a compilation: only the file's own name or tags count."""
+    _, store, notifier, provider, _, _ = lenv
+    provider.files = [lf("a", path="The Albums Remastered (2023)\\02. Astral Projection - Into the Void.flac")]
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}
+    assert "version unconfirmed" not in notifier.sent[-1][0]
 
 
 async def test_an_original_with_nothing_saying_remaster_carries_no_version_check(lenv):

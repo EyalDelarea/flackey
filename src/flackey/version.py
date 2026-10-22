@@ -61,10 +61,18 @@ def split_version(version: str | None, *context: str | None) -> Version:
     return Version(arrangement(version), bool(remaster_texts), year)
 
 
-def record_version(record: CatalogTrack) -> Version:
-    """A Beatport (or stand-in) record's version: Beatport often files a remaster as "Original Mix" on a
-    release that says "Remastered"."""
-    return split_version(record.mix_name, record.title, record.release_name)
+def record_version(record: CatalogTrack, asked: Version | None = None) -> Version:
+    """A Beatport (or stand-in) record's version as far as `asked` goes. Beatport files some remasters as
+    "Original Mix" on a release that says "Remastered", so the release name counts when the remaster was
+    asked for. It does not otherwise: classic catalogue sits on remastered releases, and a request that
+    names no version means that track, already filed as "Original Mix" (`release_counts`)."""
+    return split_version(record.mix_name, record.title, record.release_name if release_counts(asked) else None)
+
+
+def release_counts(asked: Version | None) -> bool:
+    """Whether a release's or album's own wording says which version a record is: only when the remaster
+    was asked for. The record's title and mix always do."""
+    return asked is not None and asked.remaster
 
 
 def same_arrangement(a: str, b: str) -> bool:
@@ -99,28 +107,25 @@ class VersionCheck:
         return asdict(self)
 
 
-_TAG_FIELDS = ("album", "title", "mix", "comment")
-
-
 def check_version(asked: Version, *, path: str = "", tags: dict[str, str] | None = None,
                   metadata: tuple[str | None, ...] = (), release_year: str | None = None) -> VersionCheck | None:
     """Evidence for the version of a file whose recording the fingerprint has already matched. `path` is
     the peer's, `tags` the file's own as it arrived, `metadata` what the record it was fetched as says
     (Deezer's album and title), `release_year` that record's or the file's date.
 
-    A remaster is confirmed when anything there says remaster, or the date is the remaster's year or
-    later. An original is only ever questioned, never confirmed: nothing saying remaster is the normal
-    case, so only a file that does say it gets a check (None otherwise)."""
+    A remaster is confirmed when the path, the title, mix or album tag, or the record says remaster, or
+    the date is the remaster's year or later. An original is only ever questioned, never confirmed, and
+    only by what names this one track -- the file name, its title and mix tags, the record it came as:
+    a peer's folder or a comment saying "remastered" is too often about something else (None otherwise)."""
     tags = tags or {}
-    texts = [path, *(tags.get(k) for k in _TAG_FIELDS), *metadata]
-    named = says_remaster(*texts)
-    year = (tags.get("date") or "")[:4] or (release_year or "")[:4] or None
     if not asked.remaster:
-        if named:
+        filename = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if says_remaster(filename, tags.get("title"), tags.get("mix"), *metadata):
             return VersionCheck("unconfirmed", "the file says remaster, and the original was asked for")
         return None
-    if named:
+    if says_remaster(path, tags.get("title"), tags.get("mix"), tags.get("album"), *metadata):
         return VersionCheck("confirmed", "its name or tags say remaster")
+    year = (tags.get("date") or "")[:4] or (release_year or "")[:4] or None
     if asked.year and year and year >= asked.year:
         return VersionCheck("confirmed", f"dated {year}, the remaster's year or later")
     return VersionCheck("unconfirmed", "nothing in its name or tags says it is the remaster")

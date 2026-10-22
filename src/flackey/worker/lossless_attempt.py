@@ -108,7 +108,7 @@ class LosslessMixin:
         """`from_query` says the words in this reference are the request's own. That is a fact about where
         `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
         match still searches and tags from the record, because the catalog wins inside `reference_for`."""
-        ref = reference_for(catalog, cand, req.query_duration_s)
+        ref = reference_for(catalog, cand, req.query_duration_s, req.query_version)
         return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
 
 

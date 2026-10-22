@@ -11,7 +11,7 @@ from urllib.parse import quote
 from rapidfuzz import fuzz
 
 from .models import TITLE_FLOOR, CatalogTrack, Query, norm
-from .version import Version, agrees, record_version, says_remaster, split_version
+from .version import agrees, record_version, says_remaster, split_version
 
 _NEXT_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL)
 BROWSER = "chrome"
@@ -156,14 +156,14 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
     if not tracks:
         return None
     want_version = _norm(query.version) if query.version else None
-    # The asked version against each record's, its release name counted: Beatport files some remasters as
-    # "Original Mix" on a release that says "Remastered" (issue #172)
-    asked = split_version(query.version) if query.version else Version()
+    # The asked version against each record's, its release name counted for a remaster request: Beatport
+    # files some remasters as "Original Mix" on a release that says "Remastered" (issue #172)
+    asked = split_version(query.version)
     pinned = _length_pins_a_version(query, tracks)
     scored: list[tuple[float, CatalogTrack]] = []
     agreeing: dict[int, bool] = {}
     for t in tracks:
-        agreeing[t.id] = agrees(asked, record_version(t))
+        agreeing[t.id] = agrees(asked, record_version(t, asked))
         if want_version and not agreeing[t.id]:
             continue
         if query.artist and query.title:
@@ -195,6 +195,7 @@ def best_match(query: Query, tracks: list[CatalogTrack], preferred_isrc: str | N
     # A remaster can share the original's ISRC, so the ISRC only counts for the asked version, and an
     # original request takes the original release over its remaster on a tie.
     scored.sort(key=lambda x: (-round(x[0], 3), not agreeing[x[1].id],
+                               says_remaster(x[1].release_name) != asked.remaster,
                                not _same_isrc(x[1], preferred_isrc),
                                x[1].release_date or "9999", x[1].id))
     s, t = scored[0]

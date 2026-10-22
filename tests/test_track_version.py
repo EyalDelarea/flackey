@@ -38,8 +38,27 @@ def test_context_can_only_say_remaster():
 def test_a_beatport_record_is_a_remaster_when_its_release_says_so():
     rec = CatalogTrack(id=1, artist="Hallucinogen", title="LSD", mix_name="Original Mix", label="Twisted",
                        genre="Psy-Trance", release_name="The Albums Remastered")
-    assert record_version(rec) == Version("", True, None)
-    assert not record_version(CatalogTrack(**{**rec.__dict__, "release_name": "Twisted"})).remaster
+    asked = split_version("Remastered 2024")
+    assert record_version(rec, asked) == Version("", True, None)
+    assert not record_version(CatalogTrack(**{**rec.__dict__, "release_name": "Twisted"}), asked).remaster
+
+
+@pytest.mark.parametrize("asked", [None, "Radio Edit", "Extended Mix", "Vini Vici Remix"])
+def test_a_remastered_release_says_nothing_unless_the_remaster_was_asked_for(asked):
+    """Classic catalogue sits on "Remastered" releases: a request for the track, or for its radio edit,
+    extended mix or a remix, still means the record as filed."""
+    mix = asked or "Original Mix"
+    rec = CatalogTrack(id=1, artist="A", title="T", mix_name=mix, label="L", genre="G",
+                       release_name="Greatest Hits (Remastered)")
+    have = record_version(rec, split_version(asked))
+    assert not have.remaster and agrees(split_version(asked), have)
+
+
+def test_a_track_with_no_version_anywhere_is_the_original():
+    rec = CatalogTrack(id=1, artist="A", title="T", mix_name=None, label="L", genre="G", release_name=None)
+    assert record_version(rec) == record_version(rec, split_version("Remastered")) == Version()
+    assert split_version(None, None) == Version()
+    assert check_version(Version(), path="", tags={}) is None
 
 
 def test_agreement_is_the_arrangement_and_the_remaster_flag_not_the_year():
@@ -71,7 +90,8 @@ REMASTER = split_version("Remastered 2024")
     # the path does not, the tags do
     ("Twisted\\01. LSD.flac", {"album": "The Albums (Remastered)"}, "confirmed"),
     ("Twisted\\01. LSD.flac", {"title": "LSD (2024 Remaster)"}, "confirmed"),
-    ("Twisted\\01. LSD.flac", {"comment": "remastered by Simon Posford"}, "confirmed"),
+    # a comment is too often about something else ("remastered by", a rip note)
+    ("Twisted\\01. LSD.flac", {"comment": "remastered by Simon Posford"}, "unconfirmed"),
     # the date is the remaster's year or later
     ("Twisted\\01. LSD.flac", {"date": "2024-03-01"}, "confirmed"),
     ("Twisted\\01. LSD.flac", {"date": "2025"}, "confirmed"),
@@ -90,10 +110,14 @@ def test_a_remaster_with_no_year_asked_is_not_confirmed_by_a_date():
 
 def test_an_original_is_questioned_only_by_a_file_that_says_remaster():
     assert check_version(Version(), path="Twisted\\01. LSD.flac", tags={"album": "Twisted"}) is None
-    flagged = check_version(Version(), path="The Albums Remastered (2023)\\01. LSD.flac")
+    flagged = check_version(Version(), path="Twisted\\01. LSD (2024 Remaster).flac")
     assert flagged.status == "unconfirmed" and "original" in flagged.reason
-    assert check_version(Version(), path="x\\LSD.flac", tags={"album": "The Albums Remastered"}).status \
+    assert check_version(Version(), path="x\\LSD.flac", tags={"title": "LSD (Remastered)"}).status \
         == "unconfirmed"
+    # what is about more than this one track never questions it: a peer's folder, an album, a comment
+    assert check_version(Version(), path="The Albums Remastered (2023)\\01. LSD.flac") is None
+    assert check_version(Version(), path="x/LSD.flac", tags={"album": "Remastered Classics",
+                                                             "comment": "remastered rip"}) is None
 
 
 def test_the_record_it_was_fetched_as_is_evidence_too():

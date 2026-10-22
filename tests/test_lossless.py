@@ -253,7 +253,16 @@ def test_the_year_is_left_out_of_the_search_for_a_version():
     """2026-10-20: "Hallucinogen LSD Remastered 2024" found 15 files and none was the remaster, because peers
     file it under "The Albums Remastered (2023)". Without the year the same network answered 127."""
     assert search_text(LSD_2024) == "Hallucinogen LSD Remastered"
-    assert search_text(Reference("A", "T", "2012 Remix", 300)) == "A T Remix"
+    assert search_text(Reference("A", "T", "Remastered 2012", 300)) == "A T Remastered"
+
+
+def test_a_year_that_names_a_version_stays_in_the_search_and_the_name_check():
+    """Only a remaster's year is the label's: "2020 Remix" and "Club Mix 2000" are those versions' names."""
+    assert search_text(Reference("A", "T", "2012 Remix", 300)) == "A T 2012 Remix"
+    assert search_text(Reference("A", "T", "Club Mix 2000", 300)) == "A T Club Mix 2000"
+    ref = Reference("A", "T", "2012 Remix", 300)
+    assert rank_version(mk(path="x\\A - T (2012 Remix).flac", length_s=300), ref) == 0
+    assert rank_version(mk(path="x\\A - T (1998 Remix).flac", length_s=300), ref) == 1     # another remix: tried after the named one
 
 
 def test_a_remaster_path_ranks_first_and_a_plain_one_is_still_tried():
@@ -297,9 +306,11 @@ def test_a_record_on_a_remastered_release_is_searched_and_ranked_as_the_remaster
     must still ask for the remaster, or the gate would rank the remaster last (issue #172)."""
     record = CatalogTrack(id=8, isrc="USA2P0300457", artist="Hallucinogen", title="LSD", mix_name="Original Mix",
                           label="Twisted", genre="Psy-Trance", release_name="The Albums Remastered", duration_ms=403000)
-    ref = reference_for(record, Candidate(source="beatport", source_ref="beatport:8", artist="Hallucinogen",
-                                          title="LSD", duration_s=403))
+    beatport = Candidate(source="beatport", source_ref="beatport:8", artist="Hallucinogen", title="LSD", duration_s=403)
+    ref = reference_for(record, beatport, asked="Remastered 2024")
     assert ref.mix_name == "Remastered" and search_text(ref) == "Hallucinogen LSD Remastered"
+    # a request that names no version means the track: classic catalogue sits on remastered releases
+    assert reference_for(record, beatport).mix_name == "Original Mix"
     files = [mk(username="orig", path="Twisted\\01. Hallucinogen - LSD.flac", length_s=403),
              mk(username="rm", path="The Albums Remastered (2023)\\01. LSD.flac", length_s=403, has_free_slot=False)]
     assert pick(files, ref, PickPolicy()).survivors[0].username == "rm"
@@ -308,4 +319,6 @@ def test_a_record_on_a_remastered_release_is_searched_and_ranked_as_the_remaster
 def test_a_deezer_candidate_on_a_remastered_album_is_the_remaster_reference():
     cand = Candidate(source="deezer_bot", source_ref="dz:2", artist="Hallucinogen", title="LSD", duration_s=403,
                      deezer_id=2, album="The Albums Remastered")
-    assert reference_for(None, cand).mix_name == "Remastered"
+    assert reference_for(None, cand, asked="Remastered 2024").mix_name == "Remastered"
+    assert reference_for(None, cand).mix_name == "Original Mix"
+    assert reference_for(None, cand, asked="Extended Mix").mix_name == "Original Mix"

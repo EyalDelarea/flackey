@@ -1,5 +1,6 @@
 from flackey.match import (
     THRESHOLD,
+    candidate_release,
     candidate_version,
     decide,
     identification_order,
@@ -7,6 +8,7 @@ from flackey.match import (
     score_candidate,
 )
 from flackey.models import Candidate, CatalogTrack, Query
+from flackey.version import split_version
 
 CT = CatalogTrack(id=16552105, isrc="UKU932231081", artist="Astral Projection", title="Into the Void",
                   mix_name="Original Mix", label="L", genre="G", duration_ms=442816)
@@ -169,9 +171,27 @@ def lsd_pair() -> tuple[Candidate, Candidate]:
     return original, remaster
 
 
-def test_an_album_that_says_remaster_names_the_candidate_version():
+def test_an_album_that_says_remaster_names_the_version_only_for_a_remaster_request():
+    """Classic catalogue sits on "Remastered" albums: for any other request the album says nothing, so the
+    copy already filed as "Original Mix" is still that track."""
     original, remaster = lsd_pair()
-    assert candidate_version(original) == "Original Mix" and candidate_version(remaster) == "Remastered"
+    assert candidate_version(original) == candidate_version(remaster) == "Original Mix"
+    assert candidate_release(remaster, split_version("Remastered 2024")).remaster
+    assert not candidate_release(remaster).remaster
+    assert not candidate_release(remaster, split_version("Extended Mix")).remaster
+
+
+def test_an_original_request_never_takes_a_titled_remaster_on_length():
+    """A record whose own title says remaster is turned down for a request that names no version, even when
+    its length is the closer one (as before issue #172)."""
+    original = Candidate(source="deezer_bot", source_ref="dz:1", artist="Hallucinogen", title="LSD", duration_s=395,
+                         deezer_id=1, rank=0)
+    titled = Candidate(source="deezer_bot", source_ref="dz:2", artist="Hallucinogen", title="LSD (Remastered 2024)",
+                       duration_s=403, deezer_id=2, rank=1)
+    d = decide(LSD_Q, [titled, original], None)
+    assert d.chosen is original
+    alone = decide(LSD_Q, [titled], None)
+    assert not alone.auto                                 # to the owner, as before
 
 
 def test_a_remaster_request_picks_the_remaster_on_the_text_path():
@@ -204,11 +224,12 @@ def test_a_remaster_request_tries_only_the_remaster_preview_on_the_youtube_path(
 def test_a_shared_isrc_settles_a_match_only_when_the_versions_agree():
     original, remaster = lsd_pair()
     assert score_candidate(LSD_Q, original, LSD_RECORD).isrc
-    assert not score_candidate(LSD_Q, remaster, LSD_RECORD).isrc
+    assert not score_candidate(LSD_REMASTER_Q, remaster, LSD_RECORD).isrc
     remaster_record = CatalogTrack(**{**LSD_RECORD.__dict__, "id": 8, "release_name": "The Albums Remastered"})
     assert score_candidate(LSD_REMASTER_Q, remaster, remaster_record).isrc
 
 
 def test_same_version_reads_the_album_and_the_release():
     original, remaster = lsd_pair()
-    assert same_version(original, LSD_RECORD) and not same_version(remaster, LSD_RECORD)
+    assert same_version(original, LSD_RECORD) and not same_version(remaster, LSD_RECORD, "Remastered 2024")
+    assert same_version(remaster, LSD_RECORD)       # the album alone, for a request that names no version

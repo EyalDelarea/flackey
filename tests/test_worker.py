@@ -1647,3 +1647,22 @@ async def test_a_remaster_video_with_no_remaster_on_deezer_searches_on_its_own_w
                             source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert tried == [] and r.track_id is None and r.chosen_candidate_id is None
+
+
+async def test_an_original_request_filed_from_a_remastered_album_is_flagged_not_passed(env):
+    """Classic catalogue sits on "Remastered" albums, so a request that names no version still takes such a
+    record when it is the one there is -- but the file says which it is, never silently (issue #172)."""
+    _settings, store, notifier = env
+    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0)]), FakeCatalog([]))
+    r = await w.process(store.add_request("Hallucinogen - LSD", RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    assert {e.kind: e.value for e in store.list_evidence(r.track_id)}["version_check"]["status"] == "unconfirmed"
+    assert "version unconfirmed" in notifier.sent[-1][0]
+
+
+async def test_an_original_request_prefers_the_original_album_over_its_remaster(env):
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0), _lsd(1, "Twisted", 1)]), FakeCatalog([]))
+    r = await w.process(store.add_request("Hallucinogen - LSD", RequestKind.TEXT))
+    assert r.state == RequestState.DONE and store.get_candidate(r.chosen_candidate_id).deezer_id == 1
+    assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}

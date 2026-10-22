@@ -156,9 +156,14 @@ def _present(store: Store, t: Track | None) -> Track | None:
     return t
 
 
-def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate) -> Track | None:
+def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
+                   asked: str | None = None) -> Track | None:
+    """The library track this download would duplicate. `asked` is the request's version text: a release
+    or album that says remaster only counts when it asks for the remaster, so a classic track on a
+    "Remastered" album still finds the copy already filed as "Original Mix" (issue #172)."""
     isrc = (catalog.isrc if catalog else None) or cand.isrc
-    version = record_version(catalog) if catalog else candidate_release(cand)
+    a = split_version(asked)
+    version = record_version(catalog, a) if catalog else candidate_release(cand, a)
     if isrc:
         # A label can reissue a remaster under the original's ISRC (Hallucinogen's "LSD (Remastered
         # 2024)", 2026-10-20), so the ISRC is only the same track when the version agrees too.

@@ -155,7 +155,7 @@ class PipelineMixin:
         # (the bot can list the same Deezer id twice)
         chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
 
-        dup = find_duplicate(self.store, catalog, chosen)
+        dup = find_duplicate(self.store, catalog, chosen, req.query_version)
         if dup:
             await self._mark_duplicate(req, dup.id, dup.path)
             return None
@@ -201,7 +201,7 @@ class PipelineMixin:
         """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
         downloading is another version (the owner picked a remix, or the video's length pinned an edit),
         re-match Beatport against that version so the tags describe the recording in the file."""
-        if catalog is None or same_version(cand, catalog):
+        if catalog is None or same_version(cand, catalog, req.query_version):
             return catalog
         want = candidate_query(cand)
         tracks = await self._catalog_search(req, want)
@@ -251,7 +251,7 @@ class PipelineMixin:
 
 
     async def _fetch_verify_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> None:
-        dup = find_duplicate(self.store, catalog, cand)  # again: a reviewed request may have waited for hours
+        dup = find_duplicate(self.store, catalog, cand, req.query_version)  # again: a reviewed request may have waited for hours
         if dup:
             await self._mark_duplicate(req, dup.id, dup.path)
             return

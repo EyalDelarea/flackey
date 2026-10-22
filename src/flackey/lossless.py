@@ -13,7 +13,7 @@ from rapidfuzz import fuzz
 
 from .config import Settings
 from .identify import parse_version
-from .match import candidate_version
+from .match import candidate_release, candidate_version
 from .models import Candidate, CatalogTrack, is_original, norm
 from .version import record_version, says_remaster, split_version, with_remaster
 
@@ -29,9 +29,14 @@ VERSION_WORDS = frozenset({"remix", "rmx", "mix", "edit", "version", "dub", "rew
 _TRACK_NO = re.compile(r"^\s*[\[(]?\d{1,3}[\])]?\s*[.\-_)]?\s*")
 _TRAILING_HASH = re.compile(r"-[0-9a-f]{6,}$")
 _PARENS = re.compile(r"\(.*?\)")
-# A release year in a version ("Remastered 2024") is the label's, not the peers': they file the same remaster
-# under the box set's 2023 (2026-10-20), so it neither goes into the search nor has to be in a file's name.
+# A remaster's year ("Remastered 2024") is the label's, not the peers': they file the same remaster under the
+# box set's 2023 (2026-10-20), so it neither goes into the search nor has to be in a file's name. Any other
+# year is part of the version's name ("2020 Remix", "Club Mix 2000") and stays.
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def _without_remaster_year(mix: str) -> str:
+    return _YEAR.sub("", mix) if says_remaster(mix) else mix
 
 
 @dataclass(frozen=True)
@@ -92,16 +97,20 @@ def first_artist(artist: str) -> str:
     return _PARENS.sub("", artist).split(",")[0].strip()
 
 
-def reference_for(catalog: CatalogTrack | None, cand: Candidate, requested_duration_s: int | None = None) -> Reference:
-    """The reference's mix name says remaster whenever the record's release does, so a record Beatport files
-    as "Original Mix" on a remastered release is searched and ranked as the remaster (issue #172)."""
+def reference_for(catalog: CatalogTrack | None, cand: Candidate, requested_duration_s: int | None = None,
+                  asked: str | None = None) -> Reference:
+    """For a remaster request (`asked`, the request's version text), the reference's mix name says remaster
+    whenever the record's release or album does, so a record Beatport files as "Original Mix" on a
+    remastered release is searched and ranked as the remaster (issue #172). For any other request the
+    release's wording says nothing: classic catalogue sits on remastered releases."""
+    a = split_version(asked)
     if catalog is not None:
-        mix = with_remaster(catalog.mix_name, record_version(catalog).remaster)
+        mix = with_remaster(catalog.mix_name, record_version(catalog, a).remaster)
         return Reference(catalog.artist, catalog.title, mix, catalog.duration_s or cand.duration_s,
                          cand.deezer_id, requested_duration_s)
     title, _ = parse_version(cand.title)
-    return Reference(cand.artist, title, candidate_version(cand), cand.duration_s, cand.deezer_id,
-                     requested_duration_s)
+    mix = with_remaster(candidate_version(cand), candidate_release(cand, a).remaster)
+    return Reference(cand.artist, title, mix, cand.duration_s, cand.deezer_id, requested_duration_s)
 
 
 def search_text(ref: Reference) -> str:
@@ -109,7 +118,7 @@ def search_text(ref: Reference) -> str:
     real version (the spike: this form found every track once the search was allowed to complete)."""
     text = f"{first_artist(ref.artist)} {_PARENS.sub('', ref.title)}"
     if not ref.is_original:
-        text += f" {_YEAR.sub('', ref.mix_name)}"
+        text += f" {_without_remaster_year(ref.mix_name)}"
     return " ".join(text.split())
 
 
@@ -218,7 +227,7 @@ def _version_agrees(f: LosslessFile, ref: Reference) -> bool:
     words = set(norm(version or "").split()) | set(extra)
     if ref.is_original or split_version(ref.mix_name).is_original:
         return not (words & VERSION_WORDS) or "original" in words
-    want = [w for w in norm(_YEAR.sub("", ref.mix_name)).split()
+    want = [w for w in norm(_without_remaster_year(ref.mix_name)).split()
             if w not in VERSION_WORDS and not w.startswith("remaster")]
     have = set(norm(f"{version or ''} {title}").split())
     return all(w in have for w in want)
