@@ -2188,6 +2188,25 @@ async def test_a_soulseek_miss_says_the_bot_is_paused_not_switched_off(lenv):
     assert "paused because Telegram is signed out" in notifier.sent[-1][0]
 
 
+async def test_a_copy_with_no_telegram_keys_says_telegram_isnt_set_up_and_is_still_given_back(lenv):
+    """No keys, no account: the row says what the banner and Settings say ("isn't set up"), not "signed out".
+    The re-queue matches both spellings, so setting Telegram up later still gives the row back."""
+    settings, store, _, _, _, _ = lenv
+    settings.telegram_api_id, settings.telegram_api_hash = None, None
+    status = {"telegram_authorized": False}
+    w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []), source=FakeSource([good_cand()]),
+             status=status)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert worker_mod.BOT_PAUSED_NOT_SET_UP in r.flag_reason and "signed out" not in r.flag_reason
+    store.update_request(rid, state=RequestState.ERROR, error_message=r.flag_reason)
+
+    await w._requeue_for_the_bot()
+    status["telegram_authorized"] = True
+    await w._requeue_for_the_bot()
+    assert store.get_request(rid).state == RequestState.QUEUED
+
+
 async def test_a_record_the_bot_offered_earlier_is_not_fetched_while_telegram_is_signed_out(lenv):
     """A record picked in review -- or kept when a fetch was cut short -- is a bot record, and the MP3
     fallback for it goes through the bot. With Telegram gone that fetch is skipped rather than attempted."""

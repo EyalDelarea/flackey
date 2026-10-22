@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 
 from ..models import LosslessAttempt, Request, RequestState, miss_reason
 from .policy import (
-    BOT_PAUSED,
     LONG_RETRY_EVERY_S,
     LONG_RETRY_OUTCOMES,
     LONG_RETRY_TIMES,
@@ -17,6 +16,7 @@ from .policy import (
     SEARCH_AGAIN_AFTER,
     SLOW_BACKOFF_S,
     SLOW_RETRY_OUTCOMES,
+    bot_paused,
 )
 
 log = logging.getLogger(__name__)
@@ -95,10 +95,12 @@ class RecoveryMixin:
             self._set_state(req, RequestState.QUEUED, flag_reason="Telegram is back; asking the Deezer bot",
                             retry_after=None)
             return
+        # "isn't set up" on a copy with no Telegram keys, where "signed out" names an account that never was
+        paused_why = bot_paused(self.settings.telegram_configured)
         if not self.settings.source_enabled:
             fallback = "the Deezer bot is switched off, so there is no lossy copy to fall back on"
         elif paused:
-            fallback = f"{BOT_PAUSED}, so there is no lossy copy to fall back on"
+            fallback = f"{paused_why}, so there is no lossy copy to fall back on"
         else:
             fallback = "Deezer offered nothing to fall back on"
         # Two clauses, each with its own subject: a semicolon, not a comma, between them ("... closely enough;
@@ -106,7 +108,7 @@ class RecoveryMixin:
         reason = f"no way to fetch this track: {why}; {fallback}"
         # The long wait's words are what the row shows for six hours at a time, and what
         # `_requeue_for_the_bot` reads: a paused bot has to be in them, not only in the quick ladder's.
-        waiting_on = f"{why}; {BOT_PAUSED}" if paused else why
+        waiting_on = f"{why}; {paused_why}" if paused else why
         transient = outcome in LONG_RETRY_OUTCOMES
         if self._lossless_allowed(self.store.get_request(req.id)):
             await self._retry_or_fail(req, reason, wait_s=SLOW_BACKOFF_S if outcome in SLOW_RETRY_OUTCOMES else None,

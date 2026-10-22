@@ -31,7 +31,7 @@ from .interpret import InterpretMixin
 from .lossless_attempt import LosslessMixin
 from .pipeline import PipelineMixin
 from .policy import (
-    BOT_PAUSED,
+    BOT_PAUSED_MARK,
     CANCELLABLE,
     LOGIN_REQUIRED,
     LOSSLESS_HEALTH_EVERY_S,
@@ -295,7 +295,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         """On the tick the bot becomes reachable, give back what failed for want of it. A track Soulseek
         did not have, filed nowhere because the bot was paused, is exactly the one the MP3 fallback
         exists for; making the owner find it on the Failed tab and press Try again would be a chore the
-        app can do itself. `BOT_PAUSED` in the row is how those are told apart from every other failure:
+        app can do itself. `BOT_PAUSED_MARK` in the row is how those are told apart from every other failure:
         each row gets what Try again gives a failure (`_fresh_pass`), whether it failed or is still waiting
         on its backoff -- a row six hours into the Soulseek wait has spent its retry budget on a source it
         could not use, and the bot's first timeout would otherwise end it.
@@ -310,7 +310,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         n = 0
         for req in self.store.list_requests(SWEEPABLE_STATES | {RequestState.QUEUED}, limit=100_000):
             why = req.flag_reason if req.state == RequestState.QUEUED else req.error_message
-            if BOT_PAUSED not in (why or ""):
+            if BOT_PAUSED_MARK not in (why or ""):          # "signed out" and "isn't set up" alike
                 continue
             self._fresh_pass(req)
             n += 1

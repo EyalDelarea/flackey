@@ -8,6 +8,7 @@ are in `policy`; stand-in candidates and the small value types are in `records`.
 from .core import Worker
 from .policy import (
     BOT_PAUSED,
+    BOT_PAUSED_NOT_SET_UP,
     CANCELLABLE,
     LOGIN_REQUIRED,
     LONG_RETRY_EVERY_S,
@@ -33,7 +34,8 @@ from .records import (
 )
 
 __all__ = [
-    "BOT_PAUSED", "CANCELLABLE", "CATALOG_SOURCE", "LOGIN_REQUIRED", "LONG_RETRY_EVERY_S", "LONG_RETRY_OUTCOMES",
+    "BOT_PAUSED", "BOT_PAUSED_NOT_SET_UP", "CANCELLABLE", "CATALOG_SOURCE", "LOGIN_REQUIRED", "LONG_RETRY_EVERY_S",
+    "LONG_RETRY_OUTCOMES",
     "LONG_RETRY_TIMES", "MAX_ATTEMPTS", "QUERY_SOURCE", "RETRY_BACKOFF_S", "RETRY_LOSSLESS_OUTCOMES",
     "SEARCH_AGAIN_AFTER", "SECOND_PICK_AFTER", "SECOND_SEARCH_AFTER", "STAGE_OF_STATE", "Acoustic",
     "CatalogLike", "LosslessHit", "Worker", "catalog_candidate", "format_line", "query_candidate",

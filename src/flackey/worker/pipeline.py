@@ -13,7 +13,7 @@ from ..models import Candidate, CatalogTrack, Query, Request, RequestState
 from ..notify import Button
 from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
-from .policy import BOT_PAUSED, MAX_ATTEMPTS, REVIEW_BUTTONS
+from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS, bot_paused
 from .records import CATALOG_SOURCE, QUERY_SOURCE, _mmss, catalog_candidate, query_candidate
 
 log = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ class PipelineMixin:
         if self.settings.source_enabled and not self._bot_ready():
             # Never asked, not even to time out: a signed-out client either raises at once or, with no
             # keys at all, is not connected to anything. The pass carries on as if the bot were off.
-            source_why = BOT_PAUSED
+            source_why = bot_paused(self.settings.telegram_configured)
             self._bot_skipped.add(req.id)
         elif self.settings.source_enabled:
             source_why = "no Deezer candidates"
