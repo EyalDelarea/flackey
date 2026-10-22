@@ -34,7 +34,8 @@ function AppBody({ live }: { live: Live }) {
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [updateDismissed, setUpdateDismissed] = useState(false)
-  const [reporting, setReporting] = useState(false)
+  // What the open report is about: `{}` for the general one, a request id for a failed row's (issue #165).
+  const [reporting, setReporting] = useState<{ requestId?: number } | null>(null)
   // A counter, not a boolean: pressing the banner twice should scroll twice, and the second
   // press of a boolean already set to true would change nothing.
   const [focusUpdate, setFocusUpdate] = useState(0)
@@ -139,13 +140,13 @@ function AppBody({ live }: { live: Live }) {
   const banner = banners.length ? banners : undefined
   return (
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
-      updateWaiting={!!update?.available} onReport={() => setReporting(true)}
+      updateWaiting={!!update?.available} onReport={() => setReporting({})}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
-      {tab === 'download' && <DownloadPage live={live} />}
+      {tab === 'download' && <DownloadPage live={live} onReport={requestId => setReporting({ requestId })} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}
       {tab === 'uploads' && <UploadsPage />}
-      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} onReport={() => setReporting(true)} />}
-      {reporting && <ReportBugDialog screen={tab} onClose={() => setReporting(false)} />}
+      {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} onReport={() => setReporting({})} />}
+      {reporting && <ReportBugDialog screen={tab} requestId={reporting.requestId} onClose={() => setReporting(null)} />}
     </Shell>
   )
 }

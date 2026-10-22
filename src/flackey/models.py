@@ -61,6 +61,10 @@ RETRYABLE_STATES = {RequestState.ERROR, RequestState.NOT_FOUND, RequestState.CAN
 # had deliberately stopped would undo an afternoon of stopping them with one press (issue #92). The row's
 # own "Try again" is how a stopped track comes back, one deliberate press for one deliberate stop.
 SWEEPABLE_STATES = RETRYABLE_STATES - {RequestState.CANCELLED}
+# The rows that carry "Report this failure" (issue #165): the failures the pipeline arrived at, retryable or
+# not. CANCELLED is the owner's own decision, so there is nothing about it for the developer to look into.
+# `REPORTABLE` in `web/src/presentation.ts` is pinned to this by `test_reportable_states_match_the_ui`.
+REPORTABLE_STATES = FAILED_STATES - {RequestState.CANCELLED}
 
 
 def is_original(version: str | None) -> bool:

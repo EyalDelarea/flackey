@@ -553,6 +553,12 @@ class Store:
                               (request_id,)).fetchone()
         return None if r is None else Rejection(**dict(r))
 
+    def rejections_for_request(self, request_id: int) -> list[Rejection]:
+        """Every rejection the request has collected, oldest first: a request that was retried can be
+        refused more than once, and a failure report wants the whole run of them."""
+        rows = self.conn.execute("SELECT * FROM rejections WHERE request_id=? ORDER BY id", (request_id,)).fetchall()
+        return [Rejection(**dict(r)) for r in rows]
+
     def list_rejections(self, limit: int = 200) -> list[Rejection]:
         rows = self.conn.execute("SELECT * FROM rejections ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [Rejection(**dict(r)) for r in rows]
@@ -598,6 +604,11 @@ class Store:
         r = self.conn.execute("SELECT * FROM lossless_attempts WHERE request_id=? ORDER BY id DESC LIMIT 1",
                               (request_id,)).fetchone()
         return None if r is None else self._row_to_attempt(r)
+
+    def attempts_for_request(self, request_id: int) -> list[LosslessAttempt]:
+        rows = self.conn.execute("SELECT * FROM lossless_attempts WHERE request_id=? ORDER BY id",
+                                 (request_id,)).fetchall()
+        return [self._row_to_attempt(r) for r in rows]
 
     def list_attempts(self, limit: int = 50, outcome: str | None = None) -> list[LosslessAttempt]:
         if outcome:

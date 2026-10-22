@@ -75,6 +75,10 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
               carries it, on the Failed tab and in History alike -- "why is this here and can it come back"
               is the same question wherever the row is read. */}
           {v.outcome && <div className={`outcome${v.outcome.retryable ? '' : ' final'}`}>{v.outcome.note}</div>}
+          {/* Under the note rather than on the rail beside Try again: it is not a way out of the failure, and
+              the rail of a failed row already holds the one that is. */}
+          {v.reportable && <button className="btn-link muted report-failure" onClick={() => onAction('report', v.id, undefined)}>
+            Report this failure</button>}
           <Checks checks={v.checks} />
         </div>
         {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}

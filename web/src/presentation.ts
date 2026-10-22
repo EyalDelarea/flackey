@@ -26,7 +26,7 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept'; path?: string }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report'; path?: string }
 /** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
  *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
  *  kinds of audio can be playing and only one of them belongs to a candidate. */
@@ -62,6 +62,8 @@ export interface RowView {
    *  stopped has the button and is not swept. The page counts the sweep from this rather than from the
    *  button, so the count beside "Retry all" is the number of rows it will actually move. */
   sweepable: boolean
+  /** Whether the row offers "Report this failure" (issue #165). */
+  reportable: boolean
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
   samples: SamplesView | null
@@ -275,6 +277,10 @@ const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
  *  that carry Remove: `POST /api/requests/remove` stops them and forgets them in one press. Verify and
  *  filing are absent for the reason Stop is. `test_stoppable_states_match_the_worker` pins this list. */
 const STOPPABLE: RequestState[] = ['queued', 'identifying', 'fetching', 'awaiting_review']
+/** The failures worth a report to the developer: the ones the pipeline reached by itself. A track the owner
+ *  stopped is not one -- nothing went wrong with it. `test_reportable_states_match_the_ui` pins this list to
+ *  `REPORTABLE_STATES`, which the server's own wording of the diagnosis is written for. */
+const REPORTABLE: RequestState[] = ['rejected', 'not_found', 'error']
 // No "step N of 6" here any more: the stepper itself says which rung we are on, and two places saying it
 // disagreed the moment the map changed. Each line describes what is happening, nothing else.
 const PROGRESS_TEXT: Partial<Record<RequestState, string>> = {
@@ -484,6 +490,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
     artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
     bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed' || STOPPABLE.includes(r.state), sweepable: sweptByRetryAll(r.state),
+    reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),

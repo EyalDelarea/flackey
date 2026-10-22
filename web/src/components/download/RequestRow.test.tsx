@@ -12,7 +12,7 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, samples: null }
+  formatLabel: null, checks: [], progress: null, fallback: null, outcome: null, sweepable: false, reportable: false, samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
   // The note is the only thing on a final row that says what is left to do -- there is no button beside
@@ -27,6 +27,17 @@ it('spells out whether a failed row can come back, and dresses the two answers d
     onAction={() => {}} onChoose={() => {}} {...preview} />)
   expect(screen.getByText('Try again starts the search over.')).not.toHaveClass('final')
   expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+})
+
+it('offers a report on a failed row, under the note and apart from the way out', () => {
+  const onAction = vi.fn()
+  const view: RowView = { ...base, bucket: 'failed', status: 'Failed — boom', reportable: true,
+    action: { label: 'Try again', kind: 'retry' }, outcome: { retryable: true, note: 'Try again starts over.' } }
+  const { rerender } = render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} {...preview} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Report this failure' }))
+  expect(onAction).toHaveBeenCalledWith('report', 1, undefined)
+  rerender(<RequestRow view={{ ...view, reportable: false }} onAction={onAction} onChoose={() => {}} {...preview} />)
+  expect(screen.queryByRole('button', { name: 'Report this failure' })).not.toBeInTheDocument()
 })
 
 it('renders title, status and tag', () => {

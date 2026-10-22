@@ -144,10 +144,14 @@ const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
 
 /** What only the page knows about where the bug happened. The server checks every field before it goes
     into the email or the zip, so this is a hint, not a claim. */
-export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number }
+export interface BugContext { screen: string; window: [number, number]; display: [number, number]; pixel_ratio: number
+  /** Set for "Report this failure": the report is then about this one request (issue #165). */
+  request_id?: number }
 /** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
     shows the bytes that leave rather than a description of them. */
-export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number }
+export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number
+  /** The one-line diagnosis of a failure report; null for a general bug report. */
+  diagnosis?: string | null }
 export interface BugSent { file: string; to: string; subject: string; body: string }
 
 export const api = {
