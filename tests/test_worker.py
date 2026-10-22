@@ -18,6 +18,7 @@ from flackey.models import (
     Query,
     RequestKind,
     RequestState,
+    Verdict,
 )
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
@@ -690,7 +691,7 @@ async def test_beatport_blocked_tells_the_owner_once_per_outage(env):
     assert len(notices()) == 2
 
 
-async def test_verification_failure_rejects_and_deletes(env):
+async def test_verification_failure_rejects_and_clears_tmp(env):
     settings, store, notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
@@ -736,18 +737,85 @@ async def test_a_different_recording_is_kept_so_the_owner_can_hear_it(env, monke
     assert "keep it anyway" in notifier.sent[-1][0]
 
 
-async def test_a_quality_rejection_keeps_nothing(env):
-    """The other verdict is a fact about the file, not a matter of taste: an MP3 wearing a FLAC extension
-    is one whatever it sounds like. Nothing is kept, and the row offers nothing to listen to."""
-    settings, store, _notifier = env
+async def _rejected_on_quality(env):
+    """Drive a request to a quality rejection: Deezer hands over a 128 kbps MP3, under the bitrate floor."""
+    _settings, store, _notifier = env
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
-
     assert (await w.process(rid)).state == RequestState.REJECTED
+    return rid, w
 
+
+async def test_a_quality_rejection_is_kept_so_the_owner_can_overrule_it(env):
+    """Issue #97: this one used to be deleted, on the theory that "an MP3 wearing a FLAC extension is a fact
+    about the file". The check is evidence, not proof -- a resampler or a mastering filter can draw the same
+    edge -- and the bytes are already downloaded, so they are kept beside the different recordings (#92)."""
+    settings, store, notifier = env
+    rid, _w = await _rejected_on_quality(env)
+
+    rj = store.get_rejection_for_request(rid)
+    assert rj.kind == "quality" and "bitrate" in rj.reason and rj.spectrogram_path
+    kept = Path(rj.audio_path)
+    assert kept.exists() and kept.parent == settings.rejected_dir
+    assert not list(settings.tmp_dir.glob("**/*.mp3"))
+    assert "keep it anyway" in notifier.sent[-1][0]
+
+
+async def test_a_quality_rejection_in_a_format_that_cannot_be_filed_keeps_nothing(env, monkeypatch):
+    """"Keep it anyway" on a file Flackey cannot tag or file would be a button that fails, so there is none."""
+    settings, store, _notifier = env
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    monkeypatch.setattr(filing_mod, "verify", lambda path, *_a, **_k: Verdict(False, "m4a", 256, 0,
+                                                                             "unsupported format m4a", None))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.REJECTED
     assert store.get_rejection_for_request(rid).audio_path is None
-    assert not list(settings.rejected_dir.glob("*")) if settings.rejected_dir.exists() else True
+    assert not settings.rejected_dir.exists() or not list(settings.rejected_dir.iterdir())
+
+
+async def test_keep_it_anyway_files_a_copy_that_failed_the_quality_check(env):
+    """The same button as #92, the same bytes. Filed carrying its failure: a `quality_check` row on the
+    track, an "unverified" comment tag, and a Done line that says it was kept anyway."""
+    settings, store, notifier = env
+    rid, w = await _rejected_on_quality(env)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+
+    r = await w.accept_rejection(rid)
+
+    assert r.state == RequestState.DONE
+    track = store.get_track(r.track_id)
+    assert track.path.exists() and track.bitrate_kbps == 128
+    ev = {e.kind: e.value for e in store.list_evidence(r.track_id)}
+    assert ev["quality_check"]["status"] == "failed" and "bitrate" in ev["quality_check"]["reason"]
+    assert ev["recording_match"]["status"] == "matched"          # the check it never reached still ran
+    assert read_tags(track.path)["comment"].startswith("flackey: unverified 128 kbps")
+    # Refused on bitrate, so the spectrum was never measured: said so, never as "content to 0.0 kHz".
+    assert "kept anyway" in notifier.sent[-1][0] and "edge not measured" in notifier.sent[-1][0]
+    assert "0.0 kHz" not in notifier.sent[-1][0] and "0.0 kHz" not in read_tags(track.path)["comment"]
+    assert store.get_rejection_for_request(rid).audio_path is None and not kept.exists()
+    assert not list(settings.tmp_dir.glob("*"))
+
+
+async def test_keep_it_anyway_on_quality_still_refuses_a_different_recording(env, monkeypatch):
+    """Overruling one check is not overruling both. A copy refused on quality never reached the fingerprint,
+    so the owner listened for quality, not for which take it is; filing a different recording on that press
+    would be the app deciding something they were never asked."""
+    settings, store, _notifier = env
+    rid, w = await _rejected_on_quality(env)
+    kept = Path(store.get_rejection_for_request(rid).audio_path)
+
+    async def wrong_recording(path, reference, *, minimum, missing=""):
+        return FingerprintResult("failed", 0.4, None, "best score 0.40 below 0.79", None, [4, 5, 6],
+                                 reference.label if reference else None)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_recording)
+    with pytest.raises(ValueError, match="also a different recording"):
+        await w.accept_rejection(rid)
+    assert store.get_request(rid).state == RequestState.REJECTED
+    assert kept.exists() and store.get_rejection_for_request(rid).audio_path == str(kept)
+    assert not list(settings.tmp_dir.glob("*"))
 
 
 async def test_keep_it_anyway_files_the_copy_the_owner_listened_to(env, monkeypatch):
@@ -774,9 +842,8 @@ async def test_keep_it_anyway_files_the_copy_the_owner_listened_to(env, monkeypa
 
 
 async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
-    """One button, one meaning. It files a specific set of bytes; a row that has none -- because it failed
-    the quality check, because the copy was cleaned up, because it never got that far -- must not pretend
-    to have them."""
+    """One button, one meaning. It files a specific set of bytes; a row that has none -- because nothing was
+    kept, because the copy was cleaned up, because it never got that far -- must not pretend to have them."""
     settings, store, _notifier = env
     rid, w = await _rejected_as_a_different_recording(env, monkeypatch)
 
@@ -785,10 +852,12 @@ async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
     with pytest.raises(ValueError, match="only a rejected track"):
         await w.accept_rejection(other)
 
+    # A rejection with nothing kept: one written before quality rejections were kept, or in a format that
+    # could not be filed.
     quality = store.add_request("q2", RequestKind.TEXT)
     store.add_rejection(quality, "bitrate too low", 128, 15000, None)
     store.set_state(quality, RequestState.REJECTED)
-    with pytest.raises(ValueError, match="no copy of it to keep"):
+    with pytest.raises(ValueError, match="no copy of this track was kept"):
         await w.accept_rejection(quality)
 
     # The row still says there is a copy, and there is not: the promise is withdrawn rather than repeated.

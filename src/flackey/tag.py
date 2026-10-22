@@ -61,10 +61,14 @@ def _tags_from(catalog: CatalogTrack) -> str | None:
 
 
 def comment_for(verdict: Verdict, catalog: CatalogTrack, source: str = "deezer_bot") -> str:
-    kind = f"verified {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"verified {verdict.fmt}"
+    # "unverified" on a file the owner kept after it failed the quality check (issue #97): the tag travels
+    # with the file into every player, and must not claim a check the file did not pass.
+    status = "verified" if verdict.passed else "unverified"
+    kind = f"{status} {verdict.bitrate_kbps} kbps" if verdict.fmt == "mp3" else f"{status} {verdict.fmt}"
     # "no edge found" rather than "cutoff 22.1 kHz": that number is what the check answers when it found no
     # edge at all, and a player showing it would be quoting a measurement nobody made (issue #97).
-    edge = "no edge found" if verdict.cutoff_hz >= NO_EDGE_HZ else f"cutoff {verdict.cutoff_hz / 1000:.1f} kHz"
+    edge = ("edge not measured" if not verdict.cutoff_hz else "no edge found" if verdict.cutoff_hz >= NO_EDGE_HZ
+            else f"cutoff {verdict.cutoff_hz / 1000:.1f} kHz")
     parts = [f"flackey: {kind}", edge, _tags_from(catalog),
              f"via {source_label(source)}"]
     return " · ".join(p for p in parts if p)

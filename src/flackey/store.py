@@ -77,12 +77,13 @@ CREATE TABLE IF NOT EXISTS rejections (
   -- can tell them apart -- `reason` is written for a human and `cutoff_hz` is absent on both a
   -- different-recording rejection and an unsupported-format one.
   kind TEXT NOT NULL DEFAULT 'quality',
-  -- Where the refused file was kept, for the one rejection the owner may overrule. A 'different_recording'
-  -- verdict says the audio is genuine and not the track that was asked for, which is a judgement an ear can
+  -- Where the refused file was kept, so the owner may overrule the verdict. A 'different_recording' verdict
+  -- says the audio is genuine and not the track that was asked for, which is a judgement an ear can
   -- overturn -- an old track remastered or re-mixed can score below the floor and still be the copy the
-  -- owner wants (issue #92). So that file is moved aside instead of deleted: this path is what the row
-  -- plays and what "Keep it anyway" files. NULL on every other rejection, and on one whose file has since
-  -- been filed or removed.
+  -- owner wants (issue #92). A 'quality' verdict is evidence of a lossy source, not proof of one (issue
+  -- #97). So the file is moved aside instead of deleted: this path is what the row plays and what "Keep it
+  -- anyway" files. NULL on a rejection whose format Flackey cannot file, on one written before quality
+  -- rejections were kept, and on one whose file has since been filed or removed.
   audio_path TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -522,7 +523,7 @@ class Store:
                       spectrogram_path: Path | None, *, kind: str = "quality",
                       audio_path: Path | None = None) -> int:
         """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
-        genuine audio of the wrong track). `audio_path` is the refused file, kept only for the second kind.
+        genuine audio of the wrong track). `audio_path` is the refused file, kept for the owner to overrule.
         Both keyword-only so no caller can drift into the positional slot that the spectrogram already
         holds."""
         cur = self.conn.execute(

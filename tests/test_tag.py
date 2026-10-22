@@ -458,3 +458,10 @@ def test_the_wav_rewrite_keeps_the_file_s_permissions(tmp_path: Path):
     os.chmod(p, 0o644)
     _write_wav_info(p, VALUES)
     assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+def test_comment_says_unverified_on_a_copy_kept_after_failing_the_check():
+    """"Keep it anyway" files a copy the quality check refused (issue #97). The tag goes with the file into
+    every player, so it must not claim a check the file did not pass."""
+    kept = Verdict(False, "mp3", 320, 16_000, "cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source")
+    assert comment_for(kept, CT) == "flackey: unverified 320 kbps · cutoff 16.0 kHz · beatport 16552105 · via Deezer"

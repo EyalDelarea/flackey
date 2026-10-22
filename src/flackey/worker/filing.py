@@ -15,7 +15,7 @@ from ..library import file_track, final_path, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import write_tags
 from ..tag_lookup import fill_missing
-from ..verify import verify
+from ..verify import LOSSLESS, verify
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
@@ -25,20 +25,25 @@ class FilingMixin:
     """Part of `Worker`, which supplies the state these methods read."""
 
     async def accept_rejection(self, request_id: int) -> Request:
-        """"Keep it anyway" on a track the recording check refused (issue #92).
+        """"Keep it anyway" on a refused track: the recording check's (issue #92) or the quality check's
+        (issue #97).
 
-        The one rejection an ear can overturn. `fingerprint_check` answers "is this the same recording as
+        Both are verdicts an ear can overturn. `fingerprint_check` answers "is this the same recording as
         the reference" with a number, and a number needs a floor; below it the pipeline must refuse, because
         the alternative is filing whatever a search happened to return. But on older music the floor is
         genuinely wrong sometimes -- a remaster, a re-press, a different mix of the same take -- and the
-        only instrument that can tell is the owner's ear. So the refused file is kept (see `_keep_rejected`),
-        the row plays it, and this files those same bytes: not a fresh search that might land on a different
-        copy, but the copy they listened to.
+        only instrument that can tell is the owner's ear. The quality check is the same kind of answer: a
+        sharp edge in the spectrum is consistent with a lossy source, and a resampler or a mastering filter
+        can draw one too. So the refused file is kept (see `_keep_rejected`), the row plays it, and this
+        files those same bytes: not a fresh search that might land on a different copy, but the copy they
+        listened to.
 
-        The check is re-run rather than skipped. It will fail again -- these are the same bytes against the
-        same reference -- and that is the point: the track is filed carrying a `recording_match` row saying
-        `failed` and at what score, so the library's own record says this one was kept on the owner's say-so
-        rather than claiming it passed.
+        The check that refused it is re-run rather than skipped. It will fail again -- these are the same
+        bytes -- and that is the point: the track is filed carrying the failure (a `recording_match` row
+        saying `failed` and at what score, or a `quality_check` row with the reason and an "unverified" comment
+        tag), so the library's own record says this one was kept on the owner's say-so rather than claiming it
+        passed. The *other* check still has to pass: overruling one verdict is not overruling both, and a
+        copy refused on quality was never fingerprinted at all.
 
         The rejection row itself stays. It is what happened, it is the handle `unlink_spectrogram` deletes
         the PNG by, and with the request now DONE no page draws it. Only `audio_path` is cleared, because
@@ -47,13 +52,14 @@ class FilingMixin:
         if req.state != RequestState.REJECTED:
             raise ValueError(f"request {request_id} is {req.state.value}; only a rejected track can be kept anyway")
         rejection = self.store.get_rejection_for_request(request_id)
-        if rejection is None or rejection.kind != "different_recording" or not rejection.audio_path:
-            raise ValueError("this track failed the quality check, not the recording check; there is no "
-                             "copy of it to keep")
+        if rejection is None or not rejection.audio_path:
+            raise ValueError("no copy of this track was kept, so there is nothing to keep; paste the link "
+                             "again to search afresh")
         kept = Path(rejection.audio_path)
         if not kept.exists():
             self.store.clear_rejection_audio(rejection.id)
             raise ValueError("the copy of this track is no longer on disk")
+        overruling_quality = rejection.kind != "different_recording"
         cand = (self.store.get_candidate(req.chosen_candidate_id) if req.chosen_candidate_id
                 else query_candidate(req.query(), req.id))
         catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
@@ -67,7 +73,7 @@ class FilingMixin:
             async with self._cpu:
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
                                                   f"req{req.id}-accepted")
-            if not verdict.passed:
+            if not verdict.passed and not overruling_quality:
                 # It passed the spectral check the first time round, so this is a file that has changed
                 # under us. Filing it would put a copy in the library that no check ever vouched for.
                 raise ValueError(f"the kept copy no longer passes the quality check: {verdict.reason}")
@@ -75,6 +81,11 @@ class FilingMixin:
             fp = None
             if stored is not None:
                 fp = await self._fingerprint(tmp, AcousticReference.from_dict(stored))
+            if overruling_quality and fp is not None and fp.status == "failed":
+                # Never checked before -- the quality check stopped it first -- and it fails now. The owner
+                # listened for quality, not for which take this is, so this is news to them, not a verdict
+                # they have already overruled.
+                raise ValueError(f"this copy is also a different recording ({fp.reason}), so it was not filed")
             await self._file_track(req, cand, catalog, tmp, verdict, fp, None, self.source.name, None)
         finally:
             tmp.unlink(missing_ok=True)   # gone already when file_track moved it; garbage otherwise
@@ -93,11 +104,19 @@ class FilingMixin:
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
                                                   f"req{req.id}-{tmp.stem}")
             if not verdict.passed:
+                # Kept, not deleted, like the different recording below (issue #97). This used to be the one
+                # rejection that threw the file away, on the theory that "an MP3 wearing a FLAC extension is
+                # a fact about the file". A sharp edge is evidence of a lossy source, not proof -- a resampler
+                # or a mastering lowpass draws one too -- and the bytes are already here, so the owner gets to
+                # hear them and overrule. Only a format Flackey can tag and file is kept: "Keep it anyway" on
+                # anything else would be a button that fails.
+                kept = self._keep_rejected(req, tmp) if verdict.fmt == "mp3" or verdict.fmt in LOSSLESS else None
                 self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz,
-                                         verdict.spectrogram_path)
+                                         verdict.spectrogram_path, audio_path=kept)
                 self._set_state(req, RequestState.REJECTED)
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
-                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{verdict.reason}")
+                tail = "\nYou can listen to it in the app and keep it anyway." if kept else ""
+                await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{verdict.reason}{tail}")
                 return
             # The lossy copy is checked against the same reference, at the same threshold, as a peer's
             # file (spec §7). It used to be filed on the spectral check alone -- which says the audio is
@@ -113,8 +132,6 @@ class FilingMixin:
                 # be true and still be the copy the owner wants: a remaster, a re-press, a different mix of
                 # the same take all score below the floor. So the file is moved out of `tmp` before the
                 # `finally` that deletes it, the row plays it, and "Keep it anyway" files these very bytes.
-                # A quality rejection is not kept: "this is an MP3 wearing a FLAC extension" is a fact
-                # about the file, not a matter of taste, and there is nothing to listen for.
                 kept = self._keep_rejected(req, tmp)
                 # No cutoff on this one. This branch is only reached with `verdict.passed` already true, so
                 # `verdict.cutoff_hz` here is a *healthy* number -- and the page turns any cutoff it is given
@@ -226,6 +243,12 @@ class FilingMixin:
         # would not be.
         if fp is not None:
             self._record_evidence(track_id, fp, hit)
+        if not verdict.passed:
+            # Only `accept_rejection` files a failed verdict: the owner overruled the quality check (issue
+            # #97). Recorded beside the fingerprint so the library says so, and the page can too.
+            self.store.add_evidence(track_id, "quality_check", {
+                "status": "failed", "kept_by": "owner", "reason": verdict.reason,
+                "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz})
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             write_playlist(self.store, req.playlist_id, self.settings.library_root)
@@ -234,6 +257,8 @@ class FilingMixin:
         parts = [f"Done: {catalog.artist} – {catalog.title} ({catalog.mix_name})", _mmss(catalog.duration_s or cand.duration_s),
                  format_line(verdict, source, source_fmt), edge_text(verdict.cutoff_hz),
                  f"{catalog.genre} / {catalog.label}"]
+        if not verdict.passed:
+            parts.insert(3, "kept anyway: failed the quality check")
         if conf is not None:
             parts.append(f"{conf}%")
         msg = " · ".join(parts)

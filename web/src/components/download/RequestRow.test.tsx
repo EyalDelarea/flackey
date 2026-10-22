@@ -259,7 +259,7 @@ it('tags a failed row with where it stopped, and leaves a running row untagged',
 const kept: RowView['samples'] = {
   found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
   reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
-  video: null }
+  video: null, kind: 'compare' }
 
 it('lets a refused copy be heard against the reference, and filed anyway', () => {
   // Issue #92: the fingerprint says these are different recordings, and on old music mixed twice it can be
@@ -275,11 +275,26 @@ it('lets a refused copy be heard against the reference, and filed anyway', () =>
   expect(onAction).toHaveBeenCalledWith('accept', 1, undefined)
 })
 
+it('plays a copy the quality check refused on its own, and files it anyway', () => {
+  // Issue #97: nothing to compare it with, so no "What you asked for" row claiming there is no copy of it.
+  const onAction = vi.fn(); const onPlay = vi.fn()
+  render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true,
+    samples: { found: kept!.found, reference: null, video: null, kind: 'listen' } }}
+    onAction={onAction} onChoose={() => {}} player={idle} onPlay={onPlay} />)
+  expect(screen.getByText('Listen, then decide')).toBeInTheDocument()
+  expect(screen.queryByText('What you asked for')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the copy Flackey found' }))
+  expect(onPlay).toHaveBeenCalledWith('found:7', '/api/rejections/7/audio')
+  expect(screen.getByText(/marked unverified/)).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Keep it anyway'))
+  expect(onAction).toHaveBeenCalledWith('accept', 1, undefined)
+})
+
 it('offers the video instead when the reference is one, and never Keep it anyway with nothing to keep', () => {
   // Half the comparison is still worth having: the block says what is missing rather than vanishing and
   // leaving the row with no explanation of why there is nothing to listen to.
   render(<RequestRow view={{ ...base, bucket: 'failed', rejected: true,
-    samples: { found: null, reference: null, video: { url: 'https://www.youtube.com/watch?v=abc&t=95', at: '1:35' } } }}
+    samples: { found: null, reference: null, video: { url: 'https://www.youtube.com/watch?v=abc&t=95', at: '1:35' }, kind: 'compare' } }}
     onAction={() => {}} onChoose={() => {}} player={idle} onPlay={() => {}} />)
   expect(screen.getByRole('link', { name: 'Open your video at 1:35' })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=abc&t=95')
   expect(screen.getByText('The copy is no longer here')).toBeInTheDocument()

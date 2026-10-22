@@ -184,7 +184,7 @@ describe('presentRow', () => {
     expect(v.samples).toEqual({
       found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
       reference: { key: 'ref:1', label: 'the recording you asked for', url: '/api/requests/1/reference/audio' },
-      video: null })
+      video: null, kind: 'compare' })
   })
   it('a YouTube reference is a link into the owner\'s own video, at the second the excerpt came from', () => {
     // Nothing local holds that audio, so there is nothing to serve -- but the passage the fingerprint
@@ -196,14 +196,36 @@ describe('presentRow', () => {
     expect(v.samples?.reference).toBeNull()
     expect(v.samples?.video).toEqual({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=95', at: '1:35' })
   })
-  it('a quality rejection has nothing to listen to, because nothing was kept', () => {
-    // The spectral check is a fact about the file, not a judgement call -- there is no second opinion to
-    // have, so the row must not grow a player that implies there is.
+  it('a quality rejection whose copy was kept offers that copy alone, and says what the check is worth', () => {
+    // Issue #97: a sharp edge is evidence of a lossy source, not proof, so the owner may overrule it like a
+    // different recording (#92). There is nothing to compare with -- the reference is a lossy preview -- so
+    // the block plays the found copy alone, and the reference is not offered even when there is one.
+    const rejection = { id: 7, request_id: 1, reason: 'cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source',
+      bitrate_kbps: 320, cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '', kind: 'quality',
+      audio_path: '/data/rejected/req1-1.mp3' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
+    expect(v.samples).toEqual({ found: { key: 'found:7', label: 'the copy Flackey found', url: '/api/rejections/7/audio' },
+      reference: null, video: null, kind: 'listen' })
+    expect(v.status).toMatch(/Kept aside for you to hear, not added/)
+    expect(v.rejection?.caption).toMatch(/^Nothing above 16 kHz\. .* still here, so you can hear it and decide\.$/)
+    expect(v.outcome).toEqual({ retryable: false, note: expect.stringContaining('evidence, not proof') })
+  })
+  it('a quality rejection with nothing kept has nothing to listen to', () => {
+    // A row written before copies were kept, or a format Flackey could not file: no player, no promise.
     const rejection = { id: 7, request_id: 1, reason: 'Sounds like a 128 kbps upscale', bitrate_kbps: 320,
       cutoff_hz: 16000, spectrogram_path: '/x.png', created_at: '' }
     const v = presentRow(bundle({ state: 'rejected' }, { rejection, reference: { kind: 'deezer' as const, ref: '1', excerpt_start_s: 0 } }), opts)
     expect(v.samples).toBeNull()
     expect(v.status).toMatch(/Deleted, not added/)
+  })
+  it('a track kept after failing the quality check says so instead of passing', () => {
+    const track = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 16000, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: 44100,
+      catalog: null, evidence: [{ kind: 'quality_check', value: { status: 'failed', kept_by: 'owner' } }] }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks).toEqual([
+      { label: 'Quality check', value: 'kept anyway', ok: false },
+      { label: 'Audio only to', value: '16.0 kHz', ok: false }])
   })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,

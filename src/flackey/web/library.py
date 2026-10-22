@@ -156,9 +156,9 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
 
     @r.get("/rejections/{rjid}/audio")
     async def rejected_audio(rjid: int):
-        """The refused copy itself, so the owner can hear what the fingerprint would not accept (issue #92).
+        """The refused copy itself, so the owner can hear what a check would not accept (issues #92, #97).
 
-        Kept only for a 'different_recording' verdict and served only from `rejected_dir` -- `_contained`
+        Served only from `rejected_dir` -- `_contained`
         is the same containment check `unlink_under` makes, and it is what stops a row whose path
         column was written by an older build (or by hand) from turning this into a read of any file on the
         disk. The media type comes off the extension the source gave the file; an unknown one is refused
