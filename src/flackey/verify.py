@@ -24,7 +24,18 @@ CLIFF_SEARCH_FROM_HZ = 8_000
 
 
 class VerifyError(Exception):
-    pass
+    """The file could not be read through: a decode that failed, a transfer cut short, a tool that timed out.
+    Says nothing about where the audio came from, only that this copy could not be checked (issue #97)."""
+
+
+class ToolMissing(VerifyError):
+    """ffmpeg or ffprobe is not on this machine. A fact about the computer, not the file: every other copy
+    would fail the same way, so the caller must not read it as one more bad download."""
+
+
+class Disguised(VerifyError):
+    """The bytes are a different audio format than the name claims -- an MP3 called .flac. Unlike a plain
+    VerifyError this one does say something about the source, and it is the oldest trick there is."""
 
 
 @dataclass
@@ -49,7 +60,7 @@ def _run(cmd: list[str]) -> bytes:
         # Say it here rather than handing `subprocess` a bare name and letting FileNotFoundError travel
         # up as a failed row whose message is a filename. `tool_path` has already looked in the bundle,
         # on the PATH and in both Homebrew prefixes, so None means the machine really does not have it.
-        raise VerifyError(f"{name} is not installed")
+        raise ToolMissing(f"{name} is not installed")
     cmd = [found, *cmd[1:]]
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=RUN_TIMEOUT_S, check=False, **no_window())
@@ -65,10 +76,14 @@ def _input(path: Path, tool: str) -> list[str]:
     A missing `tool` is still the first thing reported: it is what a machine without the helpers needs
     to hear, whatever the file is."""
     if tool_path(tool) is None:
-        raise VerifyError(f"{tool} is not installed")
+        raise ToolMissing(f"{tool} is not installed")
     try:
         return input_args(path)
-    except (WrongFormat, OSError) as e:
+    except WrongFormat as e:
+        # Bytes that are some other audio format are a disguise; bytes that are nothing at all are a copy
+        # that never arrived whole.
+        raise (Disguised if e.actual else VerifyError)(str(e)) from e
+    except OSError as e:
         raise VerifyError(str(e)) from e
 
 

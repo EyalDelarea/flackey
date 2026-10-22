@@ -298,8 +298,8 @@ class LosslessAttempt:
 
 
 ATTEMPT_OUTCOMES = ("filed", "no_pick", "queued", "first_byte_timeout", "transfer_timeout", "transfer_failed",
-                    "verify_failed", "fingerprint_failed", "fingerprint_unavailable", "convert_failed",
-                    "unavailable", "interrupted")
+                    "verify_failed", "damaged", "verify_unavailable", "fingerprint_failed",
+                    "fingerprint_unavailable", "convert_failed", "unavailable", "interrupted")
 
 # Why a lossless attempt came back empty, in the owner's words rather than the vocabulary above. Every
 # outcome but "filed" needs one: a track kept on the lossy copy is a thing the owner asked to be told
@@ -312,6 +312,9 @@ MISS_REASON = {
     "queued": "the people who had it are busy and their queue has not reached us yet",
     "transfer_timeout": "the people who had it stopped sending part-way through",
     "verify_failed": "the copies offered were not really lossless",
+    # A transfer problem, not a verdict on the audio: the bytes could not be read to the end (issue #97).
+    "damaged": "the copies that arrived were damaged or incomplete",
+    "verify_unavailable": "ffmpeg is missing, so the audio could not be checked",
     "fingerprint_failed": "the copies offered were a different recording",
     "fingerprint_unavailable": "the recording could not be checked acoustically",
     "convert_failed": "the file could not be converted",

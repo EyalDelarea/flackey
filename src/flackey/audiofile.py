@@ -17,7 +17,13 @@ PROTOCOLS = ["-protocol_whitelist", "file,pipe"]
 
 
 class WrongFormat(ValueError):
-    """The file's bytes are not the format its extension claims."""
+    """The file's bytes are not the format its extension claims. `actual` is the format they are, when they
+    are one of the four this module knows, and None when they are nothing recognisable at all -- which is
+    what a transfer that broke off in its first bytes looks like, rather than a disguise."""
+
+    def __init__(self, message: str, actual: str | None = None):
+        super().__init__(message)
+        self.actual = actual
 
 
 def _id3_end(head: bytes) -> int:
@@ -63,7 +69,7 @@ def demuxer(path: Path) -> str | None:
         return None
     actual = sniff(path)
     if actual != claimed:
-        raise WrongFormat(f"{path.name} is not a {claimed} file" + (f" (it is {actual})" if actual else ""))
+        raise WrongFormat(f"{path.name} is not a {claimed} file" + (f" (it is {actual})" if actual else ""), actual)
     return claimed
 
 

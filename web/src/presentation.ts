@@ -218,6 +218,8 @@ const MISS_REASON: Record<string, string> = {
   queued: 'the people who had it are busy and their queue has not reached us yet',
   transfer_timeout: 'the people who had it stopped sending part-way through',
   verify_failed: 'the copies offered were not really lossless',
+  damaged: 'the copies that arrived were damaged or incomplete',
+  verify_unavailable: 'ffmpeg is missing, so the audio could not be checked',
   fingerprint_failed: 'the copies offered were a different recording',
   fingerprint_unavailable: 'the recording could not be checked acoustically',
   convert_failed: 'the file could not be converted',

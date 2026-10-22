@@ -23,7 +23,7 @@ from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
-from flackey.verify import probe
+from flackey.verify import ToolMissing, VerifyError, probe
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -66,13 +66,22 @@ class FakeDetector:
 
     def __init__(self):
         self.refused: set[str] = set()
+        self.raises: dict[str, Exception] = {}
 
     def refuse(self, path: Path) -> Path:
         """Have every check of these bytes, wherever they are copied to, come back as a lossy source."""
         self.refused.add(_digest(path))
         return path
 
+    def fail(self, path: Path, error: Exception) -> Path:
+        """Have every check of these bytes raise `error` instead of answering: a decode that broke off, a
+        missing ffmpeg."""
+        self.raises[_digest(path)] = error
+        return path
+
     def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+        if (error := self.raises.get(_digest(path))) is not None:
+            raise error
         pr = probe(path)
         png = spectrogram_dir / f"{name or path.stem}.png"
         png.parent.mkdir(parents=True, exist_ok=True)
@@ -396,6 +405,58 @@ async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(l
     a = attempt_of(store, rid)
     assert a.outcome == "verify_failed" and provider.downloaded == ["a", "b", "c"]  # every survivor, under the cap
     assert store.get_rejection_for_request(rid) is None
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_copy_that_cannot_be_read_through_is_damaged_not_fake(lenv, detector, tmp_path: Path):
+    """A decode that breaks off is a transfer problem. It used to end as `verify_failed`, which the owner
+    reads as "the copies offered were not really lossless" -- calling a broken download a fraud (issue #97).
+    It is still a fact about this one file, so the next pick is tried."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = detector.fail(_flac(tmp_path / "broken.flac", seed=3),
+                                        VerifyError("Invalid data found when processing input"))
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "filed" and provider.downloaded == ["a", "b"]
+    damaged = [e["detail"] for e in a.timeline if e["event"] == "damaged"]
+    assert len(damaged) == 1 and "Invalid data" in damaged[0]["error"]
+    assert not any(e["event"] == "verify_failed" for e in a.timeline)
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_every_copy_damaged_says_so_and_waits_for_the_next_transfer(lenv, detector, tmp_path: Path):
+    settings, store, notifier, provider, _, _ = lenv
+    broken = detector.fail(_flac(tmp_path / "broken.flac", seed=3), VerifyError("truncated"))
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": broken, "b": broken}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).source == "deezer_bot"
+    assert attempt_of(store, rid).outcome == "damaged" and provider.downloaded == ["a", "b"]
+    assert "damaged or incomplete" in notifier.sent[-1][0] and "not really lossless" not in notifier.sent[-1][0]
+    assert worker_mod.LONG_RETRY_OUTCOMES >= {"damaged", "transfer_failed"}
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_missing_ffmpeg_ends_the_attempt_instead_of_failing_every_peer(lenv, detector, tmp_path: Path):
+    """Not one more bad download: the computer cannot check anything, so the next pick would fail the same
+    way after a transfer of its own."""
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": detector.fail(_flac(tmp_path / "x.flac", seed=3), ToolMissing("ffmpeg is not installed")),
+                      "b": provider.audio["b"]}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = attempt_of(store, rid)
+    assert a.outcome == "verify_unavailable" and provider.downloaded == ["a"]
+    assert [e["detail"]["error"] for e in a.timeline if e["event"] == "verify_unavailable"] == [
+        "ffmpeg is not installed"]
     assert not list(settings.tmp_dir.iterdir())
 
 

@@ -35,17 +35,18 @@ RETRY_LOSSLESS_OUTCOMES = {"unavailable", "interrupted", "queued"}
 # at 11:40 on 2026-09-10 and two, one on a free slot, at 14:51.
 SEARCH_AGAIN_AFTER = RETRY_LOSSLESS_OUTCOMES | {"no_pick"}
 # Outcomes that say nothing about the *next* peer, so the attempt moves on to the next ranked
-# survivor. Four kinds sit here: the file was wrong (verify, fingerprint), the peer would not
-# send it (rejected the transfer, or never started after leaving the queue), the peer stopped
+# survivor. Four kinds sit here: the file was wrong (verify, fingerprint) or arrived broken (damaged), the
+# peer would not send it (rejected the transfer, or never started after leaving the queue), the peer stopped
 # part-way (transfer_timeout), and the peer is simply busy (queued). All four are facts about one
 # peer, never about the file, so giving up on the whole attempt at any of them threw away
 # survivors that were still good. transfer_timeout used to be excluded on the theory that a slow
 # transfer measures the link rather than the peer; the Filteria measurement on 2026-09-10 says
 # otherwise -- 102 kB/s from one peer while four survivors sat on free slots with nobody queued.
 # Not here: unavailable/interrupted, which the request-level retry (RETRY_LOSSLESS_OUTCOMES)
-# already handles, and no_pick, which is about the search rather than any peer.
-SECOND_PICK_AFTER = {"verify_failed", "fingerprint_failed", "transfer_failed", "first_byte_timeout", "queued",
-                     "transfer_timeout"}
+# already handles, no_pick, which is about the search rather than any peer, and verify_unavailable,
+# which is about this computer: without ffmpeg every survivor fails the same way.
+SECOND_PICK_AFTER = {"verify_failed", "damaged", "fingerprint_failed", "transfer_failed", "first_byte_timeout",
+                     "queued", "transfer_timeout"}
 # Of those, the ones that say the peer never sent anything: its other files are skipped for the rest of the
 # attempt. A failed check or a broken transfer says something about the file, and the peer stays eligible.
 PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout"}
@@ -66,9 +67,10 @@ SLOW_RETRY_OUTCOMES = {"queued", "no_pick"}
 # After the quick ladder (RETRY_BACKOFF_S) a request that ended in one of these waits LONG_RETRY_EVERY_S in
 # `queued` and looks again, LONG_RETRY_TIMES times, before it parks in `error`. `fingerprint_failed` is
 # here although it is a verdict: every copy offered was a different recording, which says nothing about
-# the copies tomorrow's peers will offer. Not here: a missing reference or nothing to search for, which no
-# amount of waiting changes.
-LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "first_byte_timeout",
+# the copies tomorrow's peers will offer. `damaged` sits beside `transfer_failed` because it is the same
+# kind of answer: the copies broke on the way, and the next transfer is a fresh roll. Not here: a missing
+# reference, a missing ffmpeg or nothing to search for, which no amount of waiting changes.
+LONG_RETRY_OUTCOMES = {"no_pick", "fingerprint_failed", "transfer_failed", "damaged", "first_byte_timeout",
                        "transfer_timeout", "queued", "unavailable", "interrupted"}
 LONG_RETRY_EVERY_S = 6 * 3600
 LONG_RETRY_TIMES = 12            # 3 days at 6 h

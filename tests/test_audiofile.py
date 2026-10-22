@@ -112,6 +112,19 @@ def test_verify_refuses_a_mismatched_file_before_running_anything(tmp_path: Path
     assert ran.cmds == []
 
 
+def test_a_disguise_and_a_broken_copy_are_told_apart(tmp_path: Path, monkeypatch):
+    """An MP3 named .flac says something about where the audio came from; bytes that are no format at all
+    are a transfer that broke off. The worker files the first under `verify_failed` and the second under
+    `damaged` (issue #97), so the error has to carry the difference."""
+    monkeypatch.setattr(verify, "tool_path", lambda name: f"/bin/{name}")
+    with pytest.raises(verify.Disguised, match="it is mp3"):
+        verify.probe(put(tmp_path, "x.flac", MP3_SYNC))
+    for payload in (b"", b"not audio"):
+        with pytest.raises(verify.VerifyError) as e:
+            verify.probe(put(tmp_path, "y.flac", payload))
+        assert not isinstance(e.value, verify.Disguised | verify.ToolMissing)
+
+
 @pytest.mark.parametrize("name", ["x.bin", "x.m4a", "x"])
 def test_verify_refuses_an_extension_that_claims_no_format_without_running_anything(tmp_path: Path, monkeypatch,
                                                                                     name: str):
