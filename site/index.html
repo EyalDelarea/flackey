@@ -122,6 +122,54 @@
         <ul class="wn-grid">
           <li class="wn-card">
             <div class="wn-art" aria-hidden="true">
+              <div class="wn-keep">
+                <span class="wn-keep-note">Failed the quality check</span>
+                <span class="wn-keep-btn"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Keep it anyway</span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.4.0</span>
+            <h3>Keep it anyway</h3>
+            <p>A track that fails the quality check is flagged, not thrown out. Listen to it, and if it sounds right, keep it with one click.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-clean">
+                <span class="wn-messy">FREE DL | Bicep - Glue [CAT042]</span>
+                <span class="wn-arrow">↓</span>
+                <span class="wn-tidy">Bicep – Glue <i>(Original Mix)</i></span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.4.0</span>
+            <h3>Smarter searches for messy titles</h3>
+            <p>Flackey reads past “FREE DL”, catalogue numbers and label tags, tries other likely readings on Soulseek, and is far less likely to pick the wrong remix or remaster.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-report">
+                <span class="wn-report-title">Report this failure</span>
+                <span class="wn-file">flackey-bug-report.zip</span>
+                <span class="wn-send">Send</span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.4.0</span>
+            <h3>Report a failed download in one click</h3>
+            <p>A download that went wrong has its own Report button. The app writes the email and gathers a diagnostics file. Nothing is sent until you press Send.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-tags">
+                <span><b>Genre</b>Electronic</span>
+                <span><b>Label</b>Ninja Tune</span>
+                <span><b>Year</b>2017</span>
+                <em>from Deezer and Discogs</em>
+              </div>
+            </div>
+            <span class="wn-tag">v0.3.0</span>
+            <h3>Tags from Deezer and Discogs</h3>
+            <p>Genre, label and year still land in your tags while Beatport can’t be reached. Flackey fills them in from Deezer and Discogs instead.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
               <div class="wn-sidebar">
                 <span class="wn-search">Find a playlist</span>
                 <span class="wn-pl">Warm-up</span>
@@ -158,25 +206,13 @@
           <li class="wn-card">
             <div class="wn-art" aria-hidden="true">
               <div class="wn-update">
-                <span class="wn-banner">Flackey 0.2.2 is available.<b>Update</b></span>
+                <span class="wn-banner"><span>Flackey <span id="wn-version">0.4.0</span> is available.</span><b>Update</b></span>
                 <span class="wn-verified"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Signature checked</span>
               </div>
             </div>
             <span class="wn-tag">Built in</span>
             <h3>Updates from inside the app</h3>
             <p>Flackey tells you when a new version is out and installs it for you. Each update is checked against Flackey’s own signing key before it runs.</p>
-          </li>
-          <li class="wn-card">
-            <div class="wn-art" aria-hidden="true">
-              <div class="wn-report">
-                <span class="wn-report-title">Report a problem</span>
-                <span class="wn-file">flackey-bug-report.zip</span>
-                <span class="wn-send">Send</span>
-              </div>
-            </div>
-            <span class="wn-tag">Built in</span>
-            <h3>Report a problem in one step</h3>
-            <p>The app writes the email and gathers a diagnostics file for you. Nothing is sent until you press Send.</p>
           </li>
         </ul>
       </section>
@@ -396,19 +432,19 @@
                 <div class="ch-cards">
                   <div class="ch-card">
                     <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Original Mix)</span></span><span class="score">91% match</span></div>
-                    <div class="meta">6:52 · On Beatport · 1:17 shorter than the video</div>
+                    <div class="meta">6:52 · preview to play · 1:17 shorter than the video</div>
                     <div class="actions"><span class="ch-btn play"></span><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
                     <span class="ch-rail"><i></i></span>
                   </div>
                   <div class="ch-card">
                     <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Extended Mix)</span></span><span class="score">88% match</span></div>
-                    <div class="meta">8:07 · On Beatport · same length as the video</div>
+                    <div class="meta">8:07 · preview to play · same length as the video</div>
                     <div class="actions"><span class="ch-btn play"></span><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
                     <span class="ch-rail"><i></i></span>
                   </div>
                   <div class="ch-card">
                     <div class="hd"><span>Vibrasphere – Landmark <span class="ver">(Ticon Remix)</span></span><span class="score">74% match</span></div>
-                    <div class="meta">7:34 · Not on Beatport · 0:35 shorter than the video</div>
+                    <div class="meta">7:34 · no preview · 0:35 shorter than the video</div>
                     <div class="actions"><span class="ch-btn use">Use this</span><span class="elapsed">0:00</span></div>
                     
                   </div>
@@ -502,9 +538,10 @@
             <div>
               <h3>Enforce the quality floor.</h3>
               <p>
-                Fake lossless files, MP3s below 320 kbps and 320 kbps MP3s
-                upscaled from a lower bitrate are rejected. You get the best
-                verified source Flackey can find.
+                MP3s below 320 kbps are passed over while Flackey looks for
+                lossless or a real 320 kbps copy. A file whose spectrum points
+                to a lossy source is flagged, not filed. If it sounds right to
+                you, Keep it anyway files it, marked as unverified.
               </p>
             </div>
           </li>
@@ -529,7 +566,7 @@
             </div>
             <div class="spec">
               <div class="spec-head">
-                <span class="spec-verdict bad">Rejected</span>
+                <span class="spec-verdict bad">Flagged</span>
                 <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
               </div>
               <div class="spec-plot">

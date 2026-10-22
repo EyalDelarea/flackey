@@ -5,8 +5,9 @@ for Mac and Windows that turns a YouTube, YouTube Music or Spotify link into a
 tagged, Rekordbox-ready track in your DJ library — automatically.
 
 Paste the link into the app; a worker running on your computer matches the track
-on Beatport, fetches it from Soulseek (lossless) or through a Telegram source bot
-(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it and
+on Deezer (and Beatport when it can be reached), fetches it from Soulseek (lossless) or through a Telegram source bot
+(using your own accounts), checks it is 320 kbps or better with no sign of a lower-bitrate source, tags it (from Deezer and Discogs, or
+Beatport when it can be reached) and
 files it in your DJ Library (by default one folder per artist,
 `~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
 BPM and key are left to Rekordbox's analysis; genre and label are in the tags.
@@ -148,7 +149,7 @@ careless drag destructive. Instead:
 1. Drag `~/Music/DJ Library` (or one of its folders) into the Rekordbox
    collection. Rekordbox skips tracks it already knows, so this is safe to
    repeat, and existing tracks' Rekordbox data is never touched. New tracks
-   pick up their Beatport tags and artwork from the file itself.
+   pick up their tags and artwork from the file itself.
 2. File -> Import -> Playlist, choose `~/Music/DJ Library/Playlists/<name>.m3u8`.
    Re-importing the same file after new tracks are added is also safe: cues
    set on tracks already in the collection are preserved.
@@ -185,7 +186,7 @@ Optional. With a running [slskd](https://github.com/slskd/slskd) sidecar, every 
 Soulseek network for a FLAC of the matched track. The file is checked for the spectral cutoff a lossy source leaves, proven to be the
 same recording as what you asked for with a Chromaprint fingerprint against the request's own audio (the
 YouTube video, or the matched record's 30 s preview), converted to your filing format (AIFF, WAV or FLAC;
-audio untouched, peer tags dropped) and tagged from Beatport. On a miss the Deezer MP3 is fetched instead — and checked against the same
+audio untouched, peer tags dropped) and tagged from Deezer and Discogs (or Beatport when it can be reached). On a miss the Deezer MP3 is fetched instead — and checked against the same
 reference, so a copy that is a different recording is rejected rather than filed. The Done line says what you
 got: `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` or `MP3 320 kbps via Deezer`.
 
