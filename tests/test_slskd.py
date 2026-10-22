@@ -761,3 +761,23 @@ async def test_a_slow_transfer_slskd_will_not_cancel_is_kept_to_the_end(provider
         got = await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
         assert got.name.endswith(dest.name) and got.read_bytes() == b"x" * f.size
     assert cancel.call_count == len(answers)
+
+
+@respx.mock
+@pytest.mark.parametrize("after", [
+    lambda f: httpx.Response(200, json=transfer("Completed, Cancelled", 3000, size=f.size)),
+    lambda f: httpx.Response(200, json=[]),                            # removed after all: no longer listed
+], ids=["cancelled", "gone"])
+async def test_a_slow_transfer_slskd_stopped_despite_an_error_is_still_the_switch(provider, after):
+    """The cancel answered 500 twice, so the transfer was kept -- but slskd had stopped it. Read as the
+    `transfer_failed` a Cancelled state otherwise is, the copy would never be the attempt's fallback."""
+    p, _, downloads = provider
+    dest = _slow_poll(downloads)
+    f = flac_file(size=40_000)
+    crawling = [httpx.Response(200, json=transfer("InProgress", 100 * n, size=f.size)) for n in range(1, 17)]
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[*crawling, after(f)])
+    respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(
+        side_effect=[httpx.Response(500), httpx.Response(500)])
+    with pytest.raises(TooSlow) as e:
+        await p.download(f, first_byte_s=60, total_s=6000, poll_s=2, stall_s=60, slow=RULE)
+    assert e.value.outcome == "too_slow" and e.value.pct == 4 and not dest.exists()

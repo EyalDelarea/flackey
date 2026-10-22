@@ -66,6 +66,11 @@ PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout", "too_slow"}
 # first byte and a new peer's queue, and a second slow peer in a row is as likely to say the line at this
 # end is the slow one (ten requests share it) -- then another switch only makes the track arrive later.
 MAX_SLOW_SWITCHES = 1
+# After which outcomes an attempt that gave a slow copy up still comes back for it. Everything that would
+# have tried another pick, plus a conversion that failed: that is about the one file the converter was
+# given, not about the slow copy, which is a different file. Not the verdicts that hold for every copy alike
+# (no ffmpeg, no reference to fingerprint against), nor a full disk.
+SLOW_FALLBACK_AFTER = SECOND_PICK_AFTER | {"convert_failed"}
 # The rest of the too-slow rule's numbers (see `Settings.lossless_slow_grace_s` for all of them together).
 # A switch has to look clearly better on the next peer's own word, because that word is a historical
 # average: our measured rate below half what it advertises, and our time to go more than twice its

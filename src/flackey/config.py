@@ -141,7 +141,8 @@ class Settings(BaseSettings):
     # grace plus finish). Conservative on purpose: up to ten requests share one home line
     # (`max_concurrent_requests`), so a measured rate can be our end's contention rather than the peer;
     # that is why the cap is absolute, the margins are 2x, an attempt switches once
-    # (`policy.MAX_SLOW_SWITCHES`), and a switch that leads nowhere goes back to the slow copy.
+    # (`policy.MAX_SLOW_SWITCHES`), and a switch that leads nowhere -- the next copy fails, or measures
+    # slower than the one it replaced (`switch_back_rule_for`) -- goes back to the slow copy.
     lossless_slow_grace_s: int = Field(30, ge=1)
     lossless_slow_finish_s: int = Field(240, ge=0)
     lossless_slow_rate_bps: int = Field(200_000, ge=0)     # bytes per second, as peers advertise it

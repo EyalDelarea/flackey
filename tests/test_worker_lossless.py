@@ -2145,8 +2145,9 @@ async def test_a_slow_transfer_is_given_up_for_the_next_copy(lenv):
     assert (slow["pick"], slow["peer"], slow["pct"], slow["speed_kbps"]) == (1, "slow", 10, 1)
     assert slow["left_s"] == 288 and "240 s" in slow["error"]
     assert "transfer_failed" not in {e["event"] for e in a.timeline}     # the peer sent; it was not refused
-    # The second pick was the last one, so nothing could have cut it short.
-    assert [(peer, rule is None) for peer, rule in provider.slow_rules] == [("slow", False), ("fast", True)]
+    # The second pick could only have been sent back to the first, which measured 1 kB/s.
+    assert [(peer, rule and rule.max_rate_bps) for peer, rule in provider.slow_rules] == [
+        ("slow", 200_000), ("fast", 1000)]
 
 
 @pytest.mark.parametrize("files, update", [
@@ -2242,6 +2243,98 @@ async def test_a_slow_copy_is_still_the_fallback_when_the_budget_ends_the_attemp
         fails={"dud": _queued()}, on_too_slow=lambda: setattr(clock, "t", clock.t + 10_000))
     assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "dud", "slow"]
     assert _events(a, "budget_exhausted") == [{"pick": 3}]
+
+
+async def test_a_switch_to_a_peer_that_crawls_goes_back_to_the_copy_it_replaced(lenv):
+    """The next peer's advertised speed is its word, and can be stale. At 300 B/s against the dropped copy's
+    1 kB/s it would hold the attempt to its own ceiling -- the dropped copy, fetched again, is sooner."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("crawl", queue_length=1)],
+                                               {"slow": SLOW, "crawl": (300, 0.0)})
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "crawl", "slow"]
+    assert [e["peer"] for e in _events(a, "too_slow")] == ["slow", "crawl"]
+    assert _events(a, "slow_fallback") == [{"pick": 3, "peer": "slow", "file": lf().name}]
+    back = provider.slow_rules[1][1]
+    assert back.max_rate_bps == 1000 and back.finish_s == 320_000 / 1000 + 60   # fetching it again, in full
+
+
+async def test_a_switched_to_peer_a_little_slower_but_sooner_done_is_kept(lenv):
+    """900 B/s is below the dropped copy's 1 kB/s, but its 324 s to go beat fetching that copy again (380 s)."""
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("crawl", queue_length=1)],
+                                               {"slow": SLOW, "crawl": (900, 0.0)})
+    assert a.outcome == "filed" and filed_from == "crawl" and provider.downloaded == ["slow", "crawl"]
+
+
+async def test_a_conversion_that_fails_on_the_next_copy_goes_back_to_the_slow_one(lenv, monkeypatch, tmp_path):
+    """The converter failing on one file says nothing about another file."""
+    dud = _flac(tmp_path / "dud.flac", seed=5)
+    convert = lossless_attempt_mod.to_format
+
+    def to_format(src, fmt, bit_depth=None):
+        if _digest(src) == _digest(dud):
+            raise ConvertError("ffmpeg exited 1")
+        return convert(src, fmt, bit_depth)
+
+    monkeypatch.setattr(lossless_attempt_mod, "to_format", to_format)
+    lenv[3].audio["dud"] = dud
+    a, provider, filed_from = await _slow_case(lenv, [lf("slow"), lf("dud", queue_length=1)],
+                                               {"slow": SLOW, "dud": FAST})
+    assert a.outcome == "filed" and filed_from == "slow" and provider.downloaded == ["slow", "dud", "slow"]
+    assert "convert_failed" in {e["event"] for e in a.timeline}
+
+
+async def _no_fallback_case(lenv, fails=None):
+    settings, store, _, provider, _, _ = lenv
+    provider.files, provider.rates = [lf("slow"), lf("dud", queue_length=1)], {"slow": SLOW, "dud": FAST}
+    provider.audio.setdefault("slow", provider.audio["a"])
+    provider.audio.setdefault("dud", provider.audio["a"])
+    if fails:
+        plain = provider.download
+
+        async def download(file, **kw):
+            if file.username in fails:
+                provider.downloaded.append(file.username)
+                raise fails[file.username]
+            return await plain(file, **kw)
+
+        provider.download = download
+    w = make(lenv, settings=settings.model_copy(update={"lossless_transfer_s": 6000}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert not list(settings.tmp_dir.iterdir()) and not list(settings.slskd_downloads.rglob("*.flac"))
+    return store.attempts_for_request(rid), provider
+
+
+async def test_no_fallback_to_a_slow_copy_of_a_recording_the_fingerprint_refused(lenv, monkeypatch, tmp_path):
+    """The copy the slow one was given up for is the same file by name and length, and it was the wrong
+    recording: the slow copy would be refused the same way (`same_recording`)."""
+    dud = _flac(tmp_path / "dud.flac", seed=5)
+    lenv[3].audio["dud"] = dud
+    check = acoustic_mod.fingerprint_check
+
+    async def wrong_for_dud(path, reference, *, minimum, missing=""):
+        got = await check(path, reference, minimum=minimum, missing=missing)
+        return replace(got, status="failed", score=0.3) if _digest(path) == _digest(dud) else got
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", wrong_for_dud)
+    attempts, provider = await _no_fallback_case(lenv)
+    first = attempts[0]
+    assert first.outcome == "fingerprint_failed" and provider.downloaded[:2] == ["slow", "dud"]
+    assert not any(e["event"] == "slow_fallback" for a in attempts for e in a.timeline)
+
+
+async def test_no_fallback_to_a_slow_copy_on_a_full_disk(lenv, monkeypatch):
+    calls = []
+
+    def free_bytes(path):                    # room for the two picks (two folders each), then none
+        calls.append(path)
+        return 10**12 if len(calls) <= 4 else 0
+
+    monkeypatch.setattr(lossless_attempt_mod, "free_bytes", free_bytes)
+    attempts, provider = await _no_fallback_case(lenv, fails={"dud": _queued()})
+    [a] = attempts
+    assert a.outcome == "transfer_failed" and provider.downloaded == ["slow", "dud"]
+    assert [e["detail"]["pick"] for e in a.timeline if e["event"] == "disk_full"] == [3]
+    assert not _events(a, "slow_fallback")
 
 
 async def test_a_peer_that_left_us_queued_is_not_asked_again_in_the_same_attempt(lenv, tmp_path: Path):

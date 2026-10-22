@@ -30,6 +30,7 @@ from .policy import (
     PEER_STUCK_OUTCOMES,
     SECOND_PICK_AFTER,
     SECOND_SEARCH_AFTER,
+    SLOW_FALLBACK_AFTER,
     SLOW_RATE_FRACTION,
     SWITCH_ALLOWANCE_S,
     SWITCH_GAIN,
@@ -88,6 +89,14 @@ def slow_rule_for(nxt: LosslessFile, settings: Settings) -> SlowRule:
     return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
                     finish_s=max(settings.lossless_slow_finish_s, SWITCH_GAIN * projected_s),
                     max_rate_bps=min(settings.lossless_slow_rate_bps, SLOW_RATE_FRACTION * nxt.upload_speed_bps))
+
+
+def switch_back_rule_for(dropped: LosslessFile, rate_bps: float, settings: Settings) -> SlowRule:
+    """For the pick a slow copy was given up for: end it, for that copy, once it measures slower than the
+    copy did and its remaining bytes would take longer than fetching that copy again from the first byte
+    (with the same allowance for a queue and first byte as a switch counts)."""
+    return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
+                    finish_s=dropped.size / rate_bps + SWITCH_ALLOWANCE_S, max_rate_bps=rate_bps)
 
 
 class LosslessMixin:
@@ -225,7 +234,7 @@ class LosslessMixin:
         # Copies given up as too slow. Each was arriving, so it is what the attempt comes back to when the
         # pick it was given up for leads nowhere: losing a working lossless copy to a switch that failed is
         # worse than the wait the switch tried to save.
-        slow_copies = []
+        slow_copies: list[tuple[LosslessFile, float]] = []      # with the rate each was measured at
         promised = None                               # the pick a too-slow switch was made for
         stopped = False                               # ended on a verdict that no other copy can change
         n = 0
@@ -282,23 +291,34 @@ class LosslessMixin:
             if disk_short(file, n):
                 outcome, stopped = "transfer_failed", True
                 break
-            slow, nxt = slow_rule(i, file)
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow)
+            if file is promised:
+                # The pick a copy was given up for has only its peer's word to go on, and that word can be
+                # stale. Crawling below the copy it replaced, it would hold the attempt to its own ceiling
+                # (5300 s for 106 MB) with no further switch allowed -- so it goes back to that copy instead.
+                slow, nxt = switch_back_rule_for(*slow_copies[0], s), None
+            else:
+                slow, nxt = slow_rule(i, file)
+            measured: list[TooSlow] = []
+            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow,
+                                                          measured)
             if hit is not None:
                 return self._filed(rec, hit)
             if outcome not in SECOND_PICK_AFTER:
-                stopped = True
+                stopped = outcome not in SLOW_FALLBACK_AFTER
                 break
             if outcome in PEER_STUCK_OUTCOMES:
                 stuck_peers.add(file.username)
+            if outcome == "too_slow" and file is promised:
+                break                                 # straight back to the copy it replaced, below
             if outcome == "too_slow":
-                slow_copies.append(file)
+                slow_copies.append((file, measured[0].speed_bps))
                 promised = nxt
             if outcome == "fingerprint_failed":
                 refused.append(file)
         # Out of picks, budget or survivors with a slow copy given up on the way: fetch it again, to the end
         # this time, whatever the pick limit says -- it is the one copy known to arrive.
-        back = next((f for f in slow_copies if not any(same_recording(f, r, ref.artist) for r in refused)), None)
+        back = next((f for f, _ in slow_copies if not any(same_recording(f, r, ref.artist) for r in refused)),
+                    None)
         if back is not None and not stopped:
             if disk_short(back, n + 1):
                 outcome = "transfer_failed"
@@ -322,7 +342,9 @@ class LosslessMixin:
 
     async def _download_and_check(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, ref: Reference,
                                   file, n: int, acoustic: Acoustic,
-                                  slow: SlowRule | None = None) -> tuple[LosslessHit | None, str]:
+                                  slow: SlowRule | None = None,
+                                  measured: list[TooSlow] | None = None) -> tuple[LosslessHit | None, str]:
+        """`measured` collects the TooSlow a transfer was given up with, for the rate it was measured at."""
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
@@ -354,6 +376,8 @@ class LosslessMixin:
             # this timeline should see a switch, with how slow it was, rather than a refusal.
             rec.event("too_slow", pick=n, peer=file.username, pct=e.pct, speed_kbps=round(e.speed_bps / 1000),
                       left_s=round(e.left_s), error=str(e))
+            if measured is not None:
+                measured.append(e)
             return None, e.outcome
         except LosslessError as e:
             rec.event("transfer_failed", error=str(e))

@@ -397,11 +397,23 @@ class SoulseekProvider:
         # from the peer long after the row has gone, and the next run's `cancel_all` is what finally
         # notices. There is nothing to cancel before the transfer exists, which is what None means.
         transfer_id: str | None = None
+        # A slow transfer whose cancel slskd answered with an error, and which is kept for it. If slskd did
+        # stop it after all -- the next poll finds it Cancelled, or gone -- that was the switch, and it ends
+        # as the TooSlow it was, so the caller still has the copy to come back to.
+        kept_slow: TooSlow | None = None
+
+        def cancelled_after_all(tr: dict | None) -> bool:
+            return kept_slow is not None and (tr is None or "Cancelled" in str(tr.get("state") or ""))
+
         try:
             while True:
                 await self.sleep(poll_s)
                 tr = await self._find(file)
                 now = self.clock()
+                if cancelled_after_all(tr):
+                    with contextlib.suppress(OSError, ValueError):
+                        dest.unlink(missing_ok=True)
+                    raise kept_slow
                 if tr is None:
                     if (err := budget.never_appeared(now)) is not None:
                         raise err
@@ -446,7 +458,7 @@ class SoulseekProvider:
                         if not await self._cancel_twice(file.username, tr["id"]):
                             log.warning("could not cancel the slow transfer of %s from %s; keeping it",
                                         file.name, file.username)
-                            budget.slow = None
+                            budget.slow, kept_slow = None, err
                             continue
                         # Whether slskd also deletes the partial it keeps in its own incomplete folder on a
                         # cancel is not something the spike established, so say where it would be.
