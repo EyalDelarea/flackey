@@ -15,7 +15,13 @@ from ..config import Settings
 from ..library import prune_missing_tracks
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
-from ..source import LosslessError, LosslessProvider, Source, SourceUnauthorized
+from ..source import (
+    LosslessError,
+    LosslessProvider,
+    LosslessUnavailable,
+    Source,
+    SourceUnauthorized,
+)
 from ..store import Store
 from ..tag import fetch_artwork
 from ..tag_lookup import TagLookup
@@ -31,6 +37,7 @@ from .policy import (
     LOSSLESS_HEALTH_EVERY_S,
     LOSSLESS_HEALTH_SETTLING_S,
     MAINTENANCE_EVERY_S,
+    SIDECAR_PATIENCE_S,
     STAGE_OF_STATE,
 )
 from .records import CatalogLike
@@ -91,6 +98,13 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # What `_bot_ready` said on the last tick, so the tick it changes to yes can re-queue what the
         # paused bot left behind. False to begin with: a sign-in made while the app was closed counts.
         self._bot_was_ready = False
+        # The providers whose transfers from the previous run are not cancelled yet, and those whose
+        # library rescan is still owed. The app starts slskd beside the worker rather than ahead of it, so
+        # at `startup` the sidecar is usually still booting: both wait for it to answer instead of failing.
+        self._leftovers: list[LosslessProvider] = []
+        self._unscanned: list[LosslessProvider] = []
+        self._leftovers_lock = asyncio.Lock()
+        self._leftovers_since: float | None = None      # when startup first asked; None once warned
 
 
     def _bot_ready(self) -> bool:
@@ -140,15 +154,42 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
     async def startup(self) -> None:
         """on_start plus the async parts: cancel transfers the sidecar kept running, then the first maintenance."""
         self.on_start()
-        for p in self.providers:
-            try:
-                n = await p.cancel_all()
-                if n:
-                    log.info("cancelled %d %s downloads left from the previous run", n, p.name)
-            except LosslessError as e:
-                log.warning("%s: could not cancel old downloads: %s", p.name, e)
+        self._leftovers, self._leftovers_since = list(self.providers), self.clock()
+        await self._cancel_leftovers()
         await self._maintenance(force=True)
         await self.refresh_lossless_health(force=True)
+
+
+    async def _cancel_leftovers(self) -> None:
+        """Cancel what each provider still had going from the previous run, once it answers. A sidecar that
+        is not up yet is not a failure: the app starts slskd alongside the worker, so on every launch it
+        was "could not cancel old downloads: slskd unreachable" and the transfers were never cancelled.
+        Retried on each tick and before each lossless pass, under a lock. A provider's `cancel_all` leaves
+        this run's own transfers alone, so a sweep that lands late takes only the previous run's. Never
+        raises: it runs on the loop's tick, where an exception would stop every request."""
+        if not self._leftovers:
+            return
+        async with self._leftovers_lock:
+            for p in list(self._leftovers):
+                try:
+                    n = await p.cancel_all()
+                except LosslessUnavailable as e:
+                    since = self._leftovers_since
+                    if since is not None and self.clock() - since >= SIDECAR_PATIENCE_S:
+                        log.warning("%s: still unreachable %d s after startup (%s); its old downloads are "
+                                    "cancelled once it answers", p.name, SIDECAR_PATIENCE_S, e)
+                        self._leftovers_since = None
+                    else:
+                        log.debug("%s: old downloads not cancelled yet, %s", p.name, e)
+                    continue
+                except LosslessError as e:
+                    log.warning("%s: could not cancel old downloads: %s", p.name, e)
+                except Exception:   # an answer that is not what slskd sends (a non-JSON 4xx, say)
+                    log.exception("%s: could not cancel old downloads", p.name)
+                else:
+                    if n:
+                        log.info("cancelled %d %s downloads left from the previous run", n, p.name)
+                self._leftovers.remove(p)
 
 
     async def refresh_lossless_health(self, force: bool = False) -> None:
@@ -174,17 +215,25 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     async def _maintenance(self, force: bool = False) -> None:
-        """Daily: prune raw attempt folders and ask providers to rescan the shared library (spec §7, §17.3)."""
+        """Daily: prune raw attempt folders and ask providers to rescan the shared library (spec §7, §17.3).
+        A rescan the sidecar was not up for is asked for again on the next tick."""
         now = self.clock()
-        if not force and self._last_maintenance is not None and now - self._last_maintenance < MAINTENANCE_EVERY_S:
-            return
-        self._last_maintenance = now
-        await asyncio.to_thread(prune_raw, self.settings.lossless_raw_dir, self.settings.lossless_keep_raw_days)
-        for p in self.providers:
+        if force or self._last_maintenance is None or now - self._last_maintenance >= MAINTENANCE_EVERY_S:
+            self._last_maintenance = now
+            await asyncio.to_thread(prune_raw, self.settings.lossless_raw_dir, self.settings.lossless_keep_raw_days)
+            self._unscanned = list(self.providers)
+        for p in list(self._unscanned):
+            # A sidecar still starting owes the rescan rather than failing it; the next tick asks again
             try:
                 await p.rescan_shares()
+            except LosslessUnavailable as e:
+                log.debug("%s: rescan not done yet, %s", p.name, e)
+                continue
             except LosslessError as e:
                 log.warning("%s: rescan failed: %s", p.name, e)
+            except Exception:   # on the loop's tick: never out of here
+                log.exception("%s: rescan failed", p.name)
+            self._unscanned.remove(p)
 
 
     def _start_due(self) -> None:
@@ -224,6 +273,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         try:
             while True:
                 await self._requeue_for_the_bot()
+                await self._cancel_leftovers()
                 await self._maintenance()
                 self._start_due()
                 await self.refresh_lossless_health()

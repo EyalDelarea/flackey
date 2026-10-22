@@ -87,7 +87,7 @@ def test_the_diagnosis_names_the_failure_the_way_the_app_does(rec, want):
 
 def no_route(outcome: str) -> str:
     """What `_no_route` writes on the row: MISS_REASON's sentence, inside its own."""
-    return (f"no way to fetch this track: {MISS_REASON[outcome]}, Deezer offered nothing to fall back on. "
+    return (f"no way to fetch this track: {MISS_REASON[outcome]}; Deezer offered nothing to fall back on. "
             "Press Try again to search once more")
 
 
@@ -169,7 +169,7 @@ def test_the_diagnosis_is_one_short_line():
 
 def test_a_long_diagnosis_and_its_subject_stop_at_a_word_not_inside_one(tmp_path: Path):
     # Long enough that a plain cut lands inside "back" at 160 and inside "started" at the subject's 80.
-    msg = ("no way to fetch this track: the people who had it never started sending, the Deezer bot is switched "
+    msg = ("no way to fetch this track: the people who had it never started sending; the Deezer bot is switched "
            "off, so there is no lossy copy to fall back on. Press Try again to search once more")
     rec = FailureRecord(request(RequestState.ERROR, failed_stage="download", error_message=msg))
     line = diagnose(rec)

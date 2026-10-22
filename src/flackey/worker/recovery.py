@@ -101,7 +101,9 @@ class RecoveryMixin:
             fallback = f"{BOT_PAUSED}, so there is no lossy copy to fall back on"
         else:
             fallback = "Deezer offered nothing to fall back on"
-        reason = f"no way to fetch this track: {why}, {fallback}"
+        # Two clauses, each with its own subject: a semicolon, not a comma, between them ("... closely enough;
+        # the Deezer bot is switched off, so ...")
+        reason = f"no way to fetch this track: {why}; {fallback}"
         # The long wait's words are what the row shows for six hours at a time, and what
         # `_requeue_for_the_bot` reads: a paused bot has to be in them, not only in the quick ladder's.
         waiting_on = f"{why}; {BOT_PAUSED}" if paused else why

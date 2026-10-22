@@ -84,6 +84,20 @@ def test_missing_optional_fields(tmp_path: Path):
     assert t["bpm"] == "" and t["key"] == "" and t["year"] == ""
 
 
+@requires_ffmpeg
+@pytest.mark.parametrize("ext", ["mp3", "flac", "wav", "aiff"])
+def test_a_placeholder_genre_or_label_is_never_written(tmp_path: Path, ext: str):
+    """A stand-in record nothing could fill in carries "Unknown" for both: the file gets no genre and no
+    label, not a genre called "Unknown" (a Darude "Sandstorm" filed from Soulseek, 2026-10-22)."""
+    p = _make(tmp_path, ext)
+    ct = CatalogTrack(id=-5, artist="Darude", title="Sandstorm", mix_name="Original Mix", label="Unknown",
+                      genre="Unknown")
+    write_tags(p, ct, Verdict(True, "flac", None, 22050, "ok"), None)
+    t = read_tags(p)
+    assert t["genre"] == "" and t["label"] == "" and t["title"] == "Sandstorm"
+    assert b"Unknown" not in p.read_bytes()
+
+
 def test_unsupported_extension(tmp_path: Path):
     p = tmp_path / "x.ogg"
     p.write_bytes(b"OggS")

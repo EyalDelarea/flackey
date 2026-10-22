@@ -194,3 +194,35 @@ def test_source_isrc_bypasses_the_title_floor():
     t = _row(isrc="QT6EC2645809")
     assert best_match(q, [t]) is None
     assert best_match(q, [t], preferred_isrc="qt6ec2645809") is t
+
+
+def test_only_the_asked_song_by_the_asked_artist_can_pin_a_version_by_length():
+    """Darude's "Sandstorm", official video (232 s, no version asked): Beatport has the 443 s original and a
+    different act's remix that happens to be the video's length -- "D'rude", with the remix credit inside its
+    title. The remix pinned itself by length, outscored the original and named the request until Soulseek's
+    copies of it failed the fingerprint. A length pins a version of *this* song only: the same artist, and a
+    title that says nothing the asked one does not."""
+    q = Query(raw="", artist="Darude", title="Sandstorm", duration_s=232)
+    original = _ct(1, "Darude", title="Sandstorm", dur_s=443, date="2000-01-01")
+    remix = _ct(2, "D'rude", title="Sandstorm (TML 2025 RMX)", mix="Extended Version", dur_s=231, date="2025-07-01")
+    assert not _length_pins_a_version(q, [original, remix])
+    assert best_match(q, [original, remix]) is original
+    assert best_match(q, [remix]) is None
+    # The same remix credited to the asked artist, under a plain title, is still the one the length singles out
+    album = _ct(3, "Darude", title="Sandstorm", mix="Album Edit", dur_s=231)
+    assert best_match(q, [original, remix, album]) is album
+
+
+@pytest.mark.parametrize("asked, credited, title", [
+    ("Darude", "Darude, Ashley Wallbridge", "Sandstorm"),             # Beatport credits every act
+    ("Artist ft. Singer", "Artist, Singer", "Sandstorm"),             # the video credits the singer as feat.
+    ("Above & Beyond", "Above & Beyond, Zoë Johnston", "Sandstorm"),  # an act with "&" in its own name
+    ("Tiësto", "Tiesto", "Sandstorm"),                                # an accent one side spells and one not
+    ("Darude", "Darude", "Sandstorm (feat. Singer)"),                 # a feature credit inside the title
+], ids=["co-credit", "feat", "ampersand-act", "accent", "feat-in-title"])
+def test_the_asked_act_among_the_credits_still_pins_its_edit_by_length(asked, credited, title):
+    q = Query(raw="", artist=asked, title="Sandstorm", duration_s=232)
+    original = _ct(1, credited, title=title, dur_s=443, date="2000-01-01")
+    edit = _ct(2, credited, title=title, mix="Radio Edit", dur_s=231, date="2000-01-01")
+    assert _length_pins_a_version(q, [original, edit])
+    assert best_match(q, [original, edit]) is edit

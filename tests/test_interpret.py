@@ -14,7 +14,7 @@ from flackey.config import Settings
 from flackey.fingerprint import AcousticReference, FingerprintResult
 from flackey.identify import interpretations, parse_youtube_title
 from flackey.lossless import search_text
-from flackey.models import Candidate, Query, RequestKind, RequestState
+from flackey.models import Candidate, Query, Request, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
 from flackey.reference import DeezerSearchError, Identification
 from flackey.source import SourceNotFound
@@ -31,6 +31,7 @@ from flackey.worker.interpret import (
     ReadingResult,
     accepted,
     classify,
+    named,
     preview_order,
     same_record,
 )
@@ -192,7 +193,8 @@ def test_classify_agreed_ambiguous_and_skipped():
     assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [_dz(1)])], None).klass == AGREED
     differ = classify([ReadingResult(LABEL, [_dz(1, artist="Label")]), ReadingResult(AP, [_dz(2, title="X")])], None)
     assert (differ.klass, differ.reading) == (AMBIGUOUS, None)
-    assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [])], None).klass == AMBIGUOUS
+    # Deezer knowing neither reading says nothing about which is right: not a title to ask about
+    assert classify([ReadingResult(LABEL, []), ReadingResult(AP, [])], None).klass == SKIPPED
     failed = classify([ReadingResult(LABEL, [_dz(1)]), ReadingResult(AP, error="http 500")], None)
     assert failed.klass == SKIPPED
     # The same words split in two places search for the same thing: agreed whatever they found
@@ -449,7 +451,7 @@ async def test_a_failing_video_is_fetched_once_a_pass_and_compared_on_the_pass_t
     store.update_request(rid, retry_after=None)
     r = await run(w, rid)
     assert videos == [URL] and r.state == RequestState.DONE
-    assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
+    assert store.get_interpretation_outcome(rid)[0] == SKIPPED       # this Deezer knows neither reading
 
 
 @requires_ffmpeg
@@ -502,7 +504,7 @@ async def test_the_other_readings_are_the_last_spellings_and_name_the_file_they_
     t = store.get_track(r.track_id)
     assert (t.artist, t.title) == ("Astral Projection", "Into the Void")
     assert store.get_request(rid).query_artist == "Label"             # the request's query is unchanged
-    assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
+    assert store.get_interpretation_outcome(rid)[0] == SKIPPED       # this Deezer knows neither reading
 
 
 @requires_ffmpeg
@@ -661,7 +663,8 @@ async def test_waiting_for_the_cpu_slot_does_not_spend_the_budget(bare, monkeypa
     w._interpret(req, VIDEO)
     await w._shadow_settled()
     await holder
-    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 0)
+    # Both readings accept the record; "Astral Projection - Into the Void" names it better than "Label" does
+    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 1)
 
 
 async def test_a_preview_that_could_not_be_checked_is_skipped_not_ambiguous(bare, monkeypatch, caplog):
@@ -727,3 +730,141 @@ async def test_stopping_a_request_drops_its_comparison_queued_or_running(bare, m
     assert running.cancelled() and queued.cancelled() and not w._shadow_tasks
     assert store.get_interpretation_outcome(req.id) == (None, None)
     assert not w._shadow.locked()                          # the next comparison can still have its turn
+
+
+# ---- real conditions: no bot, a music video that is not any release's length ----------------------------------
+
+# The official upload of a single, as its artist's channel titles it: the channel is the artist, so the title
+# alone is the other reading. The video runs 7 s longer than the radio edit it is cut from, as music videos do.
+SANDSTORM_VIDEO_S = 232
+ORIGINAL = _dz(301, artist="Darude", title="Sandstorm", duration_s=443, rank=0)
+RADIO_EDIT = _dz(302, artist="Darude", title="Sandstorm", mix_name="Radio Edit", duration_s=225, rank=1)
+TML_RMX = _dz(303, artist="D'rude", title="Sandstorm (TML 2025 RMX)", mix_name="Extended Version", duration_s=290,
+              rank=2)
+OTHER_SANDSTORM = _dz(304, artist="Someone Else", title="Sandstorm", duration_s=180, rank=0)
+
+
+@pytest.fixture
+def realistic(tmp_path, monkeypatch):
+    """A Worker with the Telegram bot switched off, the request's video in hand and no identification of the
+    pipeline's own, and a Deezer that answers the way the public search does."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    store = Store(settings.db_path)
+    w = Worker(store, FakeSource(), FakeCatalog(), MemoryNotifier(), settings)
+    monkeypatch.setattr(interpret_mod, "DEEZER_INTERVAL_S", 0)
+    answers: dict[str, list[Candidate]] = {}
+    previews: list[int] = []
+
+    async def search(text, http, *, limit=10):
+        return [Candidate(**c.__dict__) for c in answers.get(text, [])]
+
+    def video_is(deezer_id: int):
+        async def identify(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+            previews.extend(c.deezer_id for c in cands)
+            hit = next((c for c in cands if c.deezer_id == deezer_id), None)
+            if hit is not None:
+                return Identification(hit, 0.97, [(hit.deezer_id, 0.97)], "match")
+            return Identification(None, None, [(c.deezer_id, 0.55) for c in cands], "none")
+        return identify
+
+    monkeypatch.setattr(interpret_mod, "search_deezer", search)
+
+    def add(title: str, uploader: str, duration_s: int) -> Request:
+        readings = interpretations(title, uploader, duration_s)
+        assert len(readings) >= 2
+        rid = store.add_request(title, RequestKind.YT_TRACK, source_url=URL, query=readings[0],
+                                interpretations=readings)
+        return store.get_request(rid)
+
+    return w, store, answers, previews, video_is, add
+
+
+async def test_a_music_video_longer_than_every_release_is_confirmed_by_its_audio(realistic, monkeypatch):
+    """No release is the video's length, so no record passes the words-and-length score -- and the shadow
+    used to stop there, never fetch a preview, and call the request `ambiguous`. The pipeline identifies by
+    audio whatever the text score says; so does the comparison now."""
+    w, store, answers, previews, video_is, add = realistic
+    answers["Darude Sandstorm"] = [ORIGINAL, RADIO_EDIT, TML_RMX]
+    answers["Sandstorm"] = [OTHER_SANDSTORM, ORIGINAL, RADIO_EDIT]
+    monkeypatch.setattr(interpret_mod, "identify_record", video_is(RADIO_EDIT.deezer_id))
+    req = add("Sandstorm", "Darude", SANDSTORM_VIDEO_S)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 0)
+    assert RADIO_EDIT.deezer_id in previews and OTHER_SANDSTORM.deezer_id not in previews
+
+
+def test_named_hears_every_record_the_words_name_whatever_its_length_or_version():
+    darude = Query(raw="x", artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    found = [OTHER_SANDSTORM, ORIGINAL, RADIO_EDIT, TML_RMX]
+    assert accepted(darude, found) == []                  # neither is the video's length: the score refuses both
+    assert [c.deezer_id for c in named(darude, found)] == [301, 302, 303]   # ... the audio may not
+    alone = Query(raw="x", artist=None, title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    assert named(alone, found) == []                      # no artist: the length still stands in for it
+    # What `accepted` takes comes first, in its order
+    assert [c.deezer_id for c in named(AP, [_dz(1, duration_s=60), _dz(2)])] == [2, 1]
+
+
+async def test_a_title_deezer_does_not_know_is_not_counted_as_one_to_ask_about(realistic, monkeypatch):
+    """A label's upload of a track the public catalogue lacks: no reading finds a record, so nothing tells
+    them apart. That is `skipped`, not `ambiguous` -- the "would ask" rate must not be what Deezer lacks."""
+    w, store, _, previews, video_is, add = realistic
+    monkeypatch.setattr(interpret_mod, "identify_record", video_is(0))
+    req = add("Subwoofer Records - Patrick Hollo - Low", "x", 402)
+    assert [(q.artist, q.title) for q in store.get_interpretations(req.id)] == [
+        ("Subwoofer Records", "Patrick Hollo - Low"), ("Patrick Hollo", "Low")]
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (SKIPPED, None) and previews == []
+
+
+def test_readings_that_only_name_records_still_agree_or_disagree():
+    """A music video accepts nothing on length, but its readings still name records: two readings naming
+    two different songs are `ambiguous`, not `skipped` -- that is the music-video case the label is for."""
+    darude = Query(raw="x", artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    other = Query(raw="x", artist="Someone Else", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    mine = ReadingResult(darude, accepted(darude, [ORIGINAL]), named=named(darude, [ORIGINAL]))
+    theirs_found = [_dz(305, artist="Someone Else", title="Sandstorm", duration_s=600)]
+    theirs = ReadingResult(other, accepted(other, theirs_found), named=named(other, theirs_found))
+    assert not mine.accepted and not theirs.accepted and mine.named and theirs.named
+    assert classify([mine, theirs], None).klass == AMBIGUOUS
+    again = ReadingResult(other, [], named=[_dz(301, artist="Darude", title="Sandstorm", duration_s=443)])
+    assert classify([mine, again], None).klass == AGREED
+    assert classify([mine, ReadingResult(other, [])], None).klass == AGREED      # one names it, one nothing
+    assert classify([ReadingResult(darude, []), ReadingResult(other, [])], None).klass == SKIPPED
+
+
+def test_accepted_records_are_heard_before_any_reading_only_names():
+    a = ReadingResult(AP, [_dz(1)], named=[_dz(1), _dz(2), _dz(3)])
+    b = ReadingResult(LABEL, [_dz(4)], named=[_dz(4), _dz(5)])
+    assert [c.deezer_id for c in preview_order([a, b], skip=set())] == [1, 4, 2, 5, 3]
+
+
+def test_a_match_goes_to_the_reading_whose_words_name_it_best():
+    alpha = Query(raw="x", artist="Alpha x Beta", title="Title", duration_s=3)
+    first = Query(raw="x", artist="Alpha", title="Title", duration_s=3)
+    record = _dz(9, artist="Alpha", title="Title")
+    out = classify([ReadingResult(alpha, named=[record]), ReadingResult(first, named=[record])], matched=9)
+    assert (out.klass, out.reading) == (CONFIRMED, 1)
+    # Equally well named: the earlier reading, as before
+    assert classify([ReadingResult(first, named=[record]), ReadingResult(first, named=[record])], 9).reading == 0
+    # Accepting still outranks naming, however well
+    assert classify([ReadingResult(alpha, [record]), ReadingResult(first, named=[record])], 9).reading == 0
+
+
+async def test_an_extra_record_with_no_preview_does_not_overrule_the_verdict(realistic, monkeypatch):
+    """Deezer has no preview for plenty of records. One a reading only names, missing, says nothing about
+    what the readings accepted; one they accepted, missing, still makes the label `skipped`."""
+    w, store, answers, _, _, add = realistic
+
+    async def no_match_and_no_preview_for_303(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+        return Identification(None, None, [(c.deezer_id, None if c.deezer_id == 303 else 0.5) for c in cands], "none")
+
+    monkeypatch.setattr(interpret_mod, "identify_record", no_match_and_no_preview_for_303)
+    exact = _dz(306, artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S, rank=3)
+    answers["Darude Sandstorm"] = [exact, TML_RMX]           # 306 accepted; the remix only named
+    answers["Sandstorm"] = [exact]
+    req = add("Sandstorm", "Darude", SANDSTORM_VIDEO_S)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (AGREED, None)

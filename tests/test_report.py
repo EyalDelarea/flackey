@@ -43,6 +43,22 @@ def test_known_secrets_are_removed_wherever_they_appear():
     assert out.count("<redacted>") == 4
 
 
+def test_slskds_own_web_username_is_not_a_secret_but_its_password_and_the_account_are(tmp_path):
+    """slskd's web login is always called "flackey"; redacted as a secret it blanked the app's own name
+    from every log line. The password beside it, the API key and the Soulseek account still go."""
+    from flackey.slskd_config import read_web_credentials, write_credentials
+
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    key = write_credentials(settings.data_dir, "dj-name", "hunter22pass")
+    web_user, web_password = read_web_credentials(settings.data_dir)
+    assert web_user == "flackey"
+    r = Redactor(report.known_secrets(settings), home=HOME)
+    out = r(f"2026-10-22 INFO flackey.worker.core: logged in to slskd as {web_user}:{web_password} "
+            f"with key {key}; soulseek dj-name / hunter22pass")
+    assert "flackey.worker.core" in out and f"as {web_user}:" in out
+    assert web_password not in out and key not in out and "dj-name" not in out and "hunter22pass" not in out
+
+
 @pytest.mark.parametrize("line", [
     "GET /login?user=dj&pw=s3cr3tP%40ss%21 HTTP/1.1",
     "GET /login?x=s3cr3tP%40ss%21&y=1",

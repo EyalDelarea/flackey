@@ -24,6 +24,8 @@ SPOTIFY_FAIL = "Could not read that Spotify link."
 # the connection, so that is what the paste bar says.
 YT_UNREACHABLE = "Could not reach YouTube. Check your internet connection."
 SPOTIFY_UNREACHABLE = "Could not reach Spotify. Check your internet connection."
+# YouTube answered, and the answer was that the video is not there: no update of yt-dlp brings it back.
+YT_UNAVAILABLE = "That video is unavailable (removed or private)."
 
 
 class BadLink(Exception):
@@ -153,7 +155,7 @@ class Inbox:
             name, entries = await self.youtube(url)
         except YouTubeError as e:
             log.warning("yt-dlp failed for %s: %s", url, e)
-            raise BadLink(YT_UNREACHABLE if e.network else YT_FAIL) from e
+            raise BadLink(YT_UNREACHABLE if e.network else YT_UNAVAILABLE if e.unavailable else YT_FAIL) from e
         if not entries:  # deleted, private, or region-blocked video; empty playlist
             raise BadLink(YT_FAIL)
         if kind == RequestKind.YT_TRACK:

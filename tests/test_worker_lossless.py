@@ -2,6 +2,7 @@
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
 import asyncio
 import hashlib
+import logging
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -30,7 +31,13 @@ from flackey.models import (
 )
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
-from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
+from flackey.source import (
+    LosslessError,
+    LosslessUnavailable,
+    SourceNotFound,
+    SourceTimeout,
+    TransferProgress,
+)
 from flackey.store import Store
 from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.verify import verify as real_verify
@@ -867,6 +874,113 @@ async def test_startup_marks_open_attempts_interrupted_cancels_and_rescans(lenv)
     assert store.get_attempt_for_request(rid).outcome == "filed" and r.state == RequestState.DONE
 
 
+class BootingSidecar(FakeProvider):
+    """slskd as the app finds it at launch: started beside the worker, and not answering until `up`."""
+
+    def __init__(self, *a, log: list[str], **kw):
+        super().__init__(*a, **kw)
+        self.up, self.log = False, log
+
+    def _answer(self, what: str) -> None:
+        if not self.up:
+            raise LosslessUnavailable("slskd unreachable: ConnectError")
+        self.log.append(what)
+
+    async def cancel_all(self):
+        self._answer("cancel")
+        return await super().cancel_all()
+
+    async def rescan_shares(self):
+        self._answer("rescan")
+        await super().rescan_shares()
+
+    async def search(self, text, *, wait_s, on_raw=None):
+        self.log.append("search")
+        return await super().search(text, wait_s=wait_s, on_raw=on_raw)
+
+
+async def test_a_sidecar_still_starting_is_waited_for_not_warned_about(tmp_path: Path, caplog):
+    """The app starts slskd alongside the worker, so on every launch `startup` met it booting and logged
+    "could not cancel old downloads" and "rescan failed", and neither ever happened. Both now wait for it."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    sidecar = BootingSidecar(tmp_path / "dl", log=[])
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient())
+    caplog.set_level(logging.DEBUG, logger="flackey.worker.core")
+    await w.startup()
+    await w._cancel_leftovers()
+    await w._maintenance()                     # a tick: not due again, and the sidecar is still down
+    assert sidecar.log == [] and not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    sidecar.up = True
+    await w._cancel_leftovers()
+    await w._maintenance()
+    assert sidecar.log == ["cancel", "rescan"]
+    await w._cancel_leftovers()
+    await w._maintenance()
+    assert sidecar.log == ["cancel", "rescan"]                    # once each, not on every tick
+
+
+async def test_a_refusal_that_is_not_the_sidecar_being_down_is_still_reported(tmp_path: Path, caplog):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+
+    class Refusing(FakeProvider):
+        async def cancel_all(self):
+            raise LosslessError("http 401")
+
+    sidecar = Refusing(tmp_path / "dl")
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient())
+    await w.startup()
+    assert "soulseek: could not cancel old downloads: http 401" in caplog.text and not w._leftovers
+
+
+async def test_a_sidecar_that_never_answers_is_reported_once(tmp_path: Path, caplog):
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    sidecar = BootingSidecar(tmp_path / "dl", log=[])
+    now = [0.0]
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[sidecar], http=httpx.AsyncClient(), clock=lambda: now[0])
+    await w.startup()
+    for t in (60.0, 179.0, 181.0, 240.0, 600.0):
+        now[0] = t
+        await w._cancel_leftovers()
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING and "still unreachable" in r.message]
+    assert len(warned) == 1 and w._leftovers == [sidecar]          # said once, and still owed
+    sidecar.up = True
+    await w._cancel_leftovers()
+    assert sidecar.log == ["cancel"] and not w._leftovers
+
+
+async def test_an_unexpected_answer_from_the_sidecar_never_stops_the_loop(tmp_path: Path, caplog):
+    """A non-JSON 4xx raises a JSONDecodeError out of the client. On the loop's tick that used to end
+    `run_forever` and every request with it."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+
+    class Garbled(FakeProvider):
+        async def cancel_all(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        async def rescan_shares(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+               providers=[Garbled(tmp_path / "dl")], http=httpx.AsyncClient())
+    await w.startup()
+    assert not w._leftovers and not w._unscanned
+    assert "could not cancel old downloads" in caplog.text and "rescan failed" in caplog.text
+
+
+@requires_ffmpeg
+async def test_a_pass_sweeps_the_previous_runs_downloads_before_its_first_search(lenv):
+    settings, store, _, _, _, _ = lenv
+    sidecar = BootingSidecar(settings.slskd_downloads, [lf("a")], audio=lenv[3].audio, log=[])
+    w = make(lenv, provider=sidecar)
+    await w.startup()
+    sidecar.up = True                           # up between two ticks, before the loop's own sweep
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and sidecar.log[:2] == ["cancel", "search"]
+
+
 async def test_maintenance_runs_once_a_day(lenv, tmp_path: Path):
     settings, _, _, provider, _, clock = lenv
     old = settings.lossless_raw_dir / "1"
@@ -1238,7 +1352,8 @@ async def test_source_switched_off_searches_the_providers_on_the_beatport_match_
     # switched off there is no lossy copy to fall back on either.
     assert attempt_of(store, rid).outcome == "fingerprint_unavailable"
     assert r.state == RequestState.ERROR and r.track_id is None
-    assert "could not be checked acoustically" in r.error_message
+    assert ("could not be checked acoustically; the Deezer bot is switched off, so there is no lossy copy to fall "
+            "back on") in r.error_message
 
 
 async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, monkeypatch):

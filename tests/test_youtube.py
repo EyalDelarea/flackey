@@ -57,6 +57,40 @@ async def test_an_unreachable_youtube_is_told_apart_from_an_unreadable_page(monk
     assert e.value.network is network
 
 
+# yt-dlp's rate-limit refusal, which opens with the same words as a removed video's
+RATE_LIMITED = ("ERROR: [youtube] abc: Video unavailable. This content isn't available, try again later. The "
+                "current session has been rate-limited by YouTube for up to an hour. It is recommended to use "
+                "`-t sleep` to add a delay between video requests to avoid exceeding the rate limit. For more "
+                "information, refer to https://github.com/yt-dlp/yt-dlp/wiki/Extractors"
+                "#this-content-isnt-available-try-again-later")
+
+
+@pytest.mark.parametrize("message, unavailable", [
+    ("ERROR: [youtube] dQw4w9WgXcZ: Video unavailable", True),
+    ("ERROR: [youtube] abc: Video unavailable. This video is unavailable", True),
+    ("ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video", True),
+    ("ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader", True),
+    ("ERROR: [youtube] abc: This video is no longer available because the account was terminated.", True),
+    ("ERROR: [youtube] abc: Unable to extract initial player response", False),
+    ("ERROR: Unsupported URL: https://www.youtube.com/feed/library", False),
+    (RATE_LIMITED, False),
+    ("ERROR: [youtube] abc: Video unavailable. The uploader has not made this video available in your country",
+     False),
+    ("ERROR: [youtube] abc: Video unavailable. This video is not available in your location", False),
+], ids=["unavailable", "unavailable-long", "private", "removed", "terminated", "extraction", "unsupported",
+        "rate-limited", "country", "location"])
+async def test_a_video_youtube_says_is_gone_is_told_apart_from_one_yt_dlp_cannot_read(monkeypatch, message,
+                                                                                      unavailable):
+    from yt_dlp.utils import DownloadError
+
+    def boom(url):
+        raise DownloadError(message)
+    monkeypatch.setattr(yt, "_extract", boom)
+    with pytest.raises(yt.YouTubeError) as e:
+        await yt.fetch_youtube("https://www.youtube.com/watch?v=abc")
+    assert e.value.unavailable is unavailable and e.value.network is False
+
+
 async def test_a_link_is_read_without_any_yt_dlp_on_the_path(monkeypatch):
     """yt-dlp is a Python dependency of this project, but this module used to shell out to a `yt-dlp`
     *binary* -- a separate install that a packaged .app does not have and cannot put on its PATH. Pasting

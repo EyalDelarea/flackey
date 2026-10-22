@@ -229,6 +229,29 @@ async def test_download_polls_to_completion_and_reports_progress(provider):
 
 
 @respx.mock
+async def test_cancel_all_leaves_this_runs_own_downloads_alone(provider):
+    """The worker sweeps the previous run's transfers whenever slskd first answers, which can be after this
+    run's first download went in: that one must survive the sweep."""
+    p, _clock, downloads = provider
+    f = flac_file(size=1000)
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(return_value=httpx.Response(201))
+    dest = downloads / "Twisted" / "02. Hallucinogen - Orphic Thrench.flac"
+
+    def land(_request):
+        dest.parent.mkdir(exist_ok=True)
+        dest.write_bytes(b"x" * f.size)
+        return httpx.Response(200, json=transfer("Completed, Succeeded", f.size))
+
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=[land])
+    await p.download(f, first_byte_s=60, total_s=600, poll_s=2)
+    ours, old = transfer("InProgress", 5), transfer("InProgress", 5, username="other")
+    respx.get(f"{BASE}/transfers/downloads").mock(return_value=httpx.Response(200, json=[ours, old]))
+    mine = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
+    theirs = respx.delete(f"{BASE}/transfers/downloads/other/t1").mock(return_value=httpx.Response(204))
+    assert await p.cancel_all() == 1 and theirs.called and not mine.called
+
+
+@respx.mock
 async def test_download_first_byte_cap_cancels(provider):
     # "Initializing", not "Queued, Remotely": the transfer has left the peer's queue and still sends nothing,
     # which is the peer refusing rather than the peer being busy. See the queue tests at the end of the file.
