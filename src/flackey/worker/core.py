@@ -233,20 +233,23 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         did not have, filed nowhere because the bot was paused, is exactly the one the MP3 fallback
         exists for; making the owner find it on the Failed tab and press Try again would be a chore the
         app can do itself. `BOT_PAUSED` in the row is how those are told apart from every other failure:
-        failures go through `retry`, like Try again, and a row already waiting on its backoff is just
-        made due now."""
+        each row gets what Try again gives a failure (`_fresh_pass`), whether it failed or is still waiting
+        on its backoff -- a row six hours into the Soulseek wait has spent its retry budget on a source it
+        could not use, and the bot's first timeout would otherwise end it.
+
+        Each state is matched on its own field. A failure's `flag_reason` is whatever its last backoff
+        said and nothing clears it on the way into `error`, so a disk-full error after a paused-bot backoff
+        would still carry the words; only `error_message` says why a failure failed."""
         ready = self._bot_ready()
         came_back, self._bot_was_ready = ready and not self._bot_was_ready, ready
         if not came_back:
             return
         n = 0
         for req in self.store.list_requests(SWEEPABLE_STATES | {RequestState.QUEUED}, limit=100_000):
-            if BOT_PAUSED not in f"{req.error_message or ''} {req.flag_reason or ''}":
+            why = req.flag_reason if req.state == RequestState.QUEUED else req.error_message
+            if BOT_PAUSED not in (why or ""):
                 continue
-            if req.state == RequestState.QUEUED:
-                self.store.update_request(req.id, retry_after=None)
-            else:
-                await self.retry(req.id)
+            self._fresh_pass(req)
             n += 1
         if n:
             log.info("Telegram is back: re-queued %d requests the paused Deezer bot left without a file", n)
@@ -331,11 +334,16 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             # at the first survivor, so a press can re-download a file already proven wrong. That is the
             # price of the button meaning what it says -- peers come and go, so the same search an hour
             # later is not the same file list, and the alternative is a dead end the owner cannot leave.
-            self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
-                            error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
+            self._fresh_pass(req)
         else:
             raise ValueError(f"request {request_id} is {req.state.value}; nothing to retry")
         return self.store.get_request(request_id)
+
+
+    def _fresh_pass(self, req: Request) -> None:
+        """Back on the queue, due now, with the whole retry budget and one more look at the providers."""
+        self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
+                        error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
 
 
     async def process(self, request_id: int) -> Request | None:

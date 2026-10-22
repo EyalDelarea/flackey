@@ -6,21 +6,30 @@ from flackey.app import start_sidecar, supervise_worker
 from flackey.slskd_binary import SlskdBinaryError
 
 
-async def test_supervisor_runs_the_worker_with_telegram_signed_out():
-    """Telegram used to gate the worker, and with it every Soulseek download. A signed-out account now
-    only pauses the Deezer bot inside the worker, so the supervisor starts it whatever Telegram says."""
+async def test_supervisor_runs_the_worker_however_telegram_comes_and_goes():
+    """Telegram used to gate the worker, and with it every Soulseek download: signed out at launch, it
+    never started. A signed-out account now only pauses the Deezer bot inside the worker, so the
+    supervisor starts it signed out and neither a sign-in nor a sign-out stops or restarts it."""
     status = {"telegram_authorized": False, "worker_running": False}
     runs = []
-    parked = asyncio.Event()
+    cancelled = []
 
     class W:
         async def run_forever(self):
             runs.append(status["worker_running"])
-            await parked.wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(1)
+                raise
 
     task = asyncio.create_task(supervise_worker(W(), status, poll_s=0.01))
     await asyncio.sleep(0.05)
-    assert runs == [True] and status["worker_running"] is True
+    assert runs == [True] and status["worker_running"] is True    # started while signed out
+    for signed_in in (True, False):
+        status["telegram_authorized"] = signed_in
+        await asyncio.sleep(0.05)
+    assert runs == [True] and cancelled == [] and status["worker_running"] is True   # the same run throughout
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

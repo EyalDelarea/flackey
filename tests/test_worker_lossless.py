@@ -1806,11 +1806,21 @@ async def test_telegram_coming_back_requeues_what_the_paused_bot_left_behind(len
     paused = f"no way to fetch this track: the recording could not be checked acoustically, {worker_mod.BOT_PAUSED}"
     failed = store.add_request(TEXT, RequestKind.TEXT)
     store.update_request(failed, state=RequestState.ERROR, error_message=paused, attempts=3)
+    not_found = store.add_request("q", RequestKind.TEXT)
+    store.update_request(not_found, state=RequestState.NOT_FOUND, error_message=f"could not identify this track: "
+                         f"{worker_mod.BOT_PAUSED} and no Beatport match; no artist and title could be read")
     waiting = store.add_request(TEXT, RequestKind.TEXT)
     later = (datetime.now(UTC) + timedelta(hours=6)).isoformat(timespec="seconds")
-    store.update_request(waiting, retry_after=later, flag_reason=f"waiting for Soulseek: x; {worker_mod.BOT_PAUSED}")
+    # Six hours into the Soulseek wait: the quick ladder is long spent.
+    store.update_request(waiting, retry_after=later, attempts=MAX_ATTEMPTS + 2, lossless_retry=1,
+                         flag_reason=f"waiting for Soulseek: x; {worker_mod.BOT_PAUSED}; 10 more looks")
     unrelated = store.add_request(TEXT, RequestKind.TEXT)
     store.update_request(unrelated, state=RequestState.ERROR, error_message="boom")
+    # A failure whose last backoff was the paused bot's, and which then failed for another reason: the
+    # stale flag is not why it failed, so it is not given back.
+    stale = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(stale, state=RequestState.ERROR, error_message="disk full",
+                         flag_reason=f"no way to fetch this track: x, {worker_mod.BOT_PAUSED}")
     stopped = store.add_request(TEXT, RequestKind.TEXT)
     store.update_request(stopped, state=RequestState.CANCELLED, error_message=paused)
 
@@ -1822,8 +1832,12 @@ async def test_telegram_coming_back_requeues_what_the_paused_bot_left_behind(len
     r = store.get_request(failed)
     # Through `retry`, the same as Try again: a fresh budget and another look at Soulseek.
     assert r.state == RequestState.QUEUED and r.attempts == 0 and r.lossless_retry and r.error_message is None
-    assert store.get_request(waiting).retry_after is None
+    assert store.get_request(not_found).state == RequestState.QUEUED
+    w8 = store.get_request(waiting)
+    # Due now, and with the budget back: otherwise the bot's first timeout would end it in `error`.
+    assert (w8.retry_after, w8.attempts, w8.flag_reason) == (None, 0, None)
     assert store.get_request(unrelated).state == RequestState.ERROR      # failed for another reason
+    assert store.get_request(stale).state == RequestState.ERROR
     assert store.get_request(stopped).state == RequestState.CANCELLED    # stopped on purpose stays stopped
 
     store.update_request(unrelated, error_message=paused)
@@ -1853,3 +1867,43 @@ async def test_telegram_coming_back_mid_pass_sends_the_request_round_again(lenv)
 
     await w.process(rid)
     assert source.searches == 1                          # and asked on the next one
+
+
+async def test_a_sign_in_made_while_the_app_was_closed_requeues_on_the_first_tick(lenv, monkeypatch):
+    """`flackey login`, or a session that simply works again after a restart: there is no tick on which
+    Telegram "comes back" while the worker watches, so the first one has to count."""
+    _, store, _, _, _, _ = lenv
+    _public_deezer_record(monkeypatch)
+    source = FakeSource([good_cand()])
+    w = make(lenv, source=source, status={"telegram_authorized": True})
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(rid, state=RequestState.ERROR, attempts=3, error_message=f"no way to fetch this "
+                         f"track: nothing on Soulseek matched this track closely enough, {worker_mod.BOT_PAUSED}")
+
+    task = asyncio.create_task(w.run_forever(poll_s=0.01))
+    deadline = asyncio.get_running_loop().time() + 10
+    while store.get_request(rid).state != RequestState.DONE and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert store.get_request(rid).state == RequestState.DONE
+    assert source.searches == 1                          # and this time the bot was asked
+
+
+async def test_a_record_picked_in_review_is_not_fetched_through_a_bot_switched_off_since(lenv):
+    """The other half of the gate: Telegram is signed in, but the owner has switched the bot off. The
+    pass used to fetch the picked record through the bot anyway."""
+    settings, store, _, _, _, _ = lenv
+    empty = FakeProvider(settings.slskd_downloads, [])
+    source = FakeSource([good_cand()])
+    w = make(lenv, provider=empty, source=source, status={"telegram_authorized": True},
+             settings=settings.model_copy(update={"source_enabled": False}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    chosen = store.add_candidates(rid, [good_cand()])[0]
+    store.update_request(rid, chosen_candidate_id=chosen.id)
+
+    r = await w.process(rid)
+    assert empty.searches and source.fetched == []
+    assert r.state == RequestState.QUEUED and "the Deezer bot is switched off" in r.flag_reason
+    assert worker_mod.BOT_PAUSED not in r.flag_reason
