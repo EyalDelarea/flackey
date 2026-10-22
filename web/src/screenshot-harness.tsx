@@ -134,7 +134,7 @@ const stageRow = (artist: string, title: string, state: RequestState, over: Part
 })
 
 const inSeconds = (s: number) => new Date(Date.now() + s * 1000).toISOString()
-const NO_MATCH = 'no way to fetch this track: nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on, will retry'
+const NO_MATCH = 'no way to fetch this track: nothing on Soulseek matched this track closely enough; Deezer offered nothing to fall back on, will retry'
 
 function stageBundles(): Bundle[] {
   const rows: Bundle[] = []

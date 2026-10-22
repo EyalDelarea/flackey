@@ -715,6 +715,10 @@ describe('a queued track', () => {
       flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough, Deezer offered nothing to fall back on' }), opts)
     expect(v.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
     expect(v.retryInSeconds).toBe(25)
+    // The worker joins the two clauses with a semicolon now; rows written before that keep the comma
+    const joined = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00',
+      flag_reason: 'no way to fetch this track: nothing on Soulseek matched this track closely enough; Deezer offered nothing to fall back on, will retry' }), opts)
+    expect(joined.status).toBe('Previous attempt: No Soulseek match; nothing on Deezer to fall back on')
   })
 
   it('shows the wait for Soulseek as itself rather than as a previous attempt', () => {

@@ -1316,7 +1316,8 @@ async def test_source_switched_off_searches_the_providers_on_the_beatport_match_
     # switched off there is no lossy copy to fall back on either.
     assert attempt_of(store, rid).outcome == "fingerprint_unavailable"
     assert r.state == RequestState.ERROR and r.track_id is None
-    assert "could not be checked acoustically" in r.error_message
+    assert ("could not be checked acoustically; the Deezer bot is switched off, so there is no lossy copy to fall "
+            "back on") in r.error_message
 
 
 async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, monkeypatch):
