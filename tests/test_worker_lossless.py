@@ -43,6 +43,7 @@ from flackey.source import (
 )
 from flackey.source.slskd import TransferBudget
 from flackey.store import Store
+from flackey.tag import read_tags
 from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.verify import verify as real_verify
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
@@ -1289,6 +1290,7 @@ async def test_upgrade_swaps_the_file_and_keeps_the_row_id(lenv):
     assert after.source_fmt == "flac" and after.source == "soulseek" and after.path.suffix == ".aiff"
     assert after.path.exists() and not before.path.exists(), "the lossy file is deleted, but only last"
     assert after.file_size == after.path.stat().st_size
+    assert after.tag_date is not None and after.tag_date == read_tags(after.path)["date"]   # issue #181
     assert "Upgraded to AIFF" in msg and "Upgraded:" in notifier.sent[-1][0]
     assert not list(settings.tmp_dir.iterdir())
 
