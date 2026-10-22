@@ -1,7 +1,7 @@
 """Shadow arbitration between the readings of a noisy YouTube title (`identify.interpretations`).
 
 Nothing here changes what a request searches for or files. Each reading is put to Deezer's public search,
-the records its words would accept are checked against the video, and the request is labelled with what
+the records its words name are checked against the video, and the request is labelled with what
 that showed: one reading's record *is* the video (`confirmed`), the readings lead to the same record
 anyway (`agreed`), they lead to different ones and the audio could not settle it (`ambiguous`), or the
 comparison could not run (`skipped`). Counting those is the point: `ambiguous` is how often asking the
@@ -20,7 +20,16 @@ from rapidfuzz import fuzz
 from ..fingerprint import AcousticReference
 from ..identify import parse_version
 from ..lossless import Reference
-from ..match import LENGTH_SLACK_S, THRESHOLD, candidate_version, score_candidate, versions_agree
+from ..match import (
+    LENGTH_SLACK_S,
+    THRESHOLD,
+    W_ARTIST,
+    W_TITLE,
+    Score,
+    candidate_version,
+    score_candidate,
+    versions_agree,
+)
 from ..models import TITLE_FLOOR, Candidate, Query, Request, is_original, norm
 from ..reference import DeezerSearchError, Identification, identify_record, search_deezer
 from .records import query_candidate
@@ -38,14 +47,24 @@ BUDGET_S = 45
 # and the pipeline's own lookups (a Spotify link, a request the bot could not place) share that allowance:
 # a noisy playlist compared at full speed would spend it for them.
 DEEZER_INTERVAL_S = 0.15
+# The least the artist and title points (`score_candidate`'s, out of W_ARTIST + W_TITLE) may add up to for a
+# record to be one the reading's words name: THRESHOLD's share of them. "D'rude" for "Darude" is named;
+# someone else's song of the same title is not.
+WORDS_MIN = round((W_ARTIST + W_TITLE) * THRESHOLD / 100)
 
 
 @dataclass
 class ReadingResult:
-    """What one reading's words found on Deezer: the records they would accept, best first."""
+    """What one reading's words found on Deezer: the records they would accept, best first, and every
+    record they name (`named`), which is what the video is compared with."""
     reading: Query
     accepted: list[Candidate] = field(default_factory=list)
     error: str | None = None
+    named: list[Candidate] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.named:
+            self.named = list(self.accepted)
 
 
 @dataclass(frozen=True)
@@ -63,16 +82,7 @@ def accepted(reading: Query, found: list[Candidate]) -> list[Candidate]:
     version and length alone outscore the threshold. And a reading with no artist (a title whose channel
     may be a label's) is scored as though the artist agreed and then has to match the video's length
     instead: half of what names a recording is missing, and the length is the other fact that is not a word."""
-    scored: list[Candidate] = []
-    for c in found:
-        c = replace(c)
-        q = reading if reading.artist else replace(reading, artist=c.artist)
-        c.score = score_candidate(q, c, None).total
-        if c.score < THRESHOLD or fuzz.token_set_ratio(norm(reading.title), norm(parse_version(c.title)[0])) < TITLE_FLOOR:
-            continue
-        if not reading.artist and not _fits(c, reading.duration_s):
-            continue
-        scored.append(c)
+    scored = [c for c, _ in _scored(reading, found) if (c.score or 0) >= THRESHOLD]
     if reading.version:
         out = [c for c in scored if versions_agree(reading.version, candidate_version(c))]
     else:
@@ -81,6 +91,39 @@ def accepted(reading: Query, found: list[Candidate]) -> list[Candidate]:
         out = originals + [c for c in scored if c not in originals and not length_held
                            and _fits(c, reading.duration_s)]
     return sorted(out, key=lambda c: (-(c.score or 0), c.rank))
+
+
+def named(reading: Query, found: list[Candidate]) -> list[Candidate]:
+    """The records among `found` whose artist and title are this reading's words, whatever their version
+    and length: the ones worth putting to the video. `accepted`'s come first, as it orders them, then the
+    rest by the same score -- so the length still decides what is heard first, but no longer whether.
+
+    The pipeline never lets the text score decide which record a video is: with a video it fingerprints
+    the bot's records in score order and the audio answers. Hearing only `accepted`'s left this comparison
+    deaf where it matters most. A music video runs longer than any release of its song (an intro, an
+    outro), so the original scores below THRESHOLD on length and the radio edit it is cut from on version
+    as well; no preview was fetched, and a title the audio would have settled at once was `ambiguous`."""
+    first = accepted(reading, found)
+    taken = {(c.deezer_id, c.rank) for c in first}
+    rest = [c for c, s in _scored(reading, found)
+            if (c.deezer_id, c.rank) not in taken and s.artist + s.title >= WORDS_MIN]
+    return first + sorted(rest, key=lambda c: (-(c.score or 0), c.rank))
+
+
+def _scored(reading: Query, found: list[Candidate]) -> list[tuple[Candidate, Score]]:
+    """Each record of `found` that names the reading's title, scored against the reading (on a copy). A
+    reading with no artist borrows the record's and must match the video's length instead (see `accepted`)."""
+    out: list[tuple[Candidate, Score]] = []
+    for c in found:
+        if fuzz.token_set_ratio(norm(reading.title), norm(parse_version(c.title)[0])) < TITLE_FLOOR:
+            continue
+        if not reading.artist and not _fits(c, reading.duration_s):
+            continue
+        c = replace(c)
+        s = score_candidate(reading if reading.artist else replace(reading, artist=c.artist), c, None)
+        c.score = s.total
+        out.append((c, s))
+    return out
 
 
 def _fits(c: Candidate, duration_s: int | None) -> bool:
@@ -102,32 +145,35 @@ def _words(q: Query) -> frozenset[str]:
 
 
 def preview_order(results: list[ReadingResult], skip: set[int], limit: int = MAX_PREVIEWS) -> list[Candidate]:
-    """The previews to fingerprint: each reading's best record, then each one's second best, and so on --
+    """The previews to fingerprint: each reading's first named record, then each one's second, and so on --
     so the budget is shared rather than spent on the first reading's list -- once per Deezer id, and never
     one the pipeline's own identification has already compared."""
     out: list[Candidate] = []
     seen = set(skip)
-    depth = max((len(r.accepted) for r in results), default=0)
+    depth = max((len(r.named) for r in results), default=0)
     for i in range(depth):
         for r in results:
-            if i < len(r.accepted) and r.accepted[i].deezer_id not in seen and len(out) < limit:
-                seen.add(r.accepted[i].deezer_id)
-                out.append(r.accepted[i])
+            if i < len(r.named) and r.named[i].deezer_id not in seen and len(out) < limit:
+                seen.add(r.named[i].deezer_id)
+                out.append(r.named[i])
     return out
 
 
 def classify(results: list[ReadingResult], matched: int | None) -> Outcome:
     """The label, from what each reading found and which Deezer record (if any) the video matched.
 
-    A match is attributed to the first reading that accepted that record. Without one, a search that failed
+    A match is attributed to the first reading that accepted that record, or failing that the first whose
+    words name it (the video's length or version was not the one `accepted` asks for, but the artist and
+    the title it read were right). Without one, a search that failed
     leaves the readings unfinished and the label is `skipped`; readings that are the same words split
     differently search for the same thing and are `agreed` by construction; otherwise every reading that
     found a record must have found the same one. Readings that found nothing at all are `ambiguous`: the
     catalogue says nothing about which is right, which is exactly when asking would be needed."""
     if matched is not None:
-        for i, r in enumerate(results):
-            if any(c.deezer_id == matched for c in r.accepted):
-                return Outcome(CONFIRMED, i, f"deezer:{matched} is the video")
+        for pool in ("accepted", "named"):
+            for i, r in enumerate(results):
+                if any(c.deezer_id == matched for c in getattr(r, pool)):
+                    return Outcome(CONFIRMED, i, f"deezer:{matched} is the video")
     failed = [r for r in results if r.error]
     if failed:
         return Outcome(SKIPPED, None, f"{len(failed)} of {len(results)} Deezer searches failed")
@@ -149,9 +195,10 @@ def _label(q: Query) -> str:
 def _summary(i: int, r: ReadingResult) -> str:
     if r.error:
         hit = f"search failed: {r.error}"
-    elif r.accepted:
-        top = r.accepted[0]
-        hit = f"deezer:{top.deezer_id} {top.artist} - {top.title} ({len(r.accepted)} accepted)"
+    elif r.named:
+        top = (r.accepted or r.named)[0]
+        hit = (f"deezer:{top.deezer_id} {top.artist} - {top.title} "
+               f"({len(r.accepted)} accepted, {len(r.named)} named)")
     else:
         hit = "none"
     return f'r{i} "{_label(r.reading)}": {hit}'
@@ -265,7 +312,7 @@ class InterpretMixin:
                     searched[text] = str(e)
             found = searched[text]
             results.append(ReadingResult(reading, error=found) if isinstance(found, str)
-                           else ReadingResult(reading, accepted(reading, found)))
+                           else ReadingResult(reading, accepted(reading, found), named=named(reading, found)))
         # The pipeline has compared these previews already; its match is a match for any reading that
         # accepts the same record, and its misses need no second download.
         if ident is not None and ident.chosen is not None and ident.chosen.deezer_id is not None:

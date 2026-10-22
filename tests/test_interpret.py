@@ -14,7 +14,7 @@ from flackey.config import Settings
 from flackey.fingerprint import AcousticReference, FingerprintResult
 from flackey.identify import interpretations, parse_youtube_title
 from flackey.lossless import search_text
-from flackey.models import Candidate, Query, RequestKind, RequestState
+from flackey.models import Candidate, Query, Request, RequestKind, RequestState
 from flackey.notify import MemoryNotifier
 from flackey.reference import DeezerSearchError, Identification
 from flackey.source import SourceNotFound
@@ -31,6 +31,7 @@ from flackey.worker.interpret import (
     ReadingResult,
     accepted,
     classify,
+    named,
     preview_order,
     same_record,
 )
@@ -707,3 +708,76 @@ async def test_stopping_a_request_drops_its_comparison_queued_or_running(bare, m
     assert running.cancelled() and queued.cancelled() and not w._shadow_tasks
     assert store.get_interpretation_outcome(req.id) == (None, None)
     assert not w._shadow.locked()                          # the next comparison can still have its turn
+
+
+# ---- real conditions: no bot, a music video that is not any release's length ----------------------------------
+
+# The official upload of a single, as its artist's channel titles it: the channel is the artist, so the title
+# alone is the other reading. The video runs 7 s longer than the radio edit it is cut from, as music videos do.
+SANDSTORM_VIDEO_S = 232
+ORIGINAL = _dz(301, artist="Darude", title="Sandstorm", duration_s=443, rank=0)
+RADIO_EDIT = _dz(302, artist="Darude", title="Sandstorm", mix_name="Radio Edit", duration_s=225, rank=1)
+TML_RMX = _dz(303, artist="D'rude", title="Sandstorm (TML 2025 RMX)", mix_name="Extended Version", duration_s=290,
+              rank=2)
+OTHER_SANDSTORM = _dz(304, artist="Someone Else", title="Sandstorm", duration_s=180, rank=0)
+
+
+@pytest.fixture
+def realistic(tmp_path, monkeypatch):
+    """A Worker with the Telegram bot switched off, the request's video in hand and no identification of the
+    pipeline's own, and a Deezer that answers the way the public search does."""
+    settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    store = Store(settings.db_path)
+    w = Worker(store, FakeSource(), FakeCatalog(), MemoryNotifier(), settings)
+    monkeypatch.setattr(interpret_mod, "DEEZER_INTERVAL_S", 0)
+    answers: dict[str, list[Candidate]] = {}
+    previews: list[int] = []
+
+    async def search(text, http, *, limit=10):
+        return [Candidate(**c.__dict__) for c in answers.get(text, [])]
+
+    def video_is(deezer_id: int):
+        async def identify(reference, cands, http, tmp_dir, *, minimum, limit=5, cpu=None):
+            previews.extend(c.deezer_id for c in cands)
+            hit = next((c for c in cands if c.deezer_id == deezer_id), None)
+            if hit is not None:
+                return Identification(hit, 0.97, [(hit.deezer_id, 0.97)], "match")
+            return Identification(None, None, [(c.deezer_id, 0.55) for c in cands], "none")
+        return identify
+
+    monkeypatch.setattr(interpret_mod, "search_deezer", search)
+
+    def add(title: str, uploader: str, duration_s: int) -> Request:
+        readings = interpretations(title, uploader, duration_s)
+        assert len(readings) >= 2
+        rid = store.add_request(title, RequestKind.YT_TRACK, source_url=URL, query=readings[0],
+                                interpretations=readings)
+        return store.get_request(rid)
+
+    return w, store, answers, previews, video_is, add
+
+
+async def test_a_music_video_longer_than_every_release_is_confirmed_by_its_audio(realistic, monkeypatch):
+    """No release is the video's length, so no record passes the words-and-length score -- and the shadow
+    used to stop there, never fetch a preview, and call the request `ambiguous`. The pipeline identifies by
+    audio whatever the text score says; so does the comparison now."""
+    w, store, answers, previews, video_is, add = realistic
+    answers["Darude Sandstorm"] = [ORIGINAL, RADIO_EDIT, TML_RMX]
+    answers["Sandstorm"] = [OTHER_SANDSTORM, ORIGINAL, RADIO_EDIT]
+    monkeypatch.setattr(interpret_mod, "identify_record", video_is(RADIO_EDIT.deezer_id))
+    req = add("Sandstorm", "Darude", SANDSTORM_VIDEO_S)
+    w._interpret(req, VIDEO)
+    await w._shadow_settled()
+    assert store.get_interpretation_outcome(req.id) == (CONFIRMED, 0)
+    assert RADIO_EDIT.deezer_id in previews and OTHER_SANDSTORM.deezer_id not in previews
+
+
+def test_named_hears_every_record_the_words_name_whatever_its_length_or_version():
+    darude = Query(raw="x", artist="Darude", title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    found = [OTHER_SANDSTORM, ORIGINAL, RADIO_EDIT, TML_RMX]
+    assert accepted(darude, found) == []                  # neither is the video's length: the score refuses both
+    assert [c.deezer_id for c in named(darude, found)] == [301, 302, 303]   # ... the audio may not
+    alone = Query(raw="x", artist=None, title="Sandstorm", duration_s=SANDSTORM_VIDEO_S)
+    assert named(alone, found) == []                      # no artist: the length still stands in for it
+    # What `accepted` takes comes first, in its order
+    assert [c.deezer_id for c in named(AP, [_dz(1, duration_s=60), _dz(2)])] == [2, 1]
