@@ -30,6 +30,7 @@ from flackey.worker.interpret import (
 )
 from flackey.worker.records import query_candidate
 from flackey.youtube import YouTubeError
+from tests.conftest import requires_ffmpeg
 from tests.test_worker import FakeCatalog, FakeSource, good_cand
 from tests.test_worker_lossless import (
     CT3,
@@ -255,6 +256,7 @@ BASE_TEXT = "Label Astral Projection - Into the Void"
 ALT_TEXT = "Astral Projection Into the Void"
 
 
+@requires_ffmpeg
 async def test_the_pipelines_own_match_confirms_the_reading_that_accepts_it(lenv, shadow, monkeypatch, caplog):  # noqa: F811
     """lenv's identification matches the bot's record; the second reading's Deezer search accepts that same
     record, so the label is `confirmed` by reading 1 and no preview is downloaded twice."""
@@ -281,6 +283,7 @@ async def test_the_pipelines_own_match_confirms_the_reading_that_accepts_it(lenv
     assert "confirmed by r1" in line and "previews 0" in line and f'r0 "Label - {NOISY[8:]}": none' in line
 
 
+@requires_ffmpeg
 async def test_a_preview_that_is_the_video_confirms_the_reading(lenv, shadow, monkeypatch, caplog):  # noqa: F811
     store, provider, _, answers, _, add = shadow
     caplog.set_level(logging.INFO, logger="flackey.worker.interpret")
@@ -308,6 +311,7 @@ async def test_a_preview_that_is_the_video_confirms_the_reading(lenv, shadow, mo
     assert "previews 1" in next(m for m in caplog.messages if f"req#{rid} interpretations" in m)
 
 
+@requires_ffmpeg
 async def test_readings_that_lead_to_one_record_are_agreed(lenv, shadow, monkeypatch):  # noqa: F811
     store, provider, _, answers, _, add = shadow
     answers[BASE_TEXT] = [_dz(55)]       # the label's words do not accept it ...
@@ -324,6 +328,7 @@ async def test_readings_that_lead_to_one_record_are_agreed(lenv, shadow, monkeyp
     assert store.get_interpretation_outcome(rid) == (AGREED, None)
 
 
+@requires_ffmpeg
 async def test_readings_that_lead_to_different_records_are_ambiguous(lenv, shadow, monkeypatch, caplog):  # noqa: F811
     store, provider, _, answers, _, add = shadow
     caplog.set_level(logging.INFO, logger="flackey.worker.interpret")
@@ -345,6 +350,7 @@ async def test_readings_that_lead_to_different_records_are_ambiguous(lenv, shado
 
 
 @pytest.mark.parametrize("failure", [DeezerSearchError("http 503"), "slow"])
+@requires_ffmpeg
 async def test_a_deezer_failure_or_a_slow_deezer_fails_open(lenv, shadow, monkeypatch, failure):  # noqa: F811
     store, provider, _, answers, _, add = shadow
     if failure == "slow":
@@ -363,6 +369,7 @@ async def test_a_deezer_failure_or_a_slow_deezer_fails_open(lenv, shadow, monkey
     assert store.get_interpretation_outcome(rid) == (SKIPPED, None)
 
 
+@requires_ffmpeg
 async def test_a_bug_in_the_comparison_costs_only_the_label(lenv, shadow, monkeypatch, caplog):  # noqa: F811
     store, provider, _, answers, _, add = shadow
     answers[BASE_TEXT] = RuntimeError("unforeseen")
@@ -373,6 +380,7 @@ async def test_a_bug_in_the_comparison_costs_only_the_label(lenv, shadow, monkey
     assert "comparing the title's readings failed" in caplog.text
 
 
+@requires_ffmpeg
 async def test_no_video_leaves_the_request_unlabelled_without_asking_deezer(lenv, shadow, monkeypatch):  # noqa: F811
     """A video that will not come says nothing about the title: no label, so a later pass that has the video
     can still compare."""
@@ -390,6 +398,7 @@ async def test_no_video_leaves_the_request_unlabelled_without_asking_deezer(lenv
     assert not [e for e in events if e.startswith("deezer:")]
 
 
+@requires_ffmpeg
 async def test_a_failing_video_is_fetched_once_a_pass_and_compared_on_the_pass_that_has_it(lenv, shadow,  # noqa: F811
                                                                                             monkeypatch):
     """No bot record: the comparison waits for the fingerprint step's own fetch instead of fetching first,
@@ -414,6 +423,7 @@ async def test_a_failing_video_is_fetched_once_a_pass_and_compared_on_the_pass_t
     assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
 
 
+@requires_ffmpeg
 async def test_a_duplicate_costs_no_video_download(lenv, shadow, monkeypatch):  # noqa: F811
     """No bot record and the file is already in the library: the request ends before any video is fetched,
     and so does the comparison."""
@@ -431,6 +441,7 @@ async def test_a_duplicate_costs_no_video_download(lenv, shadow, monkeypatch):  
     assert r.state == RequestState.DUPLICATE and videos == [] and not events
 
 
+@requires_ffmpeg
 async def test_one_reading_or_one_label_already_means_no_comparison(lenv, shadow):  # noqa: F811
     store, provider, events, _, _, add = shadow
     w = make(lenv, provider=provider)
@@ -444,6 +455,7 @@ async def test_one_reading_or_one_label_already_means_no_comparison(lenv, shadow
     assert store.get_interpretation_outcome(labelled) == (AGREED, None)
 
 
+@requires_ffmpeg
 async def test_the_other_readings_are_the_last_spellings_and_name_the_file_they_find(lenv, shadow, monkeypatch):  # noqa: F811
     """No record anywhere: Soulseek searches the request's own words first, then the other reading, and a
     copy found by the other reading is filed under that reading's words. The video is fetched once for
@@ -464,6 +476,7 @@ async def test_the_other_readings_are_the_last_spellings_and_name_the_file_they_
     assert store.get_interpretation_outcome(rid)[0] == AMBIGUOUS     # this Deezer knows neither reading
 
 
+@requires_ffmpeg
 async def test_the_other_readings_come_after_every_spelling_the_ladder_already_had(lenv, shadow):  # noqa: F811
     store, provider, _, _, _, add = shadow
     w = make(lenv, provider=provider)
@@ -477,6 +490,7 @@ async def test_the_other_readings_come_after_every_spelling_the_ladder_already_h
         "Astral Projection Into the Void", BASE_TEXT]
 
 
+@requires_ffmpeg
 async def test_a_reading_with_no_artist_is_never_a_soulseek_spelling(lenv, shadow):  # noqa: F811
     store, provider, _, _, _, _ = shadow
     w = make(lenv, provider=provider)
@@ -491,6 +505,7 @@ async def test_a_reading_with_no_artist_is_never_a_soulseek_spelling(lenv, shado
 
 @pytest.mark.parametrize("damaged", ["not json", '{"artist": "A"}', "[1, 2]", '[{"artist": 5, "title": "T"}]',
                                      '[{"title": "T"}]', "null"])
+@requires_ffmpeg
 async def test_damaged_readings_cost_the_readings_never_the_request(lenv, shadow, damaged):  # noqa: F811
     settings = lenv[0]
     store, _, events, _, _, add = shadow
@@ -505,6 +520,7 @@ async def test_damaged_readings_cost_the_readings_never_the_request(lenv, shadow
     assert not [e for e in events if e.startswith("deezer:")]
 
 
+@requires_ffmpeg
 async def test_another_spelling_finding_nothing_never_hides_a_wrong_recording(lenv, shadow, monkeypatch):  # noqa: F811
     """The request's own words find copies the fingerprint refuses, the other reading finds nothing. The
     pass found a different recording, and waits for the people online to change; read as "nothing matched"
@@ -527,6 +543,7 @@ async def test_another_spelling_finding_nothing_never_hides_a_wrong_recording(le
     assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
 
 
+@requires_ffmpeg
 async def test_comparisons_run_one_at_a_time_and_space_out_their_deezer_calls(lenv, shadow, monkeypatch):  # noqa: F811
     """A playlist of noisy titles is a queue, not a burst: one comparison at a time, and never two calls to
     Deezer's API closer than DEEZER_INTERVAL_S. And none of it touches Soulseek."""
