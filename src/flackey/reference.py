@@ -119,10 +119,11 @@ async def _read_capped(r: httpx.Response) -> bytes:
     return bytes(body)
 
 
-async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path) -> list[list[int]]:
+async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path, *,
+                         cpu: asyncio.Semaphore | None = None) -> list[list[int]]:
     """The Deezer preview at each sub-frame trim. Unique file name per call: two requests for one
     recording can be here at once. Raises FingerprintError when Deezer has no preview or the download
-    fails."""
+    fails. `cpu`, when given, is held around fpcalc only, not around the downloads."""
     tmp_dir.mkdir(parents=True, exist_ok=True)
     preview = tmp_dir / f"preview-{deezer_id}-{uuid4().hex[:8]}.mp3"
     try:
@@ -132,9 +133,24 @@ async def deezer_needles(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path)
         preview.write_bytes(await _download_preview(url, http))
         # No length bound: the preview is already 30 s, and asking ffmpeg to cut it would re-encode the
         # trim-0 needle that today's check reads straight off the file.
-        return await asyncio.to_thread(_needles, preview, 0.0, None)
+        if cpu is None:
+            return await _to_thread_settled(_needles, preview, 0.0, None)
+        async with cpu:
+            return await _to_thread_settled(_needles, preview, 0.0, None)
     finally:
         preview.unlink(missing_ok=True)
+
+
+async def _to_thread_settled(fn, *args):
+    """`asyncio.to_thread`, except that a cancelled caller still waits for the thread to finish. A thread
+    cannot be stopped: without this a cancel released the CPU slot while fpcalc kept running, and deleted
+    the preview from under it (which Windows refuses outright)."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait([task])
+        raise
 
 
 async def deezer_reference(deezer_id: int, http: httpx.AsyncClient, tmp_dir: Path) -> AcousticReference:
@@ -154,7 +170,12 @@ async def search_deezer(text: str, http: httpx.AsyncClient, *, limit: int = LOOK
     try:
         r = await http.get(DEEZER_SEARCH, params={"q": text, "limit": limit}, timeout=20)
         r.raise_for_status()
-        found = [parse_track_json(item) for item in r.json().get("data") or []]
+        body = r.json()
+        if "error" in body:
+            # Deezer answers a refused search -- its quota above all -- with a 200 and an error body. Read
+            # as "no results" it would count as a reading that found nothing.
+            raise DeezerError(str(body["error"]))
+        found = [parse_track_json(item) for item in body.get("data") or []]
     except (httpx.HTTPError, DeezerError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise DeezerSearchError(str(e) or type(e).__name__) from e
     return [Candidate(source=LOOKUP_SOURCE, source_ref=f"deezer:{t.id}", artist=t.artist, title=t.title,
@@ -203,7 +224,8 @@ class Identification:
 
 
 async def identify_record(reference: AcousticReference, cands: list[Candidate], http: httpx.AsyncClient,
-                          tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX) -> Identification:
+                          tmp_dir: Path, *, minimum: float, limit: int = IDENTIFY_MAX,
+                          cpu: asyncio.Semaphore | None = None) -> Identification:
     """Which Deezer candidate is the recording the owner pointed at (issue #68): the first whose 30 s preview
     is found inside the reference's full fingerprint at or above `minimum`. The preview is the needle and
     the reference's full fingerprint is the hay -- the other way round `compare` would return 0.0 for
@@ -214,7 +236,7 @@ async def identify_record(reference: AcousticReference, cands: list[Candidate], 
     tried: list[tuple[int, float | None]] = []
     for cand in [c for c in cands if c.deezer_id][:limit]:
         try:
-            needles = await deezer_needles(cand.deezer_id, http, tmp_dir)
+            needles = await deezer_needles(cand.deezer_id, http, tmp_dir, cpu=cpu)
             score = round(max(compare(n, reference.full)[0] for n in needles), 3)
         except FingerprintError as e:
             log.info("identify: deezer:%d preview unavailable: %s", cand.deezer_id, e)

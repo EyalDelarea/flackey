@@ -5,7 +5,10 @@ the records its words would accept are checked against the video, and the reques
 that showed: one reading's record *is* the video (`confirmed`), the readings lead to the same record
 anyway (`agreed`), they lead to different ones and the audio could not settle it (`ambiguous`), or the
 comparison could not run (`skipped`). Counting those is the point: `ambiguous` is how often asking the
-owner which reading they meant would actually be needed."""
+owner which reading they meant would actually be needed.
+
+It runs beside the request, never in its way: a background task per request, one comparison at a time,
+Deezer's API called at a measured pace and the CPU slot held for fpcalc alone."""
 from __future__ import annotations
 
 import asyncio
@@ -29,9 +32,12 @@ SEARCH_LIMIT = 10
 # Previews fingerprinted per request across all readings. The pipeline's own identification tries up to
 # IDENTIFY_MAX; this is a second look on top, so it is bounded on its own.
 MAX_PREVIEWS = 8
-# The whole comparison, Deezer and fpcalc included (the video is not: the pass fetches that anyway). Past it
-# the request is labelled `skipped` and carries on -- a slow Deezer must never be what holds a download up.
+# One comparison, Deezer and fpcalc included, once it has its turn. Past it the label is `skipped`.
 BUDGET_S = 45
+# Between two of this module's calls to api.deezer.com. Deezer allows about 50 requests in 5 s per address,
+# and the pipeline's own lookups (a Spotify link, a request the bot could not place) share that allowance:
+# a noisy playlist compared at full speed would spend it for them.
+DEEZER_INTERVAL_S = 0.15
 
 
 @dataclass
@@ -152,38 +158,60 @@ def _summary(i: int, r: ReadingResult) -> str:
 
 
 class InterpretMixin:
-    """Part of `Worker`, which supplies the state these methods read."""
+    """Part of `Worker`, which supplies the state these methods read -- including `_shadow` (one comparison
+    at a time), `_shadow_tasks` and `_deezer_last`."""
 
-    async def _interpret(self, req: Request, video: AcousticReference | None, ident: Identification | None = None,
-                         *, fetch: bool = False) -> None:
-        """Label a request whose title had more than one reading; once per request, and never anything
-        else. `video` is the reference `_identify` already holds; `fetch` lets this get it through
-        `_video_reference` instead, which stores it, so the fingerprint step after reads it back rather than
-        downloading it again. `ident` is the pipeline's own identification, whose previews are not fetched
-        twice. Never raises, and the comparison never takes longer than BUDGET_S."""
+    def _interpret(self, req: Request, video: AcousticReference | None, ident: Identification | None = None) -> None:
+        """Start labelling a request whose title had more than one reading, in the background: the request
+        never waits for it. Once per request. `video` is the reference the pass already holds -- never
+        fetched here -- and `ident` the pipeline's own identification, whose previews are not fetched twice.
+
+        No video, no label: a yt-dlp failure says nothing about the title, and the next pass may have the
+        video. Such a request counts as pending until one does."""
+        if req.id in self._shadow_tasks:
+            return
         readings = self.store.get_interpretations(req.id)
         if len(readings) < 2 or self.store.get_interpretation_outcome(req.id)[0] is not None:
             return
-        try:
-            if video is None and fetch:
-                video, _ = await self._video_reference(req)
-            async with asyncio.timeout(BUDGET_S):
-                outcome, results, tried = await self._arbitrate(req, readings, video, ident)
-        except TimeoutError:
-            outcome, results, tried = Outcome(SKIPPED, None, f"took longer than {BUDGET_S} s"), [], 0
-        except Exception:
-            # Shadow work: a bug here is a missing label, never a failed request.
-            log.exception("req#%d: comparing the title's readings failed", req.id)
+        if video is None:
+            log.info("req#%d interpretations: not compared this pass, no video audio", req.id)
             return
-        self.store.set_interpretation_outcome(req.id, outcome.klass, outcome.reading)
+        task = asyncio.create_task(self._compare(req.id, readings, video, ident))
+        self._shadow_tasks[req.id] = task
+        task.add_done_callback(lambda t, rid=req.id: self._shadow_tasks.pop(rid, None))
+
+    async def _shadow_settled(self) -> None:
+        """Wait for every comparison started so far (tests, and nothing else, need to)."""
+        while self._shadow_tasks:
+            await asyncio.gather(*list(self._shadow_tasks.values()), return_exceptions=True)
+
+    async def _compare(self, request_id: int, readings: list[Query], video: AcousticReference,
+                       ident: Identification | None) -> None:
+        async with self._shadow:
+            try:
+                async with asyncio.timeout(BUDGET_S):
+                    outcome, results, tried = await self._arbitrate(readings, video, ident)
+            except TimeoutError:
+                outcome, results, tried = Outcome(SKIPPED, None, f"took longer than {BUDGET_S} s"), [], 0
+            except Exception:
+                # Shadow work: a bug here is a missing label, never a failed request.
+                log.exception("req#%d: comparing the title's readings failed", request_id)
+                return
+        self.store.set_interpretation_outcome(request_id, outcome.klass, outcome.reading)
         detail = " | ".join(_summary(i, r) for i, r in enumerate(results)) or f"{len(readings)} readings"
-        log.info("req#%d interpretations: %s%s (%s); previews %d | %s", req.id, outcome.klass,
+        log.info("req#%d interpretations: %s%s (%s); previews %d | %s", request_id, outcome.klass,
                  f" by r{outcome.reading}" if outcome.reading is not None else "", outcome.why, tried, detail)
 
-    async def _arbitrate(self, req: Request, readings: list[Query], video: AcousticReference | None,
+    async def _deezer_turn(self) -> None:
+        """Wait until DEEZER_INTERVAL_S has passed since this module last called Deezer's API."""
+        loop = asyncio.get_running_loop()
+        wait = self._deezer_last + DEEZER_INTERVAL_S - loop.time()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._deezer_last = loop.time()
+
+    async def _arbitrate(self, readings: list[Query], video: AcousticReference,
                          ident: Identification | None) -> tuple[Outcome, list[ReadingResult], int]:
-        if video is None:
-            return Outcome(SKIPPED, None, "no video audio to compare against"), [], 0
         results: list[ReadingResult] = []
         searched: dict[str, list[Candidate] | str] = {}   # readings that are the same words search once
         for reading in readings:
@@ -191,6 +219,7 @@ class InterpretMixin:
             # is the title alone, so that is what it searches
             text = reading.search_text() if reading.artist else " ".join(filter(None, (reading.title, reading.version)))
             if text not in searched:
+                await self._deezer_turn()
                 try:
                     searched[text] = await search_deezer(text, self.http, limit=SEARCH_LIMIT)
                 except DeezerSearchError as e:
@@ -205,14 +234,17 @@ class InterpretMixin:
             if outcome.klass == CONFIRMED:
                 return outcome, results, 0
         known = {deezer_id for deezer_id, _ in ident.tried} if ident is not None else set()
-        previews = preview_order(results, known)
-        if not previews:
-            return classify(results, None), results, 0
-        async with self._cpu:
-            check = await identify_record(video, previews, self.http, self.settings.tmp_dir,
-                                          minimum=self.settings.lossless_fingerprint_min, limit=len(previews))
-        matched = check.chosen.deezer_id if check.chosen is not None else None
-        return classify(results, matched), results, len(check.tried)
+        tried = 0
+        for cand in preview_order(results, known):
+            # One at a time, so each preview's Deezer lookup takes its turn, and the CPU slot is held for
+            # fpcalc alone -- never across a download, where it would starve the real requests' checks.
+            await self._deezer_turn()
+            check = await identify_record(video, [cand], self.http, self.settings.tmp_dir,
+                                          minimum=self.settings.lossless_fingerprint_min, limit=1, cpu=self._cpu)
+            tried += 1
+            if check.chosen is not None:
+                return classify(results, check.chosen.deezer_id), results, tried
+        return classify(results, None), results, tried
 
     def _reading_spellings(self, req: Request) -> list[Candidate]:
         """The other readings of the title as stand-in candidates, for Soulseek's spelling ladder to try

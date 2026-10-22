@@ -81,10 +81,6 @@ class PipelineMixin:
         if not cands:
             # Either the source is switched off, or it found nothing, or it failed with a Beatport
             # match already in hand.
-            if self._lossless_allowed(req):
-                # Soulseek is next, and its fingerprint step needs the video: `_video_reference` stores
-                # it, so fetching it here for the readings costs that step nothing.
-                await self._interpret(req, None, fetch=True)
             if catalog is not None:
                 # `catalog_candidate` explains what this costs; the short version is that the pick
                 # rules still run entirely on Beatport data, but a request with no video of its own
@@ -117,7 +113,7 @@ class PipelineMixin:
                 ident = await identify_record(video, ordered, self.http, self.settings.tmp_dir,
                                               minimum=self.settings.lossless_fingerprint_min)
             log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
-        await self._interpret(req, video, ident)   # labels the request; changes nothing below
+        self._interpret(req, video, ident)   # labels the request in the background; changes nothing here
         chosen_obj = ident.chosen if ident is not None else decision.chosen
         if chosen_obj is not None and chosen_obj.isrc:
             # The source's recording ID disambiguates equally named Beatport releases. Never
@@ -246,6 +242,10 @@ class PipelineMixin:
             await self._retry_or_fail(req, f"could not fetch the video's audio: {acoustic.missing[7:]}",
                                       flag="video audio unavailable, will retry")
             return
+        # A request the bot had nothing for is compared here, where the video is in hand anyway rather than
+        # fetched for the comparison first; one `_identify` already started is not started again.
+        video = acoustic.reference if acoustic.reference is not None and acoustic.reference.kind == "youtube" else None
+        self._interpret(req, video)
         hit = None
         if self._lossless_allowed(req):
             if req.lossless_retry:

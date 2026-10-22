@@ -59,6 +59,16 @@ def duration_agrees(advertised_s: float | None, probed_s: float) -> bool:
     return abs(probed_s - advertised_s) <= max(DURATION_SLACK_S, advertised_s * DURATION_SLACK_FRACTION)
 
 
+def pass_outcome(outcomes: list[str | None]) -> str | None:
+    """What a pass through the spelling ladder found, from each spelling's outcome in order. The last one,
+    except that "nothing matched" never hides an earlier "the copies offered were a different recording":
+    a later spelling finding nothing says nothing about the copies an earlier one did find. Read as
+    `no_pick`, that pass used to come back in 15 minutes to download the same wrong files again, and told
+    the owner nothing had matched; as `fingerprint_failed` it waits for the people online to change."""
+    last = outcomes[-1] if outcomes else None
+    return "fingerprint_failed" if last == "no_pick" and "fingerprint_failed" in outcomes else last
+
+
 class LosslessMixin:
     """Part of `Worker`, which supplies the state these methods read."""
 
@@ -114,6 +124,10 @@ class LosslessMixin:
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
             log.exception("req#%d could not build a lossless reference/policy", req.id)
             return None
+        # Cleared first, so a pass that is cut short (the app closing mid-search) leaves the readers on its
+        # own attempt rows rather than on the verdict of the pass before it.
+        self.store.set_lossless_verdict(req.id, None)
+        outcomes: list[str | None] = []
         for ref in refs:
             query = search_text(ref)
             outcome: str | None = None
@@ -144,13 +158,16 @@ class LosslessMixin:
                     # request's bar: the other tracks are still downloading.
                     self._publish_progress(req.id, None)
                 if hit is not None:
+                    self.store.set_lossless_verdict(req.id, "filed")
                     return hit
                 if rec is not None:
                     outcome = self.store.get_attempt(rec.id).outcome
-            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's,
-            # which is the one `_no_route` and `_lossless_miss_line` will read back.
+            # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's.
+            outcomes.append(outcome)
             if outcome not in SECOND_SEARCH_AFTER:
                 break
+        # What `_no_route`, `_lossless_allowed` and `_lossless_miss_line` read back for this pass
+        self.store.set_lossless_verdict(req.id, pass_outcome(outcomes))
         return None
 
 

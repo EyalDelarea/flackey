@@ -1636,6 +1636,65 @@ async def test_the_long_wait_gives_up_after_its_budget(lenv):
     assert "Use Try again" in r.error_message and notifier.sent[-1][0].startswith("Gave up")
 
 
+@pytest.mark.parametrize("outcomes,expected", [
+    (["no_pick"], "no_pick"),
+    (["fingerprint_failed"], "fingerprint_failed"),
+    (["fingerprint_failed", "no_pick"], "fingerprint_failed"),
+    (["no_pick", "fingerprint_failed"], "fingerprint_failed"),
+    (["fingerprint_failed", "queued"], "queued"),       # busy peers are a reason to come back soon
+    (["no_pick", "no_pick", "unavailable"], "unavailable"),
+    ([], None),
+])
+def test_a_pass_outcome_keeps_a_wrong_recording_over_a_later_nothing(outcomes, expected):
+    assert lossless_attempt_mod.pass_outcome(outcomes) == expected
+
+
+async def test_a_wrong_recording_on_beatports_spelling_is_not_hidden_by_the_requests_words(lenv, tmp_path: Path,
+                                                                                            monkeypatch):
+    """The ladder as it was before the title's readings joined it: the catalogue's spelling finds a copy the
+    fingerprint refuses, the request's own words find nothing. The last row says `no_pick`; the pass found a
+    different recording, so it waits rather than coming back in 15 minutes for the same wrong copy."""
+    settings, store, notifier, _, fake_check, _ = lenv
+    wrong = _flac(tmp_path / "wrong.flac")
+    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong},
+                            files_for=lambda text: [lf("w", path="x\\Outputmessage - Asteroids.flac")]
+                            if text.startswith("Outputmessage") else [])
+    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
+
+    async def fake_youtube(url, tmp_dir, *, duration_s=None):
+        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
+    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
+    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
+                            source_url="https://www.youtube.com/watch?v=abc",
+                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
+    r = await w.process(rid)
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    assert store.get_attempt_for_request(rid).outcome == "no_pick"
+    assert r.state == RequestState.QUEUED and r.lossless_retry == 1
+    assert r.flag_reason.startswith("waiting for Soulseek: the copies offered were a different recording")
+    wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
+    assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
+    assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
+
+
+async def test_a_pass_cut_short_is_read_from_its_own_rows_not_the_pass_before(lenv):
+    """The verdict is cleared as a pass starts. If the app closes mid-search, startup marks the open row
+    `interrupted`, and that -- not the previous pass's verdict -- is what the next pass acts on."""
+    _, store, _, _, _, _ = lenv
+    w = make(lenv)
+    rid = store.add_request("A - B", RequestKind.YT_TRACK, query=Query(raw="", artist="A", title="B"))
+    store.add_attempt(rid, "soulseek", "A B")
+    store.set_lossless_verdict(rid, "fingerprint_failed")
+    assert w._lossless_outcome(rid)[1] == "fingerprint_failed"
+    store.set_lossless_verdict(rid, None)                       # what a new pass does first
+    store.mark_open_attempts_interrupted()
+    assert w._lossless_outcome(rid)[1] == "interrupted"
+    assert w._lossless_allowed(store.get_request(rid))
+
+
 async def test_a_wrong_recording_everywhere_skips_the_quick_ladder(lenv, monkeypatch):
     """`fingerprint_failed` is a verdict the next minute would repeat: no 30 s retry, straight to the wait."""
     _, store, _, _, fake_check, _ = lenv

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,8 @@ from .models import (
     Track,
 )
 from .models import norm as models_norm
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -110,6 +113,12 @@ CREATE INDEX IF NOT EXISTS track_evidence_track ON track_evidence(track_id);
 """
 
 
+def _text_or_none(v: object) -> str | None:
+    if v is None or isinstance(v, str):
+        return v
+    raise TypeError(f"expected text, got {type(v).__name__}")
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -144,10 +153,14 @@ class Store:
         # The other readings of a noisy YouTube title, written at submit (the uploader they need is not kept),
         # and what comparing them against Deezer and the video concluded. Shadow data: nothing chooses by
         # it yet, it is here to count how often a title is genuinely ambiguous. Kept off `Request` -- see
-        # `_SHADOW_COLUMNS`. NULL on every row with a single reading and on every row written before them.
+        # `_WORKER_COLUMNS`. NULL on every row with a single reading and on every row written before them.
         self._ensure_column("requests", "interpretations", "TEXT")
         self._ensure_column("requests", "interpret_class", "TEXT")
         self._ensure_column("requests", "interpret_reading", "INTEGER")
+        # What the last lossless pass concluded across all its spellings, which is not always what its last
+        # attempt row says (`lossless_attempt.pass_outcome`). NULL before the column, and while a pass runs:
+        # readers then fall back to the latest attempt row, as they always did.
+        self._ensure_column("requests", "lossless_verdict", "TEXT")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
         # would disappear from under the owner the moment they answered the question they came back to.
@@ -195,12 +208,12 @@ class Store:
         return rid
 
     # Columns `Request` does not carry. The queue endpoint sends every field of every Request to the page on
-    # each refresh, and these are worker-only: read them through `get_interpretations`.
-    _SHADOW_COLUMNS = ("interpretations", "interpret_class", "interpret_reading")
+    # each refresh, and these are worker-only: read them through their own methods below.
+    _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict")
 
     def _row_to_request(self, r: sqlite3.Row) -> Request:
         d = dict(r)
-        for col in self._SHADOW_COLUMNS:
+        for col in self._WORKER_COLUMNS:
             d.pop(col, None)
         d["kind"] = RequestKind(d["kind"])
         d["state"] = RequestState(d["state"])
@@ -326,13 +339,20 @@ class Store:
 
     def get_interpretations(self, request_id: int) -> list[Query]:
         """The request's readings, the query it searches with first, each carrying the video's length; an
-        empty list for a request that has only the one."""
+        empty list for a request that has only the one. Never raises: the Soulseek ladder and the filing step
+        read this, and a damaged value must cost the extra readings, never the request."""
         r = self.conn.execute("SELECT raw_text, query_duration_s, interpretations FROM requests WHERE id=?",
                               (request_id,)).fetchone()
         if r is None or not r["interpretations"]:
             return []
-        return [Query(raw=r["raw_text"], artist=x.get("artist"), title=x.get("title"), version=x.get("version"),
-                      duration_s=r["query_duration_s"]) for x in json.loads(r["interpretations"])]
+        try:
+            readings = [Query(raw=r["raw_text"], artist=_text_or_none(x["artist"]), title=_text_or_none(x["title"]),
+                              version=_text_or_none(x["version"]), duration_s=r["query_duration_s"])
+                        for x in json.loads(r["interpretations"])]
+        except (ValueError, TypeError, KeyError) as e:
+            log.warning("req#%d: unreadable interpretations, ignored: %s", request_id, e)
+            return []
+        return readings if len(readings) >= 2 and all(q.title for q in readings) else []
 
     def get_interpretation_outcome(self, request_id: int) -> tuple[str | None, int | None]:
         r = self.conn.execute("SELECT interpret_class, interpret_reading FROM requests WHERE id=?",
@@ -344,6 +364,14 @@ class Store:
         `updated_at` nor wakes the listeners."""
         self.conn.execute("UPDATE requests SET interpret_class=?, interpret_reading=? WHERE id=?",
                           (klass, reading, request_id))
+        self.conn.commit()
+
+    def get_lossless_verdict(self, request_id: int) -> str | None:
+        r = self.conn.execute("SELECT lossless_verdict FROM requests WHERE id=?", (request_id,)).fetchone()
+        return None if r is None else r["lossless_verdict"]
+
+    def set_lossless_verdict(self, request_id: int, outcome: str | None) -> None:
+        self.conn.execute("UPDATE requests SET lossless_verdict=? WHERE id=?", (outcome, request_id))
         self.conn.commit()
 
     # ---- candidates -----------------------------------------------------
@@ -702,7 +730,7 @@ class Store:
             "SELECT strftime('%Y-W%W', created_at), COUNT(*) FROM requests GROUP BY 1 ORDER BY 1")]
         by_source = {r[0]: r[1] for r in self.conn.execute("SELECT source, COUNT(*) FROM tracks GROUP BY source")}
         # Requests whose title had more than one reading, by what comparing the readings concluded; "pending"
-        # is one not compared yet. `confirmed_by_other` counts the confirmed ones the video matched through a
+        # is one not compared yet -- still queued, or no pass has had its video. `confirmed_by_other` counts the confirmed ones the video matched through a
         # reading other than the one the pipeline searched with: the titles the parse got wrong.
         interpretations = {r[0] or "pending": r[1] for r in self.conn.execute(
             "SELECT interpret_class, COUNT(*) FROM requests WHERE interpretations IS NOT NULL GROUP BY 1")}

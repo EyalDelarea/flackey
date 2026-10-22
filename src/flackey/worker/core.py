@@ -77,6 +77,12 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
         # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
         self._catalog_blocked = False
+        # The shadow comparison of a noisy title's readings (`interpret`): request id -> its background task,
+        # one comparison at a time so a playlist of noisy titles is a queue rather than a burst, and when
+        # it last called Deezer's API.
+        self._shadow_tasks: dict[int, asyncio.Task] = {}
+        self._shadow = asyncio.Semaphore(1)
+        self._deezer_last = 0.0
 
 
     def _set_state(self, req: Request, state: RequestState, **kw) -> None:
@@ -214,7 +220,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     async def _stop_all(self) -> None:
-        tasks = list(self._tasks.values())
+        tasks = list(self._tasks.values()) + list(self._shadow_tasks.values())
         for t in tasks:
             t.cancel()
         if tasks:
