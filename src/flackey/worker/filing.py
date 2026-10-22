@@ -328,7 +328,8 @@ class FilingMixin:
             file_size=dest.stat().st_size, artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
             duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
-            source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate)
+            source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate,
+            tag_date=catalog.tag_date)
         # None only when the check could not be run at all at accept time -- no stored reference, no fpcalc.
         # A track with no recording_match row says "not checked", which is true; a fabricated passing one
         # would not be.
@@ -429,7 +430,7 @@ class FilingMixin:
             verified_at=datetime.now(UTC).isoformat(timespec="seconds"),
             spectrogram_path=str(hit.verdict.spectrogram_path) if hit.verdict.spectrogram_path else None,
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
-            sample_rate=hit.verdict.sample_rate)
+            sample_rate=hit.verdict.sample_rate, tag_date=catalog.tag_date)
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
         self._record_evidence(t.id, hit.fingerprint, hit)
         if hit.version_check is not None:

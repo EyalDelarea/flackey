@@ -376,6 +376,22 @@ def test_track_source_columns_round_trip(store: Store, tmp_path: Path):
     assert store.stats()["by_source"] == {"deezer_bot": 1, "soulseek": 1}
 
 
+def test_a_track_keeps_the_date_its_file_was_tagged_with(store: Store, tmp_path: Path):
+    """Issue #181: the Library's year is the file's, not the shared catalogue record's. A row filed before
+    the column existed has none, and the page falls back to the record as it always did."""
+    tid = store.add_track(path=tmp_path / "a.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=1,
+                          artist="A", title="T", mix_name="Remastered 2021", duration_s=1, isrc=None,
+                          catalog_track_id=None, request_id=None, tag_date="2021-02-22")
+    assert store.get_track(tid).tag_date == "2021-02-22"
+    store.update_track(tid, tag_date="2021-03-01")
+    assert store.get_track(tid).tag_date == "2021-03-01"
+    assert "tag_date" in {r[1] for r in store.conn.execute("PRAGMA table_info(tracks)")}
+    old = store.add_track(path=tmp_path / "b.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=20000, file_size=1,
+                          artist="A", title="U", mix_name="Original Mix", duration_s=1, isrc=None,
+                          catalog_track_id=None, request_id=None)
+    assert store.get_track(old).tag_date is None
+
+
 def test_attempt_lifecycle(store: Store):
     rid = store.add_request("q", RequestKind.TEXT)
     aid = store.add_attempt(rid, "soulseek", "Hallucinogen Orphic Thrench")

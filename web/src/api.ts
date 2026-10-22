@@ -34,6 +34,9 @@ export interface TrackFormat { fmt:string; bit_depth:number|null; sample_rate:nu
 export interface Track { id:number; path:string; fmt:string; bitrate_kbps:number; cutoff_hz:number; file_size:number; artist:string; title:string; mix_name:string;
   duration_s:number|null; isrc:string|null; catalog_track_id:number|null; request_id:number|null; added_at:string; verified_at:string|null; spectrogram_path:string|null;
   source:string; source_fmt:string|null; bit_depth:number|null; sample_rate:number|null; format?:TrackFormat; catalog:Catalog|null
+  /** The date written into this file's tags (issue #181). Null on a row filed before it was kept; absent
+      from an older server. Either way the page falls back to the catalogue record's date. */
+  tag_date?:string|null
   /** What the file was checked against and how it came out. The page reads two kinds: `quality_check`, written
       only when the owner kept a copy the quality check refused (issue #97), and `version_check`, whose
       `status` is "unconfirmed" when nothing in the file said it is the version asked for (issue #172). */

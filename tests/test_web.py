@@ -2350,9 +2350,10 @@ def test_track_bundle_has_format_and_evidence(client, tmp_path: Path):
     tid = store.add_track(path=tmp_path / "a.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=5,
                           artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
                           catalog_track_id=None, request_id=None, source="soulseek", source_fmt="flac",
-                          bit_depth=16, sample_rate=44100)
+                          bit_depth=16, sample_rate=44100, tag_date="2021-02-22")
     store.add_evidence(tid, "recording_match", {"status": "matched", "score": 0.98})
     t = c.get("/api/library").json()[0]
+    assert t["tag_date"] == "2021-02-22"
     assert t["format"] == {"fmt": "aiff", "bit_depth": 16, "sample_rate": 44100, "source": "soulseek",
                            "source_fmt": "flac", "label": "AIFF 16-bit/44.1 kHz, from FLAC via Soulseek"}
     assert t["evidence"] == [{"kind": "recording_match", "value": {"status": "matched", "score": 0.98}}]
@@ -2361,6 +2362,7 @@ def test_track_bundle_has_format_and_evidence(client, tmp_path: Path):
                              catalog_track_id=None, request_id=None)
     t = next(x for x in c.get("/api/library").json() if x["id"] == legacy)
     assert t["format"]["label"] == "MP3 320 kbps via Deezer" and t["evidence"] == []
+    assert t["tag_date"] is None
 
 
 def test_settings_never_expose_the_api_key_and_accept_lossless_keys(tmp_path: Path):

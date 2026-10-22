@@ -28,6 +28,14 @@ it('shows the year the file is tagged with: the first release, where one is know
   expect(screen.queryByText('2005')).not.toBeInTheDocument()
 })
 
+it('shows the date its own file was tagged with over the shared record (issue #181)', () => {
+  // A remaster on a record another request dated by the original album: the file says 2021, so does the row.
+  const remaster = { ...t, tag_date: '2021-02-22', catalog: { ...t.catalog!, release_date: '2021-02-22', original_date: '2001-03-07' } }
+  render(<TrackTable tracks={[remaster]} onReveal={() => {}} />)
+  expect(screen.getByText('2021')).toBeInTheDocument()
+  expect(screen.queryByText('2001')).not.toBeInTheDocument()
+})
+
 const lossy: Track = { ...t, source: 'deezer_bot', source_fmt: null }
 
 it('names the format each file is filed as', () => {

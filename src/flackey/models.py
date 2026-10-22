@@ -232,6 +232,10 @@ class Track:
     source_fmt: str | None = None           # format as downloaded ("flac") when it differs from fmt
     bit_depth: int | None = None
     sample_rate: int | None = None
+    # The date written into this file's tags (issue #181). The catalogue record is shared between requests,
+    # and a remaster keeps its own year while the record may carry the original album's, so the Library's
+    # year is read from here first. None on a row filed before the column existed.
+    tag_date: str | None = None
 
 
 @dataclass

@@ -142,6 +142,8 @@ class Store:
         self._ensure_column("tracks", "source_fmt", "TEXT")
         self._ensure_column("tracks", "bit_depth", "INTEGER")
         self._ensure_column("tracks", "sample_rate", "INTEGER")
+        # The date the file was tagged with (issue #181); NULL on older rows, which show the record's year.
+        self._ensure_column("tracks", "tag_date", "TEXT")
         self._ensure_column("candidates", "has_preview", "INTEGER")
         self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("rejections", "audio_path", "TEXT")
@@ -503,16 +505,16 @@ class Store:
                   catalog_track_id: int | None, request_id: int | None,
                   spectrogram_path: Path | None = None, source: str = "deezer_bot",
                   source_fmt: str | None = None, bit_depth: int | None = None,
-                  sample_rate: int | None = None) -> int:
+                  sample_rate: int | None = None, tag_date: str | None = None) -> int:
         now = _now()
         cur = self.conn.execute(
             "INSERT INTO tracks (path, fmt, bitrate_kbps, cutoff_hz, file_size, artist, title, mix_name, "
             "duration_s, isrc, catalog_track_id, request_id, added_at, verified_at, spectrogram_path, "
-            "source, source_fmt, bit_depth, sample_rate, "
-            "artist_norm, title_norm, mix_norm) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "source, source_fmt, bit_depth, sample_rate, tag_date, "
+            "artist_norm, title_norm, mix_norm) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(path), fmt, bitrate_kbps, cutoff_hz, file_size, artist, title, mix_name, duration_s, isrc,
              catalog_track_id, request_id, now, now, str(spectrogram_path) if spectrogram_path else None,
-             source, source_fmt, bit_depth, sample_rate,
+             source, source_fmt, bit_depth, sample_rate, tag_date,
              norm(artist), norm(title), norm(mix_name)))
         self.conn.commit()
         tid = int(cur.lastrowid)

@@ -1666,3 +1666,31 @@ async def test_an_original_request_prefers_the_original_album_over_its_remaster(
     r = await w.process(store.add_request("Hallucinogen - LSD", RequestKind.TEXT))
     assert r.state == RequestState.DONE and store.get_candidate(r.chosen_candidate_id).deezer_id == 1
     assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}
+
+
+async def test_a_remaster_on_a_shared_record_keeps_its_own_year_on_the_track_row(env, monkeypatch):
+    """Issue #181: the record is shared, and another request dated it by the original album. The file keeps
+    the remaster's year (#180); the Library row must show that year, not the shared record's."""
+    _, store, _ = env
+    http, _asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
+    # "Original Mix" on a remastered release: the record does not call itself the remaster (#172)
+    plain = CatalogTrack(**{**DP_REISSUE.__dict__, "release_date": "2021-02-22",
+                            "release_name": "Discovery (Remastered 2021)"})
+    store.upsert_catalog_track(CatalogTrack(**{**plain.__dict__, "original_date": "2001-03-07"}))
+    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")], [plain])
+    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
+                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    t = store.get_track(r.track_id)
+    assert read_tags(t.path)["date"] == "2021-02-22" == t.tag_date
+    assert store.get_catalog_track(t.catalog_track_id).original_date == "2001-03-07"   # still the record's
+
+
+async def test_a_filed_track_row_carries_the_date_written_to_its_file(env):
+    _, store, _ = env
+    w = make_worker(env, FakeSource([dp_cand(release_date="1999-01-01", isrc="FRZ039800212")]),
+                    FakeCatalog([DP_REISSUE]))
+    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    t = store.get_track(r.track_id)
+    assert t.tag_date == read_tags(t.path)["date"]
