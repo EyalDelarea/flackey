@@ -1,5 +1,6 @@
 """The worker's lossless step with a fake provider. Every test asserts the attempt row's outcome, that the
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
+import hashlib
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -17,11 +18,12 @@ from flackey.config import Settings
 from flackey.convert import ConvertError
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.lossless import LosslessFile
-from flackey.models import CatalogTrack, Query, RequestKind, RequestState
+from flackey.models import CatalogTrack, Query, RequestKind, RequestState, Verdict
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
 from flackey.source import LosslessError, SourceNotFound, SourceTimeout, TransferProgress
 from flackey.store import Store
+from flackey.verify import probe
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
 from flackey.worker import filing as filing_mod
@@ -29,27 +31,67 @@ from flackey.worker import lossless_attempt as lossless_attempt_mod
 from flackey.worker import pipeline as pipeline_mod
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
-from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, _mp3, good_cand, no_art
+from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, good_cand, no_art
 
 pytestmark = requires_ffmpeg
 CT3 = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
 
 
-def _flac(path: Path, seconds: int = 3) -> Path:
+def _flac(path: Path, seconds: int = 3, seed: int = 2) -> Path:
     # -sample_fmt s16: anoisesrc is float and ffmpeg's flac encoder otherwise picks 24-bit for it; this is
-    # meant to be the 16-bit CD-quality file `lf()` describes.
+    # meant to be the 16-bit CD-quality file `lf()` describes. `seed` is what makes two of them different
+    # bytes, which is all `FakeDetector` tells files apart by.
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-                    f"anoisesrc=color=white:seed=2:sample_rate=44100:duration={seconds}", "-ac", "2", "-c:a", "flac",
-                    "-sample_fmt", "s16", str(path)], check=True)
+                    f"anoisesrc=color=white:seed={seed}:sample_rate=44100:duration={seconds}", "-ac", "2",
+                    "-c:a", "flac", "-sample_fmt", "s16", str(path)], check=True)
     return path
 
 
-def _fake_flac(path: Path) -> Path:
-    """A lossy source inside a FLAC container: verify rejects it (cutoff far below 20 kHz)."""
-    mp3 = _mp3(path.with_suffix(".mp3"), kbps=64)
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(mp3), "-c:a", "flac", str(path)], check=True)
-    mp3.unlink()
-    return path
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class FakeDetector:
+    """The spectral verdict, decided by the test instead of by `verify.verify` (issue #97).
+
+    These tests are about the pick loop, the budget and the fallback. They used to reach a failed check by
+    handing the real detector a FLAC made from a 64 kbps MP3, which tied every one of them to the detector's
+    rule: change how a cutoff is measured and four tests about *which peer is asked next* went red. Here a
+    file fails because the test said so, and the audio that pins the detector itself lives in
+    test_verify.py. Everything around the verdict still runs for real -- ffprobe reads the format, bit depth
+    and sample rate the conversion needs -- so only the judgement is borrowed.
+
+    A file is known by its bytes, not its name: the worker copies a download to `req<N>-lossless.flac`
+    before checking it, so the name a test gave it never reaches this."""
+
+    def __init__(self):
+        self.refused: set[str] = set()
+
+    def refuse(self, path: Path) -> Path:
+        """Have every check of these bytes, wherever they are copied to, come back as a lossy source."""
+        self.refused.add(_digest(path))
+        return path
+
+    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+        pr = probe(path)
+        png = spectrogram_dir / f"{name or path.stem}.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(b"\x89PNG")              # a row only ever holds the path; nothing here draws it
+        if _digest(path) in self.refused:
+            return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000, "lossless container but cutoff 11000 Hz: lossy source",
+                           png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+        cutoff = 20_000 if pr.fmt == "mp3" else 22_050
+        return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"content to {cutoff} Hz", png,
+                       bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+
+
+@pytest.fixture(autouse=True)
+def detector(monkeypatch) -> FakeDetector:
+    """Both places the worker asks for a verdict: inside the Soulseek attempt, and on the lossy fallback."""
+    fake = FakeDetector()
+    monkeypatch.setattr(lossless_attempt_mod, "verify", fake)
+    monkeypatch.setattr(filing_mod, "verify", fake)
+    return fake
 
 
 def lf(username: str = "a", **kw) -> LosslessFile:
@@ -291,10 +333,10 @@ async def test_a_rejected_transfer_still_files_from_the_next_peer(lenv):
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_verify_failure_tries_the_second_pick(lenv, tmp_path: Path):
+async def test_verify_failure_tries_the_second_pick(lenv, detector, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
     provider.files = [lf("a"), lf("b", queue_length=1)]
-    provider.audio["a"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["a"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -342,9 +384,9 @@ async def test_a_transfer_is_not_enqueued_without_room_for_it(lenv, monkeypatch)
     assert settings.slskd_downloads in seen
 
 
-async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, tmp_path: Path):
+async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(lenv, detector, tmp_path: Path):
     settings, store, _, provider, _, _ = lenv
-    fake = _fake_flac(tmp_path / "fake.flac")
+    fake = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     provider.files = [lf("a"), lf("b"), lf("c")]
     provider.audio = {"a": fake, "b": fake, "c": fake}
     w = make(lenv)
@@ -357,10 +399,10 @@ async def test_verify_failure_on_every_pick_falls_back_without_a_rejection_row(l
     assert not list(settings.tmp_dir.iterdir())
 
 
-async def test_second_pick_needs_budget(lenv, tmp_path: Path):
+async def test_second_pick_needs_budget(lenv, detector, tmp_path: Path):
     _, store, _, provider, _, clock = lenv
     provider.files = [lf("a"), lf("b")]
-    provider.audio["a"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["a"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     original = provider.download
 
     async def slow(file, **kw):
@@ -1272,7 +1314,8 @@ async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
     assert "never started sending" in r.flag_reason and "found nothing" not in r.flag_reason
 
 
-async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, tmp_path: Path):
+async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_ending_the_request(lenv, detector,
+                                                                                               tmp_path: Path):
     """This reverses what `test_transfer_timeout_stops_at_that_peer` used to assert. Its reasoning was that
     a slow transfer "says something about the link rather than the peer, so the next one is no more likely",
     and the measurement on 2026-09-10 says otherwise: "Dog Days Bliss" was cut off at 90 % of a 67 MB FLAC
@@ -1280,7 +1323,7 @@ async def test_a_transfer_that_stopped_moves_to_the_next_survivor_instead_of_end
     queued -- and 316 s of the attempt's budget was still unspent. Upload rate is a fact about the peer."""
     _, store, _, provider, _, _ = lenv
     provider.files = [lf("a"), lf("b")]
-    provider.audio["b"] = _fake_flac(tmp_path / "fake.flac")
+    provider.audio["b"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
     original = provider.download
 
     async def stalls(file, **kw):
