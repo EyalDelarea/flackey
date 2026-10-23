@@ -238,6 +238,116 @@ p {
   }
 }
 
+/* ---- Product film ----
+   A framed 16:9 player in the same card language as the demo below. The two
+   controls sit on the film: play/pause grows to a centred button while the
+   film is stopped, and the sound toggle names what it will do. */
+.film {
+  padding: 4px 0 40px;
+  scroll-margin-top: 20px;
+}
+.film-frame {
+  position: relative;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid #c8cbd2;
+  background: #f3f4f7;
+  box-shadow:
+    0 24px 40px -30px #373a46aa,
+    0 6px 12px #35374908;
+}
+.film-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #f3f4f7;
+}
+.film-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.film-btn {
+  pointer-events: auto;
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  color: #fff;
+  background: rgba(16, 17, 22, 0.62);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.4);
+  transition:
+    background 0.2s,
+    transform 0.2s;
+}
+.film-btn:hover {
+  background: rgba(16, 17, 22, 0.78);
+}
+.film-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 0;
+}
+.film-play {
+  left: 18px;
+  bottom: 18px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+.film-sound {
+  right: 18px;
+  bottom: 18px;
+  height: 44px;
+  padding: 0 16px 0 13px;
+  border-radius: 22px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.film-sound svg .i-on,
+.film-sound svg .i-off {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+/* Each button carries both icons; the frame's state picks one. */
+.film-frame .i-play,
+.film-frame.is-paused .i-pause,
+.film-frame .film-sound .i-on,
+.film-frame.is-unmuted .film-sound .i-off {
+  display: none;
+}
+.film-frame.is-paused .i-play,
+.film-frame.is-unmuted .film-sound .i-on {
+  display: block;
+}
+/* Stopped: the play button moves to the centre and grows. */
+.film-frame.is-paused .film-play {
+  left: 50%;
+  bottom: 50%;
+  width: 84px;
+  height: 84px;
+  transform: translate(-50%, 50%);
+  background: rgba(0, 122, 255, 0.92);
+}
+.film-frame.is-paused .film-play:hover {
+  background: #007aff;
+  transform: translate(-50%, 50%) scale(1.05);
+}
+.film-frame.is-paused .film-play svg {
+  width: 32px;
+  height: 32px;
+  margin-left: 4px;
+}
+
 /* ---- What's new ----
    One tile per recent feature. Each drawing borrows the app's own controls
    (sidebar rows, the segmented picker, the amber banner) at thumbnail size. */
@@ -384,50 +494,44 @@ p {
   font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
   color: rgba(0, 0, 0, 0.55);
 }
-/* Mac and Windows windows */
-.wn-windows {
+/* Extended mix: the Done row's offer, with the app's two buttons under it */
+.wn-ext {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
 }
-.wn-win {
-  width: 78px;
-  height: 56px;
-  border-radius: 7px;
+.wn-ext-note {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #eef4ff;
+  border: 1px solid #c9dcff;
+  color: #1f4fb8;
+  white-space: nowrap;
+}
+.wn-ext-note b {
+  font-weight: 600;
+}
+.wn-ext-btns {
+  display: flex;
+  gap: 6px;
+}
+.wn-ext-keep,
+.wn-ext-get {
+  padding: 4px 11px;
+  border-radius: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wn-ext-keep {
   background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  box-shadow: 0 4px 10px -6px rgba(0, 0, 0, 0.3);
-  display: flex;
-  align-items: flex-start;
-  padding: 6px 7px;
-  background-image: linear-gradient(#f3f3f5, #f3f3f5);
-  background-size: 100% 17px;
-  background-repeat: no-repeat;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
-.wn-mac {
-  gap: 4px;
-}
-.wn-mac i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ff5f57;
-}
-.wn-mac i:nth-child(2) {
-  background: #febc2e;
-}
-.wn-mac i:nth-child(3) {
-  background: #28c840;
-}
-.wn-pc {
-  justify-content: flex-end;
-  gap: 7px;
-  padding-top: 2px;
-  border-radius: 4px;
-}
-.wn-pc b {
-  font-weight: 400;
-  font-size: 10px;
-  color: rgba(0, 0, 0, 0.6);
+.wn-ext-get {
+  background: #007aff;
+  color: #fff;
+  box-shadow: 0 2px 6px -2px rgba(0, 122, 255, 0.5);
 }
 /* Update banner */
 .wn-update {
@@ -2171,6 +2275,43 @@ footer > a:last-child {
   }
   .whats-new {
     padding: 4px 0 34px;
+  }
+  .film {
+    padding: 0 0 26px;
+  }
+  .film-frame {
+    border-radius: 14px;
+  }
+  /* On a phone the film is under 200px tall, so both controls shrink to
+     36px circles and the sound toggle drops its words (its label stays). */
+  .film-play,
+  .film-sound {
+    bottom: 8px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+  }
+  .film-play {
+    left: 8px;
+  }
+  .film-sound {
+    right: 8px;
+  }
+  .film-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .film-sound-label {
+    display: none;
+  }
+  .film-frame.is-paused .film-play {
+    width: 60px;
+    height: 60px;
+  }
+  .film-frame.is-paused .film-play svg {
+    width: 26px;
+    height: 26px;
   }
   .wn-grid {
     gap: 10px;

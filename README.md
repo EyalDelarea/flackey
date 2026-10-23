@@ -11,6 +11,7 @@ Beatport when it can be reached) and
 files it in your DJ Library (by default one folder per artist,
 `~/Music/DJ Library/<Artist>/`), and writes M3U8 playlists for Rekordbox import.
 BPM and key are left to Rekordbox's analysis; genre and label are in the tags.
+When it finds a longer extended or club mix of a track, it offers it, and one click swaps it in.
 
 <p align="center">
   <a href="https://github.com/EyalDelarea/flackey/actions/workflows/checks.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/EyalDelarea/flackey/checks.yml?branch=main&label=CI"></a>
