@@ -118,6 +118,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # empty, and not before `_scan_after` once Soulseek was unreachable.
         self._scan: asyncio.Task | None = None
         self._scan_after = 0.0
+        self._extending: set[int] = set()   # tracks with a Get extended under way
 
 
     def _bot_ready(self) -> bool:

@@ -2804,6 +2804,14 @@ def test_get_extended_and_keep_this_answer_for_the_offer_on_the_track(client_wit
     r = c.post(f"/api/lossless/extended/{tid}")
     assert r.status_code == 200 and r.json() == {"ok": True, "message": "Swapped in the Extended Mix (6:40).",
                                                  "swapped": True}
+    from flackey.source.lossless import LosslessUnavailable
+
+    async def down(track_id: int) -> str:
+        raise LosslessUnavailable("slskd unreachable: ConnectError")
+
+    worker.get_extended = down
+    r = c.post(f"/api/lossless/extended/{tid}")
+    assert r.status_code == 503 and "Try again later" in r.json()["detail"]
     store.set_evidence(tid, "extended_offer", {"status": "available", "length_s": 400, "mix_name": "Extended Mix"})
     assert c.post(f"/api/lossless/extended/{tid}/keep").json() == {"ok": True}
     assert store.evidence_of(tid, "extended_offer")["status"] == "kept"

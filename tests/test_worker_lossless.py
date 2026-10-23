@@ -2979,6 +2979,42 @@ async def test_a_failed_get_extended_leaves_the_track_and_its_row_as_they_were(l
     assert store.lossless_outcome(r.id)[1] == "filed"
 
 
+async def test_get_extended_runs_once_per_track_at_a_time(lenv, monkeypatch, tmp_path: Path):
+    """Two windows, or a direct API call, pressing Get extended on the same track start one swap, not two."""
+    w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    gate = asyncio.Event()
+    real = w._try_lossless
+
+    async def slow(*a, **kw):
+        await gate.wait()
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(w, "_try_lossless", slow)
+    first = asyncio.create_task(w.get_extended(r.track_id))
+    await asyncio.sleep(0)
+    with pytest.raises(ValueError, match="already being fetched"):
+        await w.get_extended(r.track_id)
+    gate.set()
+    assert (await first).startswith("Swapped in the Extended Mix")
+    assert w._extending == set()
+    assert [x.id for x in store.find_tracks_by_title("Astral Projection", "Into the Void")] == [r.track_id]
+
+
+async def test_soulseek_going_away_mid_get_extended_is_a_try_again_later(lenv, monkeypatch, tmp_path: Path):
+    w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    before = store.get_track(r.track_id)
+
+    async def down(*a, **kw):
+        raise LosslessUnavailable("slskd unreachable: ConnectError")
+
+    monkeypatch.setattr(w, "_try_lossless", down)
+    assert (await w.get_extended(before.id)).endswith("Try again later.")
+    assert store.get_track(before.id) == before and _offer(store, before.id)["status"] == "available"
+    assert store.lossless_outcome(r.id)[1] == "filed" and w._extending == set()
+
+
 async def test_keep_this_takes_the_offer_away(lenv, monkeypatch, tmp_path: Path):
     w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
     with pytest.raises(ValueError):

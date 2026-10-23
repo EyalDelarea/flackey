@@ -107,10 +107,23 @@ class ExtendedMixin:
             raise ValueError("there is no extended mix on offer for this track")
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to download it from")
+        # Two windows, or a second press that went straight to the API, must not swap the same file twice
+        if track_id in self._extending:
+            raise ValueError("the extended mix of this track is already being fetched")
+        self._extending.add(track_id)
+        try:
+            return await self._get_extended(t)
+        finally:
+            self._extending.discard(track_id)
+
+    async def _get_extended(self, t) -> str:
         req, cand, catalog = self._filed_request(t)
         verdict = self.store.get_lossless_verdict(req.id)
-        acoustic = await self._acoustic_reference(req, cand)
-        hit = await self._try_lossless(req, cand, catalog, acoustic, prefer_extended=True, extended_only=True)
+        try:
+            acoustic = await self._acoustic_reference(req, cand)
+            hit = await self._try_lossless(req, cand, catalog, acoustic, prefer_extended=True, extended_only=True)
+        except LosslessUnavailable:
+            hit = None
         if hit is None:
             # The track is still the one it was: its row keeps the verdict of the pass that filed it
             self.store.set_lossless_verdict(req.id, verdict)

@@ -112,6 +112,9 @@ def router(store: Store, worker=None) -> APIRouter:
             message = await worker.get_extended(track_id)
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
+        except LosslessError:
+            # Soulseek went away in a way the worker did not turn into a sentence: still an answer, not a 500
+            raise HTTPException(503, "Soulseek isn't reachable right now. Try again later.") from None
         offer = store.evidence_of(track_id, "extended_offer") or {}
         return {"ok": True, "message": message, "swapped": offer.get("status") == "swapped"}
 
