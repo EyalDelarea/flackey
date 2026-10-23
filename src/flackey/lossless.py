@@ -97,6 +97,8 @@ class Reference:
     # in any spelling, and lets the fingerprint match an edit cut inside the reference's excerpt.
     cut: str = ""
     prefer_extended: bool = False
+    # the word the extended spelling searches with: "extended", or "club mix" for uploads that only say that
+    cut_word: str = "extended"
 
     @property
     def is_original(self) -> bool:
@@ -138,15 +140,15 @@ def search_text(ref: Reference) -> str:
     if ref.cut == EXTENDED:
         if extended_target(ref.mix_name):
             text += f" {_without_remaster_year(ref.mix_name)}"
-        return " ".join(f"{text} extended".split())
+        return " ".join(f"{text} {ref.cut_word}".split())
     if not ref.is_original:
         text += f" {_without_remaster_year(ref.mix_name)}"
     return " ".join(text.split())
 
 
-def extended_reference(ref: Reference) -> Reference:
-    """`ref` as the spelling that looks for its extended mix only."""
-    return replace(ref, cut=EXTENDED, prefer_extended=True)
+def extended_reference(ref: Reference, word: str = "extended") -> Reference:
+    """`ref` as the spelling that looks for its extended mix only, searched with `word`."""
+    return replace(ref, cut=EXTENDED, prefer_extended=True, cut_word=word)
 
 
 def file_title(name: str, artist: str) -> tuple[str, str | None]:
@@ -170,23 +172,31 @@ def file_version(f: LosslessFile, ref: Reference) -> Version:
     read off the whole file name; never off the folder, which is about more than this file."""
     title, version = file_title(f.name, ref.artist)
     if version is None:
-        asked = set(norm(ref.title).split())
-        extra = [t for t in title.split() if t not in asked]
-        # a credit is not a version: "(feat. Sia)"
-        for i, t in enumerate(extra):
-            if t in ("feat", "ft", "featuring"):
-                extra = extra[:i]
-                break
-        version = " ".join(extra) or None
+        version = " ".join(_extra_words(title, ref)) or None
     v = split_version(version)
     return replace(v, cut=EXTENDED if says_extended(f.name) else "")
 
 
+def _extra_words(title: str, ref: Reference) -> list[str]:
+    """The title words of a file name that are not the asked title's, up to a credit: "(feat. Sia)" is no
+    version."""
+    asked = set(norm(ref.title).split())
+    extra = [t for t in title.split() if t not in asked]
+    for i, t in enumerate(extra):
+        if t in ("feat", "ft", "featuring"):
+            return extra[:i]
+    return extra
+
+
 def own_extended(f: LosslessFile, ref: Reference) -> bool:
     """`f` names an extended cut of the asked arrangement: "Feel So Close (Extended Mix)" for Feel So Close,
-    never "(Liquid Soul Extended Remix)", which is Liquid Soul's remix (issue #187)."""
+    never "(Liquid Soul Extended Remix)", which is Liquid Soul's remix, nor "No Broke Boys x Better Off
+    Alone (Mashup) (Extended Mix)", a mashup with the track in it that the fingerprint passes (issue #187)."""
     have = file_version(f, ref)
-    return have.cut == EXTENDED and same_arrangement(extended_target(ref.mix_name), have.arrangement)
+    if have.cut != EXTENDED or not same_arrangement(extended_target(ref.mix_name), have.arrangement):
+        return False
+    title, version = file_title(f.name, ref.artist)
+    return version is None or not _extra_words(title, ref)
 
 
 def downloaded_mix(f: LosslessFile, ref: Reference, tags: dict[str, str] | None = None) -> str | None:
@@ -197,6 +207,8 @@ def downloaded_mix(f: LosslessFile, ref: Reference, tags: dict[str, str] | None 
     for text in (file_title(f.name, ref.artist)[1], tags.get("mix"), parse_version(tags.get("title") or "")[1]):
         if text and says_extended(text):
             text = " ".join(text.split())
+            if norm(text) == "extended":
+                return None           # a bare "(Extended)" is filed as the "Extended Mix" it is
             return text.title() if text == text.lower() else text
     return None
 

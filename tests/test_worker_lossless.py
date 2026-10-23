@@ -2752,20 +2752,21 @@ EXT_PATH = "Void\\02. Astral Projection - Into the Void (Extended Mix).flac"
 
 
 def _extended_env(lenv, monkeypatch, tmp_path: Path, *, prefer: bool, extended_on_offer: bool = True,
-                  normal_on_offer: bool = True, extended_in_normal_search: bool = False):
+                  normal_on_offer: bool = True, extended_in_normal_search: bool = False,
+                  extended_path: str = EXT_PATH, extended_word: str = "extended"):
     """A peer with the 3 s radio edit, another with a 20 s extended mix, and a fingerprint that records
     whether it was asked to match by halves. The extended file answers only a search with "extended" in
     it, the way a peer's file name does, unless `extended_in_normal_search`."""
     settings, store, notifier, provider, fake_check, _ = lenv
     settings.prefer_extended = prefer
     provider.audio["x"] = _flac(tmp_path / "extended.flac", seconds=20, seed=7)
-    extended = lf("x", path=EXT_PATH, length_s=20, size=3_200_000)
+    extended = lf("x", path=extended_path, length_s=20, size=3_200_000)
 
     def files_for(text):
         out = []
-        if extended_on_offer and ("extended" in text or extended_in_normal_search):
+        if extended_on_offer and (extended_word in text or extended_in_normal_search):
             out.append(extended)
-        if normal_on_offer and "extended" not in text:
+        if normal_on_offer and "extended" not in text and "club" not in text:
             out.append(lf("a"))
         return out
 
@@ -2807,7 +2808,8 @@ async def test_with_no_extended_mix_the_normal_version_is_filed_and_the_done_lin
     r = await w.process(rid)
     assert r.state == RequestState.DONE
     # the extended search first, then the ladder exactly as it runs with the setting off
-    assert provider.searches == ["Astral Projection Into the Void extended", "Astral Projection Into the Void"]
+    assert provider.searches == ["Astral Projection Into the Void extended",
+                                 "Astral Projection Into the Void club mix", "Astral Projection Into the Void"]
     t = store.get_track(r.track_id)
     assert (t.mix_name, t.duration_s, t.isrc, t.source) == ("Original Mix", 3, "UKU932231081", "soulseek")
     kinds = {e.kind: e.value for e in store.list_evidence(t.id)}
@@ -2847,6 +2849,38 @@ async def test_off_an_extended_file_is_still_filed_as_the_extended_mix_not_the_r
     assert halves == [False]
 
 
+async def test_a_club_mix_that_never_says_extended_is_found_by_the_club_mix_search(lenv, monkeypatch,
+                                                                                     tmp_path: Path):
+    _settings, store, _notifier, provider, _halves = _extended_env(
+        lenv, monkeypatch, tmp_path, prefer=True, extended_word="club mix",
+        extended_path="Void\\02. Astral Projection - Into the Void (Club Mix).flac")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and provider.downloaded == ["x"]
+    assert provider.searches == ["Astral Projection Into the Void extended", "Astral Projection Into the Void club mix"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)
+
+
+async def test_off_there_is_no_club_mix_search(lenv, monkeypatch, tmp_path: Path):
+    _settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    w = make(lenv)
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert provider.searches == ["Astral Projection Into the Void"]
+
+
+async def test_a_mashup_with_the_track_in_it_is_not_its_extended_mix(lenv, monkeypatch, tmp_path: Path):
+    """Real pair, 2026-10-23: "No Broke Boys x Better Off Alone (Mashup) (Extended Mix)" passed the
+    fingerprint at 0.92 for Better Off Alone, because the mashup has it in it."""
+    _settings, store, _notifier, provider, _halves = _extended_env(
+        lenv, monkeypatch, tmp_path, prefer=True,
+        extended_path="x\\Astral Projection - Other Song x Into the Void (Tim Mashup) (Extended Mix).wav")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and provider.downloaded == ["a"]
+    assert store.get_track(r.track_id).mix_name == "Original Mix"
+
+
 def _own(store: Store, settings, mix_name: str, duration_s: int, isrc: str | None) -> int:
     path = settings.library_root / "Astral Projection" / f"Into the Void ({mix_name}).aiff"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2874,7 +2908,8 @@ async def test_owning_the_radio_edit_with_no_extended_mix_is_a_duplicate(lenv, m
     w = make(lenv)
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert r.state == RequestState.DUPLICATE and r.track_id == owned and r.fetch_source is None
-    assert provider.searches == ["Astral Projection Into the Void extended"] and provider.downloaded == []
+    assert provider.searches == ["Astral Projection Into the Void extended",
+                                 "Astral Projection Into the Void club mix"] and provider.downloaded == []
     assert w.source.fetched == [] and not list(settings.tmp_dir.glob("*"))
 
 

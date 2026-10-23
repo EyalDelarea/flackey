@@ -156,7 +156,8 @@ class LosslessMixin:
         a time. Never raises; every miss is an attempt row with an outcome (spec §5, §11).
 
         With the owner preferring extended mixes (`prefer_extended`, the setting unless a caller says), the
-        first spelling is searched once more before the ladder, for its extended mix alone, and every
+        first spelling is searched twice more before the ladder, for its extended mix alone ("extended",
+        then "club mix"), and every
         spelling after it ranks an extended cut first (issue #187). That search's miss is no answer about
         the track, so the ladder then runs exactly as it would have. `extended_only` stops after it: the
         normal version is in the library already."""
@@ -168,7 +169,9 @@ class LosslessMixin:
             return None
         prefer = self.settings.prefer_extended if prefer_extended is None else prefer_extended
         if prefer and wants_extended(req.query_version) and wants_extended(refs[0].mix_name):
-            refs = [extended_reference(refs[0])] + [replace(r, prefer_extended=True) for r in refs]
+            # "club mix" second: uploads of a club mix often never say extended
+            refs = ([extended_reference(refs[0]), extended_reference(refs[0], "club mix")]
+                    + [replace(r, prefer_extended=True) for r in refs])
         if extended_only:
             refs = [r for r in refs if r.cut == EXTENDED]
         # Cleared first, so a pass that is cut short (the app closing mid-search) leaves the readers on its

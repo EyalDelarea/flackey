@@ -426,3 +426,20 @@ def test_an_extended_cut_is_named_by_the_file_s_own_words():
     assert downloaded_mix(mk(path="x\\02.05 - Never Gonna Give You Up (Extended Version) (Rick Astley).flac"),
                           Reference(artist="Rick Astley", title="Never Gonna Give You Up", mix_name=None,
                                     duration_s=213)) is None
+
+
+def test_a_bare_extended_is_filed_as_the_extended_mix_and_a_mashup_is_no_extended_cut():
+    from flackey.lossless import downloaded_mix
+
+    ref = Reference("David Guetta", "Titanium", "Original Mix", 245)
+    bare = mk(path="David Guetta - Titanium - 07 - Titanium (extended).flac")
+    assert own_extended(bare, ref) and downloaded_mix(bare, ref) is None
+    credit = mk(path="01. Titanium (feat. Sia) (Extended).flac")
+    assert own_extended(credit, ref)
+    alice = Reference("Alice Deejay", "Better Off Alone", "Original Mix", 214)
+    mashup = mk(path="Disco Lines, Tinashe x Alice Deejay - No Broke Boys x Better Off Alone "
+                          "[Sergio Villanueva Edit] (Tim Underscore Mashup) (Extended Mix).wav")
+    assert not own_extended(mashup, alice)
+    club = mk(path="Above & Beyond - Sun & Moon (Club Mix).flac")
+    assert own_extended(club, Reference("Above & Beyond", "Sun & Moon", "Original Mix", 300))
+    assert search_text(extended_reference(alice, "club mix")) == "Alice Deejay Better Off Alone club mix"
