@@ -53,9 +53,9 @@
             <p class="lede">High-quality tracks. Ready to download.</p>
             <div class="hero-actions">
               <a class="button" href="#download">Download</a
-              ><a class="watch" href="#preview"
-                ><span class="small-play" aria-hidden="true">▶</span>Watch
-                preview</a
+              ><a class="watch" href="#film"
+                ><span class="small-play" aria-hidden="true">▶</span>Watch the
+                film</a
               >
             </div>
           </div>
@@ -111,6 +111,36 @@
       <div class="track-wave wrap" aria-hidden="true">
         <canvas id="track-wave"></canvas>
       </div>
+      <!-- The product film. Muted, it plays only while on screen and never for
+           visitors who ask for reduced motion; preload="none" keeps its 5 MB off
+           the first load until it is about to be seen. Without the script the
+           browser's own controls stay on. -->
+      <section class="film wrap" id="film" aria-label="Product film">
+        <div class="film-frame">
+          <video
+            class="film-video"
+            id="film-video"
+            width="1920"
+            height="1080"
+            poster="img/film-poster.jpg"
+            preload="none"
+            muted
+            playsinline
+            controls
+          >
+            <source src="video/flackey-film.mp4" type="video/mp4" />
+          </video>
+          <div class="film-controls" hidden>
+            <button class="film-btn film-play" type="button" aria-label="Play the film">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-play" d="M8 5.5v13l11-6.5z" /><path class="i-pause" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /></svg>
+            </button>
+            <button class="film-btn film-sound" type="button" aria-label="Turn sound on">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" /><path class="i-on" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" /><path class="i-off" d="m15.5 9.5 5 5m0-5-5 5" /></svg>
+              <span class="film-sound-label">Sound on</span>
+            </button>
+          </div>
+        </div>
+      </section>
       <!-- What the current release can do, newest first. Each tile carries a small
            drawing of the app's own control rather than a screenshot, like the
            demos below it. The drawings are decorative; the text says it all. -->
@@ -120,6 +150,17 @@
           <h2 id="whats-new-title">Recently added to Flackey.</h2>
         </div>
         <ul class="wn-grid">
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
+              <div class="wn-ext">
+                <span class="wn-ext-note">Extended mix available <b>(6:40)</b></span>
+                <span class="wn-ext-btns"><span class="wn-ext-keep">Keep this</span><span class="wn-ext-get">Get extended</span></span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.5.0</span>
+            <h3>Get the extended mix</h3>
+            <p>When Flackey finds a longer extended or club mix of a track, it offers it. One click swaps it in, in the same place in your library and playlists.</p>
+          </li>
           <li class="wn-card">
             <div class="wn-art" aria-hidden="true">
               <div class="wn-keep">
@@ -194,19 +235,8 @@
           </li>
           <li class="wn-card">
             <div class="wn-art" aria-hidden="true">
-              <div class="wn-windows">
-                <span class="wn-win wn-mac"><i></i><i></i><i></i></span>
-                <span class="wn-win wn-pc"><b>–</b><b>□</b><b>×</b></span>
-              </div>
-            </div>
-            <span class="wn-tag">v0.2.0</span>
-            <h3>Now on Windows</h3>
-            <p>The same app on Windows 10 and 11, with its own installer next to the Mac one.</p>
-          </li>
-          <li class="wn-card">
-            <div class="wn-art" aria-hidden="true">
               <div class="wn-update">
-                <span class="wn-banner"><span>Flackey <span id="wn-version">0.4.0</span> is available.</span><b>Update</b></span>
+                <span class="wn-banner"><span>Flackey <span id="wn-version">0.5.0</span> is available.</span><b>Update</b></span>
                 <span class="wn-verified"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Signature checked</span>
               </div>
             </div>

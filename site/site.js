@@ -208,6 +208,69 @@ if (layoutTile && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
   }, 2600);
 }
 
+// The product film. It starts muted the first time it is mostly on screen, pauses
+// when scrolled away, and plays through once. Visitors who ask for reduced motion
+// get the poster and the play button only. The browser's own controls are the
+// fallback in the HTML; they come off here in favour of the two on the film.
+const filmVideo = document.querySelector("#film-video");
+if (filmVideo) {
+  const frame = filmVideo.closest(".film-frame");
+  const controls = frame.querySelector(".film-controls");
+  const playBtn = frame.querySelector(".film-play");
+  const soundBtn = frame.querySelector(".film-sound");
+  const soundLabel = frame.querySelector(".film-sound-label");
+  // Set once someone presses pause, so scrolling back never overrides them.
+  let heldByVisitor = false;
+  filmVideo.removeAttribute("controls");
+  filmVideo.muted = true;
+  controls.hidden = false;
+
+  const sync = () => {
+    const paused = filmVideo.paused;
+    frame.classList.toggle("is-paused", paused);
+    frame.classList.toggle("is-unmuted", !filmVideo.muted);
+    playBtn.setAttribute("aria-label", paused ? "Play the film" : "Pause the film");
+    soundBtn.setAttribute("aria-label", filmVideo.muted ? "Turn sound on" : "Turn sound off");
+    soundLabel.textContent = filmVideo.muted ? "Sound on" : "Sound off";
+  };
+  const play = () => filmVideo.play().catch(sync);
+  const toggle = () => {
+    if (filmVideo.paused) {
+      heldByVisitor = false;
+      play();
+    } else {
+      heldByVisitor = true;
+      filmVideo.pause();
+    }
+  };
+  ["play", "pause", "ended", "volumechange"].forEach((e) => filmVideo.addEventListener(e, sync));
+  playBtn.addEventListener("click", toggle);
+  filmVideo.addEventListener("click", toggle);
+  soundBtn.addEventListener("click", () => {
+    filmVideo.muted = !filmVideo.muted;
+    // Asking for sound is asking to hear it, so a stopped film starts too.
+    if (!filmVideo.muted && filmVideo.paused) {
+      heldByVisitor = false;
+      play();
+    }
+  });
+  sync();
+
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!reduceMotion && "IntersectionObserver" in window) {
+    new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          if (!heldByVisitor && !filmVideo.ended && filmVideo.paused) play();
+        } else if (!filmVideo.paused) {
+          filmVideo.pause();
+        }
+      },
+      { threshold: 0.4 },
+    ).observe(filmVideo);
+  }
+}
+
 // The app-walkthrough demo. Every value below is interpolated per frame rather
 // than stepped between a handful of states: the percentage, the arc that draws
 // it, the byte counter and the speed all move continuously, which is what keeps
