@@ -326,7 +326,7 @@ describe('presentRow', () => {
     expect(offer({ status: 'swapped', length_s: 400, mix_name: 'Extended Mix', was: 'Radio Edit' })).toEqual({ state: 'swapped',
       label: 'Swapped in for the Radio Edit.', tip: '' })
     // still being looked for, nothing found, or a no: nothing on the row
-    for (const status of ['pending', 'none', 'kept']) expect(offer({ status })).toBeNull()
+    for (const status of ['pending', 'none', 'kept', 'unmatched']) expect(offer({ status })).toBeNull()
     expect(offer({ status: 'available', length_s: 400 }, 'duplicate')).toBeNull()
   })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {

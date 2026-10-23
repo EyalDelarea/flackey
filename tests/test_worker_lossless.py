@@ -3015,6 +3015,47 @@ async def test_soulseek_going_away_mid_get_extended_is_a_try_again_later(lenv, m
     assert store.lossless_outcome(r.id)[1] == "filed" and w._extending == set()
 
 
+async def test_get_extended_tries_the_next_extended_copy_when_one_fails_the_fingerprint(lenv, monkeypatch,
+                                                                                       tmp_path: Path):
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    provider.audio["y"] = _flac(tmp_path / "extended2.flac", seconds=26, seed=9)
+    other = lf("y", path=EXT_PATH, length_s=26, size=4_200_000)  # another cut, not a copy of the same file
+    first = provider.files_for
+    provider.files_for = lambda text: first(text) + ([other] if "extended" in text else [])
+    await _scan(w)
+    calls = []
+
+    async def check(path, reference, *, minimum, missing="", **kw):
+        calls.append(path)
+        status = "failed" if len(calls) == 1 else "matched"
+        return FingerprintResult(status, 0.5 if status == "failed" else 0.95, 1.0, status, reference=reference.label)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
+    message = await w.get_extended(r.track_id)
+    assert message.startswith("Swapped in the Extended Mix") and len(calls) == 2
+    assert sorted(provider.downloaded[-2:]) == ["x", "y"]
+    assert _offer(store, r.track_id)["status"] == "swapped"
+
+
+async def test_an_extended_copy_that_is_another_recording_withdraws_the_offer(lenv, monkeypatch, tmp_path: Path):
+    w, r, settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    before = store.get_track(r.track_id)
+
+    async def check(path, reference, *, minimum, missing="", **kw):
+        return FingerprintResult("failed", 0.4, 1.0, "best score 0.40 below 0.79", reference=reference.label)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
+    message = await w.get_extended(before.id)
+    assert message == "The extended copy on Soulseek didn't match this track, so your version stays."
+    assert "could not be downloaded" not in message
+    assert store.get_track(before.id) == before
+    assert _offer(store, before.id)["status"] == "unmatched"
+    assert store.lossless_outcome(r.id)[1] == "filed" and not list(settings.tmp_dir.glob("*"))
+    with pytest.raises(ValueError):
+        await w.get_extended(before.id)          # nothing on offer any more
+
+
 async def test_keep_this_takes_the_offer_away(lenv, monkeypatch, tmp_path: Path):
     w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
     with pytest.raises(ValueError):

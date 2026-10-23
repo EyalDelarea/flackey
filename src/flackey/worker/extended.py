@@ -24,6 +24,10 @@ OFFER_WORDS = ("extended", "club mix")
 # mix" shorter than the radio edit turned up in the real-pair run (209 s for 233 s, 2026-10-23); an edit a
 # few seconds longer is no extended mix either.
 LONGER_BY_S = 30
+# A Get extended that ended on these alone heard from every extended copy there was, and none was this track
+FINGERPRINT_FAILED = "fingerprint_failed"
+NOT_THIS_TRACK = {FINGERPRINT_FAILED, "no_pick"}
+UNMATCHED = "unmatched"     # the offer withdrawn: its copy was another recording
 # How long the scan waits before asking again after Soulseek was not reachable.
 SCAN_BACKOFF_S = 60.0
 
@@ -112,21 +116,30 @@ class ExtendedMixin:
             raise ValueError("the extended mix of this track is already being fetched")
         self._extending.add(track_id)
         try:
-            return await self._get_extended(t)
+            return await self._get_extended(t, offer)
         finally:
             self._extending.discard(track_id)
 
-    async def _get_extended(self, t) -> str:
+    async def _get_extended(self, t, offer: dict) -> str:
         req, cand, catalog = self._filed_request(t)
         verdict = self.store.get_lossless_verdict(req.id)
+        before = max((a.id for a in self.store.attempts_for_request(req.id)), default=0)
         try:
             acoustic = await self._acoustic_reference(req, cand)
+            # Each search tries the extended copies it found in turn, so a copy that fails the fingerprint
+            # hands over to the next one there is
             hit = await self._try_lossless(req, cand, catalog, acoustic, prefer_extended=True, extended_only=True)
         except LosslessUnavailable:
             hit = None
         if hit is None:
             # The track is still the one it was: its row keeps the verdict of the pass that filed it
             self.store.set_lossless_verdict(req.id, verdict)
+            outcomes = [a.outcome for a in self.store.attempts_for_request(req.id) if a.id > before]
+            if FINGERPRINT_FAILED in outcomes and all(o in NOT_THIS_TRACK for o in outcomes):
+                # Every extended copy there was came and was another recording: asking again would fetch the
+                # same ones, so the offer goes
+                self.store.set_evidence(t.id, OFFER, {**offer, "status": UNMATCHED})
+                return "The extended copy on Soulseek didn't match this track, so your version stays."
             return "The extended mix could not be downloaded this time. Try again later."
         try:
             if hit.cut != EXTENDED:
