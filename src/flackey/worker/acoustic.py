@@ -18,13 +18,15 @@ class AcousticMixin:
     """Part of `Worker`, which supplies the state these methods read."""
 
     async def _fingerprint(self, path: Path, reference: AcousticReference | None,
-                           missing: str = "") -> FingerprintResult:
+                           missing: str = "", *, halves: bool = False) -> FingerprintResult:
         """The recording check, for every caller: the lossy copy, each lossless pick, and a kept copy the
         owner accepts. On the CPU semaphore because fpcalc decodes the whole file; it belongs with the
         other ffmpeg work."""
+        # `halves` only when asked: a longer cut of the reference may hold an edit inside its excerpt
+        extra = {"halves": True} if halves else {}
         async with self._cpu:
             return await fingerprint_check(path, reference, minimum=self.settings.lossless_fingerprint_min,
-                                           missing=missing)
+                                           missing=missing, **extra)
 
     async def _video_reference(self, req: Request) -> tuple[AcousticReference | None, str]:
         """The video's own audio as the reference (issue #67), stored once found, or None and the reason.

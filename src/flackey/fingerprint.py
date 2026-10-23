@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 FPS = 8.06                                        # chromaprint hop: 1365 samples at 11025 Hz
 SUBFRAME_TRIMS_S = (0.0, 0.031, 0.062, 0.093)     # a quarter frame each; the preview's cut is never frame-aligned
 FPCALC_TIMEOUT_S = 120
+# An edit cut inside the reference excerpt (issue #187): the radio edit's 30 s is two passages that sit apart
+# in the extended mix, so the whole needle finds neither. Its halves each find their own, in order, with at
+# most this much of the longer version between them. Measured offline on 12 library files: a splice at the
+# needle's centre scored 0.748 whole and >= 0.879 as halves; a different track's halves at most 0.783.
+HALF_GAP_MAX_S = 240
+HALF_ORDER_SLACK_S = 2.0
 
 
 class FingerprintError(Exception):
@@ -135,10 +141,40 @@ class FingerprintResult:
                 "reference": self.reference}
 
 
+def compare_halves(needle: list[int], hay: list[int]) -> tuple[float, int]:
+    """The weaker of `needle`'s two halves, each slid along `hay` on its own -- the second found after the
+    first, with at most HALF_GAP_MAX_S between them -- and the first half's offset. A radio edit cut inside
+    the excerpt is two passages of the longer version; a passage of another track has no such pair.
+    Anchored on each half in turn, because a chorus repeats and the best place for one half alone may be
+    the wrong chorus."""
+    h = len(needle) // 2
+    first, second = needle[:h], needle[h:]
+    if h == 0 or len(hay) < len(needle):
+        return 0.0, -1
+    slack, gap = round(HALF_ORDER_SLACK_S * FPS), round(HALF_GAP_MAX_S * FPS)
+    best = (0.0, -1)
+    # anchored on the first half: the second is looked for after it
+    s1, o1 = compare(first, hay)
+    lo = max(o1 + h - slack, 0)
+    s2, _ = compare(second, hay[lo:o1 + h + gap + len(second)])
+    best = max(best, (min(s1, s2), o1))
+    # anchored on the second half: the first is looked for before it
+    s2, o2 = compare(second, hay)
+    lo = max(o2 - gap - h, 0)
+    s1, o1 = compare(first, hay[lo:max(o2 - h + slack + h, lo)])
+    if o1 >= 0:
+        best = max(best, (min(s1, s2), lo + o1))
+    return best
+
+
 async def check(path: Path, reference: AcousticReference | None, *, minimum: float,
-                missing: str = "") -> FingerprintResult:
+                missing: str = "", halves: bool = False) -> FingerprintResult:
     """Never raises. `skipped` when the check cannot run (no reference, no fpcalc, fpcalc failed) --
-    `missing` says why there is no reference; `failed` only when it ran and the best score is low."""
+    `missing` says why there is no reference; `failed` only when it ran and the best score is low.
+
+    `halves`: a file may be a longer version of the reference -- an extended mix of a radio edit -- so the
+    needle may also match as two halves (`compare_halves`), each at the same minimum. Only asked for when
+    the owner prefers extended mixes; a copy of the reference's own cut has no edit to split it."""
     if reference is None:
         return FingerprintResult("skipped", None, None, missing or "no acoustic reference for this request")
     if not fpcalc_available():
@@ -153,6 +189,18 @@ async def check(path: Path, reference: AcousticReference | None, *, minimum: flo
         if got > best:
             best, best_needle = got, needle
     score, offset = best
+    if score < minimum and halves:
+        split, split_needle = (0.0, -1), None
+        for needle in reference.needles:
+            got = compare_halves(needle, track_fp)
+            if got > split:
+                split, split_needle = got, needle
+        if split[0] >= minimum:
+            offset_s = round(split[1] / FPS, 1)
+            return FingerprintResult("matched", round(split[0], 3), offset_s,
+                                     f"{reference.label} found in two halves from {offset_s} s, score "
+                                     f"{split[0]:.2f} (whole excerpt {score:.2f}: an edit cut inside it)",
+                                     split_needle, track_fp, reference.label)
     offset_s = round(offset / FPS, 1) if offset >= 0 else None
     if score >= minimum:
         return FingerprintResult("matched", round(score, 3), offset_s,

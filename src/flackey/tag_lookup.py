@@ -36,7 +36,7 @@ from .catalog import with_original_date
 from .deezer import DeezerApi, DeezerError
 from .identify import parse_version
 from .models import CatalogTrack, norm
-from .version import arrangement, says_remaster, split_version
+from .version import arrangement, says_extended, says_remaster, split_version
 
 log = logging.getLogger(__name__)
 
@@ -82,12 +82,13 @@ def split_title(title: str) -> tuple[str, list[str]]:
 
 def version_key(versions: list[str]) -> str:
     """What makes the recording a different one: the remix or edit, normalised. A remaster is the same
-    recording and an "Original Mix" is no version at all, so both read as ""."""
+    recording and an "Original Mix" is no version at all, so both read as "". An extended cut is its own
+    version, whatever it is called: "Extended Mix", "Club Mix" and "12'' Version" all read as "extended"."""
     parts: list[str] = []
     for v in versions:
-        k = arrangement(v)
-        if k and k not in parts:
-            parts.append(k)
+        for k in (arrangement(v), "extended" if says_extended(v) else ""):
+            if k and k not in parts:
+                parts.append(k)
     return " ".join(parts)
 
 

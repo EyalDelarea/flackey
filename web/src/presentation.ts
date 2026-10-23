@@ -26,7 +26,10 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report'; path?: string }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep'; path?: string }
+/** A longer version of a filed track, found on Soulseek after it was filed (issue #187). `offer` until the
+ *  owner answers it; `swapped` once Get extended has put it in the track's place. `busy` while that runs. */
+export interface ExtendedOfferView { state: 'offer' | 'swapped'; label: string; tip: string; busy?: boolean }
 /** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
  *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
  *  kinds of audio can be playing and only one of them belongs to a candidate. */
@@ -66,6 +69,10 @@ export interface RowView {
   reportable: boolean
   formatLabel: string | null; checks: CheckView[]
   progress: ProgressView | null; fallback: FallbackView | null; outcome: OutcomeView | null
+  /** The owner prefers extended mixes and none turned up: what was filed instead (issue #187). */
+  extendedNote: string | null
+  /** An extended mix on offer for this filed track, or the note that one was swapped in (issue #187). */
+  extendedOffer: ExtendedOfferView | null
   samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
@@ -385,6 +392,8 @@ function checksFor(b: Bundle): CheckView[] {
   // name or tags said it is the version asked for -- a remaster above all -- the track says so.
   const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
   if (unconfirmed) out.push({ label: 'Version', value: 'unconfirmed', ok: false })
+  // Asked for because the owner prefers extended mixes (issue #187); a miss is said in its own line instead
+  if (extendedOf(b)?.found) out.push({ label: 'Extended mix', value: 'found', ok: true })
   const filed = b.track != null && !overruled
   if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
     : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
@@ -407,9 +416,45 @@ function lengthNote(c: Candidate, videoS: number | null): string {
   return `${mmss(Math.abs(d))} ${d < 0 ? 'shorter' : 'longer'} than the video`
 }
 
+/* The worker's word on an extended mix it went looking for (issue #187), or null when it did not look. */
+function extendedOf(b: Bundle): { found: boolean; mix_name: string | null } | null {
+  const e = b.track?.evidence?.find(x => x.kind === 'extended')
+  return e ? { found: !!e.value.found, mix_name: typeof e.value.mix_name === 'string' ? e.value.mix_name : null } : null
+}
+
+function extendedNoteOf(b: Bundle): string | null {
+  const e = extendedOf(b)
+  if (!e || e.found) return null
+  return `No extended mix found, so this is the ${e.mix_name || 'Original Mix'}.`
+}
+
+/* "Extended Mix" reads as a name on the title line and as words in a sentence: "Extended mix available". */
+const asWords = (name: string) => /^(extended|club) mix$/i.test(name) ? name[0].toUpperCase() + name.slice(1).toLowerCase() : name
+
+/* What the Done row offers once a longer version of the track turned up, said for someone who never turned
+   the feature on (it is on by default). Nothing while it is still being looked for, or after a no. */
+function extendedOfferOf(b: Bundle): ExtendedOfferView | null {
+  const e = b.track?.evidence?.find(x => x.kind === 'extended_offer')
+  if (!e || b.request.state !== 'done') return null
+  const name = typeof e.value.mix_name === 'string' && e.value.mix_name ? e.value.mix_name : 'Extended Mix'
+  const length = typeof e.value.length_s === 'number' ? ` (${mmss(e.value.length_s)})` : ''
+  const kind = /club/i.test(name) ? 'club mix' : 'extended mix'
+  if (e.value.status === 'available') return {
+    state: 'offer', label: `${asWords(name)} available${length}`,
+    tip: `We found a longer ${kind} of this track — easier to mix in and out. Get it instead of this version?`,
+  }
+  if (e.value.status === 'swapped') {
+    const was = typeof e.value.was === 'string' && e.value.was ? e.value.was : 'version you had'
+    return { state: 'swapped', label: `Swapped in for the ${was}.`, tip: '' }
+  }
+  return null
+}
+
 function titleOf(b: Bundle): { title: string; version: string | null } {
   const r = b.request
-  if (b.catalog) return { title: `${b.catalog.artist} – ${b.catalog.title}`, version: b.catalog.mix_name }
+  // The filed track's own mix name first: an extended file found for a radio-edit record is filed as the
+  // extended mix, and the record still says radio edit (issue #187)
+  if (b.catalog) return { title: `${b.catalog.artist} – ${b.catalog.title}`, version: b.track?.mix_name || b.catalog.mix_name }
   if (r.query_artist && r.query_title) return { title: `${r.query_artist} – ${r.query_title}`, version: r.query_version }
   return { title: r.raw_text, version: null }
 }
@@ -549,7 +594,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed' || STOPPABLE.includes(r.state), sweepable: sweptByRetryAll(r.state),
     reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
-    progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b),
+    progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b), extendedNote: extendedNoteOf(b), extendedOffer: extendedOfferOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)

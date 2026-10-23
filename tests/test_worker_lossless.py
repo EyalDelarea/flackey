@@ -48,6 +48,7 @@ from flackey.verify import Disguised, ToolMissing, VerifyError, probe
 from flackey.verify import verify as real_verify
 from flackey.worker import MAX_ATTEMPTS, Worker, format_line
 from flackey.worker import acoustic as acoustic_mod
+from flackey.worker import extended as extended_mod
 from flackey.worker import filing as filing_mod
 from flackey.worker import lossless_attempt as lossless_attempt_mod
 from flackey.worker import pipeline as pipeline_mod
@@ -2745,3 +2746,443 @@ async def test_an_original_with_nothing_saying_remaster_carries_no_version_check
     w = make(lenv)
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}
+
+
+# ---- issue #187: preferring extended mixes ----------------------------------------------------------
+EXT_PATH = "Void\\02. Astral Projection - Into the Void (Extended Mix).flac"
+
+
+def _extended_env(lenv, monkeypatch, tmp_path: Path, *, prefer: bool, extended_on_offer: bool = True,
+                  normal_on_offer: bool = True, extended_in_normal_search: bool = False,
+                  extended_path: str = EXT_PATH, extended_word: str = "extended"):
+    """A peer with the 3 s radio edit, another with a 20 s extended mix, and a fingerprint that records
+    whether it was asked to match by halves. The extended file answers only a search with "extended" in
+    it, the way a peer's file name does, unless `extended_in_normal_search`."""
+    settings, store, notifier, provider, fake_check, _ = lenv
+    # off-the-switch is the default, which asks: its download is exactly today's
+    settings.extended_mixes = "always" if prefer else "ask"
+    provider.audio["x"] = _flac(tmp_path / "extended.flac", seconds=20, seed=7)
+    extended = lf("x", path=extended_path, length_s=20, size=3_200_000)
+
+    def files_for(text):
+        out = []
+        if extended_on_offer and (extended_word in text or extended_in_normal_search):
+            out.append(extended)
+        if normal_on_offer and "extended" not in text and "club" not in text:
+            out.append(lf("a"))
+        return out
+
+    provider.files_for = files_for
+    halves = []
+
+    async def check(path, reference, *, minimum, missing="", **kw):
+        halves.append(kw.get("halves", False))
+        return replace(fake_check.result, reference=reference.label)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
+    return settings, store, notifier, provider, halves
+
+
+async def test_preferring_extended_files_the_extended_mix_under_its_own_name_and_length(lenv, monkeypatch,
+                                                                                        tmp_path: Path):
+    settings, store, notifier, provider, halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    assert provider.searches == ["Astral Projection Into the Void extended"] and provider.downloaded == ["x"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Extended Mix", 20, None)
+    assert "Extended Mix" in t.path.name
+    kinds = {e.kind: e.value for e in store.list_evidence(t.id)}
+    assert kinds["extended"] == {"sought": True, "found": True, "mix_name": "Extended Mix"}
+    assert halves == [True]
+    assert "No extended mix found" not in notifier.sent[-1][0]
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_with_no_extended_mix_the_normal_version_is_filed_and_the_done_line_says_so(lenv, monkeypatch,
+                                                                                          tmp_path: Path):
+    _settings, store, notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True,
+                                                                extended_on_offer=False)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE
+    # the extended search first, then the ladder exactly as it runs with the setting off
+    assert provider.searches == ["Astral Projection Into the Void extended",
+                                 "Astral Projection Into the Void club mix", "Astral Projection Into the Void"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc, t.source) == ("Original Mix", 3, "UKU932231081", "soulseek")
+    kinds = {e.kind: e.value for e in store.list_evidence(t.id)}
+    assert kinds["extended"] == {"sought": True, "found": False, "mix_name": "Original Mix"}
+    assert "\nNo extended mix found, so this is the Original Mix." in notifier.sent[-1][0]
+    # the extended spelling's miss set no verdict and stopped nothing
+    assert store.get_attempt_for_request(rid).outcome == "filed"
+
+
+async def test_off_nothing_is_searched_for_extended_and_the_halves_are_never_asked(lenv, monkeypatch,
+                                                                                    tmp_path: Path):
+    _settings, store, notifier, provider, halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert provider.searches == ["Astral Projection Into the Void"] and provider.downloaded == ["a"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Original Mix", 3, "UKU932231081")
+    assert "extended" not in {e.kind for e in store.list_evidence(t.id)}
+    assert halves == [False] and "No extended mix found" not in notifier.sent[-1][0]
+
+
+async def test_off_an_extended_file_is_still_filed_as_the_extended_mix_not_the_radio_edit(lenv, monkeypatch,
+                                                                                          tmp_path: Path):
+    """The mis-tag bug: the only lossless copy is the extended mix, and it was filed with the radio
+    edit's name, ISRC and length. It is filed as what it is, setting or not."""
+    _settings, store, _notifier, provider, halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False,
+                                                                normal_on_offer=False,
+                                                                extended_in_normal_search=True)
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and provider.downloaded == ["x"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Extended Mix", 20, None)
+    assert "extended" not in {e.kind for e in store.list_evidence(t.id)}
+    assert halves == [False]
+
+
+async def test_a_club_mix_that_never_says_extended_is_found_by_the_club_mix_search(lenv, monkeypatch,
+                                                                                     tmp_path: Path):
+    _settings, store, _notifier, provider, _halves = _extended_env(
+        lenv, monkeypatch, tmp_path, prefer=True, extended_word="club mix",
+        extended_path="Void\\02. Astral Projection - Into the Void (Club Mix).flac")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and provider.downloaded == ["x"]
+    assert provider.searches == ["Astral Projection Into the Void extended", "Astral Projection Into the Void club mix"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)
+
+
+async def test_off_there_is_no_club_mix_search(lenv, monkeypatch, tmp_path: Path):
+    _settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    w = make(lenv)
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert provider.searches == ["Astral Projection Into the Void"]
+
+
+async def test_a_mashup_with_the_track_in_it_is_not_its_extended_mix(lenv, monkeypatch, tmp_path: Path):
+    """Real pair, 2026-10-23: "No Broke Boys x Better Off Alone (Mashup) (Extended Mix)" passed the
+    fingerprint at 0.92 for Better Off Alone, because the mashup has it in it."""
+    _settings, store, _notifier, provider, _halves = _extended_env(
+        lenv, monkeypatch, tmp_path, prefer=True,
+        extended_path="x\\Astral Projection - Other Song x Into the Void (Tim Mashup) (Extended Mix).wav")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and provider.downloaded == ["a"]
+    assert store.get_track(r.track_id).mix_name == "Original Mix"
+
+
+# ---- the offer: "Extended mix available" on the Done row ---------------------------------------------
+def _offer(store: Store, track_id: int) -> dict | None:
+    return store.evidence_of(track_id, "extended_offer")
+
+
+async def _filed_with_offer(lenv, monkeypatch, tmp_path: Path, **kw):
+    """The default, asking: the normal version filed exactly as today, its track waiting for an offer. The
+    test copies are seconds long, so "clearly longer" is a few seconds here rather than half a minute."""
+    settings, store, notifier, provider, halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False, **kw)
+    monkeypatch.setattr(extended_mod, "LONGER_BY_S", 5)
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    return w, r, settings, store, notifier, provider, halves
+
+
+async def _scan(w) -> None:
+    w._start_extended_scan()
+    if w._scan is not None:
+        await w._scan
+
+
+async def test_asking_downloads_the_normal_version_as_today_and_waits_to_offer(lenv, monkeypatch, tmp_path: Path):
+    _w, r, settings, store, notifier, provider, halves = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    assert settings.extended_mixes == "ask" and Settings(_env_file=None).extended_mixes == "ask"
+    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Original Mix", 3, "UKU932231081") and halves == [False]
+    assert _offer(store, t.id) == {"status": "pending"}
+    assert "extended" not in notifier.sent[-1][0].lower()
+
+
+async def test_the_offer_is_searched_only_with_the_queue_empty_and_stops_at_the_first_find(lenv, monkeypatch,
+                                                                                           tmp_path: Path):
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    provider.searches.clear()
+    provider.downloaded.clear()
+    busy = asyncio.get_running_loop().create_future()
+    w._tasks[999] = busy                      # another track is still in the queue
+    w._start_extended_scan()
+    assert w._scan is None and provider.searches == []
+    del w._tasks[999]
+    await _scan(w)
+    assert provider.searches == ["Astral Projection Into the Void extended"] and provider.downloaded == []
+    assert _offer(store, r.track_id) == {"status": "available", "length_s": 20, "mix_name": "Extended Mix"}
+
+
+async def test_a_copy_not_clearly_longer_is_no_offer(lenv, monkeypatch, tmp_path: Path):
+    """The real-pair run's Paul van Dyk "club mix" was shorter than the radio edit it was found for."""
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    monkeypatch.setattr(extended_mod, "LONGER_BY_S", 30)
+    provider.searches.clear()
+    await _scan(w)
+    assert provider.searches == ["Astral Projection Into the Void extended", "Astral Projection Into the Void club mix"]
+    assert _offer(store, r.track_id) == {"status": "none"}
+    w._start_extended_scan()
+    assert w._scan.done()                       # nothing left to look for
+
+
+async def test_an_unreachable_soulseek_leaves_the_offer_pending_and_backs_off(lenv, monkeypatch, tmp_path: Path):
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    provider.health_status = "down"
+    await _scan(w)
+    assert _offer(store, r.track_id) == {"status": "pending"} and w._scan_after > w.clock()
+    first = w._scan
+    w._start_extended_scan()
+    assert w._scan is first                     # not asked again until the back-off is over
+
+
+async def test_get_extended_swaps_the_file_in_place_with_no_duplicate(lenv, monkeypatch, tmp_path: Path):
+    w, r, settings, store, notifier, provider, halves = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    old = store.get_track(r.track_id)
+    message = await w.get_extended(old.id)
+    t = store.get_track(old.id)
+    assert message == "Swapped in the Extended Mix (0:20)."
+    assert (t.id, t.mix_name, t.duration_s, t.isrc) == (old.id, "Extended Mix", 20, None)
+    assert "Extended Mix" in t.path.name and t.path.exists() and not old.path.exists()
+    assert [x.id for x in store.find_tracks_by_title("Astral Projection", "Into the Void")] == [old.id]
+    assert _offer(store, t.id) == {"status": "swapped", "mix_name": "Extended Mix", "length_s": 20,
+                                   "was": "Original Mix"}
+    assert provider.downloaded == ["a", "x"] and halves[-1] is True
+    assert notifier.sent[-1][0].startswith("Swapped in: Astral Projection - Into the Void (Extended Mix)")
+    assert not list(settings.tmp_dir.glob("*"))
+
+
+async def test_a_failed_get_extended_leaves_the_track_and_its_row_as_they_were(lenv, monkeypatch, tmp_path: Path):
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    before = store.get_track(r.track_id)
+    provider.files_for = lambda text: []        # the peer has gone
+    message = await w.get_extended(before.id)
+    assert message.startswith("The extended mix could not be downloaded")
+    assert store.get_track(before.id) == before and _offer(store, before.id)["status"] == "available"
+    assert store.lossless_outcome(r.id)[1] == "filed"
+
+
+async def test_get_extended_runs_once_per_track_at_a_time(lenv, monkeypatch, tmp_path: Path):
+    """Two windows, or a direct API call, pressing Get extended on the same track start one swap, not two."""
+    w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    gate = asyncio.Event()
+    real = w._try_lossless
+
+    async def slow(*a, **kw):
+        await gate.wait()
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(w, "_try_lossless", slow)
+    first = asyncio.create_task(w.get_extended(r.track_id))
+    await asyncio.sleep(0)
+    with pytest.raises(ValueError, match="already being fetched"):
+        await w.get_extended(r.track_id)
+    gate.set()
+    assert (await first).startswith("Swapped in the Extended Mix")
+    assert w._extending == set()
+    assert [x.id for x in store.find_tracks_by_title("Astral Projection", "Into the Void")] == [r.track_id]
+
+
+async def test_soulseek_going_away_mid_get_extended_is_a_try_again_later(lenv, monkeypatch, tmp_path: Path):
+    w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    before = store.get_track(r.track_id)
+
+    async def down(*a, **kw):
+        raise LosslessUnavailable("slskd unreachable: ConnectError")
+
+    monkeypatch.setattr(w, "_try_lossless", down)
+    assert (await w.get_extended(before.id)).endswith("Try again later.")
+    assert store.get_track(before.id) == before and _offer(store, before.id)["status"] == "available"
+    assert store.lossless_outcome(r.id)[1] == "filed" and w._extending == set()
+
+
+async def test_get_extended_tries_the_next_extended_copy_when_one_fails_the_fingerprint(lenv, monkeypatch,
+                                                                                       tmp_path: Path):
+    w, r, _settings, store, _notifier, provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    provider.audio["y"] = _flac(tmp_path / "extended2.flac", seconds=26, seed=9)
+    other = lf("y", path=EXT_PATH, length_s=26, size=4_200_000)  # another cut, not a copy of the same file
+    first = provider.files_for
+    provider.files_for = lambda text: first(text) + ([other] if "extended" in text else [])
+    await _scan(w)
+    calls = []
+
+    async def check(path, reference, *, minimum, missing="", **kw):
+        calls.append(path)
+        status = "failed" if len(calls) == 1 else "matched"
+        return FingerprintResult(status, 0.5 if status == "failed" else 0.95, 1.0, status, reference=reference.label)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
+    message = await w.get_extended(r.track_id)
+    assert message.startswith("Swapped in the Extended Mix") and len(calls) == 2
+    assert sorted(provider.downloaded[-2:]) == ["x", "y"]
+    assert _offer(store, r.track_id)["status"] == "swapped"
+
+
+async def test_an_extended_copy_that_is_another_recording_withdraws_the_offer(lenv, monkeypatch, tmp_path: Path):
+    w, r, settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    await _scan(w)
+    before = store.get_track(r.track_id)
+
+    async def check(path, reference, *, minimum, missing="", **kw):
+        return FingerprintResult("failed", 0.4, 1.0, "best score 0.40 below 0.79", reference=reference.label)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
+    message = await w.get_extended(before.id)
+    assert message == "The extended copy on Soulseek didn't match this track, so your version stays."
+    assert "could not be downloaded" not in message
+    assert store.get_track(before.id) == before
+    assert _offer(store, before.id)["status"] == "unmatched"
+    assert store.lossless_outcome(r.id)[1] == "filed" and not list(settings.tmp_dir.glob("*"))
+    with pytest.raises(ValueError):
+        await w.get_extended(before.id)          # nothing on offer any more
+
+
+async def test_keep_this_takes_the_offer_away(lenv, monkeypatch, tmp_path: Path):
+    w, r, _settings, store, _notifier, _provider, _ = await _filed_with_offer(lenv, monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        w.keep_this(r.track_id)                 # nothing on offer yet
+    await _scan(w)
+    w.keep_this(r.track_id)
+    assert _offer(store, r.track_id)["status"] == "kept"
+    with pytest.raises(ValueError):
+        await w.get_extended(r.track_id)
+
+
+@pytest.mark.parametrize("mode", ["off", "always"])
+async def test_off_or_always_nothing_is_offered(lenv, monkeypatch, tmp_path: Path, mode: str):
+    settings, store, _notifier, _provider, _ = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    settings.extended_mixes = mode
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and _offer(store, r.track_id) is None
+
+
+def _own(store: Store, settings, mix_name: str, duration_s: int, isrc: str | None) -> int:
+    path = settings.library_root / "Astral Projection" / f"Into the Void ({mix_name}).aiff"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+    return store.add_track(path=path, fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=1,
+                           artist="Astral Projection", title="Into the Void", mix_name=mix_name,
+                           duration_s=duration_s, isrc=isrc, catalog_track_id=None, request_id=None)
+
+
+async def test_owning_the_radio_edit_looks_for_the_extended_mix_alone(lenv, monkeypatch, tmp_path: Path):
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    owned = _own(store, settings, "Original Mix", 3, "UKU932231081")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and r.track_id != owned
+    assert provider.searches == ["Astral Projection Into the Void extended"]
+    assert store.get_track(r.track_id).mix_name == "Extended Mix"
+    assert store.get_track(owned).mix_name == "Original Mix"      # both versions are kept
+
+
+async def test_owning_the_radio_edit_with_no_extended_mix_is_a_duplicate(lenv, monkeypatch, tmp_path: Path):
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True,
+                                                                extended_on_offer=False)
+    owned = _own(store, settings, "Original Mix", 3, "UKU932231081")
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DUPLICATE and r.track_id == owned and r.fetch_source is None
+    assert provider.searches == ["Astral Projection Into the Void extended",
+                                 "Astral Projection Into the Void club mix"] and provider.downloaded == []
+    assert w.source.fetched == [] and not list(settings.tmp_dir.glob("*"))
+
+
+async def test_owning_the_extended_mix_is_a_duplicate_with_no_search(lenv, monkeypatch, tmp_path: Path):
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    owned = _own(store, settings, "Extended Mix", 400, None)
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DUPLICATE and r.track_id == owned and provider.searches == []
+
+
+async def test_off_owning_the_extended_mix_does_not_hide_the_radio_edit(lenv, monkeypatch, tmp_path: Path):
+    settings, store, _notifier, _provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    owned = _own(store, settings, "Extended Mix", 400, None)
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and r.track_id != owned
+    assert store.get_track(r.track_id).mix_name == "Original Mix"
+
+
+async def test_upgrade_never_swaps_a_radio_edit_for_its_extended_mix(lenv, monkeypatch, tmp_path: Path):
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    provider.files_for = None
+    w, before = await _file_on_deezer(lenv, provider)
+    provider.files_for = lambda text: [lf("x", path=EXT_PATH, length_s=20, size=3_200_000)]
+    provider.searches.clear()
+    msg = await w.upgrade(before.id)
+    assert msg == ("The lossless copy that turned up is the extended mix, not this version, so nothing was "
+                   "replaced.")
+    after = store.get_track(before.id)
+    assert after.path == before.path and after.path.exists() and after.mix_name == before.mix_name
+    assert all("extended" not in s for s in provider.searches)    # the setting does not reach an upgrade
+    assert not list(settings.tmp_dir.iterdir())
+
+
+async def test_an_extended_mix_the_worker_filed_does_not_hide_the_radio_edit_once_the_setting_is_off(
+        lenv, monkeypatch, tmp_path: Path):
+    """The worker files the extended mix against the radio edit's record (its catalog id), not a row put in
+    by hand: switched off again, the same request still gets the radio edit, as a second track."""
+    settings, store, _notifier, provider, _halves = _extended_env(lenv, monkeypatch, tmp_path, prefer=True)
+    w = make(lenv)
+    first = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert first.state == RequestState.DONE and store.get_track(first.track_id).mix_name == "Extended Mix"
+    settings.extended_mixes = "ask"
+    second = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert second.state == RequestState.DONE and second.track_id != first.track_id
+    assert store.get_track(second.track_id).mix_name == "Original Mix"
+    assert sorted(t.mix_name for t in store.find_tracks_by_title("Astral Projection", "Into the Void")) == [
+        "Extended Mix", "Original Mix"]
+    # and on again, the extended mix already filed is the duplicate: nothing is searched
+    settings.extended_mixes = "always"
+    provider.searches.clear()
+    third = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert third.state == RequestState.DUPLICATE and third.track_id == first.track_id and provider.searches == []
+
+
+async def test_a_normal_copy_longer_than_its_record_is_still_owned_when_asked_for_again(lenv, monkeypatch,
+                                                                                       tmp_path: Path):
+    """Only an extended cut is filed at its own length. A copy of the record's own cut keeps the record's
+    length, as before issue #187, so the library's length match still finds it the next time it is asked
+    for -- a request with no ISRC and no record to go by included."""
+    _settings, store, _notifier, provider, _ = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    provider.audio["a"] = _flac(tmp_path / "longer.flac", seconds=9, seed=3)
+    provider.files_for = lambda text: [lf("a", length_s=9, size=1_600_000)]
+    w = make(lenv)
+    first = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    t = store.get_track(first.track_id)
+    assert (t.mix_name, t.duration_s) == ("Original Mix", 3)
+    assert store.find_track_by_meta("Astral Projection", "Into the Void", "Original Mix", 3).id == t.id
+    again = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert again.state == RequestState.DUPLICATE and again.track_id == t.id
+
+
+async def test_off_a_club_mix_is_filed_under_its_own_name(lenv, monkeypatch, tmp_path: Path):
+    _settings, store, _notifier, provider, _ = _extended_env(lenv, monkeypatch, tmp_path, prefer=False)
+    provider.files_for = lambda text: [lf("x", path="Void\\02. Astral Projection - Into the Void (Club Mix).flac",
+                                          length_s=20, size=3_200_000)]
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    t = store.get_track(r.track_id)
+    assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)

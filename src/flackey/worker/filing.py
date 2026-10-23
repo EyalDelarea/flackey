@@ -19,7 +19,15 @@ from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verd
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
 from ..verify import verify
-from ..version import VersionCheck, check_version, split_version
+from ..version import (
+    EXTENDED,
+    VersionCheck,
+    check_version,
+    extended_mix_name,
+    split_version,
+    wants_extended,
+)
+from .extended import OFFER
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
@@ -34,8 +42,28 @@ def _same_length(duration_s: int | None, catalog: CatalogTrack) -> bool:
             and abs(duration_s - catalog.duration_s) <= DURATION_SLACK_S)
 
 
+def as_filed(catalog: CatalogTrack, hit: LosslessHit | None) -> CatalogTrack:
+    """The record as the file in hand is it. A lossless copy can be another cut of the record it was found
+    for -- the extended mix of a radio edit -- and is then filed as that: under the name the file gives its
+    cut ("Club Mix", "X Extended Remix"), else "Extended Mix", at its own length, without the radio edit's
+    ISRC (issue #187; it used to be filed as the radio edit, at the radio edit's length). A copy of the
+    record's own cut is filed as the record, length included, as before. Never saved back: the record is
+    shared."""
+    if hit is None or hit.cut != EXTENDED or split_version(catalog.mix_name).cut:
+        return catalog
+    probed = round(hit.duration_s) if hit.duration_s else None
+    return dataclasses.replace(catalog, mix_name=hit.cut_name or extended_mix_name(catalog.mix_name), isrc=None,
+                               duration_ms=probed * 1000 if probed else None)
+
+
 class FilingMixin:
     """Part of `Worker`, which supplies the state these methods read."""
+
+    def _prefers_extended(self, req: Request, mix_name: str | None) -> bool:
+        """The owner prefers extended mixes, and this request can be answered with one: it names no version
+        that rules one out (an extended mix already, a remaster), and nor does the record (issue #187)."""
+        return (self.settings.prefer_extended and wants_extended(req.query_version)
+                and wants_extended(mix_name))
 
     async def accept_rejection(self, request_id: int) -> Request:
         """"Keep it anyway" on a refused track: the recording check's (issue #92) or the quality check's
@@ -312,6 +340,11 @@ class FilingMixin:
         # Read before `write_tags` replaces the file's own tags; a lossless hit read them before converting
         version = hit.version_check if hit is not None else await self._lossy_version(req, cand, tmp)
         catalog = await self._tags_for(req, cand, catalog)
+        sought = self._prefers_extended(req, catalog.mix_name)
+        filed = as_filed(catalog, hit)
+        renamed = filed.mix_name != catalog.mix_name
+        catalog = filed
+        extended = split_version(catalog.mix_name).cut == EXTENDED
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
         dest = final_path(self.settings.library_root, catalog, tmp.suffix.lstrip("."),
@@ -326,7 +359,8 @@ class FilingMixin:
         track_id = self.store.add_track(
             path=dest, fmt=verdict.fmt, bitrate_kbps=verdict.bitrate_kbps, cutoff_hz=verdict.cutoff_hz,
             file_size=dest.stat().st_size, artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
-            duration_s=catalog.duration_s or cand.duration_s, isrc=catalog.isrc or cand.isrc,
+            duration_s=catalog.duration_s or cand.duration_s,
+            isrc=catalog.isrc if renamed else catalog.isrc or cand.isrc,
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate,
             tag_date=catalog.tag_date)
@@ -337,6 +371,13 @@ class FilingMixin:
             self._record_evidence(track_id, fp, hit)
         if version is not None:
             self.store.add_evidence(track_id, "version_check", version.to_dict())
+        if sought:
+            # What the row says under the track: the extended mix it got, or that there was none
+            self.store.add_evidence(track_id, "extended", {"sought": True, "found": extended,
+                                                           "mix_name": catalog.mix_name})
+        elif not extended and self._offers_extended(req, catalog.mix_name):
+            # Looked for once the queue is empty (`ExtendedMixin`); only tracks filed from now on
+            self.store.add_evidence(track_id, OFFER, {"status": "pending"})
         if not verdict.passed:
             # Only `accept_rejection` files a failed verdict: the owner overruled the quality check (issue
             # #97). Recorded beside the fingerprint so the library says so, and the page can too.
@@ -358,6 +399,8 @@ class FilingMixin:
         if conf is not None:
             parts.append(f"{conf}%")
         msg = " · ".join(parts)
+        if sought and not extended:
+            msg += f"\nNo extended mix found, so this is the {catalog.mix_name or 'Original Mix'}."
         miss = self._lossless_miss_line(req)
         if miss:
             msg += f"\n{miss}"
@@ -382,6 +425,24 @@ class FilingMixin:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
+        req, cand, catalog = self._filed_request(t)
+
+        acoustic = await self._acoustic_reference(req, cand)
+        # The same version as the filed one, never its extended mix: the row keeps its name and length
+        hit = await self._try_lossless(req, cand, catalog, acoustic, prefer_extended=False)
+        if hit is None:
+            miss = self._lossless_miss_line(req, from_find_lossless=True)
+            return miss or "No lossless copy turned up this time."
+        try:
+            if hit.cut == EXTENDED and not split_version(t.mix_name).cut:
+                return "The lossless copy that turned up is the extended mix, not this version, so nothing was replaced."
+            return await self._replace_with(t, req, cand, catalog, hit)
+        finally:
+            hit.path.unlink(missing_ok=True)   # spec §13: every outcome leaves tmp_dir empty
+
+    def _filed_request(self, t: Track) -> tuple[Request, Candidate, CatalogTrack | None]:
+        """The request, chosen candidate and record a filed track came from: what a search for another copy
+        of it starts from."""
         if t.request_id is None:
             raise ValueError("this track has no request to search from")
         try:
@@ -392,16 +453,7 @@ class FilingMixin:
             raise ValueError("this track was filed without a recorded choice, so there is nothing to match")
         cand = self.store.get_candidate(req.chosen_candidate_id)
         catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
-
-        acoustic = await self._acoustic_reference(req, cand)
-        hit = await self._try_lossless(req, cand, catalog, acoustic)
-        if hit is None:
-            miss = self._lossless_miss_line(req, from_find_lossless=True)
-            return miss or "No lossless copy turned up this time."
-        try:
-            return await self._replace_with(t, req, cand, catalog, hit)
-        finally:
-            hit.path.unlink(missing_ok=True)   # spec §13: every outcome leaves tmp_dir empty
+        return req, cand, catalog
 
 
     async def _replace_with(self, t: Track, req: Request, cand: Candidate, catalog: CatalogTrack | None,
@@ -414,6 +466,11 @@ class FilingMixin:
         disk are the only things holding the old path, and they are rewritten from the row.
         """
         catalog = await self._tags_for(req, cand, catalog)
+        # Get extended brings the record's extended mix: filed under its own name and length (issue #187)
+        filed = as_filed(catalog, hit)
+        swapped = filed is not catalog
+        catalog = filed
+        offer = self.store.evidence_of(t.id, OFFER)
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, hit.path, catalog, hit.verdict, artwork, source=hit.provider)
         # The replacement goes where the track already is: under a date layout, recomputing the path
@@ -430,11 +487,18 @@ class FilingMixin:
             verified_at=datetime.now(UTC).isoformat(timespec="seconds"),
             spectrogram_path=str(hit.verdict.spectrogram_path) if hit.verdict.spectrogram_path else None,
             source=hit.provider, source_fmt=hit.source_fmt, bit_depth=hit.verdict.bit_depth,
-            sample_rate=hit.verdict.sample_rate, tag_date=catalog.tag_date)
+            sample_rate=hit.verdict.sample_rate, tag_date=catalog.tag_date,
+            **({"mix_name": catalog.mix_name, "duration_s": catalog.duration_s or t.duration_s, "isrc": None}
+               if swapped else {}))
         self.store.clear_evidence(t.id)          # the old evidence describes a file that no longer exists
         self._record_evidence(t.id, hit.fingerprint, hit)
         if hit.version_check is not None:
             self.store.add_evidence(t.id, "version_check", hit.version_check.to_dict())
+        if swapped:
+            self.store.set_evidence(t.id, OFFER, {"status": "swapped", "mix_name": catalog.mix_name,
+                                                  "length_s": catalog.duration_s, "was": t.mix_name})
+        elif offer is not None:      # Find lossless swaps the file, not the offer that stands on the track
+            self.store.set_evidence(t.id, OFFER, offer)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
         if old != dest:
@@ -444,6 +508,11 @@ class FilingMixin:
             old_spectrogram.unlink(missing_ok=True)
         line = format_line(hit.verdict, hit.provider, hit.source_fmt)
         log.info("upgraded track#%d %s -> %s", t.id, old.name, dest.name)
+        if swapped:
+            length = _mmss(catalog.duration_s)
+            await self.notifier.send(f"Swapped in: {catalog.artist} - {catalog.title} ({catalog.mix_name})"
+                                     f"{' · ' + length if length else ''} - {line}")
+            return f"Swapped in the {catalog.mix_name}" + (f" ({length})." if length else ".")
         await self.notifier.send(f"Upgraded: {catalog.artist} - {catalog.title} - {line}")
         return f"Upgraded to {line}."
 

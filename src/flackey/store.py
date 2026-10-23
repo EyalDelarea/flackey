@@ -581,6 +581,12 @@ class Store:
     def find_tracks_by_isrc(self, isrc: str) -> list[Track]:
         return [self._row_to_track(r) for r in self.conn.execute("SELECT * FROM tracks WHERE isrc=?", (isrc,))]
 
+    def find_tracks_by_title(self, artist: str, title: str) -> list[Track]:
+        """Every version filed of one song, whatever its mix and length."""
+        rows = self.conn.execute("SELECT * FROM tracks WHERE artist_norm=? AND title_norm=?",
+                                 (norm(artist), norm(title))).fetchall()
+        return [self._row_to_track(r) for r in rows]
+
     def find_track_by_meta(self, artist: str, title: str, mix_name: str, duration_s: int | None,
                            tolerance_s: int = 3) -> Track | None:
         rows = self.conn.execute(
@@ -766,6 +772,29 @@ class Store:
             (track_id, kind, json.dumps(value), _now()))
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def set_evidence(self, track_id: int, kind: str, value: dict) -> None:
+        """The one row of `kind` this track has, replacing any before it. Announced as a queue change: a
+        Done row draws from it (the extended-mix offer, issue #187)."""
+        self.conn.execute("DELETE FROM track_evidence WHERE track_id=? AND kind=?", (track_id, kind))
+        self.conn.execute(
+            "INSERT INTO track_evidence (track_id, kind, value_json, created_at) VALUES (?,?,?,?)",
+            (track_id, kind, json.dumps(value), _now()))
+        self.conn.commit()
+        self._emit("queue", 0)
+
+    def evidence_of(self, track_id: int, kind: str) -> dict | None:
+        """The latest row of `kind` this track has, or None."""
+        r = self.conn.execute("SELECT value_json FROM track_evidence WHERE track_id=? AND kind=? "
+                              "ORDER BY id DESC LIMIT 1", (track_id, kind)).fetchone()
+        return json.loads(r[0]) if r else None
+
+    def tracks_with_evidence(self, kind: str, status: str, limit: int = 1) -> list[int]:
+        """Tracks whose `kind` row has this status, oldest first."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT e.track_id FROM track_evidence e JOIN tracks t ON t.id = e.track_id "
+            "WHERE e.kind=? AND json_extract(e.value_json, '$.status')=? ORDER BY e.id LIMIT ?",
+            (kind, status, limit))]
 
     def clear_evidence(self, track_id: int) -> None:
         """After an upgrade the fingerprint and spectrogram rows describe a file that is gone; the new

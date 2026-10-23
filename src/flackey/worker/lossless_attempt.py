@@ -15,6 +15,9 @@ from ..lossless import (
     IDENTITY_RANKERS,
     LosslessFile,
     Reference,
+    downloaded_cut,
+    downloaded_mix,
+    extended_reference,
     pick,
     policy_from_settings,
     reference_for,
@@ -26,7 +29,7 @@ from ..models import Candidate, CatalogTrack, Request, norm
 from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
 from ..tag import tags_as_arrived
 from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
-from ..version import check_version, split_version
+from ..version import EXTENDED, check_version, split_version, wants_extended
 from .policy import (
     MAX_SLOW_SWITCHES,
     PEER_STUCK_OUTCOMES,
@@ -147,15 +150,30 @@ class LosslessMixin:
 
 
     async def _try_lossless(self, req: Request, cand: Candidate, catalog: CatalogTrack | None,
-                            acoustic: Acoustic) -> LosslessHit | None:
+                            acoustic: Acoustic, *, prefer_extended: bool | None = None,
+                            extended_only: bool = False) -> LosslessHit | None:
         """Ask each provider in turn for a verified, fingerprinted, converted lossless file, one spelling at
-        a time. Never raises; every miss is an attempt row with an outcome (spec §5, §11)."""
+        a time. Never raises; every miss is an attempt row with an outcome (spec §5, §11).
+
+        With the owner preferring extended mixes (`prefer_extended`, the setting unless a caller says), the
+        first spelling is searched twice more before the ladder, for its extended mix alone ("extended",
+        then "club mix"), and every
+        spelling after it ranks an extended cut first (issue #187). That search's miss is no answer about
+        the track, so the ladder then runs exactly as it would have. `extended_only` stops after it: the
+        normal version is in the library already."""
         try:
             refs = self._search_references(req, cand, catalog)
             policy = policy_from_settings(self.settings)
         except Exception:  # nothing was written yet; the safe fallback is Deezer, no attempt row to close
             log.exception("req#%d could not build a lossless reference/policy", req.id)
             return None
+        prefer = self.settings.prefer_extended if prefer_extended is None else prefer_extended
+        if prefer and wants_extended(req.query_version) and wants_extended(refs[0].mix_name):
+            # "club mix" second: uploads of a club mix often never say extended
+            refs = ([extended_reference(refs[0]), extended_reference(refs[0], "club mix")]
+                    + [replace(r, prefer_extended=True) for r in refs])
+        if extended_only:
+            refs = [r for r in refs if r.cut == EXTENDED]
         # Cleared first, so a pass that is cut short (the app closing mid-search) leaves the readers on its
         # own attempt rows rather than on the verdict of the pass before it.
         self.store.set_lossless_verdict(req.id, None)
@@ -195,6 +213,8 @@ class LosslessMixin:
                     return hit
                 if rec is not None:
                     outcome = self.store.get_attempt(rec.id).outcome
+            if ref.cut == EXTENDED:
+                continue        # the extended mix's miss says nothing about the track: on to the ladder
             # Only an answer about *this spelling* earns the next one. `outcome` is the last provider's.
             outcomes.append(outcome)
             if outcome not in SECOND_SEARCH_AFTER:
@@ -431,7 +451,7 @@ class LosslessMixin:
         if not verdict.passed:
             return None, "verify_failed"
         self._publish_phase(req.id, "fingerprinting")
-        fp = await self._fingerprint(tmp, acoustic.reference, missing=acoustic.missing)
+        fp = await self._fingerprint(tmp, acoustic.reference, missing=acoustic.missing, halves=ref.prefer_extended)
         rec.raw("fingerprint", {"preview": fp.preview, "track": fp.track})
         self.store.update_attempt(rec.id, fingerprint=fp.to_dict())
         rec.event("fingerprint", status=fp.status, score=fp.score, offset_s=fp.offset_s, reason=fp.reason)
@@ -447,6 +467,10 @@ class LosslessMixin:
         version = check_version(split_version(ref.mix_name, req.query_version), path=file.path, tags=tags)
         if version is not None:
             rec.event("version", status=version.status, reason=version.reason)
+        cut = downloaded_cut(file, ref, tags)
+        cut_name = downloaded_mix(file, ref, tags) if cut else None
+        if cut:
+            rec.event("cut", cut=cut)
         self._publish_phase(req.id, "converting")
         t0 = self.clock()
         out: Path | None = None
@@ -472,7 +496,8 @@ class LosslessMixin:
                 out.unlink(missing_ok=True)
             return None, "convert_failed"
         rec.event("convert", fmt=verdict.fmt, ms=int((self.clock() - t0) * 1000))
-        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref, version), "filed"
+        return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref, version, cut,
+                           cut_name, pr.duration_s), "filed"
 
 
     def _publish_phase(self, request_id: int, phase: str) -> None:

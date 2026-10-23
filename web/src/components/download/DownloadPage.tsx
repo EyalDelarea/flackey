@@ -47,6 +47,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   const now = useNow(1000)
   const platform = usePlatform()
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
+  // Rows whose Get extended is running (issue #187)
+  const [extending, setExtending] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   // One axis or the other, never both: `Bucket` and `Stage` share no value, so a single predicate picks
   // whichever the pressed chip named. Stage is a filter here and nothing more -- the list still groups by
@@ -101,7 +103,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   // finished row would otherwise draw a bar reading "0 filed" on a batch that is half filed.
   const groups = groupRows(scoped, live.playlists, opts, filter, bundles).map(g => ({ ...g, rows: g.rows.map(r => ({
     ...(whyOpen.has(r.id) && r.action?.kind === 'why' ? { ...r, action: { ...r.action, label: 'Hide why' } } : r),
-    reportable: r.reportable && onReport != null })) }))
+    reportable: r.reportable && onReport != null,
+    extendedOffer: r.extendedOffer && extending.has(r.id) ? { ...r.extendedOffer, busy: true } : r.extendedOffer })) }))
   // Taken from the rows actually on screen, not from every failed request: whatever the view is filtered
   // down to is what "Retry all" retries. `sweepable`, not "has a retry button" -- a track the owner stopped
   // carries the button and is still left out, so counting the buttons would promise a sweep of seventeen
@@ -119,6 +122,22 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   // it is made into a sentence before it heads a banner.
   const failMessage = (err: unknown) => err instanceof ApiError ? asSentence(err.message) : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
+  /* Get extended is a search, a download and a fingerprint: long enough that the row has to say it is on it.
+     One at a time, so a playlist's worth of them stands in Soulseek's line as one track would. */
+  const getExtended = async (ids: number[]) => {
+    setExtending(s => new Set([...s, ...ids]))
+    for (const id of ids) {
+      const trackId = live.bundles.get(id)?.track?.id
+      try {
+        if (trackId != null) {
+          const r = await api.getExtended(trackId)
+          setActionError(r.swapped ? null : r.message)
+        }
+      } catch (err) { setActionError(failMessage(err)) }
+      finally { setExtending(s => { const n = new Set(s); n.delete(id); return n }) }
+    }
+    await live.refresh()
+  }
   const retryAll = () => {
     setRetryingAll(true)
     api.retryFailed(retryableIds)
@@ -205,6 +224,11 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
     else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
     else if (kind === 'cancel') run(api.cancel(id))
     else if (kind === 'report') onReport?.(id)
+    else if (kind === 'extended') void getExtended([id])
+    else if (kind === 'keep') {
+      const trackId = live.bundles.get(id)?.track?.id
+      if (trackId != null) run(api.keepThis(trackId).then(() => live.refresh()))
+    }
     // A finished row goes through DELETE as it always has. A live one -- parked, queued, downloading --
     // has to be stopped first, which only the batch route does, so it goes there as a batch of one.
     else if (kind === 'remove') {
@@ -271,6 +295,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
         {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }} onTryNow={ids => ids.forEach(id => run(api.retry(id)))}
+          onGetAllExtended={ids => void getExtended(ids)}
           player={{ playing, clock, slow, failed }} onPlay={onPlay} />)}
       </div>
       </div>

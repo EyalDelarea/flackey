@@ -1,5 +1,6 @@
 import inspect
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -16,7 +17,10 @@ from flackey.lossless import (
     PickPolicy,
     PickReport,
     Reference,
+    extended_reference,
     file_title,
+    file_version,
+    own_extended,
     pick,
     policy_from_settings,
     rank_artist,
@@ -28,6 +32,7 @@ from flackey.lossless import (
     transfer_ceiling_s,
 )
 from flackey.models import Candidate, CatalogTrack
+from flackey.version import wants_extended
 
 REF = Reference(artist="Hallucinogen", title="Orphic Thrench", mix_name="Original Mix", duration_s=442, deezer_id=6025986)
 
@@ -191,8 +196,9 @@ def test_the_default_gate_is_the_hard_rules_then_the_identity_rankers():
     `def` would leave the live gate on the old lists while every test that passes them explicitly stayed
     green. `version` leads the title-closeness rankers by the replay measurement (2026-09-21-no-pick-replay.md);
     `same_song` goes before it so a version match can never lift a different song over the asked one."""
+    # `cut` rejects only on the extended spelling (issue #187); for any other reference it passes everything
     assert [n for n, _ in RULES] == ["extension", "has_length", "limits", "plausible_size", "queue",
-                                    "banned_user"]
+                                    "banned_user", "cut"]
     assert [n for n, _ in RANKERS][:5] == ["same_song", "version", "duration", "title", "artist"]
     bound = inspect.signature(pick).parameters
     assert bound["rules"].default is RULES and bound["rankers"].default is RANKERS
@@ -322,3 +328,118 @@ def test_a_deezer_candidate_on_a_remastered_album_is_the_remaster_reference():
     assert reference_for(None, cand, asked="Remastered 2024").mix_name == "Remastered"
     assert reference_for(None, cand).mix_name == "Original Mix"
     assert reference_for(None, cand, asked="Extended Mix").mix_name == "Original Mix"
+
+
+# Issue #187: "Prefer extended mixes". Off, nothing here changes: a reference has no cut and prefers nothing.
+RADIO = Reference(artist="Calvin Harris", title="Feel So Close", mix_name="Original Mix", duration_s=206)
+
+
+def ext(name: str, length_s: int = 330, **kw) -> LosslessFile:
+    return mk(path=f"Music\\Calvin Harris\\18 Months\\{name}", length_s=length_s,
+              size=length_s * 1000 * 1000 // 8, **kw)
+
+
+def test_the_extended_spelling_searches_with_the_word_extended_alone():
+    assert search_text(extended_reference(RADIO)) == "Calvin Harris Feel So Close extended"
+    radio_edit = Reference(artist="Calvin Harris", title="Feel So Close", mix_name="Radio Edit", duration_s=206)
+    assert search_text(extended_reference(radio_edit)) == "Calvin Harris Feel So Close extended"
+    remix = Reference(artist="CamelPhat", title="Cola", mix_name="Made by Pete Remix", duration_s=200)
+    assert search_text(extended_reference(remix)) == "CamelPhat Cola Made by Pete Remix extended"
+    assert search_text(RADIO) == "Calvin Harris Feel So Close"
+
+
+@pytest.mark.parametrize("name, own", [
+    ("01-02 - Feel So Close (extended mix).flac", True),
+    ("Calvin Harris - Feel So Close (Extended).flac", True),
+    ("Feel So Close (Club Mix).flac", True),
+    ("Feel So Close (12'' Version).flac", True),
+    ("Feel So Close (Extended Mix) (feat. Nobody).flac", True),
+    ("Feel So Close.flac", False),
+    ("Feel So Close (Radio Edit).flac", False),
+    ("Feel So Close (Liquid Soul Extended Remix).flac", False),
+    ("Feel So Close (Dillon Francis Remix).flac", False),
+])
+def test_an_extended_file_names_an_extended_cut_of_the_asked_arrangement(name, own):
+    assert own_extended(ext(name), RADIO) is own
+
+
+def test_a_file_with_no_version_text_reads_its_cut_off_the_leftover_words():
+    f = mk(path="x\\02.05 - Never Gonna Give You Up (Extended Version) (Rick Astley).flac")
+    ref = Reference(artist="Rick Astley", title="Never Gonna Give You Up", mix_name=None, duration_s=213)
+    assert file_version(f, ref).cut == "extended" and own_extended(f, ref)
+    titanium = mk(path="x\\01. Titanium (feat. Sia) (Extended).flac")
+    assert own_extended(titanium, Reference(artist="David Guetta", title="Titanium", mix_name=None, duration_s=245))
+
+
+def test_an_extended_remix_is_the_remix_s_own_extended_cut():
+    remix = Reference(artist="CamelPhat", title="Cola", mix_name="Made by Pete Remix", duration_s=200)
+    assert own_extended(mk(path="x\\01 - Cola (Made by Pete extended remix).flac"), remix)
+    assert not own_extended(mk(path="x\\01 - Cola (Extended Mix).flac"), remix)
+
+
+@pytest.mark.parametrize("mix, wants", [
+    (None, True), ("Original Mix", True), ("Radio Edit", True), ("Made by Pete Remix", True),
+    ("Extended Mix", False), ("Club Mix", False), ("Remastered 2024", False),
+])
+def test_what_a_request_for_a_version_can_be_answered_with(mix, wants):
+    assert wants_extended(mix) is wants
+
+
+def test_the_extended_spelling_rejects_every_file_that_is_not_an_extended_cut():
+    files = [ext("Feel So Close (Extended Mix).flac", username="a"), ext("Feel So Close.flac", 206, username="b"),
+             ext("Feel So Close (Liquid Soul Extended Remix).flac", username="c")]
+    report = pick(files, extended_reference(RADIO), PickPolicy())
+    assert [f.username for f in report.survivors] == ["a"]
+    assert {r.file.username: r.rule for r in report.rejections} == {"b": "cut", "c": "cut"}
+
+
+def test_preferring_extended_ranks_it_ahead_of_the_radio_edit_at_its_exact_length():
+    radio = ext("Feel So Close.flac", 206, username="radio")
+    extended = ext("Feel So Close (Extended Mix).flac", 330, username="extended", has_free_slot=False)
+    remix = ext("Feel So Close (Liquid Soul Extended Remix).flac", 400, username="remix")
+    # off: today's order, the radio edit's length first and the extended mix last
+    assert pick([extended, remix, radio], RADIO, PickPolicy()).survivors[0].username == "radio"
+    on = pick([remix, radio, extended], replace(RADIO, prefer_extended=True), PickPolicy())
+    assert [f.username for f in on.survivors] == ["extended", "radio", "remix"]
+    assert rank_version(extended, RADIO) == 1 and rank_version(extended, replace(RADIO, prefer_extended=True)) == -1
+    assert rank_duration(extended, replace(RADIO, prefer_extended=True)) == 0
+
+
+def test_a_report_round_trips_the_cut_and_older_reports_still_load():
+    report = pick([ext("Feel So Close (Extended Mix).flac")], extended_reference(RADIO), PickPolicy())
+    again = PickReport.from_dict(json.loads(json.dumps(report.to_dict())))
+    assert again.reference.cut == "extended" and again.reference.prefer_extended
+    old = report.to_dict()
+    del old["reference"]["cut"], old["reference"]["prefer_extended"]
+    assert PickReport.from_dict(old).reference == RADIO.__class__(**old["reference"])
+    assert PickReport.from_dict(old).reference.cut == ""
+
+
+def test_an_extended_cut_is_named_by_the_file_s_own_words():
+    from flackey.lossless import downloaded_mix
+    remix = Reference(artist="CamelPhat", title="Cola", mix_name="Made by Pete Remix", duration_s=200)
+    assert downloaded_mix(mk(path="x\\01 - Cola (Made by Pete Extended Remix).flac"), remix) == "Made by Pete Extended Remix"
+    assert downloaded_mix(ext("Calvin Harris - Feel So Close (extended mix).flac"), RADIO) == "Extended Mix"
+    assert downloaded_mix(ext("Feel So Close (Club Mix).flac"), RADIO) == "Club Mix"
+    # nothing of its own to go by: the tags, else None (filed as "Extended Mix")
+    assert downloaded_mix(ext("01. Feel So Close.flac"), RADIO, {"mix": "Extended Mix"}) == "Extended Mix"
+    assert downloaded_mix(mk(path="x\\02.05 - Never Gonna Give You Up (Extended Version) (Rick Astley).flac"),
+                          Reference(artist="Rick Astley", title="Never Gonna Give You Up", mix_name=None,
+                                    duration_s=213)) is None
+
+
+def test_a_bare_extended_is_filed_as_the_extended_mix_and_a_mashup_is_no_extended_cut():
+    from flackey.lossless import downloaded_mix
+
+    ref = Reference("David Guetta", "Titanium", "Original Mix", 245)
+    bare = mk(path="David Guetta - Titanium - 07 - Titanium (extended).flac")
+    assert own_extended(bare, ref) and downloaded_mix(bare, ref) is None
+    credit = mk(path="01. Titanium (feat. Sia) (Extended).flac")
+    assert own_extended(credit, ref)
+    alice = Reference("Alice Deejay", "Better Off Alone", "Original Mix", 214)
+    mashup = mk(path="Disco Lines, Tinashe x Alice Deejay - No Broke Boys x Better Off Alone "
+                          "[Sergio Villanueva Edit] (Tim Underscore Mashup) (Extended Mix).wav")
+    assert not own_extended(mashup, alice)
+    club = mk(path="Above & Beyond - Sun & Moon (Club Mix).flac")
+    assert own_extended(club, Reference("Above & Beyond", "Sun & Moon", "Original Mix", 300))
+    assert search_text(extended_reference(alice, "club mix")) == "Alice Deejay Better Off Alone club mix"

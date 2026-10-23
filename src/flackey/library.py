@@ -12,7 +12,15 @@ from pathlib import Path
 from .match import candidate_release, candidate_version
 from .models import Candidate, CatalogTrack, Track
 from .store import Store
-from .version import Version, agrees, record_version, split_version
+from .version import (
+    EXTENDED,
+    Version,
+    extended_target,
+    record_version,
+    same_arrangement,
+    same_owned_version,
+    split_version,
+)
 
 log = logging.getLogger(__name__)
 _BAD = re.compile(r'[\\/:*?"<>|]')
@@ -179,8 +187,19 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
     return _present(store, t) if t is not None and _same_version(t, version) else None
 
 
+def find_extended(store: Store, artist: str, title: str, mix_name: str | None) -> Track | None:
+    """An extended copy of the `mix_name` version of this song already in the library, at any length: the
+    request's length is the radio edit's, so it says nothing about the extended mix's (issue #187)."""
+    target = extended_target(mix_name)
+    for t in store.find_tracks_by_title(artist, title):
+        v = split_version(t.mix_name)
+        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and _present(store, t):
+            return t
+    return None
+
+
 def _same_version(t: Track, version: Version) -> bool:
     """A library track's stored mix agrees with `version` (a track with no mix is taken as agreeing). The
     library keeps no release name, so a remaster filed as "Original Mix" reads as the original: asked for
     again, it is fetched once more rather than an original standing in for it."""
-    return not t.mix_name or agrees(split_version(t.mix_name), version)
+    return not t.mix_name or same_owned_version(split_version(t.mix_name), version)

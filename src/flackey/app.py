@@ -368,7 +368,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
     worker = Worker(store, source, BeatportCatalog(), LogNotifier(), settings, status=status,
                     providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
-    inbox = Inbox(store)
+    inbox = Inbox(store, prefer_extended=lambda: settings.prefer_extended)
 
     if not UI_DIR.exists():
         log.warning("UI not built: run `npm --prefix web run build`")

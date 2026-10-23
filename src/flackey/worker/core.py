@@ -27,6 +27,7 @@ from ..store import Store
 from ..tag import fetch_artwork
 from ..tag_lookup import TagLookup
 from .acoustic import AcousticMixin
+from .extended import ExtendedMixin
 from .filing import FilingMixin
 from .interpret import InterpretMixin
 from .lossless_attempt import LosslessMixin
@@ -47,7 +48,8 @@ from .recovery import RecoveryMixin
 log = logging.getLogger(__name__)
 
 
-class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin, InterpretMixin):
+class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin, InterpretMixin,
+             ExtendedMixin):
     def __init__(self, store: Store, source: Source, catalog: CatalogLike, notifier: Notifier,
                  settings: Settings,
                  artwork_fetch: Callable[[str], Awaitable[bytes | None]] = fetch_artwork,
@@ -112,6 +114,11 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._unscanned: list[LosslessProvider] = []
         self._leftovers_lock = asyncio.Lock()
         self._leftovers_since: float | None = None      # when startup first asked; None once warned
+        # The extended-mix search for a filed track (`ExtendedMixin`): one at a time, while the queue is
+        # empty, and not before `_scan_after` once Soulseek was unreachable.
+        self._scan: asyncio.Task | None = None
+        self._scan_after = 0.0
+        self._extending: set[int] = set()   # tracks with a Get extended under way
 
 
     def _bot_ready(self) -> bool:
@@ -302,6 +309,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 await self._cancel_leftovers()
                 await self._maintenance()
                 self._start_due()
+                self._start_extended_scan()
                 await self.refresh_lossless_health()
                 await asyncio.sleep(poll_s)
         finally:
@@ -340,6 +348,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
     async def _stop_all(self) -> None:
         tasks = list(self._tasks.values()) + list(self._shadow_tasks.values())
+        if self._scan is not None and not self._scan.done():
+            tasks.append(self._scan)
         for t in tasks:
             t.cancel()
         if tasks:

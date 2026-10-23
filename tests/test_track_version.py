@@ -6,7 +6,10 @@ from flackey.version import (
     Version,
     agrees,
     check_version,
+    extended_mix_name,
+    file_cut,
     record_version,
+    same_owned_version,
     split_version,
     with_remaster,
 )
@@ -20,8 +23,8 @@ from flackey.version import (
     ("Digital Remaster", Version("", True, None)),
     ("Remastered Version", Version("", True, None)),
     ("Original Mix - Remastered", Version("", True, None)),
-    ("Extended Mix", Version("extended mix")),
-    ("Extended Mix Remastered 2024", Version("extended mix", True, "2024")),
+    ("Extended Mix", Version(cut="extended")),
+    ("Extended Mix Remastered 2024", Version("", True, "2024", "extended")),
     ("Vini Vici Remix", Version("vini vici remix")),
 ])
 def test_a_version_text_is_an_arrangement_and_a_remaster_flag(text, expected):
@@ -124,3 +127,98 @@ def test_the_record_it_was_fetched_as_is_evidence_too():
     """The Deezer copy is that record: its album saying remaster is what confirms it."""
     assert check_version(REMASTER, metadata=("The Albums Remastered", "LSD")).status == "confirmed"
     assert check_version(REMASTER, metadata=("Twisted", "LSD"), release_year="1995").status == "unconfirmed"
+
+
+# Issue #187: an extended / club / 12" cut is the same arrangement at another length, the way a remaster is
+# the same arrangement on another release.
+@pytest.mark.parametrize("text, arrangement", [
+    ("Extended Mix", ""),
+    ("Extended", ""),
+    ("Extended Version", ""),
+    ("Club Mix", ""),
+    ("12'' Version", ""),
+    ('Original 12" Mix', ""),
+    ("12 Inch Version", ""),
+    ("12_ club mix", ""),
+    ("Original Extended Mix", ""),
+    ("Extended Edit", ""),
+    # someone else's extended remix is still their remix
+    ("Liquid Soul Extended Remix", "liquid soul remix"),
+    ("JJ Stockholm Club Mix", "jj stockholm"),
+    ("Shep Pettibone 12'' Mix", "shep pettibone mix"),
+    ("Vocal Club Mix", "vocal"),
+])
+def test_an_extended_cut_is_read_apart_from_the_arrangement(text, arrangement):
+    v = split_version(text)
+    assert v.cut == "extended" and v.arrangement == arrangement
+
+
+@pytest.mark.parametrize("text", [None, "Original Mix", "Radio Edit", "Vini Vici Remix", "Remastered 2024",
+                                  "Dub Mix", "Live"])
+def test_other_versions_have_no_cut(text):
+    assert split_version(text).cut == ""
+
+
+def test_an_extended_cut_is_never_the_original_and_never_the_radio_edit():
+    """What the matcher calls the original (`is_original`) stays what it was before the cut existed: an
+    Extended Mix candidate must not be auto-picked for a request that names no version."""
+    assert not split_version("Extended Mix").is_original
+    assert not agrees(Version(), split_version("Extended Mix"))
+    assert not agrees(split_version("Extended Mix"), Version())
+    assert not agrees(split_version("Radio Edit"), split_version("Extended Mix"))
+    # a club mix is a version of its own, to match and to own (both are still read as an extended cut)
+    assert split_version("Club Mix").cut == split_version("Extended Mix").cut == "extended"
+    assert not agrees(split_version("Extended Mix"), split_version("Club Mix"))
+    assert not same_owned_version(split_version("Extended Mix"), split_version("Club Mix"))
+
+
+def test_a_remix_s_extended_cut_still_matches_the_remix_but_is_owned_apart():
+    """Matching reads "X Extended Remix" as "X Remix", as it always has: a request for the remix may
+    still be answered by a candidate named for its extended cut. The library keeps them apart: owning one
+    does not hide the other (issue #187)."""
+    remix, extended = split_version("Bad Company Remix"), split_version("Bad Company Extended Remix")
+    assert agrees(remix, extended) and agrees(extended, remix)
+    assert not same_owned_version(remix, extended) and not same_owned_version(extended, remix)
+    assert same_owned_version(remix, split_version("Bad Company Remix"))
+    assert same_owned_version(Version(), split_version("Original Mix"))
+    assert not same_owned_version(split_version("Radio Edit"), split_version("Extended Mix"))
+
+
+def test_context_never_makes_a_cut():
+    """A peer's folder called "Extended Mixes" or an album called "Extended Versions" says nothing about
+    this one track."""
+    assert split_version(None, "Extended Versions").cut == ""
+
+
+def test_with_remaster_keeps_an_extended_mix():
+    assert with_remaster("Extended Mix", True) == "Extended Mix Remastered"
+
+
+@pytest.mark.parametrize("path, tags, expected", [
+    ("x\\01-02 - Feel So Close (extended mix).flac", {}, "extended"),
+    ("x\\01. Titanium (feat. Sia) (Extended).flac", {}, "extended"),
+    ("x\\0102 Music Sounds Better With You (12_ club mix).flac", {}, "extended"),
+    ("x\\04. New Order - Blue Monday (Original 12'' Version).flac", {}, "extended"),
+    ("x\\01 - Sun & Moon (club mix).flac", {}, "extended"),
+    ("x\\01 - Feel So Close.flac", {"mix": "Extended Mix"}, "extended"),
+    ("x\\01 - Feel So Close.flac", {"title": "Feel So Close (Extended Mix)"}, "extended"),
+    # a folder or an album is about more than this track
+    ("Extended Mixes\\01 - Feel So Close.flac", {"album": "Extended Versions"}, ""),
+    ("x\\01 - Feel So Close (Radio Edit).flac", {}, ""),
+    ("x\\01 - Feel So Close.flac", {}, ""),
+])
+def test_a_file_says_its_cut_by_its_own_name_or_its_title_and_mix_tags(path, tags, expected):
+    assert file_cut(path, tags) == expected
+
+
+@pytest.mark.parametrize("mix, expected", [
+    (None, "Extended Mix"),
+    ("Original Mix", "Extended Mix"),
+    ("Radio Edit", "Extended Mix"),
+    ("Remastered", "Extended Mix Remastered"),
+    ("Bad Company Remix", "Bad Company Extended Remix"),
+    ("Extended Mix", "Extended Mix"),
+    ("Club Mix", "Club Mix"),
+])
+def test_an_extended_file_is_filed_under_a_mix_name_that_says_so(mix, expected):
+    assert extended_mix_name(mix) == expected

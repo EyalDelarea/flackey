@@ -7,12 +7,13 @@ from pathlib import Path
 
 from ..catalog import CatalogUnavailable, best_match, with_original_date
 from ..identify import parse_text
-from ..library import find_duplicate
+from ..library import find_duplicate, find_extended
 from ..match import candidate_query, candidate_version, decide, identification_order, same_version
-from ..models import Candidate, CatalogTrack, Query, Request, RequestState
+from ..models import Candidate, CatalogTrack, Query, Request, RequestState, Track
 from ..notify import Button
 from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
+from ..version import EXTENDED
 from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS, bot_paused
 from .records import CATALOG_SOURCE, QUERY_SOURCE, _mmss, catalog_candidate, query_candidate
 
@@ -155,7 +156,7 @@ class PipelineMixin:
         # (the bot can list the same Deezer id twice)
         chosen = saved[next(i for i, c in enumerate(cands) if c is chosen_obj)]
 
-        dup = find_duplicate(self.store, catalog, chosen, req.query_version)
+        dup, _ = self._owned(req, catalog, chosen)
         if dup:
             await self._mark_duplicate(req, dup.id, dup.path)
             return None
@@ -228,6 +229,19 @@ class PipelineMixin:
         await self._fetch_verify_file(req, query_candidate(query, req.id), catalog)
 
 
+    def _owned(self, req: Request, catalog: CatalogTrack | None, cand: Candidate) -> tuple[Track | None, Track | None]:
+        """The library track this request would duplicate, and the one it may go on past. With the owner
+        preferring extended mixes, the radio edit already filed is not the track: only an extended copy is
+        a duplicate, and the normal one comes back second, so the pass looks for the extended mix alone
+        and stops at what is already there when there is none (issue #187)."""
+        dup = find_duplicate(self.store, catalog, cand, req.query_version)
+        mix = catalog.mix_name if catalog else candidate_version(cand)
+        if not self._prefers_extended(req, mix):
+            return dup, None
+        artist, title = (catalog.artist, catalog.title) if catalog else (cand.artist, candidate_query(cand).title)
+        extended = find_extended(self.store, artist, title, mix)
+        return (extended, None) if extended else (None, dup)
+
     async def _mark_duplicate(self, req: Request, track_id: int | None, path: Path) -> None:
         self._set_state(req, RequestState.DUPLICATE, track_id=track_id)
         if req.playlist_id is not None and track_id is not None:
@@ -251,7 +265,7 @@ class PipelineMixin:
 
 
     async def _fetch_verify_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> None:
-        dup = find_duplicate(self.store, catalog, cand, req.query_version)  # again: a reviewed request may have waited for hours
+        dup, owned = self._owned(req, catalog, cand)  # again: a reviewed request may have waited for hours
         if dup:
             await self._mark_duplicate(req, dup.id, dup.path)
             return
@@ -278,7 +292,15 @@ class PipelineMixin:
         if self._lossless_allowed(req):
             if req.lossless_retry:
                 self.store.update_request(req.id, lossless_retry=0)   # one pass, spent now
-            hit = await self._try_lossless(req, cand, catalog, acoustic)
+            hit = await self._try_lossless(req, cand, catalog, acoustic, extended_only=owned is not None)
+        if owned is not None and (hit is None or hit.cut != EXTENDED):
+            # The normal version is in the library already and no extended mix of it turned up
+            if hit is not None:
+                hit.path.unlink(missing_ok=True)       # spec §13: every outcome leaves tmp_dir empty
+            self.store.update_request(req.id, fetch_source=None)
+            log.info("req#%d: no extended mix found; the normal version is already in the library", req.id)
+            await self._mark_duplicate(req, owned.id, owned.path)
+            return
         if (hit is not None and hit.reference.from_query and catalog is not None
                 and cand.source in (CATALOG_SOURCE, QUERY_SOURCE)):
             # No record vouches for this file: Beatport's spelling found nothing the recording check
