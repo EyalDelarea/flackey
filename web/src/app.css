@@ -34,6 +34,19 @@
 }
 .fallback { margin-top: 4px; font-size: 12px; color: var(--orange-text); }
 .extended-note { margin-top: 4px; font-size: 12px; color: var(--secondary); }
+/* The offer strip (issue #187): under the row's text, the answers at the right edge where the row's own
+   buttons are, so nothing of it has to fit into the text column. */
+.extended-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: -2px 12px 10px 60px; padding: 6px 4px 6px 10px;
+  border-radius: 6px; background: var(--chip); }
+.extended-offer .help-tag-target { display: inline-flex; min-width: 0; max-width: 100%; }
+/* A narrow window puts the answers under the label rather than cutting the label short. */
+.extended-offer > .help-tag-target { flex: none; }
+.extended-offer-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 500;
+  color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; outline-offset: 2px; }
+.extended-offer-label svg { flex: none; color: var(--accent); }
+.extended-offer-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; flex: none; }
+.group-head .group-extended { margin-left: auto; align-self: center; }
+.group-head .group-extended + .summary { margin-left: 0; }
 .tag.amber { color: var(--orange-text); font-weight: 500; }
 
 /* ---- Shell ---- */
@@ -244,7 +257,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* A help tag the app draws itself, because the native window's WKWebView draws none. Placed in viewport
    coordinates from the rung's own rect: the ladder sits inside a scrolling pane that would clip it. The
    transform is what centres it over the rung and lifts it clear -- `left`/`top` are the rung's midpoint. */
-.step-tip { z-index: 40; transform: translate(-50%, calc(-100% - 8px)); max-width: 300px; padding: 7px 10px;
+.step-tip, .help-tag { z-index: 40; transform: translate(-50%, calc(-100% - 8px)); max-width: 300px; padding: 7px 10px;
   border-radius: 4px; border: .5px solid var(--sep); background: var(--tip-bg);
   -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
   box-shadow: 0 0 0 .5px rgba(0,0,0,.06), 0 6px 16px rgba(0,0,0,.18);
@@ -252,10 +265,11 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   animation: tip-in 120ms ease-out; }
 .step-tip strong { display: block; margin-bottom: 2px; font-size: 11px; font-weight: 600; color: var(--secondary); }
 /* Flipped under the rung when there is no room above it, so it is never half off the top of the window. */
-.step-tip.below { transform: translate(-50%, 8px); animation-name: tip-in-below; }
+.step-tip.below, .help-tag.below { transform: translate(-50%, 8px); animation-name: tip-in-below; }
 @keyframes tip-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 3px)); } }
 @keyframes tip-in-below { from { opacity: 0; transform: translate(-50%, 3px); } }
 @media (prefers-reduced-motion: reduce) { .step-tip { animation: none; } }
+.help-tag { width: max-content; max-width: 280px; }
 .checks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; }
 .check { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--secondary); }
 .check svg { color: var(--green); }

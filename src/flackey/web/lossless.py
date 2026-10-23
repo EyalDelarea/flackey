@@ -99,4 +99,35 @@ def router(store: Store, worker=None) -> APIRouter:
         t = store.get_track(track_id)
         return {"ok": True, "message": message, "upgraded": t.source_fmt is not None}
 
+    @r.post("/extended/{track_id}")
+    async def get_extended(track_id: int) -> dict:
+        """Get extended: download the extended mix on offer and swap it in for the filed track (issue #187)."""
+        if worker is None:
+            raise HTTPException(503, "the worker is not running")
+        try:
+            store.get_track(track_id)
+        except KeyError:
+            raise HTTPException(404, f"no track {track_id}") from None
+        try:
+            message = await worker.get_extended(track_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        offer = store.evidence_of(track_id, "extended_offer") or {}
+        return {"ok": True, "message": message, "swapped": offer.get("status") == "swapped"}
+
+    @r.post("/extended/{track_id}/keep")
+    async def keep_this(track_id: int) -> dict:
+        """Keep this: the filed version stays, and the offer goes away."""
+        if worker is None:
+            raise HTTPException(503, "the worker is not running")
+        try:
+            store.get_track(track_id)
+        except KeyError:
+            raise HTTPException(404, f"no track {track_id}") from None
+        try:
+            worker.keep_this(track_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        return {"ok": True}
+
     return r

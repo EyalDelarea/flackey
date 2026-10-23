@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { AppSettings, LosslessHealth, Platform, TelegramStatus, UpdateStatus } from '../api'
+import type { AppSettings, ExtendedMixes, LosslessHealth, Platform, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
 import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
@@ -194,10 +194,10 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .catch(e => setLayoutError(getErrorMessage(e, 'Could not save that layout.')))
       .finally(() => setLayoutBusy(false))
   }
-  const preferExtended = s.prefer_extended === true
-  const setPreferExtended = (on: boolean) => {
+  const extendedMixes: ExtendedMixes = s.extended_mixes ?? 'off'
+  const saveExtended = (mode: ExtendedMixes) => {
     setExtendedBusy(true); setExtendedError(null)
-    api.saveSettings(s.library_root, { prefer_extended: on })
+    api.saveSettings(s.library_root, { extended_mixes: mode })
       .then(next => live.setSettings(next))
       .catch(e => setExtendedError(getErrorMessage(e, 'Could not save that setting.')))
       .finally(() => setExtendedBusy(false))
@@ -335,12 +335,20 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           {formatError && <div className="err">{formatError}</div>}</div>
           <div className="actions"><Segmented label="File format" options={formatOptions} value={currentFormat}
             onChange={saveFormat} busy={formatBusy} /></div></div>
-        {/* Issue #187. Off, every download is the version asked for, exactly as before. */}
-        <div className="srow"><div className="srow-body"><div className="k">Prefer extended mixes</div>
-          <div className="v">Look for the extended or club version first. If there is none, you get the normal one.</div>
+        {/* Issue #187. On by default, and asking: every download is still the version asked for. */}
+        <div className="srow"><div className="srow-body"><div className="k">Offer extended mixes when available</div>
+          <div className="v">You get the version you asked for. If a longer extended or club mix turns up, its Done row offers it.</div>
           {extendedError && <div className="err">{extendedError}</div>}</div>
-          <div className="actions"><Switch label="Prefer extended mixes" checked={preferExtended}
-            onChange={setPreferExtended} busy={extendedBusy} /></div></div>
+          <div className="actions"><Switch label="Offer extended mixes when available" checked={extendedMixes !== 'off'}
+            onChange={on => saveExtended(on ? 'ask' : 'off')} busy={extendedBusy} /></div></div>
+        {extendedMixes !== 'off' && (
+          <div className="srow"><div className="srow-body"><div className="k">When one is found</div>
+            <div className="v">{extendedMixes === 'always'
+              ? 'Look for the extended mix first and download it instead. If there is none, you get the normal one.'
+              : 'Ask on the Done row. Nothing waits for your answer.'}</div></div>
+            <div className="actions"><Segmented label="When one is found"
+              options={[['ask', 'Always ask'], ['always', 'Always get extended']] as const}
+              value={extendedMixes} onChange={saveExtended} busy={extendedBusy} /></div></div>)}
       </div>
       <h2>Updates</h2>
       <div className="group" ref={updateRow}>

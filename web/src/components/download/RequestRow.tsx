@@ -7,6 +7,7 @@ import SpectrogramWell from './SpectrogramWell'
 import Stepper from './Stepper'
 import Platter from './Platter'
 import Icon from '../Icon'
+import HelpTag from '../HelpTag'
 import type { RowAction, RowView } from '../../presentation'
 import type { PlayerState } from './DownloadPage'
 
@@ -72,6 +73,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}
           {v.fallback && <div className="fallback" title={v.fallback.reason}>{v.fallback.reason}</div>}
           {v.extendedNote && <div className="extended-note">{v.extendedNote}</div>}
+          {v.extendedOffer?.state === 'swapped' && <div className="extended-note">{v.extendedOffer.label}</div>}
           {/* The status line above says what happened; this one says whether it is over. Every failed row
               carries it, on the Failed tab and in History alike -- "why is this here and can it come back"
               is the same question wherever the row is read. */}
@@ -100,6 +102,24 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           about it. It is always open on a row that has something to play -- "See why" hides a diagram,
           and hiding the way out of a dead end behind a second press is what the row did wrong to begin
           with (issue #92). */}
+      {/* Its own strip under the row, not a line in the text column: the column is a third of the row, and
+          the two answers need the room to sit where the row's other buttons do (issue #187). */}
+      {v.extendedOffer?.state === 'offer' && (
+        <div className="extended-offer" role="group" aria-label={v.extendedOffer.label}>
+          <HelpTag text={v.extendedOffer.tip}>
+            <span className="extended-offer-label" tabIndex={0}>
+              <Icon name="extend" size={13} />{v.extendedOffer.label}</span>
+          </HelpTag>
+          <div className="extended-offer-actions">
+            <button className="btn-link muted" disabled={v.extendedOffer.busy}
+                    onClick={() => onAction('keep', v.id, undefined)}>Keep this</button>
+            <HelpTag text={v.extendedOffer.tip}>
+              <button className="btn-secondary" disabled={v.extendedOffer.busy} aria-description={v.extendedOffer.tip}
+                      onClick={() => onAction('extended', v.id, undefined)}>
+                {v.extendedOffer.busy ? 'Getting…' : 'Get extended'}</button>
+            </HelpTag>
+          </div>
+        </div>)}
       {v.samples && <Compare s={v.samples} player={player} onPlay={onPlay} onAccept={() => onAction('accept', v.id, undefined)} />}
       {v.candidates && (<>
         <div className="candidates">{v.candidates.map(c => <CandidateCard key={c.id} c={c} onChoose={() => onChoose(v.id, c.id)}

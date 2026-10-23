@@ -773,6 +773,29 @@ class Store:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def set_evidence(self, track_id: int, kind: str, value: dict) -> None:
+        """The one row of `kind` this track has, replacing any before it. Announced as a queue change: a
+        Done row draws from it (the extended-mix offer, issue #187)."""
+        self.conn.execute("DELETE FROM track_evidence WHERE track_id=? AND kind=?", (track_id, kind))
+        self.conn.execute(
+            "INSERT INTO track_evidence (track_id, kind, value_json, created_at) VALUES (?,?,?,?)",
+            (track_id, kind, json.dumps(value), _now()))
+        self.conn.commit()
+        self._emit("queue", 0)
+
+    def evidence_of(self, track_id: int, kind: str) -> dict | None:
+        """The latest row of `kind` this track has, or None."""
+        r = self.conn.execute("SELECT value_json FROM track_evidence WHERE track_id=? AND kind=? "
+                              "ORDER BY id DESC LIMIT 1", (track_id, kind)).fetchone()
+        return json.loads(r[0]) if r else None
+
+    def tracks_with_evidence(self, kind: str, status: str, limit: int = 1) -> list[int]:
+        """Tracks whose `kind` row has this status, oldest first."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT e.track_id FROM track_evidence e JOIN tracks t ON t.id = e.track_id "
+            "WHERE e.kind=? AND json_extract(e.value_json, '$.status')=? ORDER BY e.id LIMIT ?",
+            (kind, status, limit))]
+
     def clear_evidence(self, track_id: int) -> None:
         """After an upgrade the fingerprint and spectrogram rows describe a file that is gone; the new
         attempt writes its own."""

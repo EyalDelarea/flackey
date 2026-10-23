@@ -14,7 +14,7 @@ const base: RowView = { id: 1, title: 'Ace Ventura – Rezonate', version: null,
   steps: STEPS.map(name => ({ name, state: 'pending' as const })),
   tag: 'queued', dimmed: true, washed: false, action: null,
   candidates: null, rejection: null, artworkUrl: null, rejected: false, retryInSeconds: null, bucket: 'progress', stage: 'search', removable: false,
-  formatLabel: null, checks: [], progress: null, fallback: null, extendedNote: null, outcome: null, sweepable: false, reportable: false,
+  formatLabel: null, checks: [], progress: null, fallback: null, extendedNote: null, extendedOffer: null, outcome: null, sweepable: false, reportable: false,
   samples: null }
 
 it('spells out whether a failed row can come back, and dresses the two answers differently', () => {
@@ -324,4 +324,29 @@ it('offers the video instead when the reference is one, and never Keep it anyway
   expect(screen.getByRole('link', { name: 'Open your video at 1:35' })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=abc&t=95')
   expect(screen.getByText('The copy is no longer here')).toBeInTheDocument()
   expect(screen.queryByText('Keep it anyway')).toBeNull()
+})
+
+
+it('offers the extended mix in its own strip, with both answers and a help tag that says what it is', () => {
+  const onAction = vi.fn()
+  const tip = 'We found a longer extended mix of this track — easier to mix in and out. Get it instead of this version?'
+  const view: RowView = { ...base, bucket: 'done', status: '', formatLabel: 'AIFF 16-bit/44.1 kHz',
+    extendedOffer: { state: 'offer', label: 'Extended mix available (6:40)', tip } }
+  const { rerender } = render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} {...preview} />)
+  const strip = screen.getByRole('group', { name: 'Extended mix available (6:40)' })
+  expect(strip).toHaveClass('extended-offer')
+  expect(screen.queryByRole('tooltip')).toBeNull()
+  fireEvent.mouseEnter(screen.getByRole('button', { name: 'Get extended' }).parentElement!)
+  expect(screen.getByRole('tooltip')).toHaveTextContent(tip)
+  fireEvent.click(screen.getByRole('button', { name: 'Get extended' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Keep this' }))
+  expect(onAction.mock.calls.map(c => c[0])).toEqual(['extended', 'keep'])
+  rerender(<RequestRow view={{ ...view, extendedOffer: { ...view.extendedOffer!, busy: true } }} onAction={onAction}
+    onChoose={() => {}} {...preview} />)
+  expect(screen.getByRole('button', { name: 'Getting…' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Keep this' })).toBeDisabled()
+  rerender(<RequestRow view={{ ...view, extendedOffer: { state: 'swapped', label: 'Swapped in for the Radio Edit.', tip: '' } }}
+    onAction={onAction} onChoose={() => {}} {...preview} />)
+  expect(screen.queryByRole('button', { name: 'Get extended' })).toBeNull()
+  expect(screen.getByText('Swapped in for the Radio Edit.')).toHaveClass('extended-note')
 })

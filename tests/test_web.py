@@ -1692,7 +1692,7 @@ def test_settings_get_and_put(client, tmp_path: Path):
                  "slskd_downloads_dir": str(settings.slskd_downloads),
                  "lossless_filing_format": settings.lossless_filing_format,
                  "library_layout": "artist", "library_layouts": ["artist", "month", "day", "flat"],
-                 "auto_update_check": True, "prefer_extended": False,
+                 "auto_update_check": True, "extended_mixes": "ask",
                  "ports": {"app": {"port": 8765, "host": "127.0.0.1", "public": False},
                            "sidecar": {"port": 5030, "host": "127.0.0.1", "public": False},
                            "soulseek_listen": {"port": 50300, "host": "0.0.0.0", "public": True}},
@@ -1712,11 +1712,13 @@ def test_settings_get_and_put(client, tmp_path: Path):
     assert r.status_code == 200 and r.json()["auto_update_check"] is False
     assert settings.auto_update_check is False
     assert c.get("/api/settings").json()["auto_update_check"] is False
-    # issue #187: off until the owner turns it on, saved like any other setting, and only a yes or no
-    r = c.put("/api/settings", json={"library_root": str(new), "prefer_extended": True})
-    assert r.status_code == 200 and r.json()["prefer_extended"] is True and settings.prefer_extended is True
-    assert '"prefer_extended": true' in settings.settings_path.read_text()
-    assert c.put("/api/settings", json={"library_root": str(new), "prefer_extended": "yes"}).status_code == 400
+    # issue #187: offered by default, saved like any other setting, and only one of its three answers
+    r = c.put("/api/settings", json={"library_root": str(new), "extended_mixes": "always"})
+    assert r.status_code == 200 and r.json()["extended_mixes"] == "always" and settings.prefer_extended
+    assert '"extended_mixes": "always"' in settings.settings_path.read_text()
+    assert c.put("/api/settings", json={"library_root": str(new), "extended_mixes": "yes"}).status_code == 400
+    r = c.put("/api/settings", json={"library_root": str(new), "extended_mixes": "off"})
+    assert not settings.prefer_extended and not settings.offer_extended
 
 
 def test_reveal_only_opens_places_the_app_itself_named(tmp_path: Path):
@@ -2780,3 +2782,29 @@ def test_removing_a_request_drops_its_queued_title_comparison(client_with_worker
     assert c.delete(f"/api/requests/{gone}").json() == {"ok": True}
     assert c.post("/api/requests/clear-failed").json() == {"removed": [failed]}
     assert one.cancelled and many.cancelled and not worker._shadow_tasks
+
+
+def test_get_extended_and_keep_this_answer_for_the_offer_on_the_track(client_with_worker, tmp_path: Path):
+    """Issue #187's Done-row buttons. Get extended hands the work to the worker; Keep this takes the offer
+    away; neither answers for a track with nothing on offer."""
+    c, worker = client_with_worker
+    store = worker.store
+    tid = store.add_track(path=tmp_path / "a.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050, file_size=5,
+                          artist="A", title="T", mix_name="Radio Edit", duration_s=200, isrc=None,
+                          catalog_track_id=None, request_id=None)
+    assert c.post("/api/lossless/extended/999").status_code == 404
+    assert c.post(f"/api/lossless/extended/{tid}/keep").status_code == 409
+
+    async def swapped(track_id: int) -> str:
+        store.set_evidence(track_id, "extended_offer", {"status": "swapped"})
+        return "Swapped in the Extended Mix (6:40)."
+
+    worker.get_extended = swapped
+    store.set_evidence(tid, "extended_offer", {"status": "available", "length_s": 400, "mix_name": "Extended Mix"})
+    r = c.post(f"/api/lossless/extended/{tid}")
+    assert r.status_code == 200 and r.json() == {"ok": True, "message": "Swapped in the Extended Mix (6:40).",
+                                                 "swapped": True}
+    store.set_evidence(tid, "extended_offer", {"status": "available", "length_s": 400, "mix_name": "Extended Mix"})
+    assert c.post(f"/api/lossless/extended/{tid}/keep").json() == {"ok": True}
+    assert store.evidence_of(tid, "extended_offer")["status"] == "kept"
+    assert [e.kind for e in store.list_evidence(tid)] == ["extended_offer"]     # one row, replaced

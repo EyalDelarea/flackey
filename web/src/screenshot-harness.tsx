@@ -37,6 +37,7 @@ const settingsPanel: AppSettings = {
     soulseek_listen: { port: 50300, host: '0.0.0.0', public: true },
   },
   ranking: { max_picks: 4, max_queue: null, fingerprint_min: 0.79 },
+  extended_mixes: 'ask',
 }
 const stats: Stats = { tracks: 2, bytes: 84_000_000, playlists: 1, rejections: 0,
   library_root: '/Users/dj/Music/Flackey', playlist_dir: '/Users/dj/Music/Flackey/Playlists', requests_by_state: {} }
@@ -243,44 +244,82 @@ const burnedOnRevoke: Bundle[] = [
     error_message: 'Cannot send requests while disconnected' }),
 ]
 
-/* Issue #187, the owner preferring extended mixes: one track whose extended mix was found and filed under
-   its own name and length, one with none on Soulseek that got the normal version and says so. The record
-   behind both is the radio edit. */
-const radioRecord = (id: number, artist: string, title: string) => ({ id, artist, title, mix_name: 'Original Mix',
-  label: 'Ultra', genre: 'Dance', isrc: null, sub_genre: null, catalog_number: null, release_name: title,
-  release_date: '2012-03-01', bpm: 128, key: '8A', duration_ms: 206000, artwork_url: null })
-const extendedDone = (id: number, artist: string, title: string, mix_name: string, duration_s: number,
-  found: boolean): Bundle => {
+/* Issue #187, extended mixes offered after the fact: the normal version is filed as today, then a quiet
+   search finds a clearly longer extended mix and the Done row offers it. One row on offer, one with nothing
+   longer on Soulseek (no strip at all), one already swapped in. `extended-playlist` is a playlist's worth,
+   where the header can take them all at once. Get extended waits a moment and then swaps the row in place,
+   so the "Getting…" state and the swapped note can both be screenshotted. */
+const radioRecord = (id: number, artist: string, title: string, mix_name = 'Radio Edit', duration_ms = 206000) => ({
+  id, artist, title, mix_name, label: 'Ultra', genre: 'Dance', isrc: null, sub_genre: null, catalog_number: null,
+  release_name: title, release_date: '2012-03-01', bpm: 128, key: '8A', duration_ms, artwork_url: null })
+type Offer = { status: string; length_s?: number; mix_name?: string; was?: string }
+const offerDone = (id: number, artist: string, title: string, mix_name: string, duration_s: number,
+  offer: Offer | null, playlist_id: number | null = null): Bundle => {
   const t = track({ id, artist, title, mix_name, duration_s, cutoff_hz: 22050, request_id: id,
     path: `/Users/dj/Music/DJ Library/${artist}/${artist} - ${title} (${mix_name}).aiff`, fmt: 'aiff',
     catalog: radioRecord(id, artist, title),
     format: { fmt: 'aiff', bit_depth: 16, sample_rate: 44100, source: 'soulseek', source_fmt: 'flac',
       label: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek' },
-    evidence: [{ kind: 'extended', value: { sought: true, found, mix_name } }] })
-  return failure(id, 'done', { query_artist: artist, query_title: title, track_id: id, catalog_track_id: id },
+    evidence: offer ? [{ kind: 'extended_offer', value: offer }] : [] })
+  return failure(id, 'done', { query_artist: artist, query_title: title, track_id: id, catalog_track_id: id, playlist_id },
     { catalog: radioRecord(id, artist, title), track: t,
       attempt: { id, request_id: id, provider: 'soulseek', created_at: '', query: 'q', outcome: 'filed',
         fingerprint: { status: 'matched', score: 0.94, offset_s: 61, reason: null },
         spectrogram_path: null, first_byte_ms: 2000, total_ms: 30000 } } as Partial<Bundle>)
 }
+const available = (length_s: number, mix_name = 'Extended Mix'): Offer => ({ status: 'available', length_s, mix_name })
 const extendedRows: Bundle[] = [
-  extendedDone(61, 'Calvin Harris', 'Feel So Close', 'Extended Mix', 330, true),
-  extendedDone(62, 'Avicii', 'Levels', 'Original Mix', 203, false),
+  offerDone(61, 'Calvin Harris', 'Feel So Close', 'Radio Edit', 206, available(400)),
+  offerDone(62, 'Avicii', 'Levels', 'Original Mix', 203, { status: 'none' }),
+  offerDone(63, 'Tiësto', 'Adagio for Strings', 'Extended Mix', 498,
+    { status: 'swapped', length_s: 498, mix_name: 'Extended Mix', was: 'Radio Edit' }),
 ]
+const summerPlaylist: Playlist = { id: 8, source_url: 'https://open.spotify.com/playlist/summer', name: 'Summer Anthems 2012',
+  created_at: '', updated_at: '', track_ids: [71, 72, 73, 74], file: '/Users/dj/Music/DJ Library/Playlists/Summer Anthems 2012.m3u8' }
+const extendedPlaylistRows: Bundle[] = [
+  offerDone(71, 'Calvin Harris', 'Feel So Close', 'Radio Edit', 206, available(400), 8),
+  offerDone(72, 'Swedish House Mafia', "Don't You Worry Child", 'Radio Edit', 212, available(402), 8),
+  offerDone(73, 'Avicii', 'Levels', 'Original Mix', 203, { status: 'none' }, 8),
+  offerDone(74, 'Alesso', 'Years', 'Radio Edit', 195, available(380, 'Club Mix'), 8),
+]
+/* The swap, as the worker does it: same track row, new name and length, the offer turned into the note. */
+function swapIn(rows: Bundle[], trackId: number) {
+  const b = rows.find(r => r.track?.id === trackId)
+  if (!b?.track) return
+  const ev = b.track.evidence?.find(e => e.kind === 'extended_offer')
+  const offer = (ev?.value ?? {}) as Offer
+  const mix = offer.mix_name ?? 'Extended Mix'
+  b.track = { ...b.track, mix_name: mix, duration_s: offer.length_s ?? b.track.duration_s,
+    path: b.track.path.replace(/\([^)]*\)\.aiff$/, `(${mix}).aiff`),
+    evidence: [{ kind: 'extended_offer', value: { status: 'swapped', length_s: offer.length_s, mix_name: mix, was: b.track.mix_name } }] }
+}
 
 const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 'default'
 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist]
-    : scenario === 'many-playlists' ? manyPlaylists : scenario === 'stages' ? [goaPlaylist] : [])
+    : scenario === 'many-playlists' ? manyPlaylists : scenario === 'stages' ? [goaPlaylist]
+    : scenario === 'extended-playlist' ? [summerPlaylist] : [])
   vi_spy(api, 'stats', async () => stats)
   vi_spy(api, 'queue', async () => scenario === 'failed' ? failures
     : scenario === 'stages' ? staged
     : scenario === 'choose' ? choices
     : scenario === 'telegram-revoked' ? pausedOnLogin
     : scenario === 'telegram-revoked-before' ? burnedOnRevoke
-    : scenario === 'extended' ? extendedRows : [] as Bundle[])
+    : scenario === 'extended' ? extendedRows
+    : scenario === 'extended-playlist' ? extendedPlaylistRows : [] as Bundle[])
+  const rows = scenario === 'extended-playlist' ? extendedPlaylistRows : extendedRows
+  vi_spy(api, 'getExtended', async (trackId: number) => {
+    await new Promise(r => setTimeout(r, Number(new URLSearchParams(window.location.search).get('delay') ?? 1500)))
+    swapIn(rows, trackId)
+    return { ok: true, message: 'Swapped in the Extended Mix.', swapped: true }
+  })
+  vi_spy(api, 'keepThis', async (trackId: number) => {
+    const b = rows.find(r => r.track?.id === trackId)
+    if (b?.track) b.track = { ...b.track, evidence: [{ kind: 'extended_offer', value: { status: 'kept' } }] }
+    return { ok: true }
+  })
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
 
   switch (scenario) {
@@ -292,6 +331,10 @@ function scenarioSetup() {
         track({ id: 2, path: '/lib/Example Artist/Track Two.mp3', artist: 'Example Artist', title: 'Track Two', fmt: 'mp3', bitrate_kbps: 320, source_fmt: null, catalog: null }),
         track({ id: 3, path: '/lib/Other Artist/Track Three.flac', artist: 'Other Artist', title: 'Track Three' }),
       ])
+      break
+    case 'extended-playlist':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
       break
     case 'extended':
       vi_spy(api, 'health', async () => health())

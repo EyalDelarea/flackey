@@ -12,7 +12,14 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import __version__
-from ..config import FILING_FORMATS, LIBRARY_LAYOUTS, Settings, default_filing_format, save_settings
+from ..config import (
+    EXTENDED_MIXES,
+    FILING_FORMATS,
+    LIBRARY_LAYOUTS,
+    Settings,
+    default_filing_format,
+    save_settings,
+)
 from ..export import PLAYLIST_DIR, playlist_names, write_playlists
 from ..library import prune_missing_tracks
 from ..logsetup import LOG_FILE
@@ -231,7 +238,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 "lossless_filing_format": settings.lossless_filing_format,
                 "library_layout": settings.library_layout, "library_layouts": list(LIBRARY_LAYOUTS),
                 "auto_update_check": settings.auto_update_check,
-                "prefer_extended": settings.prefer_extended,
+                "extended_mixes": settings.extended_mixes,
                 "ports": _ports(settings),
                 "ranking": {"max_picks": settings.lossless_max_picks,
                             "max_queue": settings.lossless_max_queue,
@@ -275,10 +282,10 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             extra["library_layout"] = body["library_layout"]
         if "auto_update_check" in body:
             extra["auto_update_check"] = bool(body["auto_update_check"])
-        if "prefer_extended" in body:
-            if not isinstance(body["prefer_extended"], bool):
-                raise HTTPException(400, "Prefer extended mixes is either on or off.")
-            extra["prefer_extended"] = body["prefer_extended"]
+        if "extended_mixes" in body:
+            if body["extended_mixes"] not in EXTENDED_MIXES:
+                raise HTTPException(400, f"Extended mixes must be one of {', '.join(EXTENDED_MIXES)}.")
+            extra["extended_mixes"] = body["extended_mixes"]
         if body.get("slskd_url"):
             extra["slskd_url"] = str(body["slskd_url"]).rstrip("/")
         if body.get("slskd_api_key"):

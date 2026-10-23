@@ -16,13 +16,15 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
-             "source_enabled", "auto_update_check", "window_size", "prefer_extended")
+             "source_enabled", "auto_update_check", "window_size", "extended_mixes")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
 # month or per day they were filed, or none at all. Changing it never moves a track already filed:
 # Rekordbox finds a track by its full path, and a moved file shows up there as missing.
 LIBRARY_LAYOUTS = ("artist", "month", "day", "flat")
+# Extended mixes (issue #187): never looked for, offered on the Done row once found, or downloaded instead.
+EXTENDED_MIXES = ("off", "ask", "always")
 
 
 def default_filing_format() -> str:
@@ -84,9 +86,10 @@ class Settings(BaseSettings):
     window_size: tuple[int, int] | None = None
     library_root: Path = Path("~/Music/DJ Library")
     library_layout: str = "artist"
-    # Look for each track's extended / club / 12" mix on Soulseek first, and file the normal one when there
-    # is none (issue #187). Off by default: nothing about a download changes until the owner turns it on.
-    prefer_extended: bool = False
+    # A track's extended / club / 12" mix (issue #187). "ask": the normal version downloads as it always
+    # has, and an extended mix found afterwards is offered on its Done row. "always": the extended mix is
+    # looked for first and downloaded instead, the normal one when there is none. "off": neither.
+    extended_mixes: str = "ask"
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
@@ -172,6 +175,23 @@ class Settings(BaseSettings):
         if v not in FILING_FORMATS:
             raise ValueError(f"lossless_filing_format must be one of {FILING_FORMATS}")
         return v
+
+    @field_validator("extended_mixes", mode="after")
+    @classmethod
+    def _extended_mixes(cls, v: str) -> str:
+        if v not in EXTENDED_MIXES:
+            raise ValueError(f"extended_mixes must be one of {EXTENDED_MIXES}")
+        return v
+
+    @property
+    def prefer_extended(self) -> bool:
+        """Download the extended mix instead of the version asked for, when there is one."""
+        return self.extended_mixes == "always"
+
+    @property
+    def offer_extended(self) -> bool:
+        """Download the version asked for, and offer its extended mix afterwards."""
+        return self.extended_mixes == "ask"
 
     @field_validator("library_layout", mode="after")
     @classmethod

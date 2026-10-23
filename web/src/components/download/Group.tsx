@@ -31,12 +31,17 @@ interface Props {
   onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
   onChoose: (rowId: number, cid: number) => void
   onTryNow: (ids: number[]) => void
+  /** Get extended for every row of the batch with one on offer, one after another (issue #187). */
+  onGetAllExtended?: (ids: number[]) => void
   /** Passed straight through to the rows: the page owns the one audio element, the group only
    *  hands it down. */
   player: PlayerState; onPlay: (key: string, url: string) => void
 }
-export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, player, onPlay }: Props) {
+export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, onGetAllExtended, player, onPlay }: Props) {
   const s = g.summary
+  // Offered, and not already being fetched: a press while some are running takes only the rest.
+  const offered = g.rows.filter(r => r.extendedOffer?.state === 'offer')
+  const waiting = offered.filter(r => !r.extendedOffer!.busy)
   const failedView = view === 'failed'
   /* Every row in the batch lands in exactly one segment, so the bar fills its width and nothing goes
      missing into an unexplained gap: filed, working, waiting on the owner, parked on a backoff, failed.
@@ -59,6 +64,10 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, 
       <div className="group-head"><h2>{g.name}</h2>
         {/* The counts live under the bar now, beside the colour that carries them. What belongs up here is
             the size of the batch -- and, on the Failed tab, how much of it stopped. */}
+        {g.key.startsWith('pl-') && offered.length > 1 && onGetAllExtended && (
+          <button className="btn-secondary group-extended" disabled={waiting.length === 0}
+                  onClick={() => onGetAllExtended(waiting.map(r => r.id))}>
+            {waiting.length === 0 ? 'Getting extended…' : `Get all extended (${waiting.length})`}</button>)}
         <span className="summary">{failedView ? `Whole batch · ${s.failed} of ${s.total} stopped` : `Whole batch · ${plural(s.total, 'track')}`}</span></div>
       {failedView
         ? <div className="group-bar" role="img" aria-label={`${g.name}: ${segments.map(x => `${x.n} ${x.label}`).join(', ')}`}>{bar}</div>

@@ -74,10 +74,28 @@ class Bundles:
         attempt, outcome = self.store.lossless_outcome(rid)
         if attempt is None:
             return None
+        # A filed track is about the attempt that filed it. A later search for that track's extended mix
+        # (issue #187) adds attempt rows of its own, and one that missed says nothing about the file.
+        filing = self._filing_attempt(rid)
+        if filing is not None and filing.id != attempt.id:
+            return {**to_dict(filing), "no_results": False}
         # `no_results`: the `no_pick` was an empty search, which the page words as such (`models.miss_reason`).
         # Stored with the verdict when the pass ended, so drawing the queue reads one column, not every row.
         return {**to_dict(dataclasses.replace(attempt, outcome=outcome)),
                 "no_results": self.store.lossless_no_results(rid, outcome)}
+
+    def _filing_attempt(self, rid: int):
+        r = self.store.get_request(rid)
+        if not r.track_id:
+            return None
+        for e in self.store.list_evidence(r.track_id):
+            if e.kind == "source" and e.value.get("attempt_id"):
+                try:
+                    a = self.store.get_attempt(int(e.value["attempt_id"]))
+                except KeyError:
+                    return None
+                return a if a.request_id == rid else None
+        return None
 
     def reference(self, rid: int) -> dict | None:
         """What this request was fingerprinted against, as the page needs it: which audio, and where in it

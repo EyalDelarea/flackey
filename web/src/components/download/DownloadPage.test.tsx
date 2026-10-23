@@ -841,3 +841,41 @@ it('keeps stopped tracks individually retryable but out of the sweep when filter
   fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
   await waitFor(() => expect(api.retryFailed).toHaveBeenCalledWith([2]))
 })
+
+it('gets every extended mix a playlist was offered, one at a time, from the playlist header', async () => {
+  const playlists = [{ id: 7, source_url: 'u', name: 'Goa Trance Classics', created_at: '', updated_at: '',
+    track_ids: [], file: '/lib/Playlists/Goa.m3u8' }]
+  const track = (id: number, status: string) => ({ id: 100 + id, path: `/l/${id}.aiff`, fmt: 'aiff', bitrate_kbps: 1411,
+    cutoff_hz: 22050, file_size: 1, artist: 'A', title: `Track ${id}`, mix_name: 'Radio Edit', duration_s: 200, isrc: null,
+    catalog_track_id: null, request_id: id, added_at: '', verified_at: null, spectrogram_path: null, source: 'soulseek',
+    source_fmt: 'flac', bit_depth: 16, sample_rate: 44100, catalog: null,
+    evidence: [{ kind: 'extended_offer', value: { status, length_s: 400, mix_name: 'Extended Mix' } }] })
+  const done = (id: number, status: string): Bundle => ({
+    request: { ...baseRequest, id, state: 'done', playlist_id: 7, query_title: `Track ${id}`, error_message: null,
+      track_id: 100 + id },
+    candidates: [], catalog: null, track: track(id, status) as never, rejection: null,
+  })
+  const calls: number[] = []
+  let release: () => void = () => {}
+  vi.spyOn(api, 'getExtended').mockImplementation(async (trackId: number) => {
+    calls.push(trackId)
+    await new Promise<void>(r => { release = r })
+    return { ok: true, message: 'Swapped in the Extended Mix (6:40).', swapped: true }
+  })
+  const refresh = vi.fn(async () => undefined)
+  render(<DownloadPage live={makeLive([done(1, 'available'), done(2, 'available'), done(3, 'kept')], { playlists, refresh })} />)
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Get all extended (2)' }))
+  await waitFor(() => expect(calls).toHaveLength(1))          // the second waits for the first
+  expect(screen.getByRole('button', { name: 'Getting extended…' })).toBeDisabled()
+  await act(async () => release())
+  await waitFor(() => expect([...calls].sort()).toEqual([101, 102]))
+  await act(async () => release())
+  await waitFor(() => expect(refresh).toHaveBeenCalled())
+})
+
+it('offers no Get all extended for a single track or a lone offer', () => {
+  render(<DownloadPage live={makeLive([mk(1, 'done')])} />)
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  expect(screen.queryByRole('button', { name: /Get all extended/ })).toBeNull()
+})

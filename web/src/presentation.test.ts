@@ -310,6 +310,25 @@ describe('presentRow', () => {
     const off = presentRow(bundle({ state: 'done', track_id: 9 }, { catalog, track: track('Original Mix', []) }), opts)
     expect(off.extendedNote).toBeNull(); expect(off.checks.map(c => c.label)).not.toContain('Extended mix')
   })
+  it('a longer version found after filing is offered on the Done row, and named once it is swapped in', () => {
+    const track = (evidence: { kind: string; value: Record<string, unknown> }[]) => ({ id: 9, path: '/l/a.aiff', fmt: 'aiff',
+      bitrate_kbps: 1411, cutoff_hz: 22050, file_size: 1, artist: 'Calvin Harris', title: 'Feel So Close', mix_name: 'Radio Edit',
+      duration_s: 206, isrc: null, catalog_track_id: null, request_id: 1, added_at: '', verified_at: null, spectrogram_path: null,
+      source: 'soulseek', source_fmt: 'flac', bit_depth: 16, sample_rate: 44100, catalog: null, evidence })
+    const offer = (value: Record<string, unknown>, state = 'done') =>
+      presentRow(bundle({ state: state as never, track_id: 9 }, { track: track([{ kind: 'extended_offer', value }]) }), opts).extendedOffer
+    expect(offer({ status: 'available', length_s: 400, mix_name: 'Extended Mix' })).toEqual({ state: 'offer',
+      label: 'Extended mix available (6:40)',
+      tip: 'We found a longer extended mix of this track — easier to mix in and out. Get it instead of this version?' })
+    expect(offer({ status: 'available', length_s: 444, mix_name: 'Club Mix' })?.label).toBe('Club mix available (7:24)')
+    expect(offer({ status: 'available', length_s: 444, mix_name: 'Club Mix' })?.tip).toMatch(/^We found a longer club mix/)
+    expect(offer({ status: 'available', length_s: 444, mix_name: 'PvD E-Werk Club Mix' })?.label).toBe('PvD E-Werk Club Mix available (7:24)')
+    expect(offer({ status: 'swapped', length_s: 400, mix_name: 'Extended Mix', was: 'Radio Edit' })).toEqual({ state: 'swapped',
+      label: 'Swapped in for the Radio Edit.', tip: '' })
+    // still being looked for, nothing found, or a no: nothing on the row
+    for (const status of ['pending', 'none', 'kept']) expect(offer({ status })).toBeNull()
+    expect(offer({ status: 'available', length_s: 400 }, 'duplicate')).toBeNull()
+  })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
       spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }

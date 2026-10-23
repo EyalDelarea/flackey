@@ -317,25 +317,36 @@ it('shows automatic update checks as off when the setting is saved that way', as
   expect(screen.getByRole('switch', { name: 'Automatic update checks' })).toHaveAttribute('aria-checked', 'false')
 })
 
-it('keeps extended mixes off until the owner turns them on, beside the library settings', async () => {
-  const liveSettings = (live as unknown as { settings: AppSettings }).settings
-  const result = { ...liveSettings, prefer_extended: true }
+it('offers extended mixes and asks, beside the library settings, and the switch turns them off', async () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const asking = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'ask' } })
+  const result = { ...current.settings, extended_mixes: 'off' as const }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
-  render(<SettingsPage live={live} onReconnect={() => {}} />)
-  const toggle = within(section('Library')).getByRole('switch', { name: 'Prefer extended mixes' })
-  expect(toggle).toHaveAttribute('aria-checked', 'false')
-  expect(within(section('Library')).getByText(
-    'Look for the extended or club version first. If there is none, you get the normal one.')).toBeInTheDocument()
+  render(<SettingsPage live={asking} onReconnect={() => {}} />)
+  const toggle = within(section('Library')).getByRole('switch', { name: 'Offer extended mixes when available' })
+  expect(toggle).toHaveAttribute('aria-checked', 'true')
+  expect(within(section('Library')).getByRole('radio', { name: 'Always ask' })).toHaveAttribute('aria-checked', 'true')
+  expect(within(section('Library')).getByText('Ask on the Done row. Nothing waits for your answer.')).toBeInTheDocument()
   fireEvent.click(toggle)
-  await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(liveSettings.library_root, { prefer_extended: true }))
+  await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(current.settings.library_root, { extended_mixes: 'off' }))
   expect(mockSetSettings).toHaveBeenCalledWith(result)
 })
 
-it('shows extended mixes as on when the setting is saved that way', async () => {
+it('can get the extended mix every time instead of asking', async () => {
   const current = live as unknown as { settings: AppSettings; health: Health }
-  const on = makeLive({ ...current, settings: { ...current.settings, prefer_extended: true } })
-  render(<SettingsPage live={on} onReconnect={() => {}} />)
-  expect(screen.getByRole('switch', { name: 'Prefer extended mixes' })).toHaveAttribute('aria-checked', 'true')
+  const asking = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'ask' } })
+  vi.spyOn(api, 'saveSettings').mockResolvedValue({ ...current.settings, extended_mixes: 'always' })
+  render(<SettingsPage live={asking} onReconnect={() => {}} />)
+  fireEvent.click(screen.getByRole('radio', { name: 'Always get extended' }))
+  await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(current.settings.library_root, { extended_mixes: 'always' }))
+})
+
+it('shows extended mixes as off, with no choice under it, when the setting is saved that way', async () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const off = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'off' } })
+  render(<SettingsPage live={off} onReconnect={() => {}} />)
+  expect(screen.getByRole('switch', { name: 'Offer extended mixes when available' })).toHaveAttribute('aria-checked', 'false')
+  expect(screen.queryByRole('radiogroup', { name: 'When one is found' })).toBeNull()
 })
 
 it('shows error message when saveSettings fails with ApiError', async () => {
