@@ -261,7 +261,8 @@ if (filmVideo) {
     new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          if (!heldByVisitor && !filmVideo.ended && filmVideo.paused) play();
+          // Only a muted film comes back on its own; with sound on it waits for play.
+          if (!heldByVisitor && !filmVideo.ended && filmVideo.paused && filmVideo.muted) play();
         } else if (!filmVideo.paused) {
           filmVideo.pause();
         }
