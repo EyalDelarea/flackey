@@ -56,6 +56,9 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
   const nowPlaying = v.candidates?.find(c => c.sample?.key === player.playing)?.version ?? null
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
+  // A file the quality check did not vouch for (unverified, or kept anyway) names its format without the
+  // green tick: the tick would read as the pass the check row beside it says it is not (issue #97)
+  const vouched = !v.checks.some(c => c.label === 'Quality check')
   return (
     <div className={cls}>
       <div className="row-main">
@@ -89,7 +92,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
-            : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
+            : v.formatLabel ? <span className={`verified${vouched ? '' : ' plain'}`}>
+                {vouched && <Icon name="check" size={13} stroke={2.2} />}{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
           {/* A cancel sits under the choices when there are choices to skip past, and on the right of the
               row when there are not -- which is where a track that is downloading right now needs it. */}

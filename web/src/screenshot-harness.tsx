@@ -282,6 +282,17 @@ const extendedPlaylistRows: Bundle[] = [
   offerDone(73, 'Avicii', 'Levels', 'Original Mix', 203, { status: 'none' }, 8),
   offerDone(74, 'Alesso', 'Years', 'Radio Edit', 195, available(380, 'Club Mix'), 8),
 ]
+/* Issue #97, three tiers: a copy the check could not vouch for is filed and says "unverified", with the
+   reason on hover and its spectrum as a plain fact; a clear one beside it for comparison. */
+const tiered = (b: Bundle, cutoff_hz: number, verification: Record<string, unknown> | null): Bundle => {
+  b.track = { ...b.track!, cutoff_hz, evidence: verification ? [{ kind: 'verification', value: verification }] : [] }
+  return b
+}
+const unverifiedRows: Bundle[] = [
+  tiered(offerDone(81, 'Example Artist', 'Faint Trace', 'Original Mix', 372, null), 20_400, { tier: 'unverified',
+    reason: 'lossless, but nothing above 20400 Hz, which a genuine master and a lossy source can both show' }),
+  tiered(offerDone(82, 'Example Artist', 'Clean Master', 'Original Mix', 401, null), 22_050, { tier: 'clear' }),
+]
 /* The swap, as the worker does it: same track row, new name and length, the offer turned into the note. */
 function swapIn(rows: Bundle[], trackId: number) {
   const b = rows.find(r => r.track?.id === trackId)
@@ -308,6 +319,7 @@ function scenarioSetup() {
     : scenario === 'telegram-revoked' ? pausedOnLogin
     : scenario === 'telegram-revoked-before' ? burnedOnRevoke
     : scenario === 'extended' ? extendedRows
+    : scenario === 'unverified' ? unverifiedRows
     : scenario === 'extended-playlist' ? extendedPlaylistRows : [] as Bundle[])
   const rows = scenario === 'extended-playlist' ? extendedPlaylistRows : extendedRows
   vi_spy(api, 'getExtended', async (trackId: number) => {
@@ -351,6 +363,7 @@ function scenarioSetup() {
       ])
       break
     case 'library-empty':
+    case 'unverified':
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
       break
@@ -500,6 +513,12 @@ if (scenario === 'stages') {
   const fetching = staged.find(b => b.request.state === 'fetching')!
   setTimeout(() => sources.forEach(es =>
     es.handlers['status']?.({ data: JSON.stringify({ fetch_progress: [stageProgress(fetching.request.id)] }) })), 200)
+}
+
+/* Done rows live in History: open it, so a plain headless screenshot of `unverified` shows them */
+if (scenario === 'unverified') {
+  setTimeout(() => [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+    .find(t => t.textContent?.trim() === 'History')?.click(), 600)
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
