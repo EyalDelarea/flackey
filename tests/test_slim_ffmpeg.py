@@ -94,6 +94,10 @@ def _answers(src: Path, work: Path, full_ffmpeg: str) -> dict:
         "duration": pr.duration_s,
         "verdict": (v.passed, v.fmt, v.bitrate_kbps),
         "cutoff": v.cutoff_hz,
+        # The streaming decode the three-tier check runs (issue #97): the slim build has to give it the same
+        # samples, the same promises kept, and so the same tier.
+        "tier": v.level,
+        "integrity": (v.analysis or {}).get("integrity"),
         "spectrogram": v.spectrogram_path is not None and v.spectrogram_path.stat().st_size > 0,
         "bands": band_levels_db(src, window_s=20)[1] if src.suffix in DEMUXERS else None,
         "fingerprints": [fingerprint(src), *(fingerprint(src, 5.0 + t, 20.0) for t in (0.0, 0.023))],
@@ -121,6 +125,7 @@ def test_slim_build_gives_the_full_builds_answers(name, fixtures, full_ffmpeg, t
         assert slim[key] == full[key], key
     if src.suffix != ".mp3" and src.suffix in DEMUXERS:
         assert slim["cutoff"] == full["cutoff"]
+        assert slim["tier"] == full["tier"] and slim["integrity"] == full["integrity"]
         np.testing.assert_allclose(slim["bands"], full["bands"], atol=0.01)  # resampler float rounding
         assert slim["fingerprints"] == full["fingerprints"]
         return

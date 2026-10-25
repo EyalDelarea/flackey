@@ -138,6 +138,17 @@ def sweep(out: Path = typer.Option(Path("sweep.md"), "--out",  # noqa: B008
     typer.echo(f"wrote {out}")
 
 
+@app.command("verify-folder")
+def verify_folder(folder: Path, out: Path = typer.Option(Path("verify-folder.jsonl"), "--out",  # noqa: B008
+                                                      help="One JSON line per file; it names every file"),
+                  jobs: int = typer.Option(2, "--jobs", help="Files checked at once")) -> None:
+    """Run the old and the new quality check over every audio file in a folder, read-only; print how they
+    compare and every file they disagree on (issue #97)."""
+    from .verify_report import run, table
+
+    typer.echo(table(run(folder, out, jobs)))
+
+
 @app.command("replay-picks")
 def replay_picks(out: Path = typer.Option(Path("replay.md"), "--out",  # noqa: B008
                                           help="Where to write the markdown table")) -> None:

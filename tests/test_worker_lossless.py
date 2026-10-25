@@ -3209,3 +3209,38 @@ async def test_off_a_club_mix_is_filed_under_its_own_name(lenv, monkeypatch, tmp
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     t = store.get_track(r.track_id)
     assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)
+
+
+# --- the three tiers (issue #97) ---------------------------------------------------------------------------
+
+async def test_an_unverified_copy_is_filed_and_says_so(lenv, detector, tmp_path: Path):
+    """One sign of a lossy source that a genuine master can show too is no reason to refuse the copy: it is
+    filed, and the track, its tag and the timeline all say the check could not vouch for it."""
+    _settings, store, _, provider, _, _ = lenv
+    provider.audio["a"] = detector.unverify(_flac(tmp_path / "edge.flac", seed=4))
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    a = attempt_of(store, r.id)
+    assert a.outcome == "filed" and provider.downloaded == ["a"]
+    verdict = next(e["detail"] for e in a.timeline if e["event"] == "verify")
+    assert verdict["tier"] == "unverified" and verdict["evidence"]["edge"]["finding"] == "ambiguous"
+    ev = store.evidence_of(r.track_id, "verification")
+    assert ev["tier"] == "unverified" and ev["edge"]["edge_hz"] == 20_500
+    assert read_tags(store.get_track(r.track_id).path)["comment"].startswith("flackey: unverified")
+    assert detector.rules == ["tiers"]
+
+
+async def test_a_clear_copy_is_tagged_verified(lenv, detector):
+    _settings, store, _, _, _, _ = lenv
+    r = await make(lenv).process(store.add_request(TEXT, RequestKind.TEXT))
+    assert read_tags(store.get_track(r.track_id).path)["comment"].startswith("flackey: verified")
+    verdict = next(e["detail"] for e in attempt_of(store, r.id).timeline if e["event"] == "verify")
+    assert verdict["tier"] == "clear"
+
+
+async def test_measurement_only_mode_reaches_the_check(lenv, detector):
+    """`verification_rule=legacy` is passed to every check the worker asks for, unchanged."""
+    settings, store, _, _, _, _ = lenv
+    w = make(lenv, settings=settings.model_copy(update={"verification_rule": "legacy"}))
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert detector.rules and set(detector.rules) == {"legacy"}

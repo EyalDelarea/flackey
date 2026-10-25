@@ -69,7 +69,7 @@ layers = [
   "web",
   "selfupdate",
   "soulseek_link : sharing",
-  "worker : events : inbox : sweep : replay : tag_dryrun",
+  "worker : events : inbox : sweep : replay : tag_dryrun : verify_report",
   "attempts : reference : tag_lookup",
   "library : export : tag : verify : store : catalog : deezer : youtube : spotify : source : telegram : convert : fingerprint",
   "evidence",

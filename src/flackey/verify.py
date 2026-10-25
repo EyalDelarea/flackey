@@ -358,8 +358,8 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
             return ("reject", (f"cutoff at {edge} Hz, below {MP3_EDGE_REJECT_BELOW_HZ}: consistent with a "
                     "lower-bitrate source"), cutoff)
         if edge_kind == "ambiguous":
-            return ("unverified", f"{analysis['probe']['bitrate_kbps']} kbps, but nothing above {edge} Hz, "
-                    "short of where a 320 kbps encode usually reaches", cutoff)
+            return ("unverified", (f"{analysis['probe']['bitrate_kbps']} kbps, but nothing above {edge} Hz, "
+                    "short of where a 320 kbps encode usually reaches"), cutoff)
         return "clear", f"{analysis['probe']['bitrate_kbps']} kbps, {edge_text(cutoff)}", cutoff
     q_kind, codec, _ = quant_finding(analysis.get("quant"))
     name = CODEC_NAMES.get(codec or "", "lossy")
