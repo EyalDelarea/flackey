@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import subprocess
 import threading
 import time
@@ -14,6 +15,8 @@ from . import evidence
 from .audiofile import DEMUXERS, WrongFormat, arrived_empty, input_args
 from .models import NO_EDGE_HZ, Verdict, edge_text
 from .tools import no_window, tool_path
+
+log = logging.getLogger(__name__)
 
 MIN_MP3_BITRATE = 320
 MIN_MP3_CUTOFF = 18_000
@@ -367,6 +370,12 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
             return ("unverified", (f"{analysis['probe']['bitrate_kbps']} kbps, but nothing above {edge} Hz, "
                     "short of where a 320 kbps encode usually reaches"), cutoff)
         return "clear", f"{analysis['probe']['bitrate_kbps']} kbps, {edge_text(cutoff)}", cutoff
+    sr = analysis["probe"].get("sample_rate") or SR
+    if sr < SR:
+        # Nothing above sr/2 can be in it at all: the old check read that as a lowpass at sr/2, and so does
+        # this one. A 22.05 kHz "lossless" file is a phone-call-grade copy whatever made it.
+        top = sr // 2
+        return "reject", f"lossless container but cutoff at {top} Hz: consistent with a lossy source", top
     q_kind, codec, _ = quant_finding(analysis.get("quant"))
     name = CODEC_NAMES.get(codec or "", "lossy")
     if edge_kind == "unambiguous" and edge >= EDGE_REJECT_ALONE_BELOW_HZ and q_kind not in ("strong", "weak"):
@@ -430,6 +439,7 @@ def verify(path: Path, spectrogram_dir: Path | None, name: str | None = None, ru
         legacy = {"passed": old_passed, "cutoff_hz": legacy_cutoff}
         try:
             analysis = analyze(path, pr)
+            tier, reason, cutoff = decide(analysis, pr.fmt)
         except ToolMissing:
             raise
         except VerifyError as e:
@@ -440,7 +450,25 @@ def verify(path: Path, spectrogram_dir: Path | None, name: str | None = None, ru
             return Verdict(old_passed, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
                            bit_depth=pr.bit_depth, sample_rate=pr.sample_rate,
                            analysis={"version": DETECTOR_VERSION, "error": str(e)[:300], "legacy": legacy})
-        tier, reason, cutoff = decide(analysis, pr.fmt)
+        except Exception as e:  # a bug in the detectors is no verdict on the file
+            # The bytes decoded (or the error would be a VerifyError): it is the check that broke. Refusing
+            # the file, or failing the request and deleting it, would punish the copy for our bug. So the
+            # copy is filed, as unverified, and the crash is logged for a report.
+            log.exception("the evidence check crashed on %s", path.name)
+            crash = {"version": DETECTOR_VERSION, "error": f"{type(e).__name__}: {e}"[:300], "legacy": legacy}
+            if rule == "legacy":
+                return Verdict(old_passed, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
+                               bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, analysis=crash)
+            if not old_passed:
+                # The old check still had its say and refused it: that stands, as it did before
+                return Verdict(False, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
+                               bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="reject",
+                               analysis={**crash, "tier": "reject"})
+            head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
+            return Verdict(True, pr.fmt, pr.bitrate_kbps, legacy_cutoff,
+                           f"{head}, but the full check could not finish ({type(e).__name__})", png,
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="unverified",
+                           analysis={**crash, "tier": "unverified"})
         analysis["legacy"] = legacy
         if rule == "legacy":
             # Measurement only: today's verdict and numbers decide. The new rule's answer is kept beside it

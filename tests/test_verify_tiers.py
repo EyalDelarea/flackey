@@ -124,6 +124,28 @@ def test_measurement_only_mode_passes_what_the_old_check_passed_even_when_the_de
     assert not list((d / "png2").glob("*.png"))                  # the picture of a failed check is not left behind
 
 
+@pytest.mark.parametrize("rule", ["tiers", "legacy"])
+def test_a_crash_in_the_check_files_the_copy_as_unverified(pink: Path, d: Path, monkeypatch, rule):
+    """A bug in the detectors is not a fact about the file: no refusal, no failed request, no deleted copy."""
+    from flackey import verify as verify_mod
+
+    def crash(*_a, **_k):
+        raise IndexError("detector bug")
+
+    monkeypatch.setattr(verify_mod, "analyze", crash)
+    v = verify_mod.verify(_flac(pink, d / f"crash-{rule}.flac"), None, rule=rule)
+    assert v.passed and "IndexError" in v.analysis["error"]
+    assert v.level == ("unverified" if rule == "tiers" else "clear")
+
+
+def test_a_lossless_file_below_cd_rate_is_rejected_as_before(pink: Path, d: Path):
+    low = d / "half.flac"
+    _ffmpeg("-i", str(pink), "-ar", "22050", "-c:a", "flac", "-sample_fmt", "s16", str(low))
+    v = verify(low, None)
+    assert v.analysis["legacy"]["passed"] is False
+    assert v.tier == "reject" and v.cutoff_hz == 11_025
+
+
 def test_a_glitch_in_an_mp3_is_concealed_as_before(pink: Path, d: Path):
     good = d / "glitch320.mp3"
     _ffmpeg("-i", str(pink), "-c:a", "libmp3lame", "-b:a", "320k", str(good))
