@@ -172,14 +172,19 @@ class TopRegions:
 
     The reference measures window `w`'s energy over 2 x `block` samples of the mid channel from (w-1) x
     `block`, and analyses `span` samples from the same start (the window plus every alignment the search
-    tries). Only windows whose span lies wholly inside the stream are candidates."""
+    tries). Only windows whose span lies wholly inside the stream are candidates.
 
-    def __init__(self, block: int, span: int, count: int, channels: int):
+    With `segment` (samples), the loudest `count` are kept for every stretch of that length as well
+    (issue #97): a grid that only some stretches carry -- an MP3-sourced sample inside a genuine master --
+    is told apart from one the whole file carries. The whole stream's loudest are always among them."""
+
+    def __init__(self, block: int, span: int, count: int, channels: int, segment: int | None = None):
         self.block, self.span, self.count, self.channels = block, span, count, channels
+        self.segment = segment
         self._buf = np.empty((0, channels), dtype=np.float32)
         self._buf_start = 0                     # absolute index of _buf[0]
         self._next = 0                          # next window start to evaluate
-        self._heap: list[tuple[float, int, np.ndarray]] = []
+        self._heaps: dict[int, list[tuple[float, int, np.ndarray]]] = {}
 
     def feed(self, chunk: np.ndarray) -> None:
         self._buf = np.concatenate([self._buf, chunk.astype(np.float32, copy=False)])
@@ -188,24 +193,31 @@ class TopRegions:
             rel = self._next - self._buf_start
             mid = self._buf[rel:rel + 2 * self.block].sum(axis=1, dtype=np.float64)
             item = (float(np.dot(mid, mid)), -self._next)
-            if len(self._heap) < self.count or item > self._heap[0][:2]:
+            heap = self._heaps.setdefault(self._next // self.segment if self.segment else 0, [])
+            if len(heap) < self.count or item > heap[0][:2]:
                 entry = (*item, self._buf[rel:rel + self.span].copy())
-                if len(self._heap) < self.count:
-                    heapq.heappush(self._heap, entry)
+                if len(heap) < self.count:
+                    heapq.heappush(heap, entry)
                 else:
-                    heapq.heapreplace(self._heap, entry)
+                    heapq.heapreplace(heap, entry)
             self._next += self.block
         drop = self._next - self._buf_start
         if drop > 0:
             self._buf = self._buf[drop:]
             self._buf_start += drop
 
-    def regions(self) -> np.ndarray:
-        """(windows, span, channels) as float64, loudest first; fewer than `count` for a short stream."""
-        items = sorted(self._heap, key=lambda it: (it[0], it[1]), reverse=True)
+    def regions(self, segment: int | None = None) -> np.ndarray:
+        """(windows, span, channels) as float64, loudest first; fewer than `count` for a short stream. The
+        whole stream's, or one segment's."""
+        pool = self._heaps.get(segment, []) if segment is not None else [it for h in self._heaps.values() for it in h]
+        items = sorted(pool, key=lambda it: (it[0], it[1]), reverse=True)[:self.count]
         if not items:
             return np.empty((0, self.span, self.channels))
         return np.stack([it[2] for it in items]).astype(np.float64)
+
+    def segments(self) -> list[int]:
+        """The segments that hold a full `count` of windows, in order: a short tail is too few to judge."""
+        return sorted(k for k, h in self._heaps.items() if len(h) == self.count)
 
 
 def regions_of(x: np.ndarray, block: int, span: int, count: int) -> np.ndarray:

@@ -8,6 +8,7 @@ from flackey import evidence, quant
 from flackey.config import Settings
 from flackey.models import NO_EDGE_HZ, Verdict
 from flackey.verify import (
+    QUANT_COVER_MIN,
     QUANT_Z_STRONG,
     QUANT_Z_WEAK,
     VerifyError,
@@ -49,6 +50,44 @@ def test_the_lossless_rule(kw, tier):
     assert got == tier, reason
     if kw.get("edge") and not kw.get("reach"):
         assert cutoff == kw["edge"]
+
+
+def _segments(n_with, n=8, z=QUANT_Z_STRONG + 10):
+    return [z] * n_with + [4.0] * (n - n_with)
+
+
+@pytest.mark.parametrize("kw,tier", [
+    ({"mp3_seg": _segments(8)}, "reject"),                      # the whole file carries the grid
+    ({"mp3_seg": _segments(int(8 * QUANT_COVER_MIN))}, "reject"),
+    ({"mp3_seg": _segments(2)}, "unverified"),                  # a sample from an MP3 inside a master
+    ({"mp3_seg": _segments(2), "edge": 19_400}, "unverified"),  # the edge does not get to lean on it
+    ({"mp3_seg": _segments(2), "edge": 16_500}, "reject"),      # an edge that rejects alone still does
+    ({"mp3_seg": _segments(2, n=3)}, "reject"),                 # too few stretches to count: as before
+])
+def test_traces_in_part_of_the_track_are_not_a_reject(kw, tier):
+    a = analysis(mp3_z=QUANT_Z_STRONG + 20, edge=kw.get("edge"))
+    a["quant"]["mp3"]["segments"] = kw["mp3_seg"]
+    got, reason, _ = decide(a, "flac")
+    assert got == tier, reason
+    if tier == "unverified":
+        assert reason == "lossless, but MP3-like traces in part of the track"
+        assert summary({**a, "tier": got})["quant"] == {"finding": "partial", "codec": "mp3",
+                                                         "z": QUANT_Z_STRONG + 20, "cover": 0.25}
+
+
+def test_the_loudest_windows_are_the_same_with_segments_kept():
+    """Keeping each stretch's loudest windows leaves the whole file's loudest -- the detectors' input --
+    exactly as before, and a stretch too short to fill its count is not offered for judging."""
+    rng = np.random.default_rng(5)
+    x = (rng.standard_normal((44100 * 10, 2)) * np.linspace(0.1, 1, 44100 * 10)[:, None]).astype(np.float32)
+    whole = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, 2)
+    parts = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, 2, segment=44100 * 3)
+    for i in range(0, len(x), 30_000):
+        whole.feed(x[i:i + 30_000])
+        parts.feed(x[i:i + 30_000])
+    assert np.array_equal(whole.regions(), parts.regions())
+    assert parts.segments() == [0, 1, 2, 3]
+    assert parts.regions(1).shape == (quant.MP3_WINDOWS, quant.MP3_SPAN, 2)
 
 
 def test_a_quantisation_only_reject_keeps_the_no_edge_cutoff():

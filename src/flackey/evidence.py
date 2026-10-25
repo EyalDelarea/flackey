@@ -36,6 +36,11 @@ ABOVE_MARGIN_HZ = 300         # "content above the edge" is looked for this far 
 ABOVE_RISE_DB = 12            # a frame whose level above the edge is within this of its level below
 SMOOTH_HZ = 60                # the fine spectrum is smoothed over about this much before locating an edge
 MIN_ACTIVE_FRAMES = 20        # about 2 s of sound with something in it
+# The quantisation grid is also looked for in each of this many equal stretches of the file, once the whole
+# file shows one at least this clearly (issue #97): a grid in a few stretches is a sample, not a transcode
+QUANT_SEGMENTS = 8
+QUANT_SEGMENT_FROM_Z = 8.0
+QUANT_SEGMENT_FALLBACK_S = 30  # the stretch length when the file's length is not known up front
 
 
 def frame_length(sample_rate: int) -> int:
@@ -46,7 +51,8 @@ def frame_length(sample_rate: int) -> int:
 class Analyzer:
     """Fed the raw little-endian PCM of one decode, in chunks of any size."""
 
-    def __init__(self, sample_rate: int, channels: int, bits: int, *, quant_detectors: bool):
+    def __init__(self, sample_rate: int, channels: int, bits: int, *, quant_detectors: bool,
+                 expected_samples: int | None = None):
         self.sr, self.ch, self.bits = sample_rate, channels, bits
         self.width = 2 if bits == 16 else 3
         self.md5 = hashlib.md5()
@@ -70,8 +76,10 @@ class Analyzer:
         self._peak = 0
         self.quant = quant_detectors and round(sample_rate / 1000) in quant.AAC_BANDS_LONG
         if self.quant:
-            self._aac = quant.TopRegions(quant.AAC_LONG, quant.AAC_SPAN, quant.AAC_WINDOWS, channels)
-            self._mp3 = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, channels)
+            seg = (-(-expected_samples // QUANT_SEGMENTS) if expected_samples
+                   else QUANT_SEGMENT_FALLBACK_S * sample_rate)
+            self._aac = quant.TopRegions(quant.AAC_LONG, quant.AAC_SPAN, quant.AAC_WINDOWS, channels, seg)
+            self._mp3 = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, channels, seg)
 
     def feed(self, raw: bytes) -> None:
         self.md5.update(raw)
@@ -122,9 +130,20 @@ class Analyzer:
             "bits": self._bit_usage(),
         }
         if self.quant:
-            aac = quant.detect_aac(self._aac.regions(), self.sr)
-            mp3 = quant.detect_mp3(self._mp3.regions(), self.sr)
-            out["quant"] = {"aac": aac.to_dict() if aac else None, "mp3": mp3.to_dict() if mp3 else None}
+            out["quant"] = {"aac": self._detect(self._aac, quant.detect_aac),
+                            "mp3": self._detect(self._mp3, quant.detect_mp3)}
+        return out
+
+    def _detect(self, top: quant.TopRegions, detect) -> dict | None:
+        """One detector over the whole file's loudest windows and, when that finds a grid, over each
+        segment's: `segments` holds each one's z, so the rule can ask how much of the file carries it."""
+        found = detect(top.regions(), self.sr)
+        if found is None:
+            return None
+        out = found.to_dict()
+        if found.z >= QUANT_SEGMENT_FROM_Z:
+            parts = [detect(top.regions(s), self.sr) for s in top.segments()]
+            out["segments"] = [round(p.z, 1) for p in parts if p is not None]
         return out
 
     def _bit_usage(self) -> dict:

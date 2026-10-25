@@ -11,7 +11,7 @@ import pytest
 from mutagen.flac import FLAC
 
 from flackey import verify_report
-from flackey.verify import VerifyError, analyze, summary, verify
+from flackey.verify import QUANT_Z_STRONG, VerifyError, analyze, summary, verify
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -78,6 +78,24 @@ def test_an_aac_256_in_a_flac_is_rejected_on_its_quantisation(pink: Path, d: Pat
 def test_an_mp3_320_in_a_flac_is_not_cleared(pink: Path, d: Path):
     v = verify(_transcode(pink, d, "m320", "-c:a", "libmp3lame", "-b:a", "320k", ext="mp3"), None)
     assert v.tier in ("reject", "unverified")
+
+
+def test_a_genuine_master_with_a_lossy_sample_in_it_is_unverified_not_rejected(pink: Path, d: Path):
+    """A producer's lossy-sourced sample leaves the grid in one stretch of an otherwise genuine master: the
+    whole file's loudest windows show it plainly, the rest of the file does not (issue #97)."""
+    loud = d / "sample.wav"
+    _ffmpeg("-i", str(pink), "-t", "2.5", "-af", "volume=4dB", "-c:a", "pcm_s24le", str(loud))
+    lossy = d / "sample.m4a"
+    _ffmpeg("-i", str(loud), "-c:a", "aac", "-b:a", "256k", str(lossy))
+    spliced = d / "spliced.wav"
+    _ffmpeg("-i", str(pink), "-i", str(lossy), "-filter_complex",
+            "[0:a]atrim=0:10,asetpts=N/SR/TB[a];[1:a]atrim=0:2.5,asetpts=N/SR/TB,aformat=channel_layouts=stereo[b];"
+            "[0:a]atrim=12.5:20,asetpts=N/SR/TB[c];[a][b][c]concat=n=3:v=0:a=1",
+            "-ar", "44100", "-c:a", "pcm_s24le", str(spliced))
+    v = verify(_flac(spliced, d / "spliced.flac"), None)
+    assert v.analysis["quant"]["aac"]["z"] >= QUANT_Z_STRONG, v.analysis["quant"]
+    assert v.tier == "unverified" and v.reason == "lossless, but AAC-like traces in part of the track"
+    assert summary(v.analysis)["quant"]["cover"] < 0.5
 
 
 @pytest.mark.parametrize("name,filters", [

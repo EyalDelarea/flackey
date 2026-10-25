@@ -195,6 +195,11 @@ MP3_EDGE_CLEAR_FROM_HZ = 19_900
 # Derrien quantisation traces: how far the best frame alignment stands above every other (robust z).
 QUANT_Z_STRONG = 12.0
 QUANT_Z_WEAK = 8.0
+# The same traces have to run through most of the file (issue #97): the share of its stretches that show them
+# at QUANT_Z_WEAK or more. A genuine master with an MP3-sourced sample in it carries them in a stretch or two,
+# and is unverified, not rejected. Judged once the file has QUANT_COVER_FROM stretches to count.
+QUANT_COVER_MIN = 0.5
+QUANT_COVER_FROM = 4
 
 
 def _decode_args(path: Path, pr: Probe) -> tuple[list[str], int]:
@@ -291,7 +296,8 @@ def analyze(path: Path, pr: Probe | None = None, *, quant_detectors: bool = True
     cmd, bits = _decode_args(path, pr)
     channels = _channels(path)
     an = evidence.Analyzer(pr.sample_rate, channels, bits,
-                           quant_detectors=quant_detectors and pr.fmt in LOSSLESS)
+                           quant_detectors=quant_detectors and pr.fmt in LOSSLESS,
+                           expected_samples=round(pr.duration_s * pr.sample_rate) or None)
     t0 = time.monotonic()
     _stream(cmd, an.feed)
     measured = an.finish()
@@ -311,17 +317,34 @@ def analyze(path: Path, pr: Probe | None = None, *, quant_detectors: bool = True
     }
 
 
+def quant_cover(r: dict) -> float | None:
+    """The share of a detector's stretches that carry its grid, or None with too few stretches measured."""
+    seg = r.get("segments")
+    if not seg or len(seg) < QUANT_COVER_FROM:
+        return None
+    return sum(z >= QUANT_Z_WEAK for z in seg) / len(seg)
+
+
 def quant_finding(q: dict | None) -> tuple[str, str | None, float]:
-    """The quantisation family: "strong", "weak", "clean" or "not_run", with the codec and its z."""
-    found = [(r["z"], r["codec"]) for r in ((q or {}).get("aac"), (q or {}).get("mp3")) if r]
+    """The quantisation family: "strong", "weak", "partial" (traces in only part of the file), "clean" or
+    "not_run", with the codec and its z."""
+    found = [(r["z"], r["codec"], r) for r in ((q or {}).get("aac"), (q or {}).get("mp3")) if r]
     if not found:
         return "not_run", None, 0.0
-    z, codec = max(found)
+    z, codec, best = max(found, key=lambda f: f[:2])
+    cover = quant_cover(best)
+    if z >= QUANT_Z_WEAK and cover is not None and cover < QUANT_COVER_MIN:
+        return "partial", codec, z
     if z >= QUANT_Z_STRONG:
         return "strong", codec, z
     if z >= QUANT_Z_WEAK:
         return "weak", codec, z
     return "clean", codec, z
+
+
+def _best_cover(q: dict | None, codec: str | None) -> float | None:
+    r = (q or {}).get(codec or "")
+    return quant_cover(r) if r else None
 
 
 def edge_finding(spec: dict, fmt: str) -> tuple[str, int | None]:
@@ -353,9 +376,9 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
     """The three-tier verdict from the evidence families: (tier, reason, cutoff_hz for the Verdict).
 
     reject:     one unambiguous family (an edge below EDGE_REJECT_ALONE_BELOW_HZ that nothing reaches
-                past; strong quantisation traces), or two families agreeing (an edge below
-                EDGE_REJECT_BELOW_HZ, or an ambiguous one, with any quantisation traces);
-    unverified: one ambiguous family alone, or too little sound to judge;
+                past; strong quantisation traces through most of the file), or two families agreeing (an
+                edge below EDGE_REJECT_BELOW_HZ, or an ambiguous one, with quantisation traces);
+    unverified: one ambiguous family alone, traces in only part of the file, or too little sound to judge;
     clear:      none of the above.
     An MP3 is judged on its edge alone (below MIN_MP3_CUTOFF a reject, as before; short of
     MP3_EDGE_CLEAR_FROM_HZ unverified): it is lossy by definition, the only question is whether it was
@@ -387,6 +410,8 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
         # on the spectrum" to the page, and is still a cutoff, so the copy is kept to be overruled.
         return ("reject", ("lossless container but the audio carries the quantisation pattern of an earlier "
                 f"{name} encode: consistent with a lossy source"), NO_EDGE_HZ)
+    if q_kind == "partial":
+        return "unverified", f"lossless, but {name}-like traces in part of the track", cutoff
     if edge_kind == "ambiguous" and q_kind == "weak":
         return ("reject", (f"lossless container but cutoff at {edge} Hz and traces of an earlier {name} "
                 "encode: consistent with a lossy source"), cutoff)
@@ -508,7 +533,9 @@ def summary(analysis: dict | None) -> dict | None:
         **({"shadow_tier": analysis["shadow_tier"]} if "shadow_tier" in analysis else {}),
         "edge": {"finding": edge_kind, "edge_hz": spec.get("edge_hz"), "drop_db": spec.get("edge_drop_db"),
                  "frames_above_edge": spec.get("frames_above_edge")},
-        "quant": {"finding": q_kind, "codec": codec, "z": round(z, 1)},
+        "quant": {"finding": q_kind, "codec": codec, "z": round(z, 1),
+                  **({"cover": round(c, 2)} if (c := _best_cover(analysis.get("quant"), codec)) is not None
+                     else {})},
         "integrity": {"checked": analysis["integrity"]["checked"], "failed": analysis["integrity"]["failed"]},
         "container": {k: cont[k] for k in ("max_blocksize", "vendor") if k in cont},
         "legacy": analysis.get("legacy"),
