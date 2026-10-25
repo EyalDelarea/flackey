@@ -400,6 +400,9 @@ class FilingMixin:
                  f"{catalog.genre} / {catalog.label}"]
         if not verdict.passed:
             parts.insert(3, "kept anyway: failed the quality check")
+        elif verdict.level == "unverified":
+            # Filed, but not vouched for (issue #97): said here as on the page, with the reason
+            parts.insert(3, f"unverified: {verdict.reason}")
         if version is not None and version.status == "unconfirmed":
             parts.insert(1, "version unconfirmed")
         if conf is not None:

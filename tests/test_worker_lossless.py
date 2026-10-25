@@ -135,6 +135,7 @@ class FakeDetector:
 # The shape `verify.summary` reads, as an unverified 24-bit master would give it
 _UNVERIFIED_ANALYSIS = {
     "version": "2.0", "tier": "unverified", "probe": {"fmt": "flac"},
+    "reason": "lossless, but nothing above 20500 Hz, which a genuine master and a lossy source can both show",
     "spectral": {"judged": 2, "edge_hz": 20_500, "edge_drop_db": 30.0, "frames_above_edge": 0.0},
     "quant": {"aac": {"codec": "aac", "z": 4.0}, "mp3": {"codec": "mp3", "z": 4.0}},
     "integrity": {"checked": ["sample_count", "md5"], "failed": None},
@@ -3216,7 +3217,7 @@ async def test_off_a_club_mix_is_filed_under_its_own_name(lenv, monkeypatch, tmp
 async def test_an_unverified_copy_is_filed_and_says_so(lenv, detector, tmp_path: Path):
     """One sign of a lossy source that a genuine master can show too is no reason to refuse the copy: it is
     filed, and the track, its tag and the timeline all say the check could not vouch for it."""
-    _settings, store, _, provider, _, _ = lenv
+    _settings, store, notifier, provider, _, _ = lenv
     provider.audio["a"] = detector.unverify(_flac(tmp_path / "edge.flac", seed=4))
     w = make(lenv)
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
@@ -3226,7 +3227,10 @@ async def test_an_unverified_copy_is_filed_and_says_so(lenv, detector, tmp_path:
     assert verdict["tier"] == "unverified" and verdict["evidence"]["edge"]["finding"] == "ambiguous"
     ev = store.evidence_of(r.track_id, "verification")
     assert ev["tier"] == "unverified" and ev["edge"]["edge_hz"] == 20_500
+    assert ev["reason"].startswith("lossless, but nothing above 20500 Hz")    # the page's hover reads it
     assert read_tags(store.get_track(r.track_id).path)["comment"].startswith("flackey: unverified")
+    done = next(m for m, *_ in reversed(notifier.sent) if m.startswith("Done:"))
+    assert "unverified: lossless, but nothing above 20500 Hz" in done
     assert detector.rules == ["tiers"]
 
 

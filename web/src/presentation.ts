@@ -23,7 +23,8 @@ export type Dot = 'done' | 'current' | 'pending' | 'paused'
 /** One rung of the ladder: the name and the state are rendered together, never as two separate widgets. */
 export interface StepView { name: string; state: Dot }
 /** Evidence that the file is what it claims to be - the fingerprint match and the spectrogram cutoff. */
-export interface CheckView { label: string; value: string; ok: boolean }
+/** `ok` null: a plain fact, neither a pass nor a failure. `title`: the reason, on hover. */
+export interface CheckView { label: string; value: string; ok: boolean | null; title?: string }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
 export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep'; path?: string }
@@ -396,8 +397,14 @@ function checksFor(b: Bundle): CheckView[] {
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
   // Filed, but the check could not vouch for it either way (issue #97): one sign of a lossy source that a
   // genuine master can show too, or too little sound to judge. Said, so it never passes for a clear one.
-  const unverified = !overruled && (b.track?.evidence?.some(e => e.kind === 'verification' && e.value.tier === 'unverified') ?? false)
-  if (unverified) out.push({ label: 'Quality check', value: 'unverified', ok: false })
+  const verification = overruled ? undefined
+    : b.track?.evidence?.find(e => e.kind === 'verification' && e.value.tier === 'unverified')
+  const unverified = verification != null
+  if (verification) {
+    const why = typeof verification.value.reason === 'string' ? verification.value.reason : null
+    out.push({ label: 'Quality check', value: 'unverified', ok: false,
+      title: why ? asSentence(why) : 'One sign of a lossy source that a genuine master can show too, or too little sound to judge' })
+  }
   // The fingerprint proves the recording, not which release of it (issue #172): when nothing in the file's
   // name or tags said it is the version asked for -- a remaster above all -- the track says so.
   const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
@@ -405,8 +412,11 @@ function checksFor(b: Bundle): CheckView[] {
   // Asked for because the owner prefers extended mixes (issue #187); a miss is said in its own line instead
   if (extendedOf(b)?.found) out.push({ label: 'Extended mix', value: 'found', ok: true })
   const filed = b.track != null && !overruled
-  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
-    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
+  // Beside "unverified" neither spectrum line is a pass: the check did not vouch for the file, so its
+  // numbers are shown as plain facts, not in green
+  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: unverified ? null : true }
+    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`,
+        ok: unverified ? null : filed })
   return out
 }
 

@@ -11,7 +11,7 @@ import pytest
 from mutagen.flac import FLAC
 
 from flackey import verify_report
-from flackey.verify import VerifyError, analyze, verify
+from flackey.verify import VerifyError, analyze, summary, verify
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -136,6 +136,10 @@ def test_a_crash_in_the_check_files_the_copy_as_unverified(pink: Path, d: Path, 
     v = verify_mod.verify(_flac(pink, d / f"crash-{rule}.flac"), None, rule=rule)
     assert v.passed and "IndexError" in v.analysis["error"]
     assert v.level == ("unverified" if rule == "tiers" else "clear")
+    if rule == "tiers":
+        # The track still carries its tier and why, so the page says unverified rather than nothing
+        assert summary(v.analysis) == {"version": v.analysis["version"], "tier": "unverified",
+                                       "reason": v.reason, "error": v.analysis["error"]}
 
 
 def test_a_lossless_file_below_cd_rate_is_rejected_as_before(pink: Path, d: Path):

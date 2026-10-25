@@ -465,10 +465,10 @@ def verify(path: Path, spectrogram_dir: Path | None, name: str | None = None, ru
                                bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="reject",
                                analysis={**crash, "tier": "reject"})
             head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
-            return Verdict(True, pr.fmt, pr.bitrate_kbps, legacy_cutoff,
-                           f"{head}, but the full check could not finish ({type(e).__name__})", png,
+            why = f"{head}, but the full check could not finish ({type(e).__name__})"
+            return Verdict(True, pr.fmt, pr.bitrate_kbps, legacy_cutoff, why, png,
                            bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="unverified",
-                           analysis={**crash, "tier": "unverified"})
+                           analysis={**crash, "tier": "unverified", "reason": why})
         analysis["legacy"] = legacy
         if rule == "legacy":
             # Measurement only: today's verdict and numbers decide. The new rule's answer is kept beside it
@@ -492,14 +492,19 @@ def verify(path: Path, spectrogram_dir: Path | None, name: str | None = None, ru
 def summary(analysis: dict | None) -> dict | None:
     """The handful of numbers a verdict rests on, small enough to keep on every rejection and track: the
     tier and each family's finding. The full analysis (per channel, per detector) is for reports."""
-    if not analysis or "spectral" not in analysis:
+    if not analysis:
         return None
+    if "spectral" not in analysis:
+        # A check that crashed (`verify`) still has a tier to show, and the reason it has no numbers
+        if "tier" not in analysis:
+            return None
+        return {k: analysis[k] for k in ("version", "tier", "reason", "error") if k in analysis}
     spec = analysis["spectral"]
     q_kind, codec, z = quant_finding(analysis.get("quant"))
     edge_kind, _ = edge_finding(spec, analysis["probe"]["fmt"])
     cont = analysis.get("container") or {}
     return {
-        "version": analysis["version"], "tier": analysis.get("tier"),
+        "version": analysis["version"], "tier": analysis.get("tier"), "reason": analysis.get("reason"),
         **({"shadow_tier": analysis["shadow_tier"]} if "shadow_tier" in analysis else {}),
         "edge": {"finding": edge_kind, "edge_hz": spec.get("edge_hz"), "drop_db": spec.get("edge_drop_db"),
                  "frames_above_edge": spec.get("frames_above_edge")},

@@ -285,10 +285,19 @@ describe('presentRow', () => {
     const track = { id: 9, path: '/l/a.aiff', fmt: 'aiff', bitrate_kbps: 1411, cutoff_hz: 20100, file_size: 1, artist: 'A',
       title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
       verified_at: null, spectrogram_path: null, source: 'slskd', source_fmt: 'flac', bit_depth: 16, sample_rate: 44100,
-      catalog: null, evidence: [{ kind: 'verification', value: { tier: 'unverified' } }] }
+      catalog: null, evidence: [{ kind: 'verification', value: { tier: 'unverified',
+        reason: 'lossless, but nothing above 20100 Hz, which a genuine master and a lossy source can both show' } }] }
+    // The reason rides on hover, and the spectrum is a plain fact beside it, never a green pass
     expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks).toEqual([
-      { label: 'Quality check', value: 'unverified', ok: false },
-      { label: 'Content to', value: '20.1 kHz', ok: true }])
+      { label: 'Quality check', value: 'unverified', ok: false,
+        title: 'Lossless, but nothing above 20.1 kHz, which a genuine master and a lossy source can both show' },
+      { label: 'Content to', value: '20.1 kHz', ok: null }])
+    // An older row with no reason still explains itself
+    const bare = { ...track, cutoff_hz: 22050, evidence: [{ kind: 'verification', value: { tier: 'unverified' } }] }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: bare }), opts).checks).toEqual([
+      { label: 'Quality check', value: 'unverified', ok: false,
+        title: 'One sign of a lossy source that a genuine master can show too, or too little sound to judge' },
+      { label: 'Spectrum', value: 'no edge found', ok: null }])
   })
   it('a refusal on the quantisation grid alone does not quote a cutoff it never had', () => {
     const rejection = { id: 3, request_id: 1, reason: 'lossless container but the audio carries the quantisation pattern of an earlier AAC encode: consistent with a lossy source',

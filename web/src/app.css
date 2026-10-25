@@ -275,6 +275,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .check svg { color: var(--green); }
 .check b { font-weight: 600; color: var(--text); }
 .check.bad { color: var(--red); } .check.bad svg { color: var(--red); } .check.bad b { color: var(--red); }
+.check[title] { cursor: help; }
 /* The batch bar. Four or five segments rather than a fill plus a sliver, because "how far along" was never
    the question a bulk import raises -- "how much of this is working, and how much is parked" is. Every row
    in the batch lands in exactly one segment, so the bar always fills its width: a gap at the end would be
