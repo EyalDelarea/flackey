@@ -6,6 +6,7 @@ import Compare from './Compare'
 import SpectrogramWell from './SpectrogramWell'
 import Stepper from './Stepper'
 import Platter from './Platter'
+import PlayButton from './PlayButton'
 import Icon from '../Icon'
 import HelpTag from '../HelpTag'
 import type { RowAction, RowView } from '../../presentation'
@@ -122,6 +123,19 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
                       onClick={() => onAction('extended', v.id, undefined)}>
                 {v.extendedOffer.busy ? 'Getting…' : 'Get extended'}</button>
             </HelpTag>
+          </div>
+        </div>)}
+      {/* The lossless copy the quality check held back (issue #97): the same strip as an extended mix on
+          offer, since it asks the same question -- this one, or the copy that was filed? */}
+      {v.held && (
+        <div className="extended-offer held-copy" role="group" aria-label={v.held.label}>
+          <HelpTag text={v.held.tip}>
+            <span className="extended-offer-label" tabIndex={0}>{v.held.label}</span>
+          </HelpTag>
+          <div className="extended-offer-actions">
+            <PlayButton sample={v.held.sample} player={player} onPlay={onPlay} />
+            <button className="btn-secondary" aria-description={v.held.tip}
+                    onClick={() => onAction('keepHeld', v.id, undefined)}>Keep lossless</button>
           </div>
         </div>)}
       {v.samples && <Compare s={v.samples} player={player} onPlay={onPlay} onAccept={() => onAction('accept', v.id, undefined)} />}

@@ -63,6 +63,7 @@ class Bundles:
         return {"request": to_dict(r), "candidates": to_dict(self.store.get_candidates(rid)),
                 "catalog": to_dict(catalog), "track": track,
                 "rejection": to_dict(self.store.get_rejection_for_request(rid)),
+                "held": to_dict(self.store.held_lossless(rid)),
                 "attempt": self.attempt(rid),
                 "reference": self.reference(rid)}
 

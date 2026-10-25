@@ -364,3 +364,15 @@ it('an unverified track names its format without the green tick, and gives the r
   expect(screen.getByText('unverified').parentElement).toHaveAttribute('title', 'Lossless, but nothing above 20.4 kHz')
   expect(screen.getByText('20.4 kHz').parentElement).toHaveClass('check', 'plain')
 })
+
+it('the held lossless copy plays and is kept from its own strip (issue #97)', () => {
+  const onAction = vi.fn(), onPlay = vi.fn()
+  const sample = { key: 'held-5', label: 'the held lossless copy', url: '/api/rejections/5/audio' }
+  render(<RequestRow view={{ ...base, bucket: 'done', steps: null, tag: null, status: 'Done',
+    held: { label: 'Soulseek had a lossless copy the quality check refused', tip: 'why', sample, replaces: true } }}
+    onAction={onAction} onChoose={() => {}} player={idle} onPlay={onPlay} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the held lossless copy' }))
+  expect(onPlay).toHaveBeenCalledWith('held-5', '/api/rejections/5/audio')
+  fireEvent.click(screen.getByRole('button', { name: 'Keep lossless' }))
+  expect(onAction).toHaveBeenCalledWith('keepHeld', 1, undefined)
+})

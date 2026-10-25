@@ -299,6 +299,22 @@ describe('presentRow', () => {
         title: 'One sign of a lossy source that a genuine master can show too, or too little sound to judge' },
       { label: 'Spectrum', value: 'no edge found', ok: null }])
   })
+  it('a lossless copy the quality check held back is offered beside the MP3 filed instead (issue #97)', () => {
+    const held = { id: 5, request_id: 1, reason: 'lossless container but cutoff at 16000 Hz: consistent with a lossy source',
+      bitrate_kbps: 1411, cutoff_hz: 16000, spectrogram_path: null, created_at: '', kind: 'held_lossless', audio_path: '/r/req1.flac' }
+    const mp3 = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 20000, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null, catalog: null }
+    const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track: mp3, held }), opts)
+    expect(v.held).toEqual({ label: 'Soulseek had a lossless copy the quality check refused',
+      tip: 'Nothing above 16 kHz in a lossless file, which points to a lossy source. That is evidence of a lossy source, '
+        + 'not proof. Listen, and if it sounds right Keep lossless files it in place of the MP3, marked as unverified.',
+      sample: { key: 'held-5', label: 'the held lossless copy', url: '/api/rejections/5/audio' }, replaces: true })
+    // Still working: a later pick may pass and drop the hold. Gone from disk: nothing to offer.
+    expect(presentRow(bundle({ state: 'fetching' }, { held }), opts).held).toBeNull()
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: mp3, held: { ...held, audio_path: null } }), opts).held).toBeNull()
+    expect(presentRow(bundle({ state: 'error' }, { held }), opts).held?.replaces).toBe(false)
+  })
   it('a refusal on the quantisation grid alone does not quote a cutoff it never had', () => {
     const rejection = { id: 3, request_id: 1, reason: 'lossless container but the audio carries the quantisation pattern of an earlier AAC encode: consistent with a lossy source',
       bitrate_kbps: 1411, cutoff_hz: 22050, spectrogram_path: null, created_at: '', kind: 'quality', audio_path: '/r/x.flac' }

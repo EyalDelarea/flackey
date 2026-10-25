@@ -307,6 +307,10 @@ class Playlist:
     track_positions: list[int] = field(default_factory=list)
 
 
+# The `kind` of a Soulseek copy the quality check refused and the worker held beside what it filed (issue #97)
+HELD_LOSSLESS = "held_lossless"
+
+
 @dataclass
 class Rejection:
     id: int

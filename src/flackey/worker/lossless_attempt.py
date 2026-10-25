@@ -3,6 +3,7 @@ as an attempt row."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 from dataclasses import replace
@@ -11,6 +12,7 @@ from pathlib import Path
 from ..attempts import AttemptRecorder
 from ..config import Settings
 from ..convert import ConvertError, to_format
+from ..fingerprint import AcousticReference
 from ..lossless import (
     IDENTITY_RANKERS,
     LosslessFile,
@@ -25,7 +27,7 @@ from ..lossless import (
     search_text,
     transfer_ceiling_s,
 )
-from ..models import Candidate, CatalogTrack, Request, norm
+from ..models import HELD_LOSSLESS, Candidate, CatalogTrack, Request, RequestState, norm
 from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
 from ..tag import tags_as_arrived
 from ..verify import Disguised, ToolMissing, VerifyError, probe, summary, verify
@@ -210,6 +212,7 @@ class LosslessMixin:
                     self._publish_progress(req.id, None)
                 if hit is not None:
                     self.store.set_lossless_verdict(req.id, "filed")
+                    self._drop_held(req.id)          # a copy that passed beats one that was held back
                     return hit
                 if rec is not None:
                     outcome = self.store.get_attempt(rec.id).outcome
@@ -453,6 +456,12 @@ class LosslessMixin:
         rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason,
                   tier=verdict.level, evidence=summary(verdict.analysis))
         if not verdict.passed:
+            if verdict.cutoff_hz and ref.cut != EXTENDED:
+                # The main path keeps a spectral refusal for the owner to hear and overrule; so does this one
+                # (issue #97), or a genuine master with a mastering lowpass is deleted and the Deezer MP3
+                # filed in its place with no way back. Not from an extended-mix search: keeping that would
+                # swap the version asked for for another one behind the owner's back.
+                self._hold(rec, req, file, tmp, verdict)
             return None, "verify_failed"
         self._publish_phase(req.id, "fingerprinting")
         fp = await self._fingerprint(tmp, acoustic.reference, missing=acoustic.missing, halves=ref.prefer_extended)
@@ -503,6 +512,108 @@ class LosslessMixin:
         return LosslessHit(out, verdict, fp, rec.provider, file.extension, rec.id, ref, version, cut,
                            cut_name, pr.duration_s), "filed"
 
+
+    def _hold(self, rec: AttemptRecorder, req: Request, file, tmp: Path, verdict) -> None:
+        """Move a refused lossless copy into `rejected_dir` and record it, one per request: the first is
+        kept, and a later refusal is deleted as before. tmp_dir is left empty either way."""
+        if self.store.held_lossless(req.id) is not None:
+            return
+        kept = self._keep_rejected(req, tmp)
+        if kept is None:
+            return
+        # Not fingerprinted (the quality check stopped it first): `keep_held_lossless` does that. The
+        # spectrogram stays with the attempt row, which already owns it.
+        self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz, None,
+                                 kind=HELD_LOSSLESS, audio_path=kept,
+                                 analysis={**(summary(verdict.analysis) or {}), "attempt_id": rec.id,
+                                           "provider": rec.provider, "source_fmt": file.extension})
+        rec.event("held", reason=verdict.reason)
+
+    def _drop_held(self, request_id: int) -> None:
+        held = self.store.held_lossless(request_id)
+        if held is not None:
+            Path(held.audio_path).unlink(missing_ok=True)
+            self.store.clear_rejection_audio(held.id)
+
+    async def keep_held_lossless(self, request_id: int) -> Request:
+        """"Keep it anyway" on a Soulseek copy the quality check held back (issue #97): it replaces the lossy
+        copy filed instead, or is filed where nothing was.
+
+        What `_check_and_convert` never got to is done here, as `accept_rejection` does for the main path:
+        the copy is fingerprinted against the request's reference and refused unless it matches -- the owner
+        overrules the quality verdict, not the recording check -- then converted to the filing format. The
+        track carries the failed quality check, so the library says it was kept on the owner's word."""
+        held = self.store.held_lossless(request_id)
+        if held is None:
+            raise ValueError("no lossless copy of this track was held back, so there is nothing to keep")
+        kept = Path(held.audio_path)
+        if not kept.exists():
+            self.store.clear_rejection_audio(held.id)
+            raise ValueError("the held lossless copy is no longer on disk")
+        req = self.store.get_request(request_id)
+        track = self.store.get_track(req.track_id) if req.track_id and req.state == RequestState.DONE else None
+        if track is None and req.state not in (RequestState.ERROR, RequestState.REJECTED):
+            raise ValueError(f"request {request_id} is {req.state.value}; wait for it to finish first")
+        if track is not None and track.source_fmt:
+            raise ValueError("this track is already filed from a lossless copy")
+        cand = (self.store.get_candidate(req.chosen_candidate_id) if req.chosen_candidate_id
+                else query_candidate(req.query(), req.id))
+        catalog = self.store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
+        meta = json.loads(held.analysis or "{}")
+        s = self.settings
+        s.tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp = s.tmp_dir / f"req{req.id}-held{kept.suffix}"
+        shutil.copy2(kept, tmp)
+        out: Path | None = None
+        try:
+            async with self._cpu:
+                probed = await asyncio.to_thread(probe, tmp)
+                verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-held",
+                                                  s.verification_rule)
+            stored = self.store.get_reference(req.id)
+            fp = await self._fingerprint(tmp, AcousticReference.from_dict(stored)) if stored else None
+            if fp is None or fp.status != "matched":
+                why = fp.reason if fp is not None else "no acoustic reference for this request"
+                raise ValueError(f"the held copy could not be confirmed as the same recording ({why}), so it "
+                                 "was not filed")
+            async with self._cpu:
+                out = await asyncio.to_thread(to_format, tmp, s.lossless_filing_format, verdict.bit_depth)
+                pr = await asyncio.to_thread(probe, out)
+            if pr.duration_s < probed.duration_s - CONVERT_SLACK_S:
+                raise ValueError("the converted copy came out shorter than the held one, so it was not filed")
+            verdict = replace(verdict, fmt=pr.fmt, bitrate_kbps=pr.bitrate_kbps, bit_depth=pr.bit_depth,
+                              sample_rate=pr.sample_rate)
+            ref = self._search_references(req, cand, catalog)[0]
+            provider = meta.get("provider") or "slskd"
+            source_fmt = meta.get("source_fmt") or kept.suffix.lstrip(".")
+            attempt = self.store.get_attempt_for_request(req.id)
+            hit = LosslessHit(out, verdict, fp, provider, source_fmt,
+                              meta.get("attempt_id") or (attempt.id if attempt else 0), ref,
+                              None, "", None, pr.duration_s)
+            if track is not None:
+                await self._replace_with(track, req, cand, catalog, hit)
+                # The swap clears the old file's evidence and records the new one's recording match; the
+                # quality verdict it was kept against is added back, so the row does not read as a pass
+                ev = summary(verdict.analysis)
+                if ev is not None:
+                    self.store.add_evidence(track.id, "verification", ev)
+                self.store.add_evidence(track.id, "quality_check", {
+                    "status": "failed", "kept_by": "owner", "reason": verdict.reason,
+                    "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz})
+            else:
+                await self._file_track(req, cand, catalog, out, verdict, fp, hit, provider, source_fmt)
+                # The lossy copy the request was refused on is moot now that a copy is filed
+                other = self.store.get_rejection_for_request(req.id)
+                if other is not None and other.audio_path:
+                    Path(other.audio_path).unlink(missing_ok=True)
+                    self.store.clear_rejection_audio(other.id)
+        finally:
+            tmp.unlink(missing_ok=True)
+            if out is not None:
+                out.unlink(missing_ok=True)       # gone already when it was filed; garbage otherwise
+        self.store.clear_rejection_audio(held.id)
+        kept.unlink(missing_ok=True)
+        return self.store.get_request(request_id)
 
     def _publish_phase(self, request_id: int, phase: str) -> None:
         """The bytes have landed but the file is not accepted yet. verify, fingerprint and convert all run

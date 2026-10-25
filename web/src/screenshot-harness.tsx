@@ -292,6 +292,15 @@ const unverifiedRows: Bundle[] = [
   tiered(offerDone(81, 'Example Artist', 'Faint Trace', 'Original Mix', 372, null), 20_400, { tier: 'unverified',
     reason: 'lossless, but nothing above 20400 Hz, which a genuine master and a lossy source can both show' }),
   tiered(offerDone(82, 'Example Artist', 'Clean Master', 'Original Mix', 401, null), 22_050, { tier: 'clear' }),
+  // Soulseek's copy was refused and held; the Deezer MP3 was filed instead, and the row offers the swap
+  ((b: Bundle): Bundle => ({ ...b, attempt: { ...b.attempt!, outcome: 'verify_failed', fingerprint: null },
+    track: { ...b.track!, fmt: 'mp3', bitrate_kbps: 320, source: 'deezer_bot', source_fmt: null, bit_depth: null,
+      format: { fmt: 'mp3', bit_depth: null, sample_rate: 44100, source: 'deezer_bot', source_fmt: null,
+        label: 'MP3 320 kbps via Deezer' } },
+    held: { id: 84, request_id: 83, reason: 'lossless container but cutoff at 16000 Hz: consistent with a lossy source',
+      bitrate_kbps: 1411, cutoff_hz: 16000, spectrogram_path: null, created_at: '', kind: 'held_lossless',
+      audio_path: '/rejected/req83.flac' } }))(
+    tiered(offerDone(83, 'Example Artist', 'Held Back', 'Original Mix', 388, null), 20_000, { tier: 'clear' })),
 ]
 /* The swap, as the worker does it: same track row, new name and length, the offer turned into the note. */
 function swapIn(rows: Bundle[], trackId: number) {

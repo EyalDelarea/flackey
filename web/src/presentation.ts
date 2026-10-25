@@ -27,9 +27,12 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean | null; title?: string }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep'; path?: string }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
 /** A longer version of a filed track, found on Soulseek after it was filed (issue #187). `offer` until the
  *  owner answers it; `swapped` once Get extended has put it in the track's place. `busy` while that runs. */
+/** A lossless copy from Soulseek the quality check refused and the worker held instead of deleting (issue
+ *  #97): the row plays it and offers to keep it in place of what was filed. */
+export interface HeldView { label: string; tip: string; sample: SampleView; replaces: boolean }
 export interface ExtendedOfferView { state: 'offer' | 'swapped'; label: string; tip: string; busy?: boolean }
 /** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
  *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
@@ -74,6 +77,7 @@ export interface RowView {
   extendedNote: string | null
   /** An extended mix on offer for this filed track, or the note that one was swapped in (issue #187). */
   extendedOffer: ExtendedOfferView | null
+  held?: HeldView | null
   samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
@@ -436,6 +440,23 @@ function lengthNote(c: Candidate, videoS: number | null): string {
   return `${mmss(Math.abs(d))} ${d < 0 ? 'shorter' : 'longer'} than the video`
 }
 
+/* The held lossless copy, on a row that has finished one way or another (issue #97). A row still working on
+   the request may yet file a copy that passes, which drops the hold. */
+function heldOf(b: Bundle): HeldView | null {
+  const h = b.held
+  if (!h?.audio_path || !['done', 'rejected', 'error'].includes(b.request.state)) return null
+  if (b.track?.source_fmt) return null                // filed from a lossless copy already
+  const replaces = b.track != null
+  return {
+    label: 'Soulseek had a lossless copy the quality check refused',
+    tip: `${asSentence(h.reason)}. That is evidence of a lossy source, not proof. Listen, and if it sounds right `
+      + (replaces ? 'Keep lossless files it in place of the MP3, marked as unverified.'
+        : 'Keep lossless files it, marked as unverified.'),
+    sample: { key: `held-${h.id}`, label: 'the held lossless copy', url: rejectedAudioUrl(h.id) },
+    replaces,
+  }
+}
+
 /* The worker's word on an extended mix it went looking for (issue #187), or null when it did not look. */
 function extendedOf(b: Bundle): { found: boolean; mix_name: string | null } | null {
   const e = b.track?.evidence?.find(x => x.kind === 'extended')
@@ -615,6 +636,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b), extendedNote: extendedNoteOf(b), extendedOffer: extendedOfferOf(b),
+    held: heldOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)
