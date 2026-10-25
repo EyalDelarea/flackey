@@ -48,6 +48,9 @@ CONTROLS = {
     "brickwall_20k": (["aresample=40000", "aresample=44100"], "s16"),
     "brickwall_20_5k": (["aresample=41000", "aresample=44100"], "s16"),
     "resample_48k_091": (["aresample=48000", "aresample=44100:cutoff=0.91"], "s16"),
+    # Steep: a long filter just under the new rate's Nyquist, the sharpest edge a genuine chain draws
+    "steep_19_8k": (["aresample=40000:filter_size=256:cutoff=0.99", "aresample=44100:filter_size=256"], "s16"),
+    "steep_20_3k": (["aresample=41000:filter_size=256:cutoff=0.99", "aresample=44100:filter_size=256"], "s16"),
     "limited_loud": (["volume=8dB", "alimiter=limit=0.89:level=false"], "s16"),
     "clipped": (["volume=10dB"], "s16"),
     "quieter": (["volume=-12dB"], "s16"),
@@ -94,10 +97,24 @@ def judge(item: tuple[int, str, str, Path]) -> dict:
         tier, reason, _ = decide(a, "flac")
         q = a.get("quant") or {}
         return {"master": i, "label": label, "recipe": recipe, "tier": tier, "reason": reason,
+                "judged": a["spectral"].get("judged"),
                 "edge_hz": a["spectral"].get("edge_hz"), "reach": a["spectral"].get("frames_above_edge"),
                 "aac_z": (q.get("aac") or {}).get("z"), "mp3_z": (q.get("mp3") or {}).get("z")}
     except VerifyError as e:
         return {"master": i, "label": label, "recipe": recipe, "tier": "error", "reason": str(e)[:200]}
+
+
+def redecide(r: dict) -> dict:
+    """The rule as it stands now, from a row's stored measurements: thresholds can move without
+    re-running the decode."""
+    if r["tier"] == "error":
+        return r
+    a = {"probe": {"fmt": "flac", "bitrate_kbps": 0},
+         "spectral": {"judged": r.get("judged", 2), "edge_hz": r["edge_hz"], "frames_above_edge": r["reach"]},
+         "quant": {"aac": {"codec": "aac", "z": r["aac_z"]} if r["aac_z"] is not None else None,
+                   "mp3": {"codec": "mp3", "z": r["mp3_z"]} if r["mp3_z"] is not None else None}}
+    tier, reason, _ = decide(a, "flac")
+    return {**r, "tier": tier, "reason": reason}
 
 
 def report(rows: list[dict]) -> str:
@@ -126,7 +143,12 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--seed", type=int, default=97)
+    ap.add_argument("--redecide", action="store_true", help="re-apply the rule to <work>/rows.jsonl only")
     args = ap.parse_args()
+    if args.redecide:
+        rows = [redecide(json.loads(line)) for line in (args.work / "rows.jsonl").read_text().splitlines()]
+        print(report(rows))
+        return
     pool_of = sorted(p for p in args.masters.rglob("*") if p.suffix.lower() in (".aiff", ".aif", ".flac", ".wav")
                      and not p.name.startswith("._"))
     chosen = random.Random(args.seed).sample(pool_of, min(args.n, len(pool_of)))

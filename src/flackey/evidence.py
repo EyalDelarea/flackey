@@ -200,8 +200,9 @@ def find_edge(power: np.ndarray, freqs: np.ndarray, frame_db: np.ndarray, sr: in
     lo = int((edge - ABOVE_MARGIN_HZ - 1000) // BAND_HZ)
     hi = int((edge + ABOVE_MARGIN_HZ) // BAND_HZ) + 1
     if len(frame_db) and lo >= 0 and hi + 4 <= frame_db.shape[1]:
-        under = np.nanmax(frame_db[:, lo:lo + 4], axis=1)
-        over = np.nanmax(frame_db[:, hi:hi + 4], axis=1)
+        # fmax skips NaN (a silent frame) without nanmax's warning; an all-silent row stays NaN
+        under = np.fmax.reduce(frame_db[:, lo:lo + 4], axis=1)
+        over = np.fmax.reduce(frame_db[:, hi:hi + 4], axis=1)
         sounding = np.isfinite(under) & (under >= reference - EDGE_FLOOR_DB)
         if sounding.any():
             reach = over[sounding] >= under[sounding] - ABOVE_RISE_DB

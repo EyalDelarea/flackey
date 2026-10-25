@@ -176,6 +176,11 @@ READ_BYTES = 1 << 20
 # from there to 21.5 kHz genuine masters (converter passbands, resamplers) and LAME 320 / Opus end alike,
 # so an edge there alone is never a reject.
 EDGE_REJECT_BELOW_HZ = 19_900
+# ...on its own word only below this. From here to EDGE_REJECT_BELOW_HZ a mastering lowpass or a steep
+# converter filter can end a genuine master just as LAME 256 does (19.1-19.6 kHz), so an edge there needs
+# the quantisation family to agree before it rejects; alone it is unverified. LAME 256 always agreed on
+# the corpus (z 14.7 and up), so this costs no detection there.
+EDGE_REJECT_ALONE_BELOW_HZ = 19_000
 EDGE_AMBIGUOUS_TO_HZ = 21_500
 # An edge that sounding frames reach past this often is a roll-off, not an encoder's lowpass.
 EDGE_REACHED_ABOVE = 0.02
@@ -344,8 +349,9 @@ CODEC_NAMES = {"mp3": "MP3", "aac": "AAC"}
 def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
     """The three-tier verdict from the evidence families: (tier, reason, cutoff_hz for the Verdict).
 
-    reject:     one unambiguous family (an edge below EDGE_REJECT_BELOW_HZ that nothing reaches past;
-                strong quantisation traces), or two ambiguous ones agreeing;
+    reject:     one unambiguous family (an edge below EDGE_REJECT_ALONE_BELOW_HZ that nothing reaches
+                past; strong quantisation traces), or two families agreeing (an edge below
+                EDGE_REJECT_BELOW_HZ, or an ambiguous one, with any quantisation traces);
     unverified: one ambiguous family alone, or too little sound to judge;
     clear:      none of the above.
     An MP3 is judged on its edge alone (below MIN_MP3_CUTOFF a reject, as before; short of
@@ -363,6 +369,8 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
         return "clear", f"{analysis['probe']['bitrate_kbps']} kbps, {edge_text(cutoff)}", cutoff
     q_kind, codec, _ = quant_finding(analysis.get("quant"))
     name = CODEC_NAMES.get(codec or "", "lossy")
+    if edge_kind == "unambiguous" and edge >= EDGE_REJECT_ALONE_BELOW_HZ and q_kind not in ("strong", "weak"):
+        edge_kind = "ambiguous"         # a genuine master's lowpass can end here too; nothing else agrees
     if edge_kind == "unambiguous":
         return "reject", f"lossless container but cutoff at {edge} Hz: consistent with a lossy source", cutoff
     if q_kind == "strong":

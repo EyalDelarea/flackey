@@ -32,7 +32,10 @@ def analysis(fmt="flac", edge=None, reach=0.0, judged=2, aac_z=4.0, mp3_z=4.0, k
 @pytest.mark.parametrize("kw,tier", [
     ({}, "clear"),                                              # full band, no traces
     ({"edge": 16_500}, "reject"),                               # an MP3 128's lowpass
-    ({"edge": 19_400}, "reject"),                               # LAME 256
+    ({"edge": 19_400, "mp3_z": QUANT_Z_STRONG + 1}, "reject"),  # LAME 256: its grid agrees
+    ({"edge": 19_400, "mp3_z": QUANT_Z_WEAK + 1}, "reject"),
+    ({"edge": 19_400}, "unverified"),                           # a mastering lowpass, as far as anyone can tell
+    ({"edge": 18_900}, "reject"),                               # below any genuine master's filter
     ({"edge": 20_100}, "unverified"),                           # LAME 320, Opus -- or a converter's filter
     ({"edge": 20_100, "mp3_z": QUANT_Z_WEAK + 1}, "reject"),    # two ambiguous families agreeing
     ({"edge": 21_800}, "clear"),                                # above every encoder's lowpass
