@@ -266,7 +266,7 @@ def _has_xing(path: Path, frame_offset: int) -> bool:
     return b"Xing" in head or b"Info" in head
 
 
-MP3_LENGTH_SLACK_S = 0.1      # encoder delay and padding, which the decoder trims and the header counts
+MP3_LENGTH_SLACK_S = 1.0      # encoder delay and padding, and a few frames a glitch costs: a cut-off transfer loses far more
 
 
 def integrity(facts: dict, decoded: int, md5: str, sample_rate: int, native_depth: bool) -> dict:

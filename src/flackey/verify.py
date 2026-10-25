@@ -197,8 +197,8 @@ def _decode_args(path: Path, pr: Probe) -> tuple[list[str], int]:
     bits = 16 if pr.fmt == "mp3" or (pr.bit_depth or 16) <= 16 else 24
     # FLAC's per-frame CRC-16 is only checked under crccheck; explode turns a broken frame into an exit
     # code instead of a concealed glitch. The MP3 decoder conceals by design, so it is left to it.
-    detect = ["-err_detect", "crccheck+explode"] if pr.fmt == "flac" else []
-    return (["ffmpeg", "-v", "error", "-xerror", *detect, *_input(path, "ffmpeg"), "-i", str(path),
+    detect = ["-xerror", "-err_detect", "crccheck+explode"] if pr.fmt == "flac" else []
+    return (["ffmpeg", "-v", "error", *detect, *_input(path, "ffmpeg"), "-i", str(path),
              "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-fflags", "+bitexact",
              "-c:a", f"pcm_s{bits}le", "-f", "wav", "-"], bits)
 
@@ -366,8 +366,10 @@ def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
     if edge_kind == "unambiguous":
         return "reject", f"lossless container but cutoff at {edge} Hz: consistent with a lossy source", cutoff
     if q_kind == "strong":
+        # The edge, if any, is healthy here: quoting it would read as the reason. NO_EDGE_HZ says "not refused
+        # on the spectrum" to the page, and is still a cutoff, so the copy is kept to be overruled.
         return ("reject", ("lossless container but the audio carries the quantisation pattern of an earlier "
-                f"{name} encode: consistent with a lossy source"), cutoff)
+                f"{name} encode: consistent with a lossy source"), NO_EDGE_HZ)
     if edge_kind == "ambiguous" and q_kind == "weak":
         return ("reject", (f"lossless container but cutoff at {edge} Hz and traces of an earlier {name} "
                 "encode: consistent with a lossy source"), cutoff)
@@ -414,21 +416,39 @@ def verify(path: Path, spectrogram_dir: Path | None, name: str | None = None, ru
     if pr.fmt == "mp3" and pr.bitrate_kbps < MIN_MP3_BITRATE:
         return Verdict(False, pr.fmt, pr.bitrate_kbps, 0, f"bitrate {pr.bitrate_kbps} kbps below {MIN_MP3_BITRATE}",
                        png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="reject")
-    legacy_cutoff = spectral_cutoff_hz(path, duration_s=pr.duration_s)
-    old_passed, old_reason = legacy_verdict(pr, legacy_cutoff)
-    analysis = analyze(path, pr)
-    tier, reason, cutoff = decide(analysis, pr.fmt)
-    analysis["legacy"] = {"passed": old_passed, "cutoff_hz": legacy_cutoff}
-    analysis["tier"] = tier
-    analysis["reason"] = reason
-    if rule == "legacy":
-        # Measurement only: today's verdict and numbers decide; the tier is a note for later
-        return Verdict(old_passed, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
-                       bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, analysis=analysis)
-    failed = analysis["integrity"]["failed"]
-    if failed:
-        # The copy is damaged, which says nothing about where the audio came from (see VerifyError)
-        raise VerifyError(f"damaged: {failed}")
+    try:
+        legacy_cutoff = spectral_cutoff_hz(path, duration_s=pr.duration_s)
+        old_passed, old_reason = legacy_verdict(pr, legacy_cutoff)
+        legacy = {"passed": old_passed, "cutoff_hz": legacy_cutoff}
+        try:
+            analysis = analyze(path, pr)
+        except ToolMissing:
+            raise
+        except VerifyError as e:
+            if rule != "legacy":
+                raise
+            # Measurement only changes nothing: a file the new decode cannot read through still gets
+            # today's verdict, with the reason the measurements are missing
+            return Verdict(old_passed, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate,
+                           analysis={"version": DETECTOR_VERSION, "error": str(e)[:300], "legacy": legacy})
+        tier, reason, cutoff = decide(analysis, pr.fmt)
+        analysis["legacy"] = legacy
+        if rule == "legacy":
+            # Measurement only: today's verdict and numbers decide. The new rule's answer is kept beside it
+            # under its own name, so nothing that reads `tier` mistakes it for the verdict.
+            analysis.update(tier="clear" if old_passed else "reject", shadow_tier=tier, shadow_reason=reason)
+            return Verdict(old_passed, pr.fmt, pr.bitrate_kbps, legacy_cutoff, old_reason, png,
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, analysis=analysis)
+        analysis.update(tier=tier, reason=reason)
+        failed = analysis["integrity"]["failed"]
+        if failed:
+            # The copy is damaged, which says nothing about where the audio came from (see VerifyError)
+            raise VerifyError(f"damaged: {failed}")
+    except VerifyError:
+        if png is not None:
+            png.unlink(missing_ok=True)      # no verdict comes back, so nothing would ever delete it
+        raise
     return Verdict(tier != "reject", pr.fmt, pr.bitrate_kbps, cutoff, reason, png, bit_depth=pr.bit_depth,
                    sample_rate=pr.sample_rate, tier=tier, analysis=analysis)
 
@@ -444,6 +464,7 @@ def summary(analysis: dict | None) -> dict | None:
     cont = analysis.get("container") or {}
     return {
         "version": analysis["version"], "tier": analysis.get("tier"),
+        **({"shadow_tier": analysis["shadow_tier"]} if "shadow_tier" in analysis else {}),
         "edge": {"finding": edge_kind, "edge_hz": spec.get("edge_hz"), "drop_db": spec.get("edge_drop_db"),
                  "frames_above_edge": spec.get("frames_above_edge")},
         "quant": {"finding": q_kind, "codec": codec, "z": round(z, 1)},

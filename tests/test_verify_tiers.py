@@ -96,7 +96,43 @@ def test_measurement_only_mode_keeps_the_old_verdict_and_records_the_new(pink: P
         _transcode(pink, d, "a256", "-c:a", "aac", "-b:a", "256k", ext="m4a")
     v = verify(flac, None, rule="legacy")
     assert v.passed and v.tier is None and v.level == "clear"       # today's rule decides
-    assert v.analysis["tier"] == "reject"                            # and the new one is on record
+    assert v.analysis["tier"] == "clear" and v.analysis["shadow_tier"] == "reject"   # the new one on record
+
+
+def test_an_aac_reject_quotes_no_edge(pink: Path, d: Path):
+    """Refused on the grid alone: the cutoff says "no edge", so the page never calls it an upscale."""
+    flac = d / "a256.flac"
+    if not flac.exists():
+        _transcode(pink, d, "a256", "-c:a", "aac", "-b:a", "256k", ext="m4a")
+    v = verify(flac, None)
+    assert v.tier == "reject" and v.cutoff_hz == 22_050
+
+
+def test_measurement_only_mode_passes_what_the_old_check_passed_even_when_the_decode_stumbles(pink: Path, d: Path,
+                                                                                              monkeypatch):
+    from flackey import verify as verify_mod
+
+    def broken(*_a, **_k):
+        raise VerifyError("decoder hiccup")
+
+    monkeypatch.setattr(verify_mod, "analyze", broken)
+    flac = _flac(pink, d / "stumble.flac")
+    v = verify_mod.verify(flac, d / "png", rule="legacy")
+    assert v.passed and v.analysis["error"] == "decoder hiccup"
+    with pytest.raises(VerifyError):
+        verify_mod.verify(flac, d / "png2", rule="tiers")
+    assert not list((d / "png2").glob("*.png"))                  # the picture of a failed check is not left behind
+
+
+def test_a_glitch_in_an_mp3_is_concealed_as_before(pink: Path, d: Path):
+    good = d / "glitch320.mp3"
+    _ffmpeg("-i", str(pink), "-c:a", "libmp3lame", "-b:a", "320k", str(good))
+    raw = bytearray(good.read_bytes())
+    mid = len(raw) // 2
+    raw[mid:mid + 2048] = bytes(2048)
+    bad = d / "glitched320.mp3"
+    bad.write_bytes(raw)
+    assert verify(bad, None).tier in ("clear", "unverified")
 
 
 def test_a_flipped_byte_in_a_flac_is_damage_not_a_transcode(pink: Path, d: Path):
