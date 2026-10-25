@@ -962,7 +962,7 @@ async def test_a_different_recording_is_kept_so_the_owner_can_hear_it(env, monke
 EDGE_REASON = "cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source"
 
 
-def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None, rule: str = "tiers") -> Verdict:
     """The spectral check refusing a 320 kbps MP3 for an edge at 16 kHz. Stood in for rather than produced:
     these tests are about what the worker does with the verdict, and test_verify.py owns the detector."""
     png = spectrogram_dir / f"{name or path.stem}.png"

@@ -25,6 +25,10 @@ FILING_FORMATS = ("aiff", "wav", "flac")
 LIBRARY_LAYOUTS = ("artist", "month", "day", "flat")
 # Extended mixes (issue #187): never looked for, offered on the Done row once found, or downloaded instead.
 EXTENDED_MIXES = ("off", "ask", "always")
+# How a download's audio is judged (issue #97): "tiers" fuses every evidence family into reject /
+# unverified / clear; "legacy" is measurement-only mode, today's one-number cutoff deciding with the new
+# measurements recorded beside it.
+VERIFICATION_RULES = ("tiers", "legacy")
 
 
 def default_filing_format() -> str:
@@ -158,6 +162,7 @@ class Settings(BaseSettings):
     lossless_fingerprint_min: float = 0.79
     lossless_max_picks: int = 4
     lossless_keep_raw_days: int = 30
+    verification_rule: str = "tiers"
 
     @field_validator("library_root", "data_dir", mode="after")
     @classmethod
@@ -174,6 +179,13 @@ class Settings(BaseSettings):
     def _filing_format(cls, v: str) -> str:
         if v not in FILING_FORMATS:
             raise ValueError(f"lossless_filing_format must be one of {FILING_FORMATS}")
+        return v
+
+    @field_validator("verification_rule", mode="after")
+    @classmethod
+    def _verification_rule(cls, v: str) -> str:
+        if v not in VERIFICATION_RULES:
+            raise ValueError(f"verification_rule must be one of {VERIFICATION_RULES}")
         return v
 
     @field_validator("extended_mixes", mode="after")

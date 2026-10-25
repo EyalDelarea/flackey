@@ -147,6 +147,7 @@ class Store:
         self._ensure_column("candidates", "has_preview", "INTEGER")
         self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("rejections", "audio_path", "TEXT")
+        self._ensure_column("rejections", "analysis", "TEXT")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("catalog_tracks", "tag_source", "TEXT")
@@ -644,17 +645,18 @@ class Store:
     # ---- rejections -----------------------------------------------------
     def add_rejection(self, request_id: int, reason: str, bitrate_kbps: int | None, cutoff_hz: int | None,
                       spectrogram_path: Path | None, *, kind: str = "quality",
-                      audio_path: Path | None = None) -> int:
+                      audio_path: Path | None = None, analysis: dict | None = None) -> int:
         """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
         genuine audio of the wrong track). `audio_path` is the refused file, kept for the owner to overrule.
         Both keyword-only so no caller can drift into the positional slot that the spectrogram already
         holds."""
         cur = self.conn.execute(
             "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, "
-            "kind, audio_path) VALUES (?,?,?,?,?,?,?,?)",
+            "kind, audio_path, analysis) VALUES (?,?,?,?,?,?,?,?,?)",
             (request_id, reason, bitrate_kbps, cutoff_hz,
              None if spectrogram_path is None else str(spectrogram_path), _now(), kind,
-             None if audio_path is None else str(audio_path)))
+             None if audio_path is None else str(audio_path),
+             None if analysis is None else json.dumps(analysis)))
         self.conn.commit()
         return int(cur.lastrowid)
 

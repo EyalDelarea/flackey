@@ -28,7 +28,7 @@ from ..lossless import (
 from ..models import Candidate, CatalogTrack, Request, norm
 from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, TransferProgress
 from ..tag import tags_as_arrived
-from ..verify import Disguised, ToolMissing, VerifyError, probe, verify
+from ..verify import Disguised, ToolMissing, VerifyError, probe, summary, verify
 from ..version import EXTENDED, check_version, split_version, wants_extended
 from .policy import (
     MAX_SLOW_SWITCHES,
@@ -430,7 +430,8 @@ class LosslessMixin:
                     # The caps in lossless.py judged the peer's word; this is the file that came.
                     rec.event("duration_mismatch", advertised_s=file.length_s, probed_s=round(probed.duration_s, 1))
                     return None, "verify_failed"
-                verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}")
+                verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}",
+                                                  s.verification_rule)
         except ToolMissing as e:
             # This computer cannot check anything, so neither can the next pick: end the attempt here rather
             # than download every survivor to fail it the same way.
@@ -447,7 +448,10 @@ class LosslessMixin:
             return None, "damaged"
         if verdict.spectrogram_path:
             self.store.update_attempt(rec.id, spectrogram_path=str(verdict.spectrogram_path))
-        rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason)
+        # The tier and the numbers behind it ride on the timeline, so a replay or a failure report can see
+        # what each family said about a copy, including one measurement-only mode let through (issue #97).
+        rec.event("verify", passed=verdict.passed, cutoff_hz=verdict.cutoff_hz, reason=verdict.reason,
+                  tier=verdict.level, evidence=summary(verdict.analysis))
         if not verdict.passed:
             return None, "verify_failed"
         self._publish_phase(req.id, "fingerprinting")

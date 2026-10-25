@@ -244,6 +244,12 @@ const REWORDED: [RegExp, (...m: string[]) => string][] = [
     (_, hz, min) => `nothing above ${khz(hz)}, below the ${khz(min)} Flackey asks of an MP3`],
   [/lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
     (_, hz) => `nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
+  [/lossless container but cutoff at (\d+) Hz and traces of an earlier (\w+) encode: consistent with a lossy source/i,
+    (_, hz, codec) => `nothing above ${khz(hz)} and traces of an earlier ${codec} encode in a lossless file, which points to a lossy source`],
+  [/lossless container but the audio carries the quantisation pattern of an earlier (\w+) encode: consistent with a lossy source/i,
+    (_, codec) => `the audio carries the pattern an earlier ${codec} encode leaves behind, in a lossless file, which points to a lossy source`],
+  [/lossless, but nothing above (\d+) Hz, which a genuine master and a lossy source can both show/i,
+    (_, hz) => `lossless, but nothing above ${khz(hz)}, which a genuine master and a lossy source can both show`],
   [/bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
   [/best score (\d+(?:\.\d+)?) below \d+(?:\.\d+)?/gi, (_, score) => `${Math.round(Number(score) * 100)}% match`],
 ]
@@ -388,6 +394,10 @@ function checksFor(b: Bundle): CheckView[] {
   // reads as the failure it was rather than as a pass.
   const overruled = b.track?.evidence?.some(e => e.kind === 'quality_check' && e.value.status === 'failed') ?? false
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
+  // Filed, but the check could not vouch for it either way (issue #97): one sign of a lossy source that a
+  // genuine master can show too, or too little sound to judge. Said, so it never passes for a clear one.
+  const unverified = !overruled && (b.track?.evidence?.some(e => e.kind === 'verification' && e.value.tier === 'unverified') ?? false)
+  if (unverified) out.push({ label: 'Quality check', value: 'unverified', ok: false })
   // The fingerprint proves the recording, not which release of it (issue #172): when nothing in the file's
   // name or tags said it is the version asked for -- a remaster above all -- the track says so.
   const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
@@ -703,7 +713,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         caption: b.rejection?.kind === 'different_recording'
           ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
             : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
-          : (khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
+          : (khz != null && b.rejection!.cutoff_hz! >= NO_EDGE_HZ
+            ? 'The spectrum reaches the top, but the audio carries the pattern an earlier lossy encode leaves behind. That is strong evidence of a lossy source, not proof.'
+            : khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
             : 'The file did not pass the quality check.') + (kept ? ' The copy is still here, so you can hear it and decide.' : ''),
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,
       }

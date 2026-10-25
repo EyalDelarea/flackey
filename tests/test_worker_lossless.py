@@ -89,11 +89,18 @@ class FakeDetector:
 
     def __init__(self):
         self.refused: set[str] = set()
+        self.unverified: set[str] = set()
         self.raises: dict[str, Exception] = {}
+        self.rules: list[str] = []               # the rule each check was asked to apply
 
     def refuse(self, path: Path) -> Path:
         """Have every check of these bytes, wherever they are copied to, come back as a lossy source."""
         self.refused.add(_digest(path))
+        return path
+
+    def unverify(self, path: Path) -> Path:
+        """Have every check of these bytes come back unverified: filed, but not vouched for (issue #97)."""
+        self.unverified.add(_digest(path))
         return path
 
     def fail(self, path: Path, error: Exception) -> Path:
@@ -102,7 +109,8 @@ class FakeDetector:
         self.raises[_digest(path)] = error
         return path
 
-    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None, rule: str = "tiers") -> Verdict:
+        self.rules.append(rule)
         if (error := self.raises.get(_digest(path))) is not None:
             raise error
         pr = probe(path)
@@ -112,11 +120,26 @@ class FakeDetector:
         if _digest(path) in self.refused:
             return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000,
                            "lossless container but cutoff at 11000 Hz: consistent with a lossy source", png,
-                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="reject")
+        if _digest(path) in self.unverified:
+            return Verdict(True, pr.fmt, pr.bitrate_kbps, 20_500,
+                           "lossless, but nothing above 20500 Hz, which a genuine master and a lossy source can "
+                           "both show", png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate,
+                           tier="unverified", analysis=_UNVERIFIED_ANALYSIS)
         cutoff = 20_000 if pr.fmt == "mp3" else NO_EDGE_HZ
         head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
         return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"{head}, {edge_text(cutoff)}", png,
                        bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+
+
+# The shape `verify.summary` reads, as an unverified 24-bit master would give it
+_UNVERIFIED_ANALYSIS = {
+    "version": "2.0", "tier": "unverified", "probe": {"fmt": "flac"},
+    "spectral": {"judged": 2, "edge_hz": 20_500, "edge_drop_db": 30.0, "frames_above_edge": 0.0},
+    "quant": {"aac": {"codec": "aac", "z": 4.0}, "mp3": {"codec": "mp3", "z": 4.0}},
+    "integrity": {"checked": ["sample_count", "md5"], "failed": None},
+    "container": {"max_blocksize": 4096}, "legacy": {"passed": True, "cutoff_hz": 20_500},
+}
 
 
 @pytest.fixture(autouse=True)

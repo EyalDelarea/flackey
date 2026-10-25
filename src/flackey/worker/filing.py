@@ -18,7 +18,7 @@ from ..library import file_track, final_path, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
-from ..verify import verify
+from ..verify import summary, verify
 from ..version import (
     EXTENDED,
     VersionCheck,
@@ -117,7 +117,7 @@ class FilingMixin:
         try:
             async with self._cpu:
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
-                                                  f"req{req.id}-accepted")
+                                                  f"req{req.id}-accepted", self.settings.verification_rule)
             if not verdict.passed and not overruling_quality:
                 # It passed the spectral check the first time round, so this is a file that has changed
                 # under us. Filing it would put a copy in the library that no check ever vouched for.
@@ -154,7 +154,7 @@ class FilingMixin:
             # (inbox bot, API) free
             async with self._cpu:
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
-                                                  f"req{req.id}-{tmp.stem}")
+                                                  f"req{req.id}-{tmp.stem}", self.settings.verification_rule)
             if not verdict.passed:
                 # A spectral refusal is kept, not deleted, like the different recording below (issue #97). It
                 # used to be thrown away on the theory that "an MP3 wearing a FLAC extension is a fact about
@@ -165,7 +165,8 @@ class FilingMixin:
                 # which is how they are told apart -- they carry no cutoff.
                 kept = self._keep_rejected(req, tmp) if verdict.cutoff_hz else None
                 self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz,
-                                         verdict.spectrogram_path, audio_path=kept)
+                                         verdict.spectrogram_path, audio_path=kept,
+                                         analysis=summary(verdict.analysis))
                 self._set_state(req, RequestState.REJECTED)
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
                 tail = "\nYou can listen to it in the app and keep it anyway." if kept else ""
@@ -378,6 +379,11 @@ class FilingMixin:
         elif not extended and self._offers_extended(req, catalog.mix_name):
             # Looked for once the queue is empty (`ExtendedMixin`); only tracks filed from now on
             self.store.add_evidence(track_id, OFFER, {"status": "pending"})
+        evidence = summary(verdict.analysis)
+        if evidence is not None:
+            # What each evidence family said about the filed copy (issue #97): the page reads the tier, and
+            # an unverified track says so rather than passing for a clear one.
+            self.store.add_evidence(track_id, "verification", evidence)
         if not verdict.passed:
             # Only `accept_rejection` files a failed verdict: the owner overruled the quality check (issue
             # #97). Recorded beside the fingerprint so the library says so, and the page can too.

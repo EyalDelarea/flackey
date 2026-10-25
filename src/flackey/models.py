@@ -196,6 +196,15 @@ class Verdict:
     spectrogram_path: Path | None = None
     bit_depth: int | None = None      # lossless only; None for mp3
     sample_rate: int | None = None
+    # "clear", "unverified" or "reject" (issue #97). None on a verdict built the old way, which reads as
+    # "clear" when it passed and "reject" when it did not. `passed` stays the one thing every caller asks:
+    # may this file be filed. An unverified file may, with a flag.
+    tier: str | None = None
+    analysis: dict | None = None      # every evidence family's measurements, versioned; see verify.analyze
+
+    @property
+    def level(self) -> str:
+        return self.tier or ("clear" if self.passed else "reject")
 
 
 # What `verify.spectral_cutoff_hz` answers when it finds no edge: Nyquist of its 44.1 kHz analysis. It is the
@@ -315,6 +324,9 @@ class Rejection:
     # recording and on a spectral quality refusal (one with a cutoff), never on one for bitrate or format,
     # and cleared the moment the file leaves -- filed or deleted.
     audio_path: str | None = None
+    # What the evidence families measured, as JSON (`verify.summary`): why the file was refused, in numbers.
+    # NULL on rows from before the column and on refusals that never reached the audio.
+    analysis: str | None = None
 
 
 @dataclass
