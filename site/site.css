@@ -1278,14 +1278,21 @@ h2 {
   font-size: 15px;
 }
 .verification,
+.lossless-check,
 .help {
   padding: 100px 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10%;
 }
-.verification {
+.verification,
+.lossless-check {
   border-bottom: 1px solid var(--line);
+}
+/* The grid's 10% gap is for the two columns; down the rows it would push the
+   verdicts and the spectrogram far from the claims they illustrate. */
+.lossless-check {
+  row-gap: 0;
 }
 .section-intro {
   margin-top: 25px;
@@ -1412,6 +1419,44 @@ h2 {
 .spec-verdict.bad {
   color: #b3261e;
   background: #fdecea;
+}
+.spec-verdict.warn {
+  color: #8a5300;
+  background: #fff6e8;
+}
+/* ---- The three verdicts of the lossless check ----
+   Full width under the two columns, like the spectrogram comparison below it. */
+.verdicts {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: clamp(30px, 4vw, 48px) 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(16px, 2.2vw, 26px);
+}
+.verdicts li {
+  padding: 20px 22px 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.verdicts .spec-verdict {
+  display: inline-block;
+  font-size: 11.5px;
+  padding: 4px 11px;
+}
+.verdicts p {
+  margin-top: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 15.5px;
+}
+.verdicts-note {
+  grid-column: 1 / -1;
+  margin-top: 22px;
+  font-size: 17px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
 }
 .spec-name {
   font-size: 12.5px;
@@ -2334,8 +2379,17 @@ footer > a:last-child {
     grid-template-columns: 1fr;
     gap: 38px;
   }
-  .spectra-grid {
+  .spectra-grid,
+  .verdicts {
     grid-template-columns: 1fr;
+  }
+  /* One column: the grid's own 38px row gap spaces these already */
+  .lossless-check .verdicts,
+  .lossless-check .spectra {
+    padding-top: 0;
+  }
+  .verdicts-note {
+    margin-top: 0;
   }
   .gatekeeper {
     margin: 4px 0 22px;
@@ -2345,6 +2399,7 @@ footer > a:last-child {
     width: 100%;
   }
   .verification,
+  .lossless-check,
   .help {
     padding: 65px 0;
     grid-template-columns: 1fr;

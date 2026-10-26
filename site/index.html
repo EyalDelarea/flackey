@@ -547,20 +547,23 @@
             <div>
               <h3>Confirm the recording.</h3>
               <p>
-                Chromaprint compares the fingerprint of your link’s own audio
-                (or a 30-second preview of the matched record) with the
-                downloaded file to make sure it’s the same track and version.
+                Flackey compares the fingerprint of your link’s own audio (or a
+                30-second preview of the matched record) with the downloaded
+                file to make sure it’s the same track and version.
               </p>
             </div>
           </li>
           <li>
             <span>02</span>
             <div>
-              <h3>Inspect the spectrum.</h3>
+              <h3>Check it’s really lossless.</h3>
               <p>
-                Flackey analyzes the frequencies in the audio to spot a lossy
-                file disguised inside a lossless container.
+                Flackey listens for the signs a lossy file leaves behind, even
+                after it has been converted back to FLAC.
               </p>
+              <a class="step-link" href="#lossless-check"
+                >How the lossless check works <span aria-hidden="true">↓</span></a
+              >
             </div>
           </li>
           <li>
@@ -569,13 +572,86 @@
               <h3>Enforce the quality floor.</h3>
               <p>
                 MP3s below 320 kbps are passed over while Flackey looks for
-                lossless or a real 320 kbps copy. A file whose spectrum points
-                to a lossy source is flagged, not filed. If it sounds right to
-                you, Keep it anyway files it, marked as unverified.
+                lossless or a real 320 kbps copy. A file that fails the check is
+                flagged, not thrown out. If it sounds right to you, Keep it
+                anyway files it, marked as unverified.
               </p>
             </div>
           </li>
         </ol>
+      </section>
+      <section
+        class="lossless-check wrap"
+        id="lossless-check"
+        aria-labelledby="lossless-check-title"
+      >
+        <div class="section-heading">
+          <p class="eyebrow">The lossless check</p>
+          <h2 id="lossless-check-title">Lossless means lossless.<br />We check.</h2>
+          <p class="section-intro">
+            A lot of “FLAC” files on file-sharing networks are really MP3s
+            someone converted and renamed. Bigger file, same quality. Flackey
+            listens to every download before it reaches your library.
+          </p>
+        </div>
+        <ol class="checks">
+          <li>
+            <span>01</span>
+            <div>
+              <h3>Looks for the missing top end.</h3>
+              <p>
+                Converting to MP3 usually cuts off the highest frequencies.
+                Flackey checks that the sound reaches all the way up, like a
+                real master.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span>02</span>
+            <div>
+              <h3>Looks for the compression fingerprint.</h3>
+              <p>
+                MP3, AAC and Opus each simplify sound in their own way, leaving
+                a regular pattern that survives conversion back to FLAC.
+                Flackey looks for it across the whole track, skipping any moment
+                pushed past full volume, where clipping can hide it.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span>03</span>
+            <div>
+              <h3>Gives you an honest answer.</h3>
+              <p>
+                Every download gets one of three verdicts, and the app shows you
+                which one, and why.
+              </p>
+            </div>
+          </li>
+        </ol>
+        <ul class="verdicts" aria-label="The three verdicts">
+          <li>
+            <span class="spec-verdict ok">Verified</span>
+            <p>No sign of a lossy source. Filed and tagged as verified.</p>
+          </li>
+          <li>
+            <span class="spec-verdict warn">Unverified</span>
+            <p>
+              No proof it’s fake, no proof it’s real. Still saved and tagged as
+              unverified, and the app tells you why.
+            </p>
+          </li>
+          <li>
+            <span class="spec-verdict bad">Rejected</span>
+            <p>
+              Clear signs of a converted file. Flackey keeps a copy so you can
+              listen, and keep it anyway if it sounds right.
+            </p>
+          </li>
+        </ul>
+        <p class="verdicts-note">
+          Flackey never deletes a file just because it’s unsure.
+        </p>
         <!-- The argument the section is making, shown rather than described: the
              same music through both files, so the only difference on screen is
              the one the check actually looks for. -->
@@ -583,7 +659,7 @@
           <div class="spectra-grid">
             <div class="spec">
               <div class="spec-head">
-                <span class="spec-verdict ok">Accepted</span>
+                <span class="spec-verdict ok">Verified</span>
                 <span class="spec-name">Real lossless — content up to 21.8 kHz</span>
               </div>
               <div class="spec-plot">
@@ -596,7 +672,7 @@
             </div>
             <div class="spec">
               <div class="spec-head">
-                <span class="spec-verdict bad">Flagged</span>
+                <span class="spec-verdict bad">Rejected</span>
                 <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
               </div>
               <div class="spec-plot">
@@ -615,7 +691,8 @@
             Frequency runs bottom to top, time scrolls left to right. A real
             lossless file usually carries content right to the top; an MP3 throws
             the top octave away to save space, and renaming it to <code>.flac</code>
-            doesn't put it back. That empty band is what Flackey looks for.
+            doesn't put it back. That empty band is one of the two signs Flackey
+            looks for. The compression pattern is the other.
             <em>Illustration — not a recording of a specific track.</em>
           </figcaption>
         </figure>
