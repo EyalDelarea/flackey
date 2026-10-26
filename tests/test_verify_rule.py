@@ -90,9 +90,9 @@ def test_the_loudest_windows_are_the_same_with_segments_kept():
     assert parts.regions(1).shape == (quant.MP3_WINDOWS, quant.MP3_SPAN, 2)
 
 
-def _with_opus(score, cover=0.7, **kw):
+def _with_opus(score, cover=0.7, null_max=1.0, **kw):
     a = analysis(**kw)
-    a["quant"]["opus"] = {"codec": "opus", "score": score, "null_max": 1.0, "cover": cover}
+    a["quant"]["opus"] = {"codec": "opus", "score": score, "null_max": null_max, "cover": cover}
     return a
 
 
@@ -102,6 +102,8 @@ def _with_opus(score, cover=0.7, **kw):
     (_with_opus(opus.OPUS_WEAK), "unverified", "weak"),
     (_with_opus(opus.OPUS_WEAK, edge=20_000), "reject", "weak"),        # its lowpass and its traces agree
     (_with_opus(500.0, cover=0.1), "unverified", "partial"),            # a sample, not the track
+    (_with_opus(13.0, null_max=11.4), "clear", "clean"),                 # no better than chance
+    (_with_opus(13.0, null_max=11.4, edge=20_000), "unverified", "clean"),  # the edge alone, not a reject
 ])
 def test_the_opus_rule(a, tier, finding):
     got, reason, _ = decide(a, "flac")
@@ -109,6 +111,20 @@ def test_the_opus_rule(a, tier, finding):
     assert summary({**a, "tier": got})["quant"]["finding"] == finding
     if tier == "reject":
         assert "Opus" in reason
+
+
+def test_crushed_audio_that_fits_the_pulse_lattice_anywhere_shows_no_opus_traces():
+    """Six-bit audio fits integer pulses at any alignment: its best one scores past OPUS_STRONG, but the
+    random alignments score higher still, so it is chance, not an encoder's grid."""
+    rng = np.random.default_rng(2)
+    n = 48000 * 60
+    w = np.cumsum(rng.normal(0, 1, (n, 2)), axis=0)
+    w = (w - w.mean(axis=0)) / np.abs(w - w.mean(axis=0)).max()
+    a = evidence.Analyzer(48000, 2, 16, quant_detectors=True, expected_samples=n)
+    a.feed((np.round(w * 31) / 32 * 32767).astype("<i2").tobytes())
+    r = a.finish()["quant"]["opus"]
+    assert r["score"] >= opus.OPUS_STRONG and r["null_max"] >= r["score"]
+    assert quant_finding({"opus": r})[0] == "clean"
 
 
 def test_the_strongest_family_speaks_for_the_grid():

@@ -335,6 +335,8 @@ def _grade(r: dict) -> tuple[int, float, float]:
     """(rank: 3 strong, 2 weak, 1 partial, 0 clean; how far past its weak threshold; its value)."""
     if r["codec"] == "opus":
         value, strong, weak, cover_min = r["score"], opus.OPUS_STRONG, opus.OPUS_WEAK, OPUS_COVER_MIN
+        if value <= opus.OPUS_OVER_CHANCE * r.get("null_max", 0.0):
+            return 0, 0.0, value                  # no better than chance: no Opus traces at all
     else:
         value, strong, weak, cover_min = r["z"], QUANT_Z_STRONG, QUANT_Z_WEAK, QUANT_COVER_MIN
     cover = quant_cover(r)

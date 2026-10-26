@@ -53,6 +53,9 @@ CHUNK_FRAMES = 100          # a captured stretch is this many CELT frames long (
 # a genuine file reached in the prototype's corpus was 3, the lowest Opus 11 (issue #97).
 OPUS_STRONG = 10.0
 OPUS_WEAK = 4.0
+# ...and only when it beats the best of the random alignments this many times over. Coarse, crushed audio
+# fits the lattice at any alignment; a transcode's own grid beats chance 100-fold or more (issue #97).
+OPUS_OVER_CHANCE = 2.0
 
 
 def _window() -> np.ndarray:
