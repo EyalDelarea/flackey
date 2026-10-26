@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import evidence
+from . import evidence, opus
 from .audiofile import DEMUXERS, WrongFormat, arrived_empty, input_args
 from .models import NO_EDGE_HZ, Verdict, edge_text
 from .tools import no_window, tool_path
@@ -198,8 +198,10 @@ QUANT_Z_WEAK = 8.0
 # The same traces have to run through most of the file (issue #97): the share of its stretches that show them
 # at QUANT_Z_WEAK or more. A genuine master with an MP3-sourced sample in it carries them in a stretch or two,
 # and is unverified, not rejected. Judged once the file has QUANT_COVER_FROM stretches to count.
-QUANT_COVER_MIN = 0.5
+QUANT_COVER_MIN = evidence.QUANT_COVER_MIN
 QUANT_COVER_FROM = 4
+# Opus (`opus`): fitting slices on the held-out regions, and the share of those regions that fit
+OPUS_COVER_MIN = 0.25
 
 
 def _decode_args(path: Path, pr: Probe) -> tuple[list[str], int]:
@@ -318,28 +320,40 @@ def analyze(path: Path, pr: Probe | None = None, *, quant_detectors: bool = True
 
 
 def quant_cover(r: dict) -> float | None:
-    """The share of a detector's stretches that carry its grid, or None with too few stretches measured."""
+    """The share of a detector's stretches that carry its grid, or None with too few stretches measured. The
+    search stops once QUANT_COVER_MIN of them do, so a share at or above that is a floor."""
+    if r.get("codec") == "opus":
+        return r.get("cover")
     seg = r.get("segments")
-    if not seg or len(seg) < QUANT_COVER_FROM:
+    n = r.get("stretches") or len(seg or [])
+    if not seg or n < QUANT_COVER_FROM:
         return None
-    return sum(z >= QUANT_Z_WEAK for z in seg) / len(seg)
+    return sum(z >= QUANT_Z_WEAK for z in seg) / n
+
+
+def _grade(r: dict) -> tuple[int, float, float]:
+    """(rank: 3 strong, 2 weak, 1 partial, 0 clean; how far past its weak threshold; its value)."""
+    if r["codec"] == "opus":
+        value, strong, weak, cover_min = r["score"], opus.OPUS_STRONG, opus.OPUS_WEAK, OPUS_COVER_MIN
+    else:
+        value, strong, weak, cover_min = r["z"], QUANT_Z_STRONG, QUANT_Z_WEAK, QUANT_COVER_MIN
+    cover = quant_cover(r)
+    if value >= weak and cover is not None and cover < cover_min:
+        rank = 1
+    else:
+        rank = 3 if value >= strong else 2 if value >= weak else 0
+    return rank, value / weak, value
 
 
 def quant_finding(q: dict | None) -> tuple[str, str | None, float]:
     """The quantisation family: "strong", "weak", "partial" (traces in only part of the file), "clean" or
-    "not_run", with the codec and its z."""
-    found = [(r["z"], r["codec"], r) for r in ((q or {}).get("aac"), (q or {}).get("mp3")) if r]
+    "not_run", with the codec and its value (an MP3/AAC grid's z, Opus's held-out score)."""
+    found = [r for r in ((q or {}).get("aac"), (q or {}).get("mp3"), (q or {}).get("opus")) if r]
     if not found:
         return "not_run", None, 0.0
-    z, codec, best = max(found, key=lambda f: f[:2])
-    cover = quant_cover(best)
-    if z >= QUANT_Z_WEAK and cover is not None and cover < QUANT_COVER_MIN:
-        return "partial", codec, z
-    if z >= QUANT_Z_STRONG:
-        return "strong", codec, z
-    if z >= QUANT_Z_WEAK:
-        return "weak", codec, z
-    return "clean", codec, z
+    best = max(found, key=_grade)
+    rank, _, value = _grade(best)
+    return ("clean", "partial", "weak", "strong")[rank], best["codec"], value
 
 
 def _best_cover(q: dict | None, codec: str | None) -> float | None:
@@ -369,7 +383,7 @@ def edge_finding(spec: dict, fmt: str) -> tuple[str, int | None]:
     return "high", edge
 
 
-CODEC_NAMES = {"mp3": "MP3", "aac": "AAC"}
+CODEC_NAMES = {"mp3": "MP3", "aac": "AAC", "opus": "Opus"}
 
 
 def decide(analysis: dict, fmt: str) -> tuple[str, str, int]:
@@ -533,7 +547,7 @@ def summary(analysis: dict | None) -> dict | None:
         **({"shadow_tier": analysis["shadow_tier"]} if "shadow_tier" in analysis else {}),
         "edge": {"finding": edge_kind, "edge_hz": spec.get("edge_hz"), "drop_db": spec.get("edge_drop_db"),
                  "frames_above_edge": spec.get("frames_above_edge")},
-        "quant": {"finding": q_kind, "codec": codec, "z": round(z, 1),
+        "quant": {"finding": q_kind, "codec": codec, ("score" if codec == "opus" else "z"): round(z, 1),
                   **({"cover": round(c, 2)} if (c := _best_cover(analysis.get("quant"), codec)) is not None
                      else {})},
         "integrity": {"checked": analysis["integrity"]["checked"], "failed": analysis["integrity"]["failed"]},

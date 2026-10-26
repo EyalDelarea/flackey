@@ -80,6 +80,22 @@ def test_an_mp3_320_in_a_flac_is_not_cleared(pink: Path, d: Path):
     assert v.tier in ("reject", "unverified")
 
 
+def _has_encoder(name: str) -> bool:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=False).stdout
+    return f" {name} " in out
+
+
+@pytest.mark.parametrize("bitrate", ["128k", "256k"])
+def test_an_opus_encode_in_a_flac_is_rejected_on_its_pulse_vectors(pink: Path, d: Path, bitrate: str):
+    """Opus keeps the band to 20 kHz, which a genuine master's steep filter can show too: only the integer
+    pulse vectors CELT coded each band with give it away (issue #97)."""
+    if not _has_encoder("libopus"):
+        pytest.skip("this ffmpeg has no libopus encoder")
+    v = verify(_transcode(pink, d, f"o{bitrate}", "-ar", "48000", "-c:a", "libopus", "-b:a", bitrate, ext="opus"), None)
+    assert v.tier == "reject" and "Opus" in v.reason, (v.reason, v.analysis["quant"]["opus"])
+    assert summary(v.analysis)["quant"]["finding"] == "strong"
+
+
 def test_a_genuine_master_with_a_lossy_sample_in_it_is_unverified_not_rejected(pink: Path, d: Path):
     """A producer's lossy-sourced sample leaves the grid in one stretch of an otherwise genuine master: the
     whole file's loudest windows show it plainly, the rest of the file does not (issue #97)."""

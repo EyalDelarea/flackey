@@ -7,7 +7,8 @@ and depth, and hands the PCM to an `Analyzer`, which measures as it goes:
   container promised (`integrity`);
 - spectral edge: per-channel, whole-file power spectrum, linear power averaged before any logarithm, an
   edge located to the bin rather than to a 250 Hz band, and how often any frame reaches above it;
-- quantisation: the loudest windows of the file, for Derrien's MP3 and AAC detectors (`quant`);
+- quantisation: the loudest windows of the file, for Derrien's MP3 and AAC detectors (`quant`), and a
+  steady stretch from each of 32 parts of it, for the Opus detector (`opus`);
 - bit usage: how many of the declared bits ever carry anything.
 
 `container_facts` reads what the container itself declares, before or without decoding: FLAC STREAMINFO
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import quant
+from . import opus, quant
 
 EVIDENCE_VERSION = "2.0"
 BAND_HZ = 250
@@ -40,7 +41,13 @@ MIN_ACTIVE_FRAMES = 20        # about 2 s of sound with something in it
 # file shows one at least this clearly (issue #97): a grid in a few stretches is a sample, not a transcode
 QUANT_SEGMENTS = 8
 QUANT_SEGMENT_FROM_Z = 8.0
+# The share of stretches carrying it from which the whole file counts as carrying it; the per-stretch search
+# stops there, since the rest cannot change that (`verify` judges with the same share)
+QUANT_COVER_MIN = 0.5
 QUANT_SEGMENT_FALLBACK_S = 30  # the stretch length when the file's length is not known up front
+# Opus's own lowpass is 20 kHz. When the fast (ffmpeg/libopus) search finds no Opus traces in a file whose
+# edge sits there, the general search -- every alignment, several times the cost -- is run as well.
+OPUS_GENERAL_EDGE_HZ = (19_000, 21_000)
 
 
 def frame_length(sample_rate: int) -> int:
@@ -78,8 +85,12 @@ class Analyzer:
         if self.quant:
             seg = (-(-expected_samples // QUANT_SEGMENTS) if expected_samples
                    else QUANT_SEGMENT_FALLBACK_S * sample_rate)
-            self._aac = quant.TopRegions(quant.AAC_LONG, quant.AAC_SPAN, quant.AAC_WINDOWS, channels, seg)
-            self._mp3 = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, channels, seg)
+            self._aac = quant.TopRegions(quant.AAC_LONG, quant.AAC_SPAN, quant.AAC_WINDOWS, channels, seg,
+                                         clip=quant.CLIP)
+            self._mp3 = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, quant.MP3_WINDOWS, channels, seg,
+                                         clip=quant.CLIP)
+        self._opus = (opus.Chunks(sample_rate, channels, expected_samples)
+                      if self.quant and sample_rate in opus.RATES and expected_samples else None)
 
     def feed(self, raw: bytes) -> None:
         self.md5.update(raw)
@@ -102,6 +113,8 @@ class Analyzer:
         if self.quant:
             self._aac.feed(x)
             self._mp3.feed(x)
+        if self._opus is not None:
+            self._opus.feed(x)
         self._spectrum(x)
 
     def _spectrum(self, x: np.ndarray) -> None:
@@ -131,19 +144,51 @@ class Analyzer:
         }
         if self.quant:
             out["quant"] = {"aac": self._detect(self._aac, quant.detect_aac),
-                            "mp3": self._detect(self._mp3, quant.detect_mp3)}
+                            "mp3": self._detect(self._mp3, quant.detect_mp3),
+                            "opus": self._detect_opus(out["spectral"])}
         return out
+
+    def _detect_opus(self, spectral: dict) -> dict | None:
+        if self._opus is None:
+            return None
+        regions = self._opus.regions()
+        found = opus.detect_opus(regions, self.sr)
+        if found is None:
+            return None
+        lo, hi = OPUS_GENERAL_EDGE_HZ
+        edge = spectral.get("edge_hz")
+        if found.score < opus.OPUS_STRONG and edge is not None and lo <= edge <= hi:
+            wider = opus.detect_opus(regions, self.sr, general=True)
+            if wider is not None and wider.score > found.score:
+                found = wider
+        return found.to_dict()
 
     def _detect(self, top: quant.TopRegions, detect) -> dict | None:
         """One detector over the whole file's loudest windows and, when that finds a grid, over each
-        segment's: `segments` holds each one's z, so the rule can ask how much of the file carries it."""
-        found = detect(top.regions(), self.sr)
+        segment's: `segments` holds each one's z, so the rule can ask how much of the file carries it, and
+        `stretches` how many could be measured. Each stretch costs a whole search, so once QUANT_COVER_MIN
+        of them carry it the rest are not searched: `segments` is then cut short, and the share a floor.
+
+        Nothing is measured from fewer than the detector's full count of windows: a master clipped almost
+        throughout leaves only a stray unclipped window or two, and one window's best alignment can stand out
+        by chance (issue #97)."""
+        regions = top.regions()
+        if len(regions) < top.count:
+            return None
+        found = detect(regions, self.sr)
         if found is None:
             return None
         out = found.to_dict()
         if found.z >= QUANT_SEGMENT_FROM_Z:
-            parts = [detect(top.regions(s), self.sr) for s in top.segments()]
-            out["segments"] = [round(p.z, 1) for p in parts if p is not None]
+            stretches = top.segments()
+            enough = math.ceil(QUANT_COVER_MIN * len(stretches))
+            zs: list[float] = []
+            for s in stretches:
+                part = detect(top.regions(s), self.sr)
+                zs.append(round(part.z, 1) if part is not None else 0.0)
+                if sum(z >= QUANT_SEGMENT_FROM_Z for z in zs) >= enough:
+                    break
+            out["segments"], out["stretches"] = zs, len(stretches)
         return out
 
     def _bit_usage(self) -> dict:

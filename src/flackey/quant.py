@@ -47,7 +47,7 @@ What differs from the MATLAB, and why:
   ~1000 similar values; a transcode's best is the encoder's frame grid and stands far apart. It scales
   with the material, which a fixed threshold does not.
 - The loudest windows are chosen by the caller from the whole file (`TopRegions`), so a ten-minute track
-  is never held in memory for this.
+  is never held in memory for this, and a clipped window is passed over: clipping wipes out the grid.
 - `erfinv` is computed by bisection on `math.erf`: SciPy for one function is a heavy thing to ship.
 """
 from __future__ import annotations
@@ -64,6 +64,7 @@ import numpy as np
 REF_PROBA = 1e-2         # false-alarm rate each band's threshold is set for
 MU = 1 / 12              # mean squared rounding error of a uniformly distributed value
 CHUNK = 128              # alignments evaluated at once: bounds the (alignments, scalefactors, coefs) arrays
+CLIP = 32767 / 32768     # full scale at 16 bits: a window reaching it is clipped (`TopRegions`)
 
 
 def _erfinv(y: float) -> float:
@@ -174,13 +175,18 @@ class TopRegions:
     `block`, and analyses `span` samples from the same start (the window plus every alignment the search
     tries). Only windows whose span lies wholly inside the stream are candidates.
 
+    With `clip`, a window that reaches it anywhere is passed over (issue #97): a decoded MP3 or AAC that
+    overshoots full scale is clipped in exactly its loudest windows, which wipes out the grid there, and a
+    genuine master clipped hard looks, in those windows, like a faint grid. The loudest unclipped ones say more.
+
     With `segment` (samples), the loudest `count` are kept for every stretch of that length as well
     (issue #97): a grid that only some stretches carry -- an MP3-sourced sample inside a genuine master --
     is told apart from one the whole file carries. The whole stream's loudest are always among them."""
 
-    def __init__(self, block: int, span: int, count: int, channels: int, segment: int | None = None):
+    def __init__(self, block: int, span: int, count: int, channels: int, segment: int | None = None,
+                 clip: float | None = None):
         self.block, self.span, self.count, self.channels = block, span, count, channels
-        self.segment = segment
+        self.segment, self.clip = segment, clip
         self._buf = np.empty((0, channels), dtype=np.float32)
         self._buf_start = 0                     # absolute index of _buf[0]
         self._next = 0                          # next window start to evaluate
@@ -194,7 +200,8 @@ class TopRegions:
             mid = self._buf[rel:rel + 2 * self.block].sum(axis=1, dtype=np.float64)
             item = (float(np.dot(mid, mid)), -self._next)
             heap = self._heaps.setdefault(self._next // self.segment if self.segment else 0, [])
-            if len(heap) < self.count or item > heap[0][:2]:
+            if (len(heap) < self.count or item > heap[0][:2]) and not (
+                    self.clip is not None and np.abs(self._buf[rel:rel + self.span]).max() >= self.clip):
                 entry = (*item, self._buf[rel:rel + self.span].copy())
                 if len(heap) < self.count:
                     heapq.heappush(heap, entry)
@@ -345,7 +352,7 @@ MP3_SUBBANDS = 32
 MP3_GRANULE = 18                          # subband samples per granule
 MP3_BLOCK = MP3_SUBBANDS * MP3_GRANULE    # 576 PCM samples per granule
 MP3_SPAN = 4 * MP3_BLOCK                  # three granules plus every alignment 0..575
-MP3_WINDOWS = 16
+MP3_WINDOWS = 32                          # 16 misses a third more MP3 320s, and no genuine file gains (#97)
 MP3_SIGNIFICANCE = {8: 0.025}             # the reference gives a threshold for 8 windows only
 MP3_HISTORY = (MP3_GRANULE - 16 + 1) * MP3_SUBBANDS      # 96: where the reference's PQMF buffer starts
 MP3_SHORT_OFFSET = 12

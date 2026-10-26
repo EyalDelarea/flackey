@@ -76,7 +76,7 @@ layers = [
   "lossless",
   "match : identify : version",
   "notify : config : models : logsetup",
-  "tools : audiofile : quant",
+  "tools : audiofile : quant : opus",
   "slskd_process",
   "slskd_binary",
   "slskd_config",

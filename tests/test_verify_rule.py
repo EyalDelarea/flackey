@@ -4,7 +4,7 @@ import io
 import numpy as np
 import pytest
 
-from flackey import evidence, quant
+from flackey import evidence, opus, quant
 from flackey.config import Settings
 from flackey.models import NO_EDGE_HZ, Verdict
 from flackey.verify import (
@@ -88,6 +88,94 @@ def test_the_loudest_windows_are_the_same_with_segments_kept():
     assert np.array_equal(whole.regions(), parts.regions())
     assert parts.segments() == [0, 1, 2, 3]
     assert parts.regions(1).shape == (quant.MP3_WINDOWS, quant.MP3_SPAN, 2)
+
+
+def _with_opus(score, cover=0.7, **kw):
+    a = analysis(**kw)
+    a["quant"]["opus"] = {"codec": "opus", "score": score, "null_max": 1.0, "cover": cover}
+    return a
+
+
+@pytest.mark.parametrize("a,tier,finding", [
+    (_with_opus(0.0), "clear", "clean"),
+    (_with_opus(opus.OPUS_STRONG), "reject", "strong"),                 # Opus keeps every band to 20 kHz
+    (_with_opus(opus.OPUS_WEAK), "unverified", "weak"),
+    (_with_opus(opus.OPUS_WEAK, edge=20_000), "reject", "weak"),        # its lowpass and its traces agree
+    (_with_opus(500.0, cover=0.1), "unverified", "partial"),            # a sample, not the track
+])
+def test_the_opus_rule(a, tier, finding):
+    got, reason, _ = decide(a, "flac")
+    assert got == tier, reason
+    assert summary({**a, "tier": got})["quant"]["finding"] == finding
+    if tier == "reject":
+        assert "Opus" in reason
+
+
+def test_the_strongest_family_speaks_for_the_grid():
+    """A strong Opus finding is not hidden by a clean MP3 z that happens to be numerically larger."""
+    kind, codec, value = quant_finding({"aac": {"codec": "aac", "z": 7.0}, "mp3": {"codec": "mp3", "z": 7.5},
+                                        "opus": {"codec": "opus", "score": 40.0, "cover": 0.8}})
+    assert (kind, codec, value) == ("strong", "opus", 40.0)
+
+
+def test_clipped_windows_are_passed_over():
+    x = np.full((44100, 2), 0.1, np.float32)
+    x[20_000:20_010] = 1.0                                     # one loud, clipped spot
+    top = quant.TopRegions(quant.MP3_BLOCK, quant.MP3_SPAN, 4, 2, clip=quant.CLIP)
+    top.feed(x)
+    assert np.abs(top.regions()).max() < quant.CLIP
+
+
+@pytest.mark.parametrize(("hits", "searched", "tier"), [
+    (lambda i: True, 4, "reject"),            # half the stretches carry it: the rest are not searched
+    (lambda i: i % 4 == 0, 8, "unverified"),  # never enough: every stretch is searched, cover 2/8
+])
+def test_the_stretch_search_stops_once_enough_carry_the_grid(hits, searched, tier):
+    class Found:
+        def __init__(self, z):
+            self.z = z
+
+        def to_dict(self):
+            return {"codec": "mp3", "z": self.z}
+
+    calls = []
+
+    def detect(regions, sr):
+        calls.append(1)
+        return Found(QUANT_Z_STRONG + 10 if len(calls) == 1 or hits(len(calls) - 2) else 2.0)
+
+    a = evidence.Analyzer(44100, 2, 16, quant_detectors=True, expected_samples=44100 * 16)
+    a.feed((np.random.default_rng(1).normal(0, 0.1, (44100 * 16, 2)) * 32767).astype("<i2").tobytes())
+    r = a._detect(a._mp3, detect)
+    assert len(r["segments"]) == searched and r["stretches"] == evidence.QUANT_SEGMENTS
+    an = analysis(mp3_z=r["z"])
+    an["quant"]["mp3"] = r
+    assert decide(an, "flac")[0] == tier
+
+
+def test_a_master_clipped_almost_throughout_shows_no_grid():
+    """Its few unclipped windows are too few to weigh: one window's best alignment can stand out by chance."""
+    rng = np.random.default_rng(97)
+    x = np.clip(rng.normal(0, 3, (44100 * 20, 2)), -1, 1)
+    x[44100:44100 + 8000] *= 0.01                              # one short unclipped spot
+    a = evidence.Analyzer(44100, 2, 16, quant_detectors=True, expected_samples=len(x))
+    a.feed((x * 32767).astype("<i2").tobytes())
+    q = a.finish()["quant"]
+    assert 0 < len(a._aac.regions()) < quant.AAC_WINDOWS and 0 < len(a._mp3.regions()) < quant.MP3_WINDOWS
+    assert q["aac"] is None and q["mp3"] is None
+
+
+def test_the_opus_stretches_are_frame_aligned_and_spread_over_the_file():
+    total = 44100 * 300
+    ch = opus.Chunks(44100, 2, total)
+    assert len(ch.spans) == opus.REGIONS
+    assert all(s % 882 == 0 for s, _ in ch.spans)
+    assert ch.spans[0][0] < total / opus.REGIONS < ch.spans[1][0] and ch.spans[-1][1] <= total
+    x = np.arange(total, dtype=np.float32)[:, None].repeat(2, 1) / total
+    for i in range(0, total, 100_000):
+        ch.feed(x[i:i + 100_000])
+    for (s, e), buf in zip(ch.spans, ch.bufs):
+        assert len(buf) == e - s and buf[0, 0] == x[s, 0]
 
 
 def test_a_quantisation_only_reject_keeps_the_no_edge_cutoff():

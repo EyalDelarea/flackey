@@ -100,7 +100,9 @@ def judge(item: tuple[int, str, str, Path]) -> dict:
                 "judged": a["spectral"].get("judged"),
                 "edge_hz": a["spectral"].get("edge_hz"), "reach": a["spectral"].get("frames_above_edge"),
                 "aac_z": (q.get("aac") or {}).get("z"), "mp3_z": (q.get("mp3") or {}).get("z"),
-                "aac_seg": (q.get("aac") or {}).get("segments"), "mp3_seg": (q.get("mp3") or {}).get("segments")}
+                "aac_seg": (q.get("aac") or {}).get("segments"), "mp3_seg": (q.get("mp3") or {}).get("segments"),
+                "aac_n": (q.get("aac") or {}).get("stretches"), "mp3_n": (q.get("mp3") or {}).get("stretches"),
+                "opus": q.get("opus"), "seconds": a.get("seconds")}
     except VerifyError as e:
         return {"master": i, "label": label, "recipe": recipe, "tier": "error", "reason": str(e)[:200]}
 
@@ -112,8 +114,8 @@ def redecide(r: dict) -> dict:
         return r
     a = {"probe": {"fmt": "flac", "bitrate_kbps": 0},
          "spectral": {"judged": r.get("judged", 2), "edge_hz": r["edge_hz"], "frames_above_edge": r["reach"]},
-         "quant": {c: {"codec": c, "z": r[f"{c}_z"], **({"segments": r[f"{c}_seg"]} if r.get(f"{c}_seg") else {})}
-                   if r[f"{c}_z"] is not None else None for c in ("aac", "mp3")}}
+         "quant": {c: {"codec": c, "z": r[f"{c}_z"], **({"segments": r[f"{c}_seg"], "stretches": r.get(f"{c}_n")} if r.get(f"{c}_seg") else {})}
+                   if r[f"{c}_z"] is not None else None for c in ("aac", "mp3")} | {"opus": r.get("opus")}}
     tier, reason, _ = decide(a, "flac")
     return {**r, "tier": tier, "reason": reason}
 
