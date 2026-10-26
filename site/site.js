@@ -950,6 +950,146 @@ if (spectra) {
       { threshold: 0.1 },
     ).observe(spectra);
   }
+
+  // The "listening" pass: a scan line sweeps both spectrograms, the top-end
+  // reading resolves, the compression strip under each panel is read, and only
+  // then does the verdict badge replace "Listening". The CSS keys every step off
+  // the classes below; the strips are drawn here. Runs each time the figure
+  // comes into view and resets when it leaves, so a visitor scrolling back sees
+  // the pass again rather than a finished state they never watched arrive.
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const SCAN_MS = 2600; // matches the spec-scan animation in site.css
+  const PATTERN_MS = 1300;
+  const PHASES = [
+    ["is-scanning", 0],
+    ["is-top", SCAN_MS],
+    ["is-pattern", SCAN_MS + PATTERN_MS],
+    ["is-done", SCAN_MS + PATTERN_MS + 250],
+  ];
+  const strips = [...spectra.querySelectorAll(".pat-canvas")].map((canvas) => ({
+    canvas,
+    ctx: canvas.getContext("2d", { alpha: false }),
+    lossy: canvas.dataset.pattern === "1",
+    w: 0,
+    h: 0,
+  }));
+  // A fixed pseudo-random value per integer: the noise has to be the same from
+  // frame to frame, or it reads as static on a TV rather than as sound.
+  const hash = (n) => {
+    const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  let started = null; // when the current pass began, or null between passes
+  let timers = [];
+  let stripFrame = 0;
+
+  const drawStrip = (strip, now) => {
+    const { ctx, w, h, lossy } = strip;
+    if (!w || !h) return;
+    const rows = 5;
+    const cell = h / rows;
+    const cols = Math.max(12, Math.round(w / cell));
+    const cw = w / cols;
+    const gap = Math.max(1, Math.round(cell * 0.14));
+    const reveal = reduce
+      ? 1
+      : started == null
+        ? 0
+        : Math.min(1, Math.max(0, (now - started - SCAN_MS) / PATTERN_MS));
+    const t = reduce ? 0 : now / 1000;
+    ctx.fillStyle = "#05070d";
+    ctx.fillRect(0, 0, w, h);
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        // Ordinary sound: a quiet, unordered shimmer, the same on both panels
+        const seed = c * 13 + r * 71;
+        const tick = Math.floor(t * 5 + hash(seed) * 5);
+        let v = 0.1 + 0.22 * hash(seed + tick * 997);
+        // The lossy file's leftover: the same cells lit at the same regular
+        // spacing, every frame, wherever the scan has already been
+        const lattice = c % 3 === 0 && r % 2 === 0;
+        if (lossy && lattice && c / cols < reveal)
+          v = 0.78 + 0.12 * Math.sin(t * 3 + c * 0.4);
+        const i = (v * 255) | 0;
+        ctx.fillStyle = `rgb(${LUT[i * 3]},${LUT[i * 3 + 1]},${LUT[i * 3 + 2]})`;
+        ctx.fillRect(c * cw + gap / 2, r * cell + gap / 2, cw - gap, cell - gap);
+      }
+    }
+    if (reveal > 0 && reveal < 1) {
+      const x = reveal * w;
+      ctx.fillStyle = "rgba(110, 185, 255, 0.25)";
+      ctx.fillRect(Math.max(0, x - 40), 0, Math.min(40, x), h);
+      ctx.fillStyle = "#c4e5ff";
+      ctx.fillRect(x - 1, 0, 2, h);
+    }
+  };
+
+  const sizeStrips = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    for (const strip of strips) {
+      const rect = strip.canvas.getBoundingClientRect();
+      strip.w = strip.canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      strip.h = strip.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    }
+    const now = performance.now();
+    for (const strip of strips) drawStrip(strip, now);
+  };
+  sizeStrips();
+  window.addEventListener("resize", sizeStrips);
+
+  if (reduce || !("IntersectionObserver" in window)) {
+    // The finished picture, with nothing moving: both readings, both verdicts
+    for (const [name] of PHASES) spectra.classList.add(name);
+  } else {
+    const stripTick = (now) => {
+      for (const strip of strips) drawStrip(strip, now);
+      stripFrame = requestAnimationFrame(stripTick);
+    };
+    const reset = () => {
+      timers.forEach(clearTimeout);
+      timers = [];
+      started = null;
+      cancelAnimationFrame(stripFrame);
+      for (const [name] of PHASES) spectra.classList.remove(name);
+    };
+    new IntersectionObserver(
+      ([entry]) => {
+        if (entry.intersectionRatio >= 0.35 && started == null) {
+          started = performance.now();
+          timers = PHASES.map(([name, at]) =>
+            setTimeout(() => spectra.classList.add(name), at),
+          );
+          stripFrame = requestAnimationFrame(stripTick);
+        } else if (!entry.isIntersecting && started != null) {
+          reset();
+        }
+      },
+      { threshold: [0, 0.35] },
+    ).observe(spectra);
+  }
+}
+
+// Scroll reveal for the lossless check's numbered points and verdict cards: each
+// group fades up in a short stagger (--i in the markup). Skipped entirely under
+// reduced motion, which leaves them where they are.
+const reveals = document.querySelectorAll("[data-reveal]");
+if (
+  reveals.length &&
+  "IntersectionObserver" in window &&
+  !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+) {
+  document.documentElement.classList.add("js-reveal");
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("in");
+        io.unobserve(entry.target);
+      }
+    },
+    { threshold: 0.2, rootMargin: "0px 0px -8% 0px" },
+  );
+  reveals.forEach((el) => io.observe(el));
 }
 
 // Ambient sound-wave motifs: a track waveform under the hero, and a small

@@ -595,7 +595,7 @@
           </p>
         </div>
         <ol class="checks">
-          <li>
+          <li data-reveal style="--i: 0">
             <span>01</span>
             <div>
               <h3>Looks for the missing top end.</h3>
@@ -606,7 +606,7 @@
               </p>
             </div>
           </li>
-          <li>
+          <li data-reveal style="--i: 1">
             <span>02</span>
             <div>
               <h3>Looks for the compression fingerprint.</h3>
@@ -618,7 +618,7 @@
               </p>
             </div>
           </li>
-          <li>
+          <li data-reveal style="--i: 2">
             <span>03</span>
             <div>
               <h3>Gives you an honest answer.</h3>
@@ -630,18 +630,18 @@
           </li>
         </ol>
         <ul class="verdicts" aria-label="The three verdicts">
-          <li>
+          <li data-reveal style="--i: 0">
             <span class="spec-verdict ok">Verified</span>
             <p>No sign of a lossy source. Filed and tagged as verified.</p>
           </li>
-          <li>
+          <li data-reveal style="--i: 1">
             <span class="spec-verdict warn">Unverified</span>
             <p>
               No proof it’s fake, no proof it’s real. Still saved and tagged as
               unverified, and the app tells you why.
             </p>
           </li>
-          <li>
+          <li data-reveal style="--i: 2">
             <span class="spec-verdict bad">Rejected</span>
             <p>
               Clear signs of a converted file. Flackey keeps a copy so you can
@@ -653,47 +653,80 @@
           Flackey never deletes a file just because it’s unsure.
         </p>
         <!-- The argument the section is making, shown rather than described: the
-             same music through both files, so the only difference on screen is
-             the one the check actually looks for. -->
+             same music through both files, so the only differences on screen are
+             the two things the check looks for - the empty top band and the regular
+             pattern a lossy encoder leaves behind. site.js runs the "listening"
+             pass; with reduced motion the finished state is shown as is. -->
         <figure class="spectra" id="spectra">
           <div class="spectra-grid">
-            <div class="spec">
-              <div class="spec-head">
+          <div class="spec spec-real">
+            <div class="spec-head">
+              <span class="spec-badge">
+                <span class="spec-listening" aria-hidden="true">Listening</span>
                 <span class="spec-verdict ok">Verified</span>
-                <span class="spec-name">Real lossless — content up to 21.8 kHz</span>
-              </div>
-              <div class="spec-plot">
-                <canvas class="spec-canvas" data-cutoff="0" aria-hidden="true"></canvas>
-                <div class="spec-axis" aria-hidden="true">
-                  <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
-                  ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
-                </div>
-              </div>
+              </span>
+              <span class="spec-name">Real lossless — content up to 21.8 kHz</span>
             </div>
-            <div class="spec">
-              <div class="spec-head">
+            <div class="spec-plot">
+              <canvas class="spec-canvas" data-cutoff="0" aria-hidden="true"></canvas>
+              <div class="spec-axis" aria-hidden="true">
+                <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
+                ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
+              </div>
+              <div class="spec-scan" aria-hidden="true"></div>
+            </div>
+            <dl class="spec-readout">
+              <div class="sr-row">
+                <dt>Top end</dt>
+                <dd class="sr-val ok"><span class="sr-wait">Checking…</span><span class="sr-result">Reaches the top</span></dd>
+              </div>
+              <div class="sr-row">
+                <dt>Compression pattern</dt>
+                <dd class="sr-val ok"><span class="sr-wait">Checking…</span><span class="sr-result">None found</span></dd>
+              </div>
+            </dl>
+            <canvas class="pat-canvas" data-pattern="0" aria-hidden="true"></canvas>
+          </div>
+          <div class="spec spec-fake">
+            <div class="spec-head">
+              <span class="spec-badge">
+                <span class="spec-listening" aria-hidden="true">Listening</span>
                 <span class="spec-verdict bad">Rejected</span>
-                <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
-              </div>
-              <div class="spec-plot">
-                <canvas class="spec-canvas" data-cutoff="16000" aria-hidden="true"></canvas>
-                <div class="spec-axis" aria-hidden="true">
-                  <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
-                  ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
-                </div>
-                <div class="spec-cut" aria-hidden="true">
-                  <span>nothing above this line</span>
-                </div>
-              </div>
+              </span>
+              <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
             </div>
+            <div class="spec-plot">
+              <canvas class="spec-canvas" data-cutoff="16000" aria-hidden="true"></canvas>
+              <div class="spec-axis" aria-hidden="true">
+                <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
+                ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
+              </div>
+              <div class="spec-cut" aria-hidden="true">
+                <span>nothing above this line</span>
+              </div>
+              <div class="spec-scan" aria-hidden="true"></div>
+            </div>
+            <dl class="spec-readout">
+              <div class="sr-row">
+                <dt>Top end</dt>
+                <dd class="sr-val bad"><span class="sr-wait">Checking…</span><span class="sr-result">Stops at 16 kHz</span></dd>
+              </div>
+              <div class="sr-row">
+                <dt>Compression pattern</dt>
+                <dd class="sr-val bad"><span class="sr-wait">Checking…</span><span class="sr-result">MP3 pattern found</span></dd>
+              </div>
+            </dl>
+            <canvas class="pat-canvas" data-pattern="1" aria-hidden="true"></canvas>
+          </div>
           </div>
           <figcaption>
+            <span class="spec-illus">Illustration</span>
             Frequency runs bottom to top, time scrolls left to right. A real
             lossless file usually carries content right to the top; an MP3 throws
             the top octave away to save space, and renaming it to <code>.flac</code>
-            doesn't put it back. That empty band is one of the two signs Flackey
-            looks for. The compression pattern is the other.
-            <em>Illustration — not a recording of a specific track.</em>
+            doesn't put it back. The strip under each panel is the second sign: a
+            lossy encoder leaves a regular pattern in the sound, and a real master
+            has none. Not a recording or an analysis of a specific track.
           </figcaption>
         </figure>
       </section>
