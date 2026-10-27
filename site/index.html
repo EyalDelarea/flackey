@@ -629,6 +629,91 @@
             </div>
           </li>
         </ol>
+        <!-- Flackey inspecting a file, as a short story the visitor can replay:
+             the file drops in, its waveform unfolds into a spectrogram, a loupe
+             reads the compression grid, the three checks tick in, and a verdict
+             lands. Drawn in site.js; an illustration, not a real analysis. With
+             reduced motion the finished state is shown and the chips swap it. -->
+        <figure class="inspect" id="inspect" aria-labelledby="inspect-caption">
+          <div class="ix-bar">
+            <div class="ix-files" role="group" aria-label="Pick a file to inspect">
+              <button class="ix-file" type="button" data-file="real" aria-pressed="true">
+                <span class="ix-file-name">track.flac</span>
+                <span class="ix-file-note">real</span>
+              </button>
+              <button class="ix-file" type="button" data-file="fake" aria-pressed="false">
+                <span class="ix-file-name">track.flac</span>
+                <span class="ix-file-note">actually an MP3</span>
+              </button>
+            </div>
+            <button class="ix-replay" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" /></svg>
+              Replay
+            </button>
+          </div>
+          <div class="ix-stage">
+            <div class="ix-scope">
+              <div class="ix-doc" aria-hidden="true">
+                <span class="ix-doc-icon">FLAC</span>
+                <span class="ix-doc-text">
+                  <b>track.flac</b>
+                  <span>44.1 kHz · 16-bit · 6:12</span>
+                </span>
+              </div>
+              <canvas class="ix-canvas" aria-hidden="true"></canvas>
+              <div class="ix-axis" aria-hidden="true">
+                <span style="--f: 20">20 kHz</span><span style="--f: 15">15</span
+                ><span style="--f: 10">10</span><span style="--f: 5">5</span>
+              </div>
+              <div class="ix-ceiling" aria-hidden="true"><span>Nothing above 16 kHz</span></div>
+            </div>
+            <div class="ix-panel">
+              <ol class="ix-checks" aria-live="polite">
+                <li class="ix-check">
+                  <span class="ix-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" />
+                      <path class="ix-tick" d="m7.5 12.4 3 3 6-6.6" />
+                      <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
+                    </svg>
+                  </span>
+                  <span class="ix-check-label">Top end</span>
+                  <span class="ix-check-result" data-real="Reaches 21.8 kHz" data-fake="Stops dead at 16 kHz"></span>
+                </li>
+                <li class="ix-check">
+                  <span class="ix-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" />
+                      <path class="ix-tick" d="m7.5 12.4 3 3 6-6.6" />
+                      <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
+                    </svg>
+                  </span>
+                  <span class="ix-check-label">MP3 fingerprint</span>
+                  <span class="ix-check-result" data-real="None, just music" data-fake="Found, a regular grid"></span>
+                </li>
+                <li class="ix-check">
+                  <span class="ix-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" />
+                      <path class="ix-tick" d="m7.5 12.4 3 3 6-6.6" />
+                      <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
+                    </svg>
+                  </span>
+                  <span class="ix-check-label">Opus and AAC traces</span>
+                  <span class="ix-check-result" data-real="None" data-fake="None"></span>
+                </li>
+              </ol>
+              <div class="ix-verdict">
+                <span class="ix-stamp" data-real="Verified" data-fake="Rejected"></span>
+                <span class="ix-keep" aria-hidden="true">Keep it anyway</span>
+              </div>
+            </div>
+          </div>
+          <figcaption id="inspect-caption">
+            An illustration of the lossless check, not a recording or an analysis
+            of a real track. Pick a file to watch it again.
+          </figcaption>
+        </figure>
         <ul class="verdicts" aria-label="The three verdicts">
           <li data-reveal style="--i: 0">
             <span class="spec-verdict ok">Verified</span>
@@ -652,83 +737,6 @@
         <p class="verdicts-note">
           Flackey never deletes a file just because it’s unsure.
         </p>
-        <!-- The argument the section is making, shown rather than described: the
-             same music through both files, so the only differences on screen are
-             the two things the check looks for - the empty top band and the regular
-             pattern a lossy encoder leaves behind. site.js runs the "listening"
-             pass; with reduced motion the finished state is shown as is. -->
-        <figure class="spectra" id="spectra">
-          <div class="spectra-grid">
-          <div class="spec spec-real">
-            <div class="spec-head">
-              <span class="spec-badge">
-                <span class="spec-listening" aria-hidden="true">Listening</span>
-                <span class="spec-verdict ok">Verified</span>
-              </span>
-              <span class="spec-name">Real lossless — content up to 21.8 kHz</span>
-            </div>
-            <div class="spec-plot">
-              <canvas class="spec-canvas" data-cutoff="0" aria-hidden="true"></canvas>
-              <div class="spec-axis" aria-hidden="true">
-                <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
-                ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
-              </div>
-              <div class="spec-scan" aria-hidden="true"></div>
-            </div>
-            <dl class="spec-readout">
-              <div class="sr-row">
-                <dt>Top end</dt>
-                <dd class="sr-val ok"><span class="sr-wait">Checking…</span><span class="sr-result">Reaches the top</span></dd>
-              </div>
-              <div class="sr-row">
-                <dt>Compression pattern</dt>
-                <dd class="sr-val ok"><span class="sr-wait">Checking…</span><span class="sr-result">None found</span></dd>
-              </div>
-            </dl>
-            <canvas class="pat-canvas" data-pattern="0" aria-hidden="true"></canvas>
-          </div>
-          <div class="spec spec-fake">
-            <div class="spec-head">
-              <span class="spec-badge">
-                <span class="spec-listening" aria-hidden="true">Listening</span>
-                <span class="spec-verdict bad">Rejected</span>
-              </span>
-              <span class="spec-name">An MP3 renamed to .flac — stops at 16 kHz</span>
-            </div>
-            <div class="spec-plot">
-              <canvas class="spec-canvas" data-cutoff="16000" aria-hidden="true"></canvas>
-              <div class="spec-axis" aria-hidden="true">
-                <span style="top: 9.3%">20k</span><span style="top: 32%">15k</span
-                ><span style="top: 54.6%">10k</span><span style="top: 77.3%">5k</span>
-              </div>
-              <div class="spec-cut" aria-hidden="true">
-                <span>nothing above this line</span>
-              </div>
-              <div class="spec-scan" aria-hidden="true"></div>
-            </div>
-            <dl class="spec-readout">
-              <div class="sr-row">
-                <dt>Top end</dt>
-                <dd class="sr-val bad"><span class="sr-wait">Checking…</span><span class="sr-result">Stops at 16 kHz</span></dd>
-              </div>
-              <div class="sr-row">
-                <dt>Compression pattern</dt>
-                <dd class="sr-val bad"><span class="sr-wait">Checking…</span><span class="sr-result">MP3 pattern found</span></dd>
-              </div>
-            </dl>
-            <canvas class="pat-canvas" data-pattern="1" aria-hidden="true"></canvas>
-          </div>
-          </div>
-          <figcaption>
-            <span class="spec-illus">Illustration</span>
-            Frequency runs bottom to top, time scrolls left to right. A real
-            lossless file usually carries content right to the top; an MP3 throws
-            the top octave away to save space, and renaming it to <code>.flac</code>
-            doesn't put it back. The strip under each panel is the second sign: a
-            lossy encoder leaves a regular pattern in the sound, and a real master
-            has none. Not a recording or an analysis of a specific track.
-          </figcaption>
-        </figure>
       </section>
       <section class="about wrap" id="about" aria-labelledby="about-title">
         <p class="eyebrow">About Flackey</p>

@@ -1383,26 +1383,6 @@ h2 {
   .ch-steps { display: none; }
 }
 
-/* ---- Spectrogram comparison ----
-   Spans the section's two columns, so it reads as the evidence for the claim
-   above rather than as a third item beside it. */
-.spectra {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding-top: clamp(30px, 4vw, 48px);
-}
-.spectra-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(16px, 2.2vw, 26px);
-}
-.spec-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
 .spec-verdict {
   flex: none;
   padding: 3px 9px;
@@ -1486,249 +1466,464 @@ h2 {
   font-weight: 550;
   letter-spacing: -0.01em;
 }
-.spec-name {
-  font-size: 12.5px;
+/* ---- Flackey inspecting a file (site.js) ----
+   A dark inspection window on the light page, like the app window in the film.
+   site.js sets the step classes on #inspect as the run plays:
+   ix-dropped, ix-ceiling-on, ix-row1..3, ix-landed, ix-keep-on. */
+.inspect {
+  --ix-bg: #0a0c12;
+  --ix-text: #eef1f6;
+  --ix-dim: #8b91a1;
+  --ix-rule: rgba(255, 255, 255, 0.08);
+  --ix-ok: #32d74b;
+  --ix-bad: #ff453a;
+  --ix-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ix-ease-back: cubic-bezier(0.34, 1.56, 0.64, 1);
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: clamp(36px, 5vw, 64px);
+}
+.ix-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.ix-files {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ix-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    background 0.2s;
+}
+.ix-file:hover {
+  border-color: #c9ccd4;
+}
+.ix-file[aria-pressed="true"] {
+  border-color: var(--blue);
+  background: #f3f8ff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+.ix-file-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.ix-file-note {
+  font-size: 13.5px;
   color: var(--muted);
 }
-.spec-plot {
+.ix-replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font-size: 15px;
+}
+.ix-replay svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.5s var(--ix-ease-out);
+}
+.ix-replay:hover svg {
+  transform: rotate(-200deg);
+}
+.ix-stage {
   position: relative;
-  border-radius: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  gap: clamp(20px, 2.6vw, 34px);
+  padding: clamp(18px, 2vw, 26px);
+  border-radius: 22px;
+  color: var(--ix-text);
+  background:
+    radial-gradient(90% 70% at 32% 115%, rgba(10, 132, 255, 0.2), transparent 60%),
+    var(--ix-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 50px 90px -50px rgba(10, 30, 70, 0.6),
+    0 18px 36px -24px rgba(10, 20, 40, 0.45);
   overflow: hidden;
-  background: #05070d;
-  border: 1px solid var(--line);
+  isolation: isolate;
 }
-.spec-canvas {
-  display: block;
-  width: 100%;
-  height: clamp(140px, 17vw, 190px);
-}
-.spec-axis {
+/* Film grain over everything inside the window */
+.ix-stage::after {
+  content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
+  opacity: 0.09;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
-.spec-axis span {
-  position: absolute;
-  left: 9px;
-  transform: translateY(-50%);
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.45);
+.ix-thud .ix-stage {
+  animation: ix-thud 0.32s cubic-bezier(0.3, 0, 0.3, 1);
+}
+@keyframes ix-thud {
+  30% {
+    transform: translateY(3px);
+  }
+  60% {
+    transform: translateY(-1px);
+  }
+}
+.ix-scope {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+.ix-doc {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(-22px) scale(0.96);
+}
+.ix-dropped .ix-doc {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.3s ease,
+    transform 0.6s var(--ix-ease-back);
+}
+.ix-doc-icon {
+  display: grid;
+  place-items: end center;
+  width: 30px;
+  height: 36px;
+  padding-bottom: 5px;
+  border-radius: 4px 9px 4px 4px;
+  background: linear-gradient(160deg, #2b8cff, #0058d6);
+  box-shadow: 0 6px 16px -6px rgba(0, 122, 255, 0.8);
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+.ix-doc-text {
+  display: grid;
+  line-height: 1.3;
+}
+.ix-doc-text b {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ix-doc-text span {
+  font-size: 12.5px;
+  color: var(--ix-dim);
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
-/* 16 kHz of 22.05 kHz, measured from the bottom of the plot. */
-.spec-cut {
+.ix-canvas,
+.ix-axis,
+.ix-ceiling {
+  grid-area: 2 / 1;
+}
+.ix-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(250px, 26vw, 340px);
+}
+.ix-axis {
+  position: relative;
+  pointer-events: none;
+}
+.ix-axis span {
+  position: absolute;
+  left: 0;
+  top: calc((1 - var(--f) / 22.05) * 100%);
+  transform: translateY(-130%);
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.38);
+  font-variant-numeric: tabular-nums;
+}
+.ix-ceiling {
+  position: relative;
+  pointer-events: none;
+  opacity: 0;
+}
+.ix-ceiling::before {
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
-  top: 27.4%;
-  bottom: 0;
-  border-top: 1px dashed rgba(255, 255, 255, 0.5);
-  pointer-events: none;
-  /* Drawn in behind the scan line, once the ceiling has shown itself */
-  clip-path: inset(0 100% 0 0);
-  transition: clip-path 1.7s linear 0.9s;
+  top: 27.44%;
+  border-top: 1.5px dashed rgba(255, 255, 255, 0.7);
+  transform: scaleX(0);
+  transform-origin: left;
 }
-.spectra.is-scanning .spec-cut {
-  clip-path: inset(0 0 0 0);
-}
-.spec-cut span {
+.ix-ceiling span {
   position: absolute;
-  right: 9px;
-  top: 6px;
-  font-size: 10.5px;
-  color: rgba(255, 255, 255, 0.78);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  right: 0;
+  top: 27.44%;
+  transform: translateY(-140%);
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  opacity: 0;
 }
-.spectra figcaption {
-  margin-top: 22px;
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--muted);
-  /* Under both panels, one column under each, so neither side is left empty */
-  columns: 2 300px;
-  column-gap: clamp(16px, 2.2vw, 26px);
+[data-file="fake"] .ix-ceiling {
+  opacity: 1;
 }
-.spec-illus {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: #f1f2f5;
-  color: var(--ink);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  vertical-align: 1px;
+.ix-ceiling-on .ix-ceiling::before {
+  transform: none;
+  transition: transform 0.7s var(--ix-ease-out);
 }
-/* ---- The "listening" pass over the two panels (site.js) ----
-   is-scanning: a scan line sweeps each spectrogram; is-top: the top-end reading
-   resolves; is-pattern: the compression strip has been read; is-done: the
-   verdict badge replaces "Listening". */
-.spec-badge {
-  display: inline-grid;
+.ix-ceiling-on .ix-ceiling span {
+  opacity: 1;
+  transition: opacity 0.4s ease 0.35s;
 }
-.spec-badge > * {
-  grid-area: 1 / 1;
-  justify-self: start;
+.ix-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
-.spec-listening {
-  position: relative;
-  padding: 3px 9px 3px 21px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #0060d1;
-  background: #e8f1ff;
-  transition:
-    opacity 0.2s,
-    transform 0.2s;
+.ix-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
-.spec-listening::before {
-  content: "";
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  margin-top: -3px;
-  border-radius: 50%;
-  background: var(--blue);
-  animation: listen-pulse 1s ease-in-out infinite;
+.ix-check {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+  padding: 15px 0;
+  border-top: 1px solid var(--ix-rule);
 }
-@keyframes listen-pulse {
-  50% {
-    transform: scale(0.5);
-    opacity: 0.4;
+.ix-check:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+.ix-mark {
+  grid-row: span 2;
+  align-self: start;
+  margin-top: 1px;
+}
+.ix-mark svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ix-mark circle {
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-dasharray: 63 63;
+}
+.ix-mark path {
+  stroke-dasharray: 20 20;
+  stroke-dashoffset: 20;
+}
+.ix-check.ok .ix-cross,
+.ix-check.bad .ix-tick {
+  display: none;
+}
+.ix-check-label {
+  font-size: 15px;
+  font-weight: 550;
+  color: rgba(238, 241, 246, 0.45);
+  transition: color 0.3s ease;
+}
+.ix-check-result {
+  font-size: 13px;
+  color: var(--ix-dim);
+  opacity: 0;
+  transform: translateX(-6px);
+}
+/* A row resolving: the ring draws round, the mark strokes in, the result slides */
+.ix-check {
+  --tone: var(--ix-ok);
+}
+.ix-check.bad {
+  --tone: var(--ix-bad);
+}
+.ix-row1 .ix-check:nth-child(1) circle,
+.ix-row2 .ix-check:nth-child(2) circle,
+.ix-row3 .ix-check:nth-child(3) circle {
+  stroke: var(--tone);
+  animation: ix-ring 0.5s var(--ix-ease-out);
+}
+@keyframes ix-ring {
+  from {
+    stroke-dashoffset: 63;
   }
 }
-.spectra .spec-verdict {
-  opacity: 0;
-  transform: scale(0.4);
-  transition:
-    opacity 0.15s,
-    transform 0.5s cubic-bezier(0.34, 1.7, 0.64, 1);
+.ix-row1 .ix-check:nth-child(1) path,
+.ix-row2 .ix-check:nth-child(2) path,
+.ix-row3 .ix-check:nth-child(3) path {
+  stroke: var(--tone);
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.35s var(--ix-ease-out) 0.2s;
 }
-.spectra.is-done .spec-verdict {
+.ix-row1 .ix-check:nth-child(1) .ix-check-label,
+.ix-row2 .ix-check:nth-child(2) .ix-check-label,
+.ix-row3 .ix-check:nth-child(3) .ix-check-label {
+  color: var(--ix-text);
+}
+.ix-row1 .ix-check:nth-child(1) .ix-check-result,
+.ix-row2 .ix-check:nth-child(2) .ix-check-result,
+.ix-row3 .ix-check:nth-child(3) .ix-check-result {
   opacity: 1;
   transform: none;
+  color: var(--tone);
+  transition:
+    opacity 0.35s ease 0.15s,
+    transform 0.5s var(--ix-ease-out) 0.15s;
 }
-.spectra.is-done .spec-listening {
+.ix-verdict {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  min-height: 74px;
+}
+.ix-stamp {
+  --tone: var(--ix-ok);
+  position: relative;
+  padding: 7px 16px 6px;
+  border: 2.5px solid var(--tone);
+  border-radius: 10px;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 10%, transparent);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--tone) 55%, transparent);
+  box-shadow: 0 0 28px -6px color-mix(in srgb, var(--tone) 60%, transparent);
   opacity: 0;
-  transform: scale(0.7);
+  transform: rotate(-5deg) scale(2.3);
 }
-.spec-scan {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
+[data-file="fake"] .ix-stamp {
+  --tone: var(--ix-bad);
 }
-/* The stretch just listened to, glowing faintly behind the line */
-.spec-scan::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -70px;
-  width: 70px;
-  background: linear-gradient(90deg, transparent, rgba(110, 185, 255, 0.2));
+.ix-landed .ix-stamp {
+  opacity: 1;
+  transform: rotate(-5deg);
+  animation: ix-stamp 0.5s cubic-bezier(0.5, 0, 0.75, 0) both;
 }
-.spec-scan::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -1px;
-  width: 2px;
-  background: #c4e5ff;
-  box-shadow: 0 0 12px 2px rgba(70, 160, 255, 0.85);
-}
-.spectra.is-scanning .spec-scan {
-  animation: spec-scan 2.6s linear forwards;
-}
-@keyframes spec-scan {
+/* Falls fast, lands hard, settles once */
+@keyframes ix-stamp {
   0% {
-    opacity: 1;
-    transform: translateX(0);
+    opacity: 0;
+    transform: rotate(-11deg) scale(2.3);
+    filter: blur(5px);
   }
-  94% {
+  55% {
     opacity: 1;
+    transform: rotate(-5deg) scale(0.94);
+    filter: blur(0);
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  78% {
+    transform: rotate(-5deg) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: rotate(-5deg) scale(1);
+  }
+}
+/* The shock ring as it lands */
+.ix-stamp::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 12px;
+  border: 2px solid var(--tone);
+  opacity: 0;
+}
+.ix-landed .ix-stamp::after {
+  animation: ix-shock 0.6s var(--ix-ease-out) 0.27s;
+}
+@keyframes ix-shock {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
   }
   100% {
     opacity: 0;
-    transform: translateX(100%);
+    transform: scale(1.5, 1.9);
   }
 }
-.spec-readout {
-  margin: 12px 0 0;
-  display: grid;
-  gap: 5px;
-}
-.sr-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
-}
-.sr-row dt {
-  color: var(--muted);
-}
-.sr-row dd {
-  margin: 0;
-  display: inline-grid;
+.ix-keep {
+  display: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 14px;
   font-weight: 600;
-}
-.sr-val > * {
-  grid-area: 1 / 1;
-  justify-self: end;
-  transition:
-    opacity 0.3s,
-    transform 0.3s;
-}
-.sr-wait {
-  color: #a2a5ad;
-  font-weight: 500;
-}
-.sr-result {
+  box-shadow: 0 6px 18px -6px rgba(0, 122, 255, 0.7);
   opacity: 0;
-  transform: translateY(5px);
+  transform: translateY(8px);
 }
-.sr-val.ok .sr-result {
-  color: #0a6c2f;
+[data-file="fake"] .ix-keep {
+  display: inline-block;
 }
-.sr-val.bad .sr-result {
-  color: #b3261e;
-}
-.spectra.is-top .sr-row:first-child .sr-wait,
-.spectra.is-pattern .sr-row:last-child .sr-wait {
-  opacity: 0;
-}
-.spectra.is-top .sr-row:first-child .sr-result,
-.spectra.is-pattern .sr-row:last-child .sr-result {
+.ix-keep-on .ix-keep {
   opacity: 1;
   transform: none;
+  transition:
+    opacity 0.35s ease,
+    transform 0.5s var(--ix-ease-out);
 }
-.pat-canvas {
-  display: block;
-  width: 100%;
-  height: 34px;
-  margin-top: 8px;
-  border-radius: 6px;
-  background: #05070d;
+.inspect figcaption {
+  margin-top: 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
 }
-.spectra figcaption code {
-  font-size: 12.5px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #f1f2f5;
-  color: var(--ink);
+/* Between runs: what is on screen fades out before the next file drops in */
+.ix-fading .ix-canvas,
+.ix-fading .ix-doc,
+.ix-fading .ix-ceiling,
+.ix-fading .ix-panel {
+  opacity: 0;
+  transition: opacity 0.28s ease;
 }
-.spectra figcaption em {
-  font-style: normal;
-  color: #8c8f99;
+@media (max-width: 800px) {
+  .ix-stage {
+    grid-template-columns: minmax(0, 1fr);
+    border-radius: 18px;
+  }
+  .ix-canvas {
+    height: 250px;
+  }
+  .ix-bar {
+    flex-wrap: wrap;
+  }
+  .ix-file {
+    padding: 9px 13px;
+  }
+  .ix-stamp {
+    font-size: 24px;
+  }
 }
 .checks {
   list-style: none;
@@ -2586,13 +2781,12 @@ footer > a:last-child {
     grid-template-columns: 1fr;
     gap: 38px;
   }
-  .spectra-grid,
   .verdicts {
     grid-template-columns: 1fr;
   }
   /* One column: the grid's own 38px row gap spaces these already */
   .lossless-check .verdicts,
-  .lossless-check .spectra {
+  .lossless-check .inspect {
     padding-top: 0;
   }
   .verdicts-note {
