@@ -751,28 +751,74 @@ if (chooseDemo) {
   }
 }
 
-// The spectrogram comparison in the verification section. Both panels are drawn
-// from one synthetic spectrum, so the only difference between them is the thing
-// the check actually looks for: the lossy panel discards everything above its
-// cutoff. Illustrative, not an analysis of a real file - the caption says so.
-const spectra = document.querySelector("#spectra");
-if (spectra) {
-  const NYQUIST = 22050;
-  const MS_PER_COLUMN = 16; // one column per ~16ms, so the scroll speed does not
-  // depend on whether the display runs at 60 or 120Hz
+// Flackey inspecting a file, in the lossless check section. One short story per
+// run, about six seconds: the file drops in, its waveform unfolds into a
+// spectrogram, and each check resolves only after the picture has shown its
+// evidence: the top end once the fill has reached as high as it will go, the
+// compression fingerprint once the loupe has read its patch. While a check is
+// being made its row spins and its region on the picture is outlined in the
+// same yellow. The verdict lands only after both rows have resolved. While
+// in view it loops on its own, real then fake then real, holding each verdict
+// for a moment; a chip jumps straight to that file and the loop goes on from
+// there. Everything is drawn from one
+// synthetic spectrum, so the only differences between the two files are the
+// two signs the check looks for: the empty top band and the regular grid.
+// Illustrative, not an analysis of a real file - the caption says so.
+const inspect = document.querySelector("#inspect");
+if (inspect) {
+  const q = (sel) => inspect.querySelector(sel);
+  const stage = q(".ix-stage");
+  const canvas = q(".ix-canvas");
+  const ctx = canvas.getContext("2d");
+  const chips = [...inspect.querySelectorAll(".ix-file")];
+  const rows = [...inspect.querySelectorAll(".ix-check")];
+  const stamp = q(".ix-stamp");
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Dark ground through the site's blue to white, so the loud parts read as heat
-  // and the panel still belongs to the page around it.
+  const NYQUIST = 22050;
+  const CEILING = 16000;
+  // Which way each check comes out, per file: the real one passes both, the
+  // fake fails both. Any cross means Rejected.
+  const OUTCOME = { real: ["ok", "ok"], fake: ["bad", "bad"] };
+
+  // ---- Timeline, in seconds from the start of a run ----
+  const T = {
+    wave: 0.35, // waveform draws across
+    unfold: 1.15, // it sinks and the spectrogram rises out of it
+    rise: 1.0, // how long one column takes to fill
+    spread: 0.32, // left-to-right lag across the panel
+    // the fill is complete at unfold + spread + 0.08 + rise = 2.55
+    act1: 1.15, // row 1 spins and the top band is outlined while the fill rises
+    ceiling: 1.95, // the dashed ceiling draws in (fake), fully labelled by 2.7
+    row1: 2.85, // top end resolves: after the fill and the ceiling label
+    act2: 3.05, // row 2 spins and the loupe is outlined while it reads
+    loupe: 3.05, // loupe travels out from its patch
+    loupeIn: 3.55,
+    scan: 3.6, // a line sweeps the loupe, both files
+    scanEnd: 4.35,
+    grid: 3.65, // cells inside it light up (fake), all lit by 4.49
+    row2: 4.6, // compression fingerprint resolves: after the scan and the grid
+    stamp: 5.1, // after both rows have finished resolving
+    keep: 5.6,
+    end: 6.05,
+  };
+  const SCAN = "255,214,10"; // the yellow that ties a row to its region
+  const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  const span = (t, a, b) => clamp01((t - a) / (b - a));
+  const outCubic = (x) => 1 - Math.pow(1 - x, 3);
+  const inOutCubic = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+  const outBack = (x) => 1 + 2.70158 * Math.pow(x - 1, 3) + 1.70158 * Math.pow(x - 1, 2);
+  const lerp = (a, b, f) => a + (b - a) * f;
+
+  // ---- Colour: dark ground through the site's blue to white ----
   const RAMP = [
-    [0.0, [5, 7, 13]],
+    [0.0, [6, 8, 14]],
     [0.25, [11, 42, 94]],
     [0.5, [10, 92, 196]],
     [0.72, [47, 168, 255]],
     [0.88, [159, 224, 255]],
     [1.0, [255, 255, 255]],
   ];
-  // 256 steps, baked once: a spectrogram asks for a colour per pixel per column,
-  // and interpolating the ramp each time is the one thing here that would cost.
   const LUT = new Uint8Array(256 * 3);
   for (let i = 0; i < 256; i++) {
     const v = i / 255;
@@ -783,10 +829,12 @@ if (spectra) {
     const f = (v - p0) / (p1 - p0);
     for (let c = 0; c < 3; c++) LUT[i * 3 + c] = c0[c] + (c1[c] - c0[c]) * f;
   }
+  const rgb = (v, a = 1) => {
+    const i = (clamp01(v) * 255) | 0;
+    return `rgba(${LUT[i * 3]},${LUT[i * 3 + 1]},${LUT[i * 3 + 2]},${a})`;
+  };
 
-  // A spectrogram of real music is three things at once: sustained tones as
-  // horizontal lines, transients as vertical stripes, and a noise bed that thins
-  // out with frequency. Modelling those three is enough to look like music.
+  // ---- The music: tones as lines, drums as stripes, a noise bed ----
   const VOICES = [
     { root: 82.41, partials: 16, gain: 1.0, rate: 0.37 },
     { root: 164.81, partials: 11, gain: 0.62, rate: 0.55 },
@@ -794,16 +842,10 @@ if (spectra) {
     { root: 329.63, partials: 8, gain: 0.34, rate: 0.83 },
   ];
   const SEMITONES = [0, 3, 5, 7, 10, 7, 5, 3];
-
-  // A sixteenth-note grid, so the transients land in a pattern instead of on a
-  // metronome - an evenly spaced tick every beat reads as a test signal.
   const STEP = 0.125;
   const KICK = [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0];
   const SNARE = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1];
   const HAT = [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1];
-
-  // Seconds since this drum last fired. Decays are short, the way percussion
-  // actually behaves: a slow one smears every hit into a full-height band.
   const age = (pattern, t) => {
     const now = Math.floor(t / STEP);
     for (let k = 0; k < 16; k++) {
@@ -817,23 +859,12 @@ if (spectra) {
     snare: Math.exp(-age(SNARE, t) * 17),
     hat: Math.exp(-age(HAT, t) * 60),
   });
-
-  // `binHz` is how much frequency one pixel row covers. Partials narrower than a
-  // row fall between the rows being sampled and flicker in and out instead of
-  // drawing a line, so they are widened to straddle one.
   const spectrum = (freq, t, binHz, env) => {
-    let v = 0.008 * (0.3 + 0.7 / (1 + freq / 4000)); // noise bed
-    // Cymbal wash: the sustained top end that a lossy encoder throws away, and
-    // the reason the two panels differ at all. Breathes slightly so the upper
-    // band looks recorded rather than painted on.
-    v +=
-      0.012 *
-      (0.8 + 0.2 * Math.sin(t * 1.7)) *
-      Math.exp(-Math.pow((freq - 16000) / 7000, 2));
-    v += env.kick * 1.0 * Math.exp(-freq / 170);
+    let v = 0.008 * (0.3 + 0.7 / (1 + freq / 4000));
+    v += 0.012 * (0.8 + 0.2 * Math.sin(t * 1.7)) * Math.exp(-Math.pow((freq - 16000) / 7000, 2));
+    v += env.kick * Math.exp(-freq / 170);
     v += env.snare * 0.45 * Math.exp(-Math.pow((freq - 2200) / 2600, 2));
     v += env.snare * 0.1 * Math.exp(-Math.pow((freq - 7000) / 4000, 2));
-    // Narrow in frequency, or every hit is a stripe up the whole panel.
     v += env.hat * 0.34 * Math.exp(-Math.pow((freq - 14500) / 5000, 2));
     for (const voice of VOICES) {
       const step = SEMITONES[Math.floor(t * voice.rate) % SEMITONES.length];
@@ -842,114 +873,503 @@ if (spectra) {
         const pf = root * n;
         if (pf > NYQUIST) break;
         const width = Math.max(1.6 * binHz, 24 + pf * 0.014);
-        v +=
-          (voice.gain / Math.pow(n, 1.22)) *
-          Math.exp(-Math.pow((freq - pf) / width, 2));
+        v += (voice.gain / Math.pow(n, 1.22)) * Math.exp(-Math.pow((freq - pf) / width, 2));
       }
     }
     return v;
   };
+  const SEC_PER_COL = 0.03;
+  const T0 = 600; // the voices index patterns with %, so keep model time positive
 
-  // Starts well above zero so that pre-filling a panel with history still asks
-  // the model for positive times.
-  let clock = 600;
+  // ---- Pictures, built once per size ----
+  // The spectrogram is computed on a coarse grid and scaled up with smoothing,
+  // which is both cheap and soft enough to read as light. A blurred copy is the
+  // bloom: drawn additively over the image, so the loud parts glow.
+  let W = 0;
+  let H = 0;
+  let dpr = 1;
+  const pics = { real: null, fake: null };
+  const blooms = { real: null, fake: null };
+  const amp = []; // waveform amplitude per CSS pixel column, 0..1
 
-  const panels = [...spectra.querySelectorAll(".spec-canvas")].map((canvas) => ({
-    canvas,
-    ctx: canvas.getContext("2d", { alpha: false }),
-    cutoff: Number(canvas.dataset.cutoff) || 0,
-    column: null,
-    w: 0,
-    h: 0,
-  }));
-
-  const drawColumn = (panel, t) => {
-    const { ctx, h, cutoff, column } = panel;
-    const data = column.data;
-    const binHz = NYQUIST / h;
-    const env = envelopes(t); // once per column, not once per pixel
-    for (let y = 0; y < h; y++) {
-      const freq = (1 - y / (h - 1)) * NYQUIST;
-      let m = spectrum(freq, t, binHz, env);
-      // What a lossy encoder actually leaves behind: not pure silence, but a
-      // floor far below anything musical.
-      if (cutoff && freq > cutoff) m *= 0.015;
-      // Decibels over a 48 dB window, the way an analyser shows it: linear
-      // magnitude spends almost its whole range on the loudest few percent and
-      // renders as a solid wash instead of as structure.
-      const level = Math.max(0, Math.min(1, (Math.log10(m) * 20 + 45) / 45));
-      const i = (level * 255) | 0;
-      const o = y * 4;
-      data[o] = LUT[i * 3];
-      data[o + 1] = LUT[i * 3 + 1];
-      data[o + 2] = LUT[i * 3 + 2];
-      data[o + 3] = 255;
-    }
-    // Scroll by one pixel, then stamp the new column at the right edge. `copy`
-    // so the shifted image replaces rather than blends with what is under it.
-    ctx.globalCompositeOperation = "copy";
-    ctx.drawImage(ctx.canvas, -1, 0);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.putImageData(column, panel.w - 1, 0);
+  const offscreen = (w, h) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return c;
   };
-
-  const resize = () => {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    for (const panel of panels) {
-      const rect = panel.canvas.getBoundingClientRect();
-      const w = Math.max(1, Math.round(rect.width * dpr));
-      const h = Math.max(1, Math.round(rect.height * dpr));
-      if (w === panel.w && h === panel.h) continue;
-      panel.canvas.width = w;
-      panel.canvas.height = h;
-      panel.w = w;
-      panel.h = h;
-      panel.column = panel.ctx.createImageData(1, h);
-      // Fill the panel with history so it opens as a spectrogram already
-      // running, rather than as a black rectangle wiping itself in. Counted
-      // forward from a positive base: the voices index a pattern with `%`, and
-      // a negative time indexes off the front of it.
-      for (let x = 0; x < w; x++)
-        drawColumn(panel, clock - (w - x) * (MS_PER_COLUMN / 1000));
-    }
-  };
-
-  resize();
-  window.addEventListener("resize", resize);
-
-  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    let carry = 0;
-    let previous = 0;
-    let running = false;
-    let frame = 0;
-    const tick = (now) => {
-      if (!running) return;
-      // Clamped: coming back to a backgrounded tab should resume, not redraw
-      // every column that would have been dropped while it was away.
-      carry += Math.min(160, now - previous);
-      previous = now;
-      while (carry >= MS_PER_COLUMN) {
-        carry -= MS_PER_COLUMN;
-        clock += MS_PER_COLUMN / 1000;
-        for (const panel of panels) drawColumn(panel, clock);
+  const build = () => {
+    const rect = canvas.getBoundingClientRect();
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (w === W && h === H) return false;
+    W = canvas.width = w;
+    H = canvas.height = h;
+    const gw = Math.max(120, Math.min(560, Math.round(rect.width / 1.6)));
+    const gh = 150;
+    const binHz = NYQUIST / gh;
+    const real = new ImageData(gw, gh);
+    const fake = new ImageData(gw, gh);
+    for (let x = 0; x < gw; x++) {
+      const t = T0 + x * SEC_PER_COL;
+      const env = envelopes(t);
+      for (let y = 0; y < gh; y++) {
+        const freq = (1 - y / (gh - 1)) * NYQUIST;
+        const m = spectrum(freq, t, binHz, env);
+        const o = (y * gw + x) * 4;
+        for (const [img, mm] of [
+          [real, m],
+          [fake, freq > CEILING ? m * 0.012 : m],
+        ]) {
+          const level = clamp01((Math.log10(mm) * 20 + 45) / 53);
+          const i = (level * 255) | 0;
+          img.data[o] = LUT[i * 3];
+          img.data[o + 1] = LUT[i * 3 + 1];
+          img.data[o + 2] = LUT[i * 3 + 2];
+          img.data[o + 3] = 255;
+        }
       }
-      frame = requestAnimationFrame(tick);
-    };
+    }
+    for (const [name, img] of [
+      ["real", real],
+      ["fake", fake],
+    ]) {
+      const c = offscreen(gw, gh);
+      c.getContext("2d").putImageData(img, 0, 0);
+      pics[name] = c;
+      // Bloom: down to an eighth and back, which blurs it for free
+      const small = offscreen(Math.max(1, gw >> 3), Math.max(1, gh >> 3));
+      const sc = small.getContext("2d");
+      sc.imageSmoothingQuality = "high";
+      sc.drawImage(c, 0, 0, small.width, small.height);
+      blooms[name] = small;
+    }
+    amp.length = 0;
+    const cols = Math.round(rect.width);
+    for (let x = 0; x < cols; x++) {
+      const env = envelopes(T0 + (x / cols) * gw * SEC_PER_COL);
+      amp.push(clamp01(0.18 + 0.75 * env.kick + 0.35 * env.snare + 0.1 * env.hat));
+    }
+    return true;
+  };
+
+  // A smooth, fixed wobble per column, so the rising front looks like energy
+  // and not like a progress bar.
+  const wobble = (x) => 0.5 + 0.3 * Math.sin(x * 0.021) + 0.2 * Math.sin(x * 0.067 + 1.3);
+  // How far past full height each column aims: a little more where the drums
+  // hit, so the front comes up spiky with the music rather than as a smooth hill
+  const lift = (x) => 1.03 + 0.09 * (amp[Math.min(amp.length - 1, Math.round(x))] || 0);
+  const delayOf = (fx, x) => T.spread * fx + 0.08 * wobble(x);
+  const frontOf = (t, fx, x) => outCubic(span(t, T.unfold + delayOf(fx, x), T.unfold + delayOf(fx, x) + T.rise));
+
+  // ---- One frame ----
+  let file = "real";
+  const draw = (t) => {
+    ctx.clearRect(0, 0, W, H);
+    const fake = file === "fake";
+    const capH = fake ? H * (CEILING / NYQUIST) : H;
+    const ceilY = H - capH;
+
+    // Faint frequency guides
+    ctx.fillStyle = "rgba(255,255,255,0.045)";
+    for (const k of [5000, 10000, 15000, 20000]) ctx.fillRect(0, Math.round(H * (1 - k / NYQUIST)), W, dpr);
+
+    // 1. The waveform draws across, then sinks to the floor as the spectrum rises
+    const sink = inOutCubic(span(t, T.unfold, T.unfold + 0.55));
+    if (t > T.wave && sink < 1) {
+      const reach = outCubic(span(t, T.wave, T.wave + 0.75)) * W;
+      const mid = lerp(H * 0.55, H, sink);
+      const scale = H * 0.3 * (1 - sink);
+      const step = 4 * dpr;
+      ctx.save();
+      ctx.shadowColor = "rgba(40,150,255,0.9)";
+      ctx.shadowBlur = 14 * dpr;
+      ctx.fillStyle = `rgba(150,210,255,${0.95 * (1 - sink * 0.7)})`;
+      for (let x = 0; x < reach; x += step) {
+        const a = amp[Math.min(amp.length - 1, Math.round(x / dpr))] || 0;
+        // the leading edge grows in rather than appearing at full height
+        const edge = clamp01((reach - x) / (40 * dpr));
+        const hgt = Math.max(dpr, a * scale * edge);
+        ctx.fillRect(x, mid - hgt, step - dpr, hgt * 2);
+      }
+      ctx.restore();
+    }
+
+    // 2. The spectrogram fills upward out of it, column by column
+    if (t > T.unfold) {
+      const step = 3 * dpr;
+      const tops = [];
+      for (let x = 0; x <= W + step; x += step) {
+        const fx = x / W;
+        const f = frontOf(t, fx, x / dpr);
+        // A touch of overshoot on the real file, so energy visibly reaches the top
+        const want = f * H * lift(x / dpr);
+        tops.push([x, H - Math.min(want, capH)]);
+      }
+      const path = new Path2D();
+      path.moveTo(0, H);
+      for (const [x, y] of tops) path.lineTo(x, y);
+      path.lineTo(W, H);
+      path.closePath();
+      ctx.save();
+      ctx.clip(path);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(pics[file], 0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(blooms[file], 0, 0, W, H);
+      ctx.restore();
+
+      // The glowing front while it is still moving
+      const settle = span(t, T.unfold + T.rise + T.spread, T.unfold + T.rise + T.spread + 0.5);
+      const frontAlpha = 0.85 * (1 - settle);
+      if (frontAlpha > 0.01) {
+        ctx.save();
+        ctx.strokeStyle = `rgba(175,225,255,${frontAlpha})`;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.shadowColor = "rgba(40,150,255,1)";
+        ctx.shadowBlur = 16 * dpr;
+        ctx.beginPath();
+        tops.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 3. The fake hits a ceiling: each column flashes as it slams into it
+      if (fake) {
+        ctx.save();
+        ctx.shadowColor = "rgba(255,255,255,0.9)";
+        ctx.shadowBlur = 10 * dpr;
+        for (let x = 0; x <= W; x += step) {
+          const fx = x / W;
+          const reachAt = capH / (H * lift(x / dpr));
+          const hitT = T.unfold + delayOf(fx, x / dpr) + (1 - Math.cbrt(1 - reachAt)) * T.rise;
+          if (t < hitT) continue;
+          const k = Math.exp(-(t - hitT) * 4.5);
+          if (k < 0.02) continue;
+          ctx.fillStyle = `rgba(220,240,255,${0.9 * k})`;
+          ctx.fillRect(x, ceilY - 1.5 * dpr, step, 3 * dpr);
+        }
+        ctx.restore();
+      }
+    }
+
+    // 4. Row 1's region: the top band, outlined while the top end is checked
+    const band = clamp01(span(t, T.act1, T.act1 + 0.3)) * (1 - span(t, T.row1, T.row1 + 0.35));
+    if (band > 0.01) {
+      // The same band on both files: 16 kHz to the top, where only a real
+      // master still has sound
+      const by = Math.round(H * (1 - CEILING / NYQUIST)) + dpr;
+      ctx.save();
+      ctx.fillStyle = `rgba(${SCAN},${0.07 * band})`;
+      ctx.fillRect(0, 0, W, by);
+      ctx.strokeStyle = `rgba(${SCAN},${0.85 * band})`;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.strokeRect(dpr, dpr, W - 2 * dpr, by - 2 * dpr);
+      ctx.restore();
+    }
+
+    // 5. The loupe: out of a patch of the spectrum, a close look at the grid
+    if (t > T.loupe) drawLoupe(t, fake);
+  };
+
+  const noise = (i, j, k) => {
+    const x = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const drawLoupe = (t, fake) => {
+    const travel = inOutCubic(span(t, T.loupe, T.loupeIn));
+    const grow = outBack(span(t, T.loupe, T.loupeIn));
+    const R = Math.min(84 * dpr, H * 0.26);
+    const px = W * 0.5;
+    const py = H * (1 - 7500 / NYQUIST);
+    const patch = 13 * dpr;
+    const cx = Math.min(W - R - 14 * dpr, px + Math.max(R * 1.9, W * 0.24));
+    // Kept clear of the 16 kHz ceiling and its label, on both files, so the
+    // loupe sits in the same place whichever one is playing
+    const below = H * (1 - CEILING / NYQUIST) + R + 10 * dpr;
+    const cy = Math.min(H - R - 6 * dpr, Math.max(below, py - R * 0.55));
+    const x = lerp(px, cx, travel);
+    const y = lerp(py, cy, travel);
+    const r = Math.max(0, R * grow);
+    if (r < 1) return;
+    const a = clamp01(travel * 1.5);
+
+    // The patch it reads, and the two lines that tie it to the loupe
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,255,255,${0.75 * a})`;
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.strokeRect(px - patch, py - patch, patch * 2, patch * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${0.28 * a})`;
+    ctx.beginPath();
+    ctx.moveTo(px + patch, py - patch);
+    ctx.lineTo(x - r * 0.2, y - r * 0.98);
+    ctx.moveTo(px + patch, py + patch);
+    ctx.lineTo(x - r * 0.2, y + r * 0.98);
+    ctx.stroke();
+
+    // Glass
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(5,7,12,0.94)";
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = 24 * dpr;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.clip();
+
+    // Cells: organic noise in both; in the fake, a regular lattice lights up
+    const n = 9;
+    const cell = (2 * r) / n;
+    const gap = Math.max(1, cell * 0.16);
+    const shimmer = Math.floor(t * 9);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const lx = x - r + i * cell;
+        const ly = y - r + j * cell;
+        let v = 0.12 + 0.38 * Math.pow(noise(i, j, shimmer + ((i * 7 + j * 3) % 5)), 1.6);
+        if (fake && i % 2 === 1 && j % 2 === 1) {
+          const on = outBack(span(t, T.grid + (i + j) * 0.035, T.grid + (i + j) * 0.035 + 0.28));
+          v = lerp(v, 0.9, clamp01(on));
+          if (on > 0) {
+            ctx.shadowColor = "rgba(60,160,255,0.9)";
+            ctx.shadowBlur = 10 * dpr * clamp01(on);
+          }
+        }
+        ctx.fillStyle = rgb(v);
+        const inset = gap / 2;
+        ctx.fillRect(lx + inset, ly + inset, cell - gap, cell - gap);
+        ctx.shadowBlur = 0;
+      }
+    }
+    // The read: one line sweeps the patch top to bottom, on both files
+    const sweep = span(t, T.scan, T.scanEnd);
+    if (sweep > 0 && sweep < 1) {
+      const sy = y - r + 2 * r * inOutCubic(sweep);
+      const g = ctx.createLinearGradient(0, sy - 18 * dpr, 0, sy);
+      g.addColorStop(0, `rgba(${SCAN},0)`);
+      g.addColorStop(1, `rgba(${SCAN},0.28)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, sy - 18 * dpr, 2 * r, 18 * dpr);
+      ctx.fillStyle = `rgba(${SCAN},0.95)`;
+      ctx.fillRect(x - r, sy - dpr, 2 * r, 2 * dpr);
+    }
+    ctx.restore();
+
+    // Rim: yellow while row 2 is being checked, like the row's spinner
+    const hot = clamp01(span(t, T.act2, T.act2 + 0.3)) * (1 - span(t, T.row2, T.row2 + 0.35));
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = hot > 0.01 ? `rgba(${SCAN},${lerp(0.85, 1, hot)})` : "rgba(220,238,255,0.85)";
+    ctx.lineWidth = lerp(1.5, 2.2, hot) * dpr;
+    ctx.shadowColor = hot > 0.01 ? `rgba(${SCAN},${0.7 * hot})` : "rgba(60,160,255,0.8)";
+    ctx.shadowBlur = 14 * dpr;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // ---- The page around the canvas: classes the CSS animates ----
+  const setFile = (next) => {
+    file = next;
+    inspect.dataset.file = next;
+    chips.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.file === next)));
+    rows.forEach((row, i) => {
+      const res = row.querySelector(".ix-check-result");
+      res.textContent = res.dataset[next];
+      row.classList.toggle("ok", OUTCOME[next][i] === "ok");
+      row.classList.toggle("bad", OUTCOME[next][i] === "bad");
+    });
+    stamp.textContent = stamp.dataset[next];
+  };
+  const STEPS = [
+    ["ix-dropped", 0],
+    ["ix-ceiling-on", T.ceiling],
+    ["ix-row1", T.row1],
+    ["ix-row2", T.row2],
+    ["ix-landed", T.stamp],
+    ["ix-thud", T.stamp + 0.27], // the window takes the stamp's weight
+    ["ix-keep-on", T.keep],
+  ];
+  // A row is active (spinning) from its act time until it resolves
+  const ACTIVE = [
+    [T.act1, T.row1],
+    [T.act2, T.row2],
+  ];
+  const syncClasses = (t) => {
+    for (const [name, at] of STEPS) inspect.classList.toggle(name, t >= at);
+    rows.forEach((row, i) => row.classList.toggle("active", t >= ACTIVE[i][0] && t < ACTIVE[i][1]));
+  };
+  const clearClasses = () => {
+    for (const [name] of STEPS) inspect.classList.remove(name);
+    rows.forEach((row) => row.classList.remove("active"));
+    void inspect.offsetWidth; // so the next run's transitions start from scratch
+  };
+
+  // ---- Playback: an elapsed clock that only advances while on screen ----
+  let elapsed = T.end;
+  let playing = false;
+  let visible = false;
+  let frame = 0;
+  let last = 0;
+  let queued = null; // { file, hold, at }: the other file, once this verdict has been held
+  const HOLD = 1200; // ms after a run ends; with the stamp's lead and the fade, about 2 s on the verdict
+  const other = (f) => (f === "real" ? "fake" : "real");
+  let pending = null; // { file, at }: the next run, once the last one has faded out
+
+  const loop = (now) => {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (playing) {
+      elapsed = Math.min(T.end, elapsed + dt);
+      syncClasses(elapsed);
+      draw(elapsed);
+      if (elapsed >= T.end) {
+        playing = false;
+        queued = { file: other(file), hold: HOLD, at: performance.now() + HOLD };
+      }
+    } else if (pending && now >= pending.at) {
+      const next = pending.file;
+      pending = null;
+      start(next);
+    } else if (queued && queued.at && now >= queued.at) {
+      const next = queued.file;
+      queued = null;
+      run(next);
+    }
+    frame = playing || queued || pending ? requestAnimationFrame(loop) : 0;
+  };
+  const kick = () => {
+    if (frame || !visible) return;
+    last = performance.now();
+    frame = requestAnimationFrame(loop);
+  };
+  const start = (next) => {
+    setFile(next);
+    clearClasses();
+    inspect.classList.remove("ix-fading");
+    elapsed = 0;
+    playing = true;
+    draw(0);
+  };
+  const run = (next) => {
+    chips.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.file === next)));
+    if (reduce) {
+      setFile(next);
+      elapsed = T.end;
+      syncClasses(elapsed);
+      draw(elapsed);
+      return;
+    }
+    // Whatever is on screen fades out first, so a new run never starts on a cut
+    const shown = inspect.classList.contains("ix-dropped");
+    playing = false;
+    if (shown) inspect.classList.add("ix-fading");
+    pending = { file: next, at: performance.now() + (shown ? 320 : 0) };
+    kick();
+  };
+
+  chips.forEach((chip) =>
+    chip.addEventListener("click", () => {
+      queued = null;
+      run(chip.dataset.file);
+    }),
+  );
+
+  build();
+  window.addEventListener("resize", () => {
+    if (build()) draw(elapsed);
+  });
+
+  if (reduce || !("IntersectionObserver" in window)) {
+    // The finished picture, nothing moving; the chips swap between the two
+    run(reduce ? "fake" : "real");
+  } else {
+    setFile("real");
+    draw(0);
+    let seen = false;
     new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting === running) return;
-        running = entry.isIntersecting;
-        if (running) {
-          previous = performance.now();
-          carry = 0;
-          frame = requestAnimationFrame(tick);
-        } else {
+        visible = entry.isIntersecting;
+        if (!visible) {
           cancelAnimationFrame(frame);
+          frame = 0;
+          return;
+        }
+        if (!seen && entry.intersectionRatio >= 0.45) {
+          seen = true;
+          run("real");
+        } else {
+          // Back in view during a hold: give the verdict its moment again
+          if (queued && !playing) queued.at = Math.max(queued.at, performance.now() + queued.hold);
+          kick();
         }
       },
-      { threshold: 0.1 },
-    ).observe(spectra);
+      { threshold: [0, 0.45] },
+    ).observe(stage);
   }
+}
+
+// Scroll reveal for the lossless check's numbered points and verdict cards: each
+// group fades up in a short stagger (--i in the markup). Skipped entirely under
+// reduced motion, which leaves them where they are.
+const reveals = document.querySelectorAll("[data-reveal]");
+if (
+  reveals.length &&
+  "IntersectionObserver" in window &&
+  !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+) {
+  document.documentElement.classList.add("js-reveal");
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("in");
+        io.unobserve(entry.target);
+      }
+    },
+    { threshold: 0.2, rootMargin: "0px 0px -8% 0px" },
+  );
+  reveals.forEach((el) => io.observe(el));
+}
+
+// "How it works, in detail": slide the body open and shut instead of the
+// native jump. The <details> stays the source of truth (so find-in-page and
+// keyboard toggling still work); with reduced motion it is left native.
+const deep = document.querySelector("#lossless-detail");
+if (deep && deep.animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const body = deep.querySelector(".deep-body");
+  const ease = "cubic-bezier(0.16, 1, 0.3, 1)";
+  let anim = null;
+  deep.querySelector("summary").addEventListener("click", (e) => {
+    e.preventDefault();
+    // A closed body can still report its laid-out height, so closed means 0
+    const from = deep.open ? body.getBoundingClientRect().height : 0;
+    if (anim) anim.cancel();
+    const opening = !deep.open || deep.classList.contains("closing");
+    deep.classList.remove("closing");
+    if (opening) {
+      deep.open = true;
+      const to = body.scrollHeight;
+      anim = body.animate(
+        [{ height: `${from}px`, opacity: from ? 1 : 0 }, { height: `${to}px`, opacity: 1 }],
+        { duration: 520, easing: ease },
+      );
+    } else {
+      deep.classList.add("closing");
+      anim = body.animate([{ height: `${from}px` }, { height: "0px", opacity: 0 }], {
+        duration: 380,
+        easing: ease,
+      });
+      anim.onfinish = () => {
+        deep.open = false;
+        deep.classList.remove("closing");
+      };
+    }
+    anim.addEventListener("finish", () => (anim = null));
+  });
 }
 
 // Ambient sound-wave motifs: a track waveform under the hero, and a small
