@@ -20,21 +20,33 @@ the machine.
 4. Which stage fails or crashes, per OS and app version, and did a release make it worse?
 5. Which route delivers? Soulseek lossless, Deezer MP3 fallback, or nothing. How much do a paused
    Telegram and a blocked Beatport cost?
-6. How often do the lossless and recording checks refuse copies, at which tier, and in which format?
-7. How often is "Keep it anyway" used per 100 refusals, and after listening? This signals that a check is
-   too strict.
+6. How often do the lossless and recording checks refuse copies, at which tier, in which format, and
+   on which detector? This is the real-world fake rate.
+7. How often is "Keep it anyway" or "Keep lossless" used per 100 refusals, per detector, and after
+   listening? This signals a false reject.
 8. Are extended-mix offers found, accepted, kept or ignored, and does "Get extended" succeed?
 9. Where does onboarding drop off, and which steps are skipped (Telegram, Soulseek) or fail?
 10. Do self-updates succeed end to end, and how fast do active installs reach the latest version?
 
-**Events (15).** Each event is described in §3.
+**Events (16).** Each event is described in §3.
 
 - `app_started`
 - `setup_step`, `setup_finished`
 - `request_added`, `request_finished`, `review_answered`, `request_action`
 - `lossless_attempt_finished`, `quality_check`, `keep_anyway`
 - `extended_offer_found`, `extended_offer_answered`
-- `update_step`, `source_status_changed`, `error_caught`
+- `update_step`, `source_status_changed`, `error_caught`, `health_daily`
+
+**Deepened (§8.1, §8.2).**
+
+- **App health:** release health compares version N with N-1 over their first three days. It covers
+  filed rate, crash-free sessions and installs, the failure-stage mix, retries per success, source
+  uptime, update success and adoption. Example queries and alert thresholds are given.
+- **Lossless-check verdicts:** tier, the detector(s) that fired, the strength and coverage buckets,
+  format, sample-rate and bit-depth classes, ceiling bucket, route, Keep it anyway or Keep lossless and
+  how soon, whether a later copy passed, and run time. This gives the fake rate per format, false-reject
+  signals and threshold tuning.
+- **Borderline fields**, kept bucketed: the ceiling bucket, the encoder family and the run time.
 
 **Never collected:**
 
@@ -59,6 +71,7 @@ The full list is in §4.1.
 | D3 | Raw-event retention of 90 or 180 days | **180 days.** That spans about six releases for before/after comparisons. A retention promise can only ever be shortened. |
 | D4 | Turning stats off also deletes past data, or keeps it | **Delete.** This is the Firefox model and the simplest promise to state and keep. |
 | D5 | Ask on the setup wizard's Welcome step, or after the first filed track | **Welcome step**, with the box unticked. Otherwise question 9, onboarding drop-off, cannot be answered at all. |
+| D6 | Alerts pushed to you, or dashboards only | **Alerts.** A check script on the collector every 15 minutes, mailing you when a §8.1 threshold trips. Release health only works if a regression is seen inside the first 72 h, without remembering to look. |
 
 **Rollout.** The gates between phases are in §11.
 
@@ -160,6 +173,8 @@ Answers Q4, Q5, Q10 and active installs.
 | `library_tracks` | n bucket | `100+` | SENSITIVE-DERIVED → bucket | context |
 | `port_reachable` | enum `yes`/`no`/`unknown` | `no` | SAFE | 3 |
 | `days_since_opt_in` | enum `<1w`/`1-4w`/`1-3mo`/`3mo+` | `1-4w` | SENSITIVE-DERIVED → bucket | retention of use |
+| `previous_exit` | enum `clean`/`crash`/`unknown`/`first_run` (new code: a session marker file written at start and removed on clean exit; still present at the next launch means the last session died) | `crash` | SAFE | 4 |
+| `updated_from` | version or `` (the previous launch's version when it differs) | `0.6.0` | SAFE | 10 |
 
 #### `setup_step`: each step shown, completed, skipped, backed out of or failed
 
@@ -223,6 +238,10 @@ This is the core event. It answers Q1, Q2, Q4, Q5 and Q6.
 | `bit_depth` | enum `16`/`24`/`other`/`` | `16` | SAFE | 6 |
 | `tag_source` | enum `beatport`/`deezer`/`discogs`/`deezer+discogs`/`none` | `deezer` | SAFE | 5 |
 | `extended_cut` | bool | `false` | SAFE | 8 |
+| `checks_run` | UInt8 (capped 20): quality checks this request ran | `3` | SAFE | 6 |
+| `checks_refused` | UInt8 (capped 20) | `2` | SAFE | 6 |
+| `refused_then_passed` | bool: a copy was refused and a later candidate for the same request passed | `true` | SAFE | 6 |
+| `retries_by_owner` | UInt8 (capped 20): Try again / Try now presses on this request | `1` | SAFE | 1 |
 | `wait_to_start` | dur bucket (created → first `identifying`, new code: kept in memory) | `<1s` | SENSITIVE-DERIVED → bucket | 3 |
 | `total_time` | dur bucket (created → terminal) | `15-60m` | SENSITIVE-DERIVED → bucket | 3 |
 | `error_class` | exception class name, regex `^[A-Za-z][A-Za-z0-9_]{0,48}$`, only for `state=error` from `process()`'s `except` | `SourceTimeout` | SAFE. `error_message` is NEVER | 4 |
@@ -278,28 +297,45 @@ Answers Q2, Q3 and Q6.
 
 #### `quality_check`: each verify verdict
 
-Answers Q6 and Q7.
+Answers Q6 and Q7. Fired from `_check_and_convert` (the Soulseek copy) and `_verify_and_file` (the Telegram
+bot's MP3) with the fields read off `Verdict` and `verify.summary`. Every field is a label or a bucket; the
+numbers in `summary` (edge Hz, z, score, cover) are bucketed here and never sent as they are. §8.2 says what
+it answers and why it cannot name a track.
 
 | Field | Type | Example | Class |
 |---|---|---|---|
-| `copy` | enum `lossless`/`lossy` | `lossless` | SAFE |
-| `format_in` | enum, as `source_format` | `flac` | SAFE |
-| `tier` | enum `clear`/`unverified`/`reject` | `unverified` | SAFE |
-| `flagged_by` | array of enum: the evidence-family names from `verify.summary`; the numbers are dropped | `["spectral"]` | SAFE |
-| `reason_code` | enum (new code: `Verdict.reason` is a sentence today) | `cutoff_low` | SAFE |
-| `cutoff` | cutoff bucket | `16-19` | SENSITIVE-DERIVED → bucket |
-| `bit_depth` | enum | `24` | SAFE |
+| `route` | enum `soulseek`/`telegram` | `soulseek` | SAFE |
+| `claimed_format` | enum `flac`/`aiff`/`wav`/`alac`/`mp3`/`other` (the container as probed) | `flac` | SAFE |
+| `sample_rate` | enum `<44.1k`/`44.1k`/`48k`/`88.2-96k`/`>96k` | `44.1k` | SAFE |
+| `bit_depth` | enum `16`/`24`/`32`/`other`/`` | `16` | SAFE |
+| `tier` | enum `clear`/`unverified`/`reject` | `reject` | SAFE |
+| `reason_code` | enum, one per `decide` branch (new code; `Verdict.reason` is a sentence today): `clear`, `edge_unambiguous`, `quant_strong`, `edge_and_quant_weak`, `quant_partial`, `edge_ambiguous`, `quant_weak`, `insufficient`, `sample_rate_low`, `mp3_edge_low`, `mp3_edge_short`, `mp3_bitrate_low`, `unsupported_format`, `detector_crashed`, `damaged` | `quant_strong` | SAFE |
+| `edge_finding` | enum (`verify.edge_finding`): `insufficient`/`none`/`high`/`ambiguous`/`unambiguous` | `high` | SAFE |
+| `edge` | ceiling bucket (kHz, edges aligned to the thresholds in `verify.py`): `<15`, `15-16`, `16-17`, `17-18`, `18-19`, `19-19.9`, `19.9-20.5`, `20.5-21.5`, `21.5+`, `none` | `16-17` | SENSITIVE-DERIVED → bucket, **borderline** (§8.2) |
+| `quant_finding` | enum (`verify.quant_finding`): `not_run`/`clean`/`partial`/`weak`/`strong` | `strong` | SAFE |
+| `quant_codec` | enum `mp3`/`aac`/`opus`/`` (the detector that fired hardest) | `mp3` | SAFE |
+| `detectors_fired` | array of enum `spectral`/`mp3`/`aac`/`opus`: every family at or above its weak threshold, not only the strongest | `["mp3","spectral"]` | SAFE |
+| `strength` | bucket of the firing detector's value, edges at its thresholds. MP3/AAC z: `<4`, `4-8`, `8-10`, `10-12`, `12-16`, `16-24`, `24+` (weak 8, strong 12). Opus score: `<2`, `2-4`, `4-7`, `7-10`, `10-15`, `15+` (weak 4, strong 10) | `12-16` | SENSITIVE-DERIVED → bucket |
+| `coverage` | bucket of the share of stretches with traces (`quant_cover`): `n/a`, `<0.25`, `0.25-0.5`, `0.5-0.75`, `0.75-1` (Opus floor 0.25, MP3/AAC 0.5) | `0.75-1` | SENSITIVE-DERIVED → bucket |
+| `integrity_failed` | bool | `false` | SAFE |
+| `encoder_family` | enum `libflac`/`ffmpeg`/`other`/`none`, mapped from the FLAC vendor string, which is never sent | `ffmpeg` | SENSITIVE-DERIVED → enum, **borderline** (§8.2) |
+| `odd_blocksize` | bool (FLAC `max_blocksize` not 4096) | `true` | SAFE |
 | `duration_mismatch` | bool | `false` | SAFE |
-
+| `rule` | enum `tiers`/`legacy` (`Settings.verification_rule`) | `tiers` | SAFE |
+| `shadow_tier` | enum, the tier the new rule would have given under `legacy` | `` | SAFE |
+| `detector_version` | small int (`DETECTOR_VERSION`) | `3` | SAFE |
+| `candidate_index` | UInt8: this request's nth check (1 = first copy checked) | `2` | SAFE |
+| `run_time` | dur bucket around the `verify` call (new code: not measured today) | `5-15s` | SENSITIVE-DERIVED → bucket, **borderline** (§8.2) |
 #### `keep_anyway`: either "Keep it anyway" button
 
 Answers Q7.
 
 | Field | Type | Example | Class |
 |---|---|---|---|
-| `which` | enum `refused_copy` (`/accept`)/`held_lossless` (`/keep-held`) | `refused_copy` | SAFE |
+| `which` | enum `keep_it_anyway` (`/accept`)/`keep_lossless` (`/keep-held`) | `keep_it_anyway` | SAFE |
 | `rejection_kind` | enum `quality`/`different_recording` | `quality` | SAFE |
 | `tier` | enum | `reject` | SAFE |
+| `route`, `claimed_format`, `reason_code`, `detectors_fired`, `strength`, `coverage`, `edge`, `detector_version` | as in `quality_check`, copied from the overruled verdict (`Rejection.analysis`) so a keep is self-contained | `["mp3"]` | as there |
 | `listened` | bool (the rejection audio route was fetched first; new code, a per-rejection in-memory flag) | `true` | SAFE |
 | `decision_delay` | dur bucket | `1-5m` | SAFE |
 | `result` | enum `filed`/`could_not_check`/`failed` | `filed` | SAFE |
@@ -324,6 +360,21 @@ Answers Q8. "Ignored" is derived as offers found minus offers answered.
 | `answer` | enum `get`/`keep` | `get` | SAFE |
 | `result` | enum `replaced`/`not_matched`/`not_extended`/`failed`/`` | `replaced` | SAFE |
 | `offer_age` | dur bucket | `1-3d` | SAFE |
+
+#### `health_daily`: once per UTC day the app ran, sent at the first launch of the next day
+
+Answers Q4 and Q5 over time. New code: counters kept in memory and in the outbox's state file, filled by
+the health probes that already run (`refresh_lossless_health` every 5–60 s, the Telegram flag in
+`status`, `_catalog_blocked`).
+
+| Field | Type | Example | Class |
+|---|---|---|---|
+| `uptime` | dur bucket (time the app was open that day) | `1-6h` | SAFE |
+| `soulseek_up` | enum share of probes answering `ok`: `0`, `<50%`, `50-90%`, `90-99%`, `100%`, `off` | `90-99%` | SAFE |
+| `telegram_up` | same share for `telegram_authorized`, or `off` | `100%` | SAFE |
+| `beatport_up` | same share for catalogue lookups not blocked | `0` | SAFE |
+| `sessions`, `crashed_sessions` | UInt8 | `2`, `0` | SAFE |
+| `requests_finished` | n bucket | `5-19` | SAFE |
 
 #### `update_step`
 
@@ -664,7 +715,7 @@ CREATE TABLE telemetry.events
     -- Event fields. Every value is an enum/bucket label by construction (§6.3), so the key and the
     -- value are both low-cardinality; typed views below give each event real columns.
     props          Map(LowCardinality(String), LowCardinality(String)),
-    flagged_by     Array(LowCardinality(String))       -- quality_check only; empty elsewhere
+    detectors_fired Array(LowCardinality(String))      -- quality_check and keep_anyway; empty elsewhere
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(received_date)
@@ -689,7 +740,10 @@ SELECT event_date, app_version, os, os_major, install_id,
        props['route'] AS route, props['lossless_outcome'] AS lossless_outcome,
        props['lossless_no_results'] = 'true' AS no_results, props['bot'] AS bot,
        props['catalog'] AS catalog, props['verify_tier'] AS verify_tier,
-       props['total_time'] AS total_time, props['wait_to_start'] AS wait_to_start
+       props['total_time'] AS total_time, props['wait_to_start'] AS wait_to_start,
+       toUInt8OrZero(props['passes']) AS passes, toUInt8OrZero(props['retries_by_owner']) AS owner_retries,
+       toUInt8OrZero(props['checks_refused']) AS checks_refused,
+       props['refused_then_passed'] = 'true' AS refused_then_passed
 FROM telemetry.events WHERE event = 'request_finished';
 
 CREATE VIEW telemetry.v_attempt AS
@@ -779,10 +833,256 @@ Every chart applies the k≥5 suppression of §4.5.
 | C5 | Route share over time (Soulseek lossless, Deezer MP3, none), split by `bot` and `catalog` state | `request_outcomes_daily` | Q5 |
 | C6 | Onboarding funnel: the share of installs reaching each step, and skip and fail rates for Telegram and Soulseek | `setup_funnel` | Q9 |
 | C7 | Extended offers: the found rate per filed track, answered get, keep or ignored, and the get result | `actions_daily`, `ingest_daily` | Q8 |
-| C8 | Keep it anyway per 100 refusals by tier and kind, and the share after listening | `actions_daily` and `quality_check` counts | Q6, Q7 |
+| C8 | Keep it anyway / Keep lossless per 100 refusals by detector, tier and kind, the share after listening, and keeps per strength bucket (§8.2) | `actions_daily`, raw `quality_check` | Q6, Q7 |
+| C12 | Release health: N vs N-1 over each version's first 72 h, with alert state (§8.1) | raw, via `v_request_finished` | Q4, Q10 |
+| C13 | Fake rate per route × format × bit depth, and refused-then-passed (§8.2) | raw `quality_check`, `v_request_finished` | Q6 |
 | C9 | Update funnel (check → download → signature → install → restart) and version-adoption curves | `actions_daily`, `active_daily` | Q10 |
 | C10 | Crash-free sessions per version, and the top `exc_class`/`module` pairs | `active_daily`, raw `error_caught` | Q4 |
 | C11 | Daily and weekly active installs by OS and channel | `active_daily` | context |
+
+### 8.1 App health and release health
+
+These views say whether Flackey is working well over time, and catch a regression within days of a
+release. **Release health** compares version N with N-1, each over its own first 72 hours. Day 0 is the
+first UTC date a packaged install reported that version, and the window is days 0–2. `event_date` is a
+date, so 72 h means three calendar days.
+
+**What is measured, and what had to be added.** Most of it comes from events already in §3. These were
+added for it:
+
+- `health_daily`, for source uptime;
+- `previous_exit` and `updated_from` on `app_started`, for crashes that kill the process and for
+  confirming that an update landed;
+- `retries_by_owner` on `request_finished`.
+
+| Signal | Definition | Events |
+|---|---|---|
+| Filed rate | `(done + duplicate) / (finished − cancelled)` per version | `request_finished` |
+| Time to filed | The distribution of `total_time` buckets for `done`, and the share filed within 15 min | `request_finished` |
+| Crash-free sessions | `1 − sessions whose next launch says previous_exit=crash / sessions`. Crashes are attributed to `updated_from` when the crash came just before an update | `app_started`, `error_caught.fatal` |
+| Crash-free installs | The share of installs with no crashed session in the window | as above |
+| Failure-stage mix | The share of failures per stage: `error` by `failed_stage`, with `not_found` read as search and `rejected` as verify | `request_finished` |
+| Retries per success | `(sum(passes) + sum(retries_by_owner)) / done` | `request_finished` |
+| Source availability | Per install-day, the uptime shares of Soulseek, Telegram and Beatport, and the number of installs below 90% | `health_daily`, `source_status_changed` |
+| Update success | Per `to_version` and stage, failures over attempts. An update counts as confirmed when the next launch has `updated_from = N-1` and `app_version = N` | `update_step`, `app_started` |
+| Adoption curve | Daily share of active packaged installs on each version | `app_started`, `health_daily` |
+
+**Example queries** (ClickHouse 25.8; `{n}`/`{prev}` are query parameters).
+
+```sql
+-- Release health: N vs N-1, each over its own first three days
+WITH first_seen AS (
+    SELECT app_version, min(event_date) AS d0
+    FROM telemetry.events
+    WHERE event = 'app_started' AND channel = 'packaged' AND app_version IN ({n:String}, {prev:String})
+    GROUP BY app_version)
+SELECT r.app_version,
+       uniqExact(r.install_id)                                                  AS installs,
+       count()                                                                  AS finished,
+       countIf(r.state IN ('done', 'duplicate')) / countIf(r.state != 'cancelled') AS filed_rate,
+       countIf(r.state = 'error') / count()                                     AS error_rate,
+       (sum(r.passes) + sum(r.owner_retries)) / countIf(r.state = 'done')       AS retries_per_success,
+       countIf(r.state = 'done' AND r.total_time IN ('<1s','1-5s','5-15s','15-60s','1-5m','5-15m'))
+         / countIf(r.state = 'done')                                            AS filed_within_15m
+FROM telemetry.v_request_finished AS r
+INNER JOIN first_seen AS f USING (app_version)
+WHERE r.event_date BETWEEN f.d0 AND f.d0 + 2
+GROUP BY r.app_version
+HAVING installs >= 5;
+```
+
+```sql
+-- Crash-free sessions and installs per version and OS, last 14 days
+SELECT ver AS app_version, os,
+       count()                                         AS sessions,
+       1 - countIf(crashed) / sessions                 AS crash_free_sessions,
+       uniqExact(install_id)                           AS installs,
+       1 - uniqExactIf(install_id, crashed) / installs AS crash_free_installs
+FROM (
+    SELECT install_id, os,
+           if(props['updated_from'] != '', props['updated_from'], app_version) AS ver,
+           props['previous_exit'] = 'crash'                                     AS crashed
+    FROM telemetry.events
+    WHERE event = 'app_started' AND props['previous_exit'] IN ('clean', 'crash')
+      AND event_date >= today() - 14)
+GROUP BY app_version, os
+HAVING installs >= 5;
+```
+
+```sql
+-- Failure-stage mix, weekly, per version
+SELECT toStartOfWeek(day) AS week, app_version,
+       multiIf(state = 'not_found', 'search', state = 'rejected', 'verify', failed_stage) AS stage,
+       sum(requests) AS n,
+       n / sum(n) OVER (PARTITION BY week, app_version) AS share
+FROM telemetry.request_outcomes_daily
+WHERE state IN ('error', 'not_found', 'rejected')
+GROUP BY week, app_version, stage
+ORDER BY week, app_version, share DESC;
+```
+
+```sql
+-- Adoption curve: share of active packaged installs on each version, per day
+SELECT event_date, app_version, uniqExact(install_id) AS installs,
+       installs / sum(installs) OVER (PARTITION BY event_date) AS share
+FROM telemetry.events
+WHERE event IN ('app_started', 'health_daily') AND channel = 'packaged' AND event_date >= today() - 60
+GROUP BY event_date, app_version
+ORDER BY event_date, app_version;
+```
+
+```sql
+-- Update success per target version and stage
+SELECT props['to_version'] AS to_version, props['stage'] AS stage,
+       countIf(props['result'] = 'ok')     AS ok,
+       countIf(props['result'] = 'failed') AS failed,
+       failed / (ok + failed)              AS failure_rate
+FROM telemetry.events
+WHERE event = 'update_step' AND props['result'] IN ('ok', 'failed')
+GROUP BY to_version, stage
+ORDER BY to_version, stage;
+```
+
+```sql
+-- Source availability: installs per Soulseek-uptime band, per day
+SELECT event_date, props['soulseek_up'] AS soulseek_up, uniqExact(install_id) AS installs
+FROM telemetry.events
+WHERE event = 'health_daily' AND event_date >= today() - 30
+GROUP BY event_date, soulseek_up
+ORDER BY event_date, soulseek_up;
+```
+
+**Alert thresholds.** The check script (D6) runs these every 15 minutes during a release's first 72 h,
+then daily.
+
+- **Minimum sample.** An alert needs at least 5 installs and 50 finished requests on N inside the window.
+  Below that, the result is "not enough data yet", never an alert. In the beta (phase 3), these are
+  charts to read, not alerts.
+- **Comparison.** "vs N-1" means against N-1's own first 72 h.
+
+| Signal | Alert when |
+|---|---|
+| Filed rate | Down ≥ 10 points vs N-1 |
+| Error rate | ≥ 2× N-1 **and** ≥ 5 points higher |
+| Any failure stage's share | ≥ 2× N-1 **and** ≥ 5 points higher |
+| Retries per success | ≥ 1.5× N-1 |
+| Filed within 15 min | Down ≥ 15 points vs N-1 |
+| Crash-free sessions | < 97%, or down ≥ 2 points vs N-1 |
+| Crash-free installs | < 90% |
+| New crash | An `(exc_class, module)` pair never seen on N-1, from ≥ 2 installs |
+| Update stage failures | > 5% at any stage. **Any** `verify_signature` failure alerts at once (it is a security signal) |
+| Adoption | < 50% of active packaged installs (with `auto_update_check` on) on N by day 7: the update path is suspect |
+| Source availability | Median install's `soulseek_up` below `90-99%` for 2 days running. This is about the network or slskd, not a release, so it is an "infra" alert |
+| Lossless check | Reject rate per `(route, claimed_format)` ≥ 2× N-1 or ≥ 2× the trailing 28 days (§8.2) |
+
+### 8.2 Lossless-check verdicts in depth
+
+Every verdict sends one `quality_check` event (§3.2), and a keep sends `keep_anyway` with the overruled
+verdict's labels. `request_finished` adds `checks_run`, `checks_refused` and `refused_then_passed`.
+Together they describe how the check behaves in the real world, not on the issue #97 corpus.
+
+**Questions this answers**
+
+1. **Real-world fake rate per format and route.** The share of `reject` and `unverified` verdicts per
+   `claimed_format` × `route` × `sample_rate` × `bit_depth`. This shows, for example, whether 24-bit/96k
+   FLACs on Soulseek are faked more often than 16-bit ones.
+2. **Which detector does the work.** The spectral ceiling alone versus MP3, AAC or Opus traces. Detectors
+   that agree (`detectors_fired` has 2 or more entries) are compared with a single detector firing alone.
+3. **False-reject signals.**
+   - The rate of "Keep it anyway" or "Keep lossless" per 100 refusals, per `reason_code` and detector.
+   - The share of keeps after `listened`. A keep after listening is a considered overrule; a keep in under
+     a minute without listening is impatience.
+   - The keeps that cluster in the strength or ceiling bucket just past a threshold: z `8-10` or `12-16`,
+     ceiling `19-19.9` or `19.9-20.5`. A cluster like that says the threshold is too tight.
+4. **Threshold tuning.**
+   - The strength and coverage distributions of rejects per detector, and how many sit in the bucket just
+     past the line.
+   - `shadow_tier` under the `legacy` rule shows what the tier rule would have changed.
+   - `detector_version` separates before and after each tuning release.
+5. **What a refusal costs.**
+   - `refused_then_passed`: a later copy of the same request passed, so the refusal cost a download, not
+     the track.
+   - The distribution of `candidate_index` (how many copies until one passes).
+   - `run_time` per format and sample rate.
+6. **Transfer quality and encoder traps.**
+   - `integrity_failed` per route.
+   - The reject rate of `encoder_family=ffmpeg` FLACs with `odd_blocksize`. This is issue #97's
+     ffmpeg-written-FLAC corpus trap, checked in the field.
+
+**Example queries**
+
+```sql
+-- Fake rate per route and claimed format, last 28 days
+SELECT props['route'] AS route, props['claimed_format'] AS fmt, props['bit_depth'] AS bits,
+       count() AS checks, uniqExact(install_id) AS installs,
+       countIf(props['tier'] = 'reject')     / checks AS reject_rate,
+       countIf(props['tier'] = 'unverified') / checks AS unverified_rate
+FROM telemetry.events
+WHERE event = 'quality_check' AND event_date >= today() - 28
+GROUP BY route, fmt, bits
+HAVING installs >= 5
+ORDER BY reject_rate DESC;
+```
+
+```sql
+-- False-reject signal: keeps per 100 refusals, per detector
+SELECT detector,
+       countIf(event = 'quality_check' AND props['tier'] = 'reject')        AS refused,
+       countIf(event = 'keep_anyway')                                       AS kept,
+       100 * kept / refused                                                 AS keeps_per_100,
+       countIf(event = 'keep_anyway' AND props['listened'] = 'true') / kept AS listened_share
+FROM telemetry.events
+ARRAY JOIN detectors_fired AS detector
+WHERE event IN ('quality_check', 'keep_anyway') AND event_date >= today() - 56
+GROUP BY detector
+HAVING refused >= 20;
+```
+
+```sql
+-- Threshold tuning: refusals and keeps per strength bucket, per codec, per detector version
+SELECT props['detector_version'] AS dv, props['quant_codec'] AS codec, props['strength'] AS strength,
+       countIf(event = 'quality_check' AND props['tier'] = 'reject') AS refused,
+       countIf(event = 'keep_anyway')                                AS kept
+FROM telemetry.events
+WHERE event IN ('quality_check', 'keep_anyway') AND props['quant_codec'] != ''
+GROUP BY dv, codec, strength
+ORDER BY dv, codec, strength;
+```
+
+**Alert and review thresholds** (≥ 20 refusals from ≥ 5 installs):
+
+- More than 30 keeps per 100 refusals for one detector or `reason_code`: review that detector's threshold.
+- More than half of a detector's keeps sit in the bucket just past its threshold: move the threshold one
+  bucket and replay the issue #97 corpus.
+- A reject rate per `(route, claimed_format)` that doubles after a `detector_version` change: alert.
+
+**Why none of these fields can identify a track**
+
+- **Nothing is derived from the musical content in a way that tells tracks apart.**
+  - No Chromaprint fingerprint, no audio or file hash, no spectrogram.
+  - No exact duration, size, sample count, edge frequency, z score or coverage. Those numbers stay in
+    `Rejection.analysis` on the machine.
+- **The fields describe how a copy was encoded, not what it is.**
+  - A LAME 128 kbps encode lowpasses near 16 kHz whatever the song.
+  - An MP3 or AAC quantisation grid leaves the same kind of trace in every file it touched.
+  - A container written by ffmpeg says so for every track it writes.
+  - Millions of different tracks share each combination of labels, so no label vector can be turned back
+    into a track. Given a candidate track, an observer would need the exact peer file to compute its
+    vector, and would still match every other file encoded the same way.
+- **Fields left out on purpose.**
+  - `frames_above_edge`, `drop_db`, per-channel figures and the number of analysed stretches. That count
+    scales with track length.
+  - The MP3 bitrate in kbps.
+  - The FLAC vendor string.
+
+**Borderline fields, and how they are held in:**
+
+| Field | Why borderline | Mitigation |
+|---|---|---|
+| `edge` (ceiling bucket) | Ten bands, finer near the thresholds. For a genuine master, the natural roll-off is a property of that master rather than of an encoder | Bands are at least 0.5 kHz wide. The fine bands are sent only when `edge_finding` is `ambiguous` or `unambiguous` (an encoder-like cliff). Otherwise the value is `21.5+` or `none` |
+| `run_time` | The check's duration scales with track length × CPU speed, so it is a weak proxy for length | The standard dur buckets (`5-15s`, `15-60s`), where CPU speed swamps length. Drop the field if phase 1 shows it tracks length too closely |
+| `encoder_family` | The raw vendor string can name a rare tool build, which points at one uploader's ripping setup | Three-value enum only. The string never leaves the machine |
+| The whole vector | In a small beta, one install's full label vector on one day may be unique | It says "this install checked a 24-bit FLAC with MP3 traces", never which track. Dashboards apply k≥5, and raw access is the owner's only |
 
 ## 9. Prior art (primary sources)
 
@@ -840,6 +1140,14 @@ Every chart applies the k≥5 suppression of §4.5.
   - After the first filed track, people are better informed, but the onboarding funnel is lost entirely:
     anyone who drops off never reaches the question.
   - **Pick: Welcome step.** Onboarding friction is a known problem (#113).
+- **D6: alerts or dashboards only.**
+  - Release health (§8.1) is only worth having if a regression is seen within the first 72 h.
+  - A check script on the collector, running the §8.1 queries every 15 minutes in a release's first three
+    days and then daily, mails the owner when a threshold trips. It is a few dozen lines with no new
+    service.
+  - Dashboards-only costs nothing to run, but relies on remembering to look.
+  - **Pick: alerts, by email.** Don't use the owner's Telegram: it would put a bot token for a personal
+    account on an internet-facing box.
 
 ## 11. Rollout
 
