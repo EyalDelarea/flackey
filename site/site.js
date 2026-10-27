@@ -753,8 +753,11 @@ if (chooseDemo) {
 
 // Flackey inspecting a file, in the lossless check section. One short story per
 // run, about six seconds: the file drops in, its waveform unfolds into a
-// spectrogram, a loupe reads the compression grid, the three checks tick in and
-// a verdict lands. Plays the real file then the fake once when it first comes
+// spectrogram, and each check resolves only after the picture has shown its
+// evidence: the top end once the fill has reached as high as it will go, the
+// compression fingerprint once the loupe has read its patch. While a check is
+// being made its row spins and its region on the picture is outlined in the
+// same yellow. The verdict lands only after both rows have resolved. Plays the real file then the fake once when it first comes
 // into view; the chips and Replay run it again. Everything is drawn from one
 // synthetic spectrum, so the only differences between the two files are the
 // two signs the check looks for: the empty top band and the regular grid.
@@ -773,11 +776,9 @@ if (inspect) {
 
   const NYQUIST = 22050;
   const CEILING = 16000;
-  // Which way each check comes out, per file: real passes all three; the fake
-  // fails the top end and the MP3 grid, and has no Opus or AAC traces - an MP3
-  // leaves an MP3 grid, not theirs. That row is neutral ("none", a grey dash),
-  // so nothing on the fake reads as a pass.
-  const OUTCOME = { real: ["ok", "ok", "ok"], fake: ["bad", "bad", "none"] };
+  // Which way each check comes out, per file: the real one passes both, the
+  // fake fails both. Any cross means Rejected.
+  const OUTCOME = { real: ["ok", "ok"], fake: ["bad", "bad"] };
 
   // ---- Timeline, in seconds from the start of a run ----
   const T = {
@@ -785,17 +786,22 @@ if (inspect) {
     unfold: 1.15, // it sinks and the spectrogram rises out of it
     rise: 1.0, // how long one column takes to fill
     spread: 0.32, // left-to-right lag across the panel
-    ceiling: 2.45, // the dashed ceiling draws in (fake)
-    row1: 2.55,
-    loupe: 2.7, // loupe travels out from its patch
-    loupeIn: 3.2,
-    grid: 3.3, // cells inside it light up
-    row2: 4.0,
-    row3: 4.4,
-    stamp: 4.85,
-    keep: 5.35,
-    end: 5.8,
+    // the fill is complete at unfold + spread + 0.08 + rise = 2.55
+    act1: 1.15, // row 1 spins and the top band is outlined while the fill rises
+    ceiling: 1.95, // the dashed ceiling draws in (fake), fully labelled by 2.7
+    row1: 2.85, // top end resolves: after the fill and the ceiling label
+    act2: 3.05, // row 2 spins and the loupe is outlined while it reads
+    loupe: 3.05, // loupe travels out from its patch
+    loupeIn: 3.55,
+    scan: 3.6, // a line sweeps the loupe, both files
+    scanEnd: 4.35,
+    grid: 3.65, // cells inside it light up (fake), all lit by 4.49
+    row2: 4.6, // compression fingerprint resolves: after the scan and the grid
+    stamp: 5.1, // after both rows have finished resolving
+    keep: 5.6,
+    end: 6.05,
   };
+  const SCAN = "255,214,10"; // the yellow that ties a row to its region
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const span = (t, a, b) => clamp01((t - a) / (b - a));
   const outCubic = (x) => 1 - Math.pow(1 - x, 3);
@@ -1048,7 +1054,23 @@ if (inspect) {
       }
     }
 
-    // 4. The loupe: out of a patch of the spectrum, a close look at the grid
+    // 4. Row 1's region: the top band, outlined while the top end is checked
+    const band = clamp01(span(t, T.act1, T.act1 + 0.3)) * (1 - span(t, T.row1, T.row1 + 0.35));
+    if (band > 0.01) {
+      // The same band on both files: 16 kHz to the top, where only a real
+      // master still has sound
+      const by = Math.round(H * (1 - CEILING / NYQUIST)) + dpr;
+      ctx.save();
+      ctx.fillStyle = `rgba(${SCAN},${0.07 * band})`;
+      ctx.fillRect(0, 0, W, by);
+      ctx.strokeStyle = `rgba(${SCAN},${0.85 * band})`;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.strokeRect(dpr, dpr, W - 2 * dpr, by - 2 * dpr);
+      ctx.restore();
+    }
+
+    // 5. The loupe: out of a patch of the spectrum, a close look at the grid
     if (t > T.loupe) drawLoupe(t, fake);
   };
 
@@ -1121,15 +1143,28 @@ if (inspect) {
         ctx.shadowBlur = 0;
       }
     }
+    // The read: one line sweeps the patch top to bottom, on both files
+    const sweep = span(t, T.scan, T.scanEnd);
+    if (sweep > 0 && sweep < 1) {
+      const sy = y - r + 2 * r * inOutCubic(sweep);
+      const g = ctx.createLinearGradient(0, sy - 18 * dpr, 0, sy);
+      g.addColorStop(0, `rgba(${SCAN},0)`);
+      g.addColorStop(1, `rgba(${SCAN},0.28)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, sy - 18 * dpr, 2 * r, 18 * dpr);
+      ctx.fillStyle = `rgba(${SCAN},0.95)`;
+      ctx.fillRect(x - r, sy - dpr, 2 * r, 2 * dpr);
+    }
     ctx.restore();
 
-    // Rim
+    // Rim: yellow while row 2 is being checked, like the row's spinner
+    const hot = clamp01(span(t, T.act2, T.act2 + 0.3)) * (1 - span(t, T.row2, T.row2 + 0.35));
     ctx.save();
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(220,238,255,0.85)";
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.shadowColor = "rgba(60,160,255,0.8)";
+    ctx.strokeStyle = hot > 0.01 ? `rgba(${SCAN},${lerp(0.85, 1, hot)})` : "rgba(220,238,255,0.85)";
+    ctx.lineWidth = lerp(1.5, 2.2, hot) * dpr;
+    ctx.shadowColor = hot > 0.01 ? `rgba(${SCAN},${0.7 * hot})` : "rgba(60,160,255,0.8)";
     ctx.shadowBlur = 14 * dpr;
     ctx.stroke();
     ctx.restore();
@@ -1145,7 +1180,6 @@ if (inspect) {
       res.textContent = res.dataset[next];
       row.classList.toggle("ok", OUTCOME[next][i] === "ok");
       row.classList.toggle("bad", OUTCOME[next][i] === "bad");
-      row.classList.toggle("none", OUTCOME[next][i] === "none");
     });
     stamp.textContent = stamp.dataset[next];
   };
@@ -1154,16 +1188,22 @@ if (inspect) {
     ["ix-ceiling-on", T.ceiling],
     ["ix-row1", T.row1],
     ["ix-row2", T.row2],
-    ["ix-row3", T.row3],
     ["ix-landed", T.stamp],
     ["ix-thud", T.stamp + 0.27], // the window takes the stamp's weight
     ["ix-keep-on", T.keep],
   ];
+  // A row is active (spinning) from its act time until it resolves
+  const ACTIVE = [
+    [T.act1, T.row1],
+    [T.act2, T.row2],
+  ];
   const syncClasses = (t) => {
     for (const [name, at] of STEPS) inspect.classList.toggle(name, t >= at);
+    rows.forEach((row, i) => row.classList.toggle("active", t >= ACTIVE[i][0] && t < ACTIVE[i][1]));
   };
   const clearClasses = () => {
     for (const [name] of STEPS) inspect.classList.remove(name);
+    rows.forEach((row) => row.classList.remove("active"));
     void inspect.offsetWidth; // so the next run's transitions start from scratch
   };
 

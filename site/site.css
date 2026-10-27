@@ -1589,7 +1589,8 @@ h2 {
 /* ---- Flackey inspecting a file (site.js) ----
    A dark inspection window on the light page, like the app window in the film.
    site.js sets the step classes on #inspect as the run plays:
-   ix-dropped, ix-ceiling-on, ix-row1..3, ix-landed, ix-keep-on. */
+   ix-dropped, ix-ceiling-on, ix-row1..2, ix-landed, ix-keep-on, and
+   .active on the row being checked. */
 .inspect {
   --ix-bg: #0a0c12;
   --ix-text: #eef1f6;
@@ -1597,6 +1598,7 @@ h2 {
   --ix-rule: rgba(255, 255, 255, 0.08);
   --ix-ok: #32d74b;
   --ix-bad: #ff453a;
+  --ix-scan: #ffd60a;
   --ix-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ix-ease-back: cubic-bezier(0.34, 1.56, 0.64, 1);
   margin: 0;
@@ -1632,6 +1634,9 @@ h2 {
   color: var(--ink);
   padding: 14px 0;
   border-top: 1px solid var(--line);
+}
+.ix-explain b {
+  font-weight: 600;
 }
 .ix-explain p:last-child {
   padding-bottom: 0;
@@ -1892,10 +1897,7 @@ h2 {
   stroke-dashoffset: 20;
 }
 .ix-check.ok .ix-cross,
-.ix-check.bad .ix-tick,
-.ix-check.none .ix-tick,
-.ix-check.none .ix-cross,
-.ix-check:not(.none) .ix-dash {
+.ix-check.bad .ix-tick {
   display: none;
 }
 .ix-check-label {
@@ -1917,13 +1919,30 @@ h2 {
 .ix-check.bad {
   --tone: var(--ix-bad);
 }
-/* Not found, on a file already failed: neither a pass nor a second fail */
-.ix-check.none {
-  --tone: var(--ix-dim);
+/* Being checked: the ring spins in the same yellow that outlines the row's
+   region on the picture (the top band, the loupe) */
+.ix-check.active .ix-check-label {
+  color: var(--ix-text);
+}
+.ix-check.active svg {
+  animation: ix-spin 0.9s linear infinite;
+}
+.ix-check.active circle {
+  stroke: var(--ix-scan);
+  stroke-dasharray: 18 45;
+}
+@keyframes ix-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ix-check-label small {
+  font-size: 12.5px;
+  font-weight: 450;
+  color: var(--ix-dim);
 }
 .ix-row1 .ix-check:nth-child(1) circle,
-.ix-row2 .ix-check:nth-child(2) circle,
-.ix-row3 .ix-check:nth-child(3) circle {
+.ix-row2 .ix-check:nth-child(2) circle {
   stroke: var(--tone);
   animation: ix-ring 0.5s var(--ix-ease-out);
 }
@@ -1933,20 +1952,17 @@ h2 {
   }
 }
 .ix-row1 .ix-check:nth-child(1) path,
-.ix-row2 .ix-check:nth-child(2) path,
-.ix-row3 .ix-check:nth-child(3) path {
+.ix-row2 .ix-check:nth-child(2) path {
   stroke: var(--tone);
   stroke-dashoffset: 0;
   transition: stroke-dashoffset 0.35s var(--ix-ease-out) 0.2s;
 }
 .ix-row1 .ix-check:nth-child(1) .ix-check-label,
-.ix-row2 .ix-check:nth-child(2) .ix-check-label,
-.ix-row3 .ix-check:nth-child(3) .ix-check-label {
+.ix-row2 .ix-check:nth-child(2) .ix-check-label {
   color: var(--ix-text);
 }
 .ix-row1 .ix-check:nth-child(1) .ix-check-result,
-.ix-row2 .ix-check:nth-child(2) .ix-check-result,
-.ix-row3 .ix-check:nth-child(3) .ix-check-result {
+.ix-row2 .ix-check:nth-child(2) .ix-check-result {
   opacity: 1;
   transform: none;
   color: var(--tone);

@@ -631,7 +631,7 @@
         </ol>
         <!-- Flackey inspecting a file, as a short story the visitor can replay:
              the file drops in, its waveform unfolds into a spectrogram, a loupe
-             reads the compression grid, the three checks tick in, and a verdict
+             reads the compression grid, the two checks resolve in turn, and a verdict
              lands. Drawn in site.js; an illustration, not a real analysis. With
              reduced motion the finished state is shown and the chips swap it. -->
         <div class="ix-row">
@@ -689,20 +689,8 @@
                       <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
                     </svg>
                   </span>
-                  <span class="ix-check-label">MP3 fingerprint</span>
-                  <span class="ix-check-result" data-real="None, just music" data-fake="Found, a regular grid"></span>
-                </li>
-                <li class="ix-check">
-                  <span class="ix-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24">
-                      <circle cx="12" cy="12" r="10" />
-                      <path class="ix-tick" d="m7.5 12.4 3 3 6-6.6" />
-                      <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
-                      <path class="ix-dash" d="M8 12h8" />
-                    </svg>
-                  </span>
-                  <span class="ix-check-label">Opus and AAC traces</span>
-                  <span class="ix-check-result" data-real="None" data-fake="Not found"></span>
+                  <span class="ix-check-label">Compression fingerprint <small>(MP3, AAC, Opus)</small></span>
+                  <span class="ix-check-result" data-real="None, just music" data-fake="Found: an MP3 grid"></span>
                 </li>
               </ol>
               <div class="ix-verdict">
@@ -719,17 +707,17 @@
         <div class="ix-explain">
           <h3>What it’s looking for</h3>
           <p>
-            MP3 and AAC round sound off to coarse steps. What’s left sits on a
-            regular grid that real recordings don’t land on, and converting to
-            FLAC doesn’t undo it.
-          </p>
-          <p>
-            Opus leaves its own mark, in how it stores the sound of each
-            frequency band.
-          </p>
-          <p>
-            Most lossy files also lose the top end: above a certain line,
+            <b>Top end.</b> Most lossy files lose it: above a certain line,
             there’s nothing at all.
+          </p>
+          <p>
+            <b>Compression fingerprint.</b> MP3 and AAC round sound off to
+            coarse steps. What’s left sits on a regular grid that real
+            recordings don’t land on, and converting to FLAC doesn’t undo it.
+          </p>
+          <p>
+            Opus leaves a fingerprint of its own, in how it stores the sound of
+            each frequency band.
           </p>
         </div>
         </div>
@@ -764,13 +752,14 @@
           <div class="deep-body">
             <div class="deep-inner">
               <section>
-                <h3>Three checks, one pass</h3>
+                <h3>Two signs, one pass</h3>
                 <p>
-                  Flackey decodes each download once, start to finish, and runs
-                  all three checks on that one pass.
+                  Flackey decodes each download once, start to finish, and looks
+                  for both signs on that one pass: a missing top end, and the
+                  compression fingerprint of MP3, AAC or Opus.
                 </p>
                 <dl>
-                  <dt>The top end</dt>
+                  <dt>Top end</dt>
                   <dd>
                     The highest frequency the music reaches across the whole
                     track. Lossy encoders throw the top away to save space, so
@@ -778,7 +767,7 @@
                     fades out gradually instead, with sound still reaching past
                     where it fades.
                   </dd>
-                  <dt>The MP3 and AAC trace</dt>
+                  <dt>Compression fingerprint: MP3 and AAC</dt>
                   <dd>
                     These formats cut sound into short frames and round each
                     frame’s frequencies to coarse steps. Flackey repeats the cut
@@ -788,7 +777,7 @@
                     top end, so it can catch a high-bitrate copy that reaches all
                     the way up.
                   </dd>
-                  <dt>The Opus trace</dt>
+                  <dt>Compression fingerprint: Opus</dt>
                   <dd>
                     Opus stores the shape of each frequency band as a pattern of
                     whole-number pulses. Flackey checks whether the audio lines up
@@ -805,20 +794,21 @@
                     hard can look like a faint grid in exactly those moments.
                   </li>
                   <li>
-                    It looks across the whole track. A trace has to run through
-                    it, not show up in one spot: traces in only part of a track,
-                    like an MP3 sample inside a real production, give Unverified,
+                    It looks across the whole track. A fingerprint has to run
+                    through it, not show up in one spot: a fingerprint in only
+                    part of a track,
+                    like an MP3 sample inside a real production, gives Unverified,
                     not Rejected.
                   </li>
                   <li>
-                    A trace has to clearly beat chance. The best frame position is
+                    A fingerprint has to clearly beat chance. The best frame position is
                     weighed against all the others, and a narrow lead counts as a
                     faint sign, not proof.
                   </li>
                   <li>
                     One unclear sign is never enough on its own. A master that
                     simply stops a little short of the top gets Unverified,
-                    unless a trace agrees with it.
+                    unless a fingerprint agrees with it.
                   </li>
                 </ul>
               </section>
@@ -829,14 +819,15 @@
                   <dd>No check found a sign of a lossy source. Filed and tagged as verified.</dd>
                   <dt><span class="spec-verdict warn">Unverified</span></dt>
                   <dd>
-                    One unclear sign, traces in part of the track, or too little
+                    One unclear sign, a fingerprint in part of the track, or too little
                     sound to judge. Filed and tagged as unverified, and the app
                     shows the reason.
                   </dd>
                   <dt><span class="spec-verdict bad">Rejected</span></dt>
                   <dd>
-                    A hard ceiling, a strong trace through much of the track, or an
-                    unclear ceiling and a trace that agree. It isn’t filed as
+                    A hard ceiling on the top end, a strong fingerprint through much
+                    of the track, or an unclear ceiling and a fingerprint that
+                    agree. It isn’t filed as
                     lossless. In most cases Flackey holds on to the refused copy so you can
                     listen, and Keep it anyway files it, marked as unverified.
                   </dd>
