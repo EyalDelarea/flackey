@@ -757,8 +757,10 @@ if (chooseDemo) {
 // evidence: the top end once the fill has reached as high as it will go, the
 // compression fingerprint once the loupe has read its patch. While a check is
 // being made its row spins and its region on the picture is outlined in the
-// same yellow. The verdict lands only after both rows have resolved. Plays the real file then the fake once when it first comes
-// into view; the chips and Replay run it again. Everything is drawn from one
+// same yellow. The verdict lands only after both rows have resolved. While
+// in view it loops on its own, real then fake then real, holding each verdict
+// for a moment; a chip jumps straight to that file and the loop goes on from
+// there. Everything is drawn from one
 // synthetic spectrum, so the only differences between the two files are the
 // two signs the check looks for: the empty top band and the regular grid.
 // Illustrative, not an analysis of a real file - the caption says so.
@@ -771,7 +773,6 @@ if (inspect) {
   const chips = [...inspect.querySelectorAll(".ix-file")];
   const rows = [...inspect.querySelectorAll(".ix-check")];
   const stamp = q(".ix-stamp");
-  const replay = q(".ix-replay");
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const NYQUIST = 22050;
@@ -1213,7 +1214,9 @@ if (inspect) {
   let visible = false;
   let frame = 0;
   let last = 0;
-  let queued = null; // { file, at }: the fake, after the real one, on first view
+  let queued = null; // { file, hold, at }: the other file, once this verdict has been held
+  const HOLD = 1200; // ms after a run ends; with the stamp's lead and the fade, about 2 s on the verdict
+  const other = (f) => (f === "real" ? "fake" : "real");
   let pending = null; // { file, at }: the next run, once the last one has faded out
 
   const loop = (now) => {
@@ -1225,7 +1228,7 @@ if (inspect) {
       draw(elapsed);
       if (elapsed >= T.end) {
         playing = false;
-        if (queued) queued.at = performance.now() + queued.hold;
+        queued = { file: other(file), hold: HOLD, at: performance.now() + HOLD };
       }
     } else if (pending && now >= pending.at) {
       const next = pending.file;
@@ -1274,11 +1277,6 @@ if (inspect) {
       run(chip.dataset.file);
     }),
   );
-  replay.addEventListener("click", () => {
-    queued = null;
-    run(file);
-  });
-  if (reduce) replay.hidden = true;
 
   build();
   window.addEventListener("resize", () => {
@@ -1302,9 +1300,10 @@ if (inspect) {
         }
         if (!seen && entry.intersectionRatio >= 0.45) {
           seen = true;
-          queued = { file: "fake", hold: 1400, at: 0 };
           run("real");
         } else {
+          // Back in view during a hold: give the verdict its moment again
+          if (queued && !playing) queued.at = Math.max(queued.at, performance.now() + queued.hold);
           kick();
         }
       },

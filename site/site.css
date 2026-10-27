@@ -1684,29 +1684,6 @@ h2 {
   font-size: 13.5px;
   color: var(--muted);
 }
-.ix-replay {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 4px;
-  border: 0;
-  background: none;
-  color: var(--blue);
-  font-size: 15px;
-}
-.ix-replay svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 0.5s var(--ix-ease-out);
-}
-.ix-replay:hover svg {
-  transform: rotate(-200deg);
-}
 .ix-stage {
   position: relative;
   display: grid;
