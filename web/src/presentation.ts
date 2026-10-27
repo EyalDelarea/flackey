@@ -23,12 +23,16 @@ export type Dot = 'done' | 'current' | 'pending' | 'paused'
 /** One rung of the ladder: the name and the state are rendered together, never as two separate widgets. */
 export interface StepView { name: string; state: Dot }
 /** Evidence that the file is what it claims to be - the fingerprint match and the spectrogram cutoff. */
-export interface CheckView { label: string; value: string; ok: boolean }
+/** `ok` null: a plain fact, neither a pass nor a failure. `title`: the reason, on hover. */
+export interface CheckView { label: string; value: string; ok: boolean | null; title?: string }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep'; path?: string }
+export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
 /** A longer version of a filed track, found on Soulseek after it was filed (issue #187). `offer` until the
  *  owner answers it; `swapped` once Get extended has put it in the track's place. `busy` while that runs. */
+/** A lossless copy from Soulseek the quality check refused and the worker held instead of deleting (issue
+ *  #97): the row plays it and offers to keep it in place of what was filed. */
+export interface HeldView { label: string; tip: string; sample: SampleView; replaces: boolean }
 export interface ExtendedOfferView { state: 'offer' | 'swapped'; label: string; tip: string; busy?: boolean }
 /** One thing the page's single <audio> can be pointed at. `key` is what the player compares against to
  *  decide which control is lit -- a string, not a candidate id, because since issue #92 three different
@@ -73,6 +77,7 @@ export interface RowView {
   extendedNote: string | null
   /** An extended mix on offer for this filed track, or the note that one was swapped in (issue #187). */
   extendedOffer: ExtendedOfferView | null
+  held?: HeldView | null
   samples: SamplesView | null
 }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
@@ -244,6 +249,12 @@ const REWORDED: [RegExp, (...m: string[]) => string][] = [
     (_, hz, min) => `nothing above ${khz(hz)}, below the ${khz(min)} Flackey asks of an MP3`],
   [/lossless container but cutoff at (\d+) Hz: consistent with a lossy source/i,
     (_, hz) => `nothing above ${khz(hz)} in a lossless file, which points to a lossy source`],
+  [/lossless container but cutoff at (\d+) Hz and traces of an earlier (\w+) encode: consistent with a lossy source/i,
+    (_, hz, codec) => `nothing above ${khz(hz)} and traces of an earlier ${codec} encode in a lossless file, which points to a lossy source`],
+  [/lossless container but the audio carries the quantisation pattern of an earlier (\w+) encode: consistent with a lossy source/i,
+    (_, codec) => `the audio carries the pattern an earlier ${codec} encode leaves behind, in a lossless file, which points to a lossy source`],
+  [/lossless, but nothing above (\d+) Hz, which a genuine master and a lossy source can both show/i,
+    (_, hz) => `lossless, but nothing above ${khz(hz)}, which a genuine master and a lossy source can both show`],
   [/bitrate (\d+) kbps below (\d+)/i, (_, kbps, min) => `only ${kbps} kbps, below the ${min} kbps Flackey keeps`],
   [/best score (\d+(?:\.\d+)?) below \d+(?:\.\d+)?/gi, (_, score) => `${Math.round(Number(score) * 100)}% match`],
 ]
@@ -388,6 +399,16 @@ function checksFor(b: Bundle): CheckView[] {
   // reads as the failure it was rather than as a pass.
   const overruled = b.track?.evidence?.some(e => e.kind === 'quality_check' && e.value.status === 'failed') ?? false
   if (overruled) out.push({ label: 'Quality check', value: 'kept anyway', ok: false })
+  // Filed, but the check could not vouch for it either way (issue #97): one sign of a lossy source that a
+  // genuine master can show too, or too little sound to judge. Said, so it never passes for a clear one.
+  const verification = overruled ? undefined
+    : b.track?.evidence?.find(e => e.kind === 'verification' && e.value.tier === 'unverified')
+  const unverified = verification != null
+  if (verification) {
+    const why = typeof verification.value.reason === 'string' ? verification.value.reason : null
+    out.push({ label: 'Quality check', value: 'unverified', ok: false,
+      title: why ? asSentence(why) : 'One sign of a lossy source that a genuine master can show too, or too little sound to judge' })
+  }
   // The fingerprint proves the recording, not which release of it (issue #172): when nothing in the file's
   // name or tags said it is the version asked for -- a remaster above all -- the track says so.
   const unconfirmed = b.track?.evidence?.some(e => e.kind === 'version_check' && e.value.status === 'unconfirmed') ?? false
@@ -395,8 +416,11 @@ function checksFor(b: Bundle): CheckView[] {
   // Asked for because the owner prefers extended mixes (issue #187); a miss is said in its own line instead
   if (extendedOf(b)?.found) out.push({ label: 'Extended mix', value: 'found', ok: true })
   const filed = b.track != null && !overruled
-  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: true }
-    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`, ok: filed })
+  // Beside "unverified" neither spectrum line is a pass: the check did not vouch for the file, so its
+  // numbers are shown as plain facts, not in green
+  if (hz) out.push(hz >= NO_EDGE_HZ ? { label: 'Spectrum', value: 'no edge found', ok: unverified ? null : true }
+    : { label: filed ? 'Content to' : 'Audio only to', value: `${cutoffKhz(hz).toFixed(1)} kHz`,
+        ok: unverified ? null : filed })
   return out
 }
 
@@ -414,6 +438,23 @@ function lengthNote(c: Candidate, videoS: number | null): string {
   const d = c.duration_s - videoS
   if (Math.abs(d) <= 3) return 'same length as the video'
   return `${mmss(Math.abs(d))} ${d < 0 ? 'shorter' : 'longer'} than the video`
+}
+
+/* The held lossless copy, on a row that has finished one way or another (issue #97). A row still working on
+   the request may yet file a copy that passes, which drops the hold. */
+function heldOf(b: Bundle): HeldView | null {
+  const h = b.held
+  if (!h?.audio_path || !['done', 'rejected', 'error'].includes(b.request.state)) return null
+  if (b.track?.source_fmt) return null                // filed from a lossless copy already
+  const replaces = b.track != null
+  return {
+    label: 'Soulseek had a lossless copy the quality check refused',
+    tip: `${asSentence(h.reason)}. That is evidence of a lossy source, not proof. Listen, and if it sounds right `
+      + (replaces ? 'Keep lossless files it in place of the MP3, marked as unverified.'
+        : 'Keep lossless files it, marked as unverified.'),
+    sample: { key: `held-${h.id}`, label: 'the held lossless copy', url: rejectedAudioUrl(h.id) },
+    replaces,
+  }
 }
 
 /* The worker's word on an extended mix it went looking for (issue #187), or null when it did not look. */
@@ -595,6 +636,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),
     progress: progressOf(b, opts.fetchProgress), fallback: fallbackOf(b), extendedNote: extendedNoteOf(b), extendedOffer: extendedOfferOf(b),
+    held: heldOf(b),
     outcome: outcomeOf(b), samples: samplesFor(b),
   }
   const step = stepIndex(r.state)
@@ -703,7 +745,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         caption: b.rejection?.kind === 'different_recording'
           ? kept ? 'The audio itself is genuine — it is just not the recording that was asked for. The copy is still here, so you can hear it and decide.'
             : 'The audio itself is genuine — it is just not the recording that was asked for, so it was not kept.'
-          : (khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
+          : (khz != null && b.rejection!.cutoff_hz! >= NO_EDGE_HZ
+            ? 'The spectrum reaches the top, but the audio carries the pattern an earlier lossy encode leaves behind. That is strong evidence of a lossy source, not proof.'
+            : khz != null ? `Nothing above ${khz} kHz. That is consistent with a copy blown up from a smaller file — a real 320 kbps MP3 usually reaches about 20 kHz.`
             : 'The file did not pass the quality check.') + (kept ? ' The copy is still here, so you can hear it and decide.' : ''),
         spectrogramUrl: b.rejection?.spectrogram_path ? spectrogramUrl(b.rejection.id) : null,
       }

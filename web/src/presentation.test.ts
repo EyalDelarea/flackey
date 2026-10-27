@@ -30,6 +30,11 @@ describe('formatting', () => {
     expect(asSentence('deadmau5 - Strobe is already the lossless copy')).toBe('deadmau5 - Strobe is already the lossless copy')
     expect(asSentence('lossless container but cutoff at 16000 Hz: consistent with a lossy source'))
       .toBe('Nothing above 16 kHz in a lossless file, which points to a lossy source')
+    // Issue #97's reasons
+    expect(asSentence('lossless container but the audio carries the quantisation pattern of an earlier AAC encode: consistent with a lossy source'))
+      .toBe('The audio carries the pattern an earlier AAC encode leaves behind, in a lossless file, which points to a lossy source')
+    expect(asSentence('lossless container but cutoff at 20100 Hz and traces of an earlier MP3 encode: consistent with a lossy source'))
+      .toBe('Nothing above 20.1 kHz and traces of an earlier MP3 encode in a lossless file, which points to a lossy source')
     expect(asSentence('this copy is also a different recording (best score 0.64 below 0.80), so it was not filed'))
       .toBe('This copy is also a different recording (64% match), so it was not filed')
     expect(asSentence('unsupported format ogg')).toBe('Unsupported format ogg')
@@ -275,6 +280,46 @@ describe('presentRow', () => {
     expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks).toEqual([
       { label: 'Quality check', value: 'kept anyway', ok: false },
       { label: 'Audio only to', value: '16.0 kHz', ok: false }])
+  })
+  it('a track the check could not vouch for says unverified (issue #97)', () => {
+    const track = { id: 9, path: '/l/a.aiff', fmt: 'aiff', bitrate_kbps: 1411, cutoff_hz: 20100, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'slskd', source_fmt: 'flac', bit_depth: 16, sample_rate: 44100,
+      catalog: null, evidence: [{ kind: 'verification', value: { tier: 'unverified',
+        reason: 'lossless, but nothing above 20100 Hz, which a genuine master and a lossy source can both show' } }] }
+    // The reason rides on hover, and the spectrum is a plain fact beside it, never a green pass
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts).checks).toEqual([
+      { label: 'Quality check', value: 'unverified', ok: false,
+        title: 'Lossless, but nothing above 20.1 kHz, which a genuine master and a lossy source can both show' },
+      { label: 'Content to', value: '20.1 kHz', ok: null }])
+    // An older row with no reason still explains itself
+    const bare = { ...track, cutoff_hz: 22050, evidence: [{ kind: 'verification', value: { tier: 'unverified' } }] }
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: bare }), opts).checks).toEqual([
+      { label: 'Quality check', value: 'unverified', ok: false,
+        title: 'One sign of a lossy source that a genuine master can show too, or too little sound to judge' },
+      { label: 'Spectrum', value: 'no edge found', ok: null }])
+  })
+  it('a lossless copy the quality check held back is offered beside the MP3 filed instead (issue #97)', () => {
+    const held = { id: 5, request_id: 1, reason: 'lossless container but cutoff at 16000 Hz: consistent with a lossy source',
+      bitrate_kbps: 1411, cutoff_hz: 16000, spectrogram_path: null, created_at: '', kind: 'held_lossless', audio_path: '/r/req1.flac' }
+    const mp3 = { id: 9, path: '/l/a.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 20000, file_size: 1, artist: 'A',
+      title: 'T', mix_name: 'Original Mix', duration_s: 1, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null, catalog: null }
+    const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track: mp3, held }), opts)
+    expect(v.held).toEqual({ label: 'Soulseek had a lossless copy the quality check refused',
+      tip: 'Nothing above 16 kHz in a lossless file, which points to a lossy source. That is evidence of a lossy source, '
+        + 'not proof. Listen, and if it sounds right Keep lossless files it in place of the MP3, marked as unverified.',
+      sample: { key: 'held-5', label: 'the held lossless copy', url: '/api/rejections/5/audio' }, replaces: true })
+    // Still working: a later pick may pass and drop the hold. Gone from disk: nothing to offer.
+    expect(presentRow(bundle({ state: 'fetching' }, { held }), opts).held).toBeNull()
+    expect(presentRow(bundle({ state: 'done', track_id: 9 }, { track: mp3, held: { ...held, audio_path: null } }), opts).held).toBeNull()
+    expect(presentRow(bundle({ state: 'error' }, { held }), opts).held?.replaces).toBe(false)
+  })
+  it('a refusal on the quantisation grid alone does not quote a cutoff it never had', () => {
+    const rejection = { id: 3, request_id: 1, reason: 'lossless container but the audio carries the quantisation pattern of an earlier AAC encode: consistent with a lossy source',
+      bitrate_kbps: 1411, cutoff_hz: 22050, spectrogram_path: null, created_at: '', kind: 'quality', audio_path: '/r/x.flac' }
+    const v = presentRow(bundle({ state: 'rejected' }, { rejection }), opts)
+    expect(v.rejection?.caption).toBe('The spectrum reaches the top, but the audio carries the pattern an earlier lossy encode leaves behind. That is strong evidence of a lossy source, not proof. The copy is still here, so you can hear it and decide.')
   })
   it('a track whose version nothing confirmed says so, and a confirmed one says nothing extra', () => {
     // Issue #172: the fingerprint proves the recording, not the remaster, so an unconfirmed one is flagged.

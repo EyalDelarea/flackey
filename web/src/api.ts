@@ -59,7 +59,9 @@ export interface Rejection { id:number; request_id:number; reason:string; bitrat
     video, which only they have, so the page links to it at `excerpt_start_s`. */
 export interface Reference { kind:'youtube'|'deezer'; ref:string; excerpt_start_s:number|null }
 export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catalog|null; track:Track|null; rejection:Rejection|null; attempt?:Attempt|null
-  reference?:Reference|null }
+  reference?:Reference|null
+  /** A Soulseek copy the quality check refused, held beside whatever was filed instead (issue #97) */
+  held?:Rejection|null }
 export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; track_positions?:number[]; file:string }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
@@ -184,6 +186,8 @@ export const api = {
   cancel: (rid: number) => post<Request>(`/api/requests/${rid}/cancel`),
   retry: (rid: number) => post<Request>(`/api/requests/${rid}/retry`),
   accept: (rid: number) => post<Request>(`/api/requests/${rid}/accept`),
+  /** Keep it anyway, for the lossless copy the quality check held back (issue #97) */
+  keepHeld: (rid: number) => post<Request>(`/api/requests/${rid}/keep-held`),
   retryFailed: (ids: number[]) => post<{ retried: number[]; skipped: number[] }>('/api/requests/retry-failed', { ids }),
   removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
   removeRequests: (ids: number[]) => post<{ removed: number[]; skipped: number[] }>('/api/requests/remove', { ids }),

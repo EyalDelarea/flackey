@@ -350,3 +350,29 @@ it('offers the extended mix in its own strip, with both answers and a help tag t
   expect(screen.queryByRole('button', { name: 'Get extended' })).toBeNull()
   expect(screen.getByText('Swapped in for the Radio Edit.')).toHaveClass('extended-note')
 })
+
+it('an unverified track names its format without the green tick, and gives the reason on hover (issue #97)', () => {
+  const done = { ...base, bucket: 'done' as const, steps: null, tag: null, dimmed: false, status: 'Done',
+    formatLabel: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek' }
+  const { rerender } = render(<RequestRow view={{ ...done, checks: [{ label: 'Spectrum', value: 'no edge found', ok: true }] }}
+    onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(screen.getByText(/AIFF 16-bit/)).not.toHaveClass('plain')
+  rerender(<RequestRow view={{ ...done, checks: [
+    { label: 'Quality check', value: 'unverified', ok: false, title: 'Lossless, but nothing above 20.4 kHz' },
+    { label: 'Content to', value: '20.4 kHz', ok: null }] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(screen.getByText(/AIFF 16-bit/)).toHaveClass('plain')
+  expect(screen.getByText('unverified').parentElement).toHaveAttribute('title', 'Lossless, but nothing above 20.4 kHz')
+  expect(screen.getByText('20.4 kHz').parentElement).toHaveClass('check', 'plain')
+})
+
+it('the held lossless copy plays and is kept from its own strip (issue #97)', () => {
+  const onAction = vi.fn(), onPlay = vi.fn()
+  const sample = { key: 'held-5', label: 'the held lossless copy', url: '/api/rejections/5/audio' }
+  render(<RequestRow view={{ ...base, bucket: 'done', steps: null, tag: null, status: 'Done',
+    held: { label: 'Soulseek had a lossless copy the quality check refused', tip: 'why', sample, replaces: true } }}
+    onAction={onAction} onChoose={() => {}} player={idle} onPlay={onPlay} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Play a sample of the held lossless copy' }))
+  expect(onPlay).toHaveBeenCalledWith('held-5', '/api/rejections/5/audio')
+  fireEvent.click(screen.getByRole('button', { name: 'Keep lossless' }))
+  expect(onAction).toHaveBeenCalledWith('keepHeld', 1, undefined)
+})

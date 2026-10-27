@@ -9,8 +9,8 @@ export default function Checks({ checks }: { checks: CheckView[] }) {
   return (
     <div className="checks">
       {checks.map(c => (
-        <span key={c.label} className={`check${c.ok ? '' : ' bad'}`}>
-          <Icon name={c.ok ? 'check' : 'x'} size={11} stroke={2.4} />
+        <span key={c.label} className={`check${c.ok === null ? ' plain' : c.ok ? '' : ' bad'}`} title={c.title}>
+          {c.ok !== null && <Icon name={c.ok ? 'check' : 'x'} size={11} stroke={2.4} />}
           {c.label} <b>{c.value}</b>
         </span>
       ))}

@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import subprocess
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -962,7 +964,7 @@ async def test_a_different_recording_is_kept_so_the_owner_can_hear_it(env, monke
 EDGE_REASON = "cutoff at 16000 Hz, below 18000: consistent with a lower-bitrate source"
 
 
-def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None, rule: str = "tiers") -> Verdict:
     """The spectral check refusing a 320 kbps MP3 for an edge at 16 kHz. Stood in for rather than produced:
     these tests are about what the worker does with the verdict, and test_verify.py owns the detector."""
     png = spectrogram_dir / f"{name or path.stem}.png"
@@ -1694,3 +1696,25 @@ async def test_a_filed_track_row_carries_the_date_written_to_its_file(env):
     r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
     t = store.get_track(r.track_id)
     assert t.tag_date == read_tags(t.path)["date"]
+
+
+async def test_a_quality_rejection_keeps_the_numbers_it_was_refused_on(env, monkeypatch):
+    """Issue #97: the rejection row carries each evidence family's finding, so a later look at why a copy
+    was refused does not have to re-run the check on a file that may be gone."""
+    _settings, store, _notifier = env
+    analysis = {"version": "2.0", "tier": "reject", "probe": {"fmt": "mp3"},
+                "spectral": {"judged": 2, "edge_hz": 16_000, "edge_drop_db": 40.0, "frames_above_edge": 0.0},
+                "quant": None, "integrity": {"checked": ["length_header"], "failed": None}, "container": {},
+                "legacy": {"passed": False, "cutoff_hz": 16_000}}
+
+    def refusal(path, spectrogram_dir, name=None, rule="tiers"):
+        return replace(_spectral_refusal(path, spectrogram_dir, name), tier="reject", analysis=analysis)
+
+    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    monkeypatch.setattr(filing_mod, "verify", refusal)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.REJECTED
+    kept = json.loads(store.get_rejection_for_request(rid).analysis)
+    assert kept["tier"] == "reject" and kept["edge"] == {"finding": "unambiguous", "edge_hz": 16_000,
+                                                         "drop_db": 40.0, "frames_above_edge": 0.0}

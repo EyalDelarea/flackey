@@ -6,6 +6,7 @@ import Compare from './Compare'
 import SpectrogramWell from './SpectrogramWell'
 import Stepper from './Stepper'
 import Platter from './Platter'
+import PlayButton from './PlayButton'
 import Icon from '../Icon'
 import HelpTag from '../HelpTag'
 import type { RowAction, RowView } from '../../presentation'
@@ -56,6 +57,9 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
   const nowPlaying = v.candidates?.find(c => c.sample?.key === player.playing)?.version ?? null
   // The ladder belongs under the title, spanning the row - not squeezed into the right rail beside the buttons.
   const showSteps = v.steps && !v.rejected && v.formatLabel == null
+  // A file the quality check did not vouch for (unverified, or kept anyway) names its format without the
+  // green tick: the tick would read as the pass the check row beside it says it is not (issue #97)
+  const vouched = !v.checks.some(c => c.label === 'Quality check')
   return (
     <div className={cls}>
       <div className="row-main">
@@ -89,7 +93,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
-            : v.formatLabel ? <span className="verified"><Icon name="check" size={13} stroke={2.2} />{v.formatLabel}</span>
+            : v.formatLabel ? <span className={`verified${vouched ? '' : ' plain'}`}>
+                {vouched && <Icon name="check" size={13} stroke={2.2} />}{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
           {/* A cancel sits under the choices when there are choices to skip past, and on the right of the
               row when there are not -- which is where a track that is downloading right now needs it. */}
@@ -118,6 +123,19 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
                       onClick={() => onAction('extended', v.id, undefined)}>
                 {v.extendedOffer.busy ? 'Getting…' : 'Get extended'}</button>
             </HelpTag>
+          </div>
+        </div>)}
+      {/* The lossless copy the quality check held back (issue #97): the same strip as an extended mix on
+          offer, since it asks the same question -- this one, or the copy that was filed? */}
+      {v.held && (
+        <div className="extended-offer held-copy" role="group" aria-label={v.held.label}>
+          <HelpTag text={v.held.tip}>
+            <span className="extended-offer-label" tabIndex={0}>{v.held.label}</span>
+          </HelpTag>
+          <div className="extended-offer-actions">
+            <PlayButton sample={v.held.sample} player={player} onPlay={onPlay} />
+            <button className="btn-secondary" aria-description={v.held.tip}
+                    onClick={() => onAction('keepHeld', v.id, undefined)}>Keep lossless</button>
           </div>
         </div>)}
       {v.samples && <Compare s={v.samples} player={player} onPlay={onPlay} onAccept={() => onAction('accept', v.id, undefined)} />}

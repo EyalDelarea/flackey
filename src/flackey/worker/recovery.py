@@ -126,7 +126,7 @@ class RecoveryMixin:
                    if outcome in ("fingerprint_unavailable", "verify_unavailable")
                    else ". Press Try again to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
-        await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}")
+        await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}{self._held_line(req.id)}")
 
 
     def _lossless_allowed(self, req: Request) -> bool:
@@ -167,4 +167,11 @@ class RecoveryMixin:
         manual = ("Press it again later to search once more." if from_find_lossless
                   else "Press Find lossless in your library to search Soulseek once more.")
         tail = "It will try again on its own." if outcome in RETRY_LOSSLESS_OUTCOMES else manual
-        return f"No lossless copy this time — {why}. {tail}"
+        return f"No lossless copy this time — {why}. {tail}{self._held_line(req.id)}"
+
+    def _held_line(self, request_id: int) -> str:
+        """Said wherever a pass ends without its lossless copy, when the quality check held one back
+        (issue #97): the owner can hear it and keep it from the row."""
+        if self.store.held_lossless(request_id) is None:
+            return ""
+        return "\nThe lossless copy the quality check refused is kept: listen to it in the app and keep it anyway."

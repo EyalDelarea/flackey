@@ -53,10 +53,12 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         """One request row and the evidence files it owns. Never the filed track: see `delete_request`."""
         rejection = store.get_rejection_for_request(rid)
         attempt = store.get_attempt_for_request(rid)
+        held = store.held_lossless(rid)          # a Soulseek copy held back beside the filed one (issue #97)
         worker.forget_comparison(rid)
         store.delete_request(rid)
         unlink_evidence(rejection)
         unlink_evidence(attempt)
+        unlink_evidence(held)
 
     @r.get("/queue")
     async def queue() -> list:
@@ -148,6 +150,12 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         """"Keep it anyway" on a rejected row: file the copy the recording or quality check refused."""
         return await act(rid, lambda: worker.accept_rejection(rid))
 
+    @r.post("/requests/{rid}/keep-held")
+    async def keep_held(rid: int) -> dict:
+        """"Keep it anyway" on the Soulseek copy the quality check held back: it replaces the lossy copy
+        filed in its place, or is filed where nothing was (issue #97)."""
+        return await act(rid, lambda: worker.keep_held_lossless(rid))
+
     @r.post("/requests/{rid}/cancel")
     async def cancel(rid: int) -> dict:
         return await act(rid, lambda: worker.cancel(rid))
@@ -226,6 +234,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
     async def clear_failed() -> dict:
         failed = store.list_requests(FAILED_STATES, limit=100_000)
         rejections = [store.get_rejection_for_request(req.id) for req in failed]
+        rejections += [store.held_lossless(req.id) for req in failed]      # issue #97
         attempts = [store.get_attempt_for_request(req.id) for req in failed]
         removed = store.delete_requests(FAILED_STATES)
         for rid in removed:

@@ -89,11 +89,18 @@ class FakeDetector:
 
     def __init__(self):
         self.refused: set[str] = set()
+        self.unverified: set[str] = set()
         self.raises: dict[str, Exception] = {}
+        self.rules: list[str] = []               # the rule each check was asked to apply
 
     def refuse(self, path: Path) -> Path:
         """Have every check of these bytes, wherever they are copied to, come back as a lossy source."""
         self.refused.add(_digest(path))
+        return path
+
+    def unverify(self, path: Path) -> Path:
+        """Have every check of these bytes come back unverified: filed, but not vouched for (issue #97)."""
+        self.unverified.add(_digest(path))
         return path
 
     def fail(self, path: Path, error: Exception) -> Path:
@@ -102,7 +109,8 @@ class FakeDetector:
         self.raises[_digest(path)] = error
         return path
 
-    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None) -> Verdict:
+    def __call__(self, path: Path, spectrogram_dir: Path, name: str | None = None, rule: str = "tiers") -> Verdict:
+        self.rules.append(rule)
         if (error := self.raises.get(_digest(path))) is not None:
             raise error
         pr = probe(path)
@@ -112,11 +120,27 @@ class FakeDetector:
         if _digest(path) in self.refused:
             return Verdict(False, pr.fmt, pr.bitrate_kbps, 11_000,
                            "lossless container but cutoff at 11000 Hz: consistent with a lossy source", png,
-                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+                           bit_depth=pr.bit_depth, sample_rate=pr.sample_rate, tier="reject")
+        if _digest(path) in self.unverified:
+            return Verdict(True, pr.fmt, pr.bitrate_kbps, 20_500,
+                           "lossless, but nothing above 20500 Hz, which a genuine master and a lossy source can "
+                           "both show", png, bit_depth=pr.bit_depth, sample_rate=pr.sample_rate,
+                           tier="unverified", analysis=_UNVERIFIED_ANALYSIS)
         cutoff = 20_000 if pr.fmt == "mp3" else NO_EDGE_HZ
         head = f"{pr.bitrate_kbps} kbps" if pr.fmt == "mp3" else "lossless"
         return Verdict(True, pr.fmt, pr.bitrate_kbps, cutoff, f"{head}, {edge_text(cutoff)}", png,
                        bit_depth=pr.bit_depth, sample_rate=pr.sample_rate)
+
+
+# The shape `verify.summary` reads, as an unverified 24-bit master would give it
+_UNVERIFIED_ANALYSIS = {
+    "version": "2.0", "tier": "unverified", "probe": {"fmt": "flac"},
+    "reason": "lossless, but nothing above 20500 Hz, which a genuine master and a lossy source can both show",
+    "spectral": {"judged": 2, "edge_hz": 20_500, "edge_drop_db": 30.0, "frames_above_edge": 0.0},
+    "quant": {"aac": {"codec": "aac", "z": 4.0}, "mp3": {"codec": "mp3", "z": 4.0}},
+    "integrity": {"checked": ["sample_count", "md5"], "failed": None},
+    "container": {"max_blocksize": 4096}, "legacy": {"passed": True, "cutoff_hz": 20_500},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -3186,3 +3210,128 @@ async def test_off_a_club_mix_is_filed_under_its_own_name(lenv, monkeypatch, tmp
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     t = store.get_track(r.track_id)
     assert (t.mix_name, t.duration_s, t.isrc) == ("Club Mix", 20, None)
+
+
+# --- the three tiers (issue #97) ---------------------------------------------------------------------------
+
+async def test_an_unverified_copy_is_filed_and_says_so(lenv, detector, tmp_path: Path):
+    """One sign of a lossy source that a genuine master can show too is no reason to refuse the copy: it is
+    filed, and the track, its tag and the timeline all say the check could not vouch for it."""
+    _settings, store, notifier, provider, _, _ = lenv
+    provider.audio["a"] = detector.unverify(_flac(tmp_path / "edge.flac", seed=4))
+    w = make(lenv)
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    a = attempt_of(store, r.id)
+    assert a.outcome == "filed" and provider.downloaded == ["a"]
+    verdict = next(e["detail"] for e in a.timeline if e["event"] == "verify")
+    assert verdict["tier"] == "unverified" and verdict["evidence"]["edge"]["finding"] == "ambiguous"
+    ev = store.evidence_of(r.track_id, "verification")
+    assert ev["tier"] == "unverified" and ev["edge"]["edge_hz"] == 20_500
+    assert ev["reason"].startswith("lossless, but nothing above 20500 Hz")    # the page's hover reads it
+    assert read_tags(store.get_track(r.track_id).path)["comment"].startswith("flackey: unverified")
+    done = next(m for m, *_ in reversed(notifier.sent) if m.startswith("Done:"))
+    assert "unverified: lossless, but nothing above 20500 Hz" in done
+    assert detector.rules == ["tiers"]
+
+
+async def test_a_clear_copy_is_tagged_verified(lenv, detector):
+    _settings, store, _, _, _, _ = lenv
+    r = await make(lenv).process(store.add_request(TEXT, RequestKind.TEXT))
+    assert read_tags(store.get_track(r.track_id).path)["comment"].startswith("flackey: verified")
+    verdict = next(e["detail"] for e in attempt_of(store, r.id).timeline if e["event"] == "verify")
+    assert verdict["tier"] == "clear"
+
+
+async def test_measurement_only_mode_reaches_the_check(lenv, detector):
+    """`verification_rule=legacy` is passed to every check the worker asks for, unchanged."""
+    settings, store, _, _, _, _ = lenv
+    w = make(lenv, settings=settings.model_copy(update={"verification_rule": "legacy"}))
+    await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert detector.rules and set(detector.rules) == {"legacy"}
+
+
+# --- a refused lossless copy is held, not deleted (issue #97) ---------------------------------------------
+
+async def test_a_refused_lossless_copy_is_held_beside_the_deezer_one_and_can_replace_it(lenv, detector, tmp_path: Path):
+    """The main path keeps a spectral refusal for the owner to overrule; the lossless attempt used to delete
+    its copy and file the MP3. Now the first refused copy is held, the MP3 is filed, and Keep it anyway
+    swaps the held copy in -- fingerprinted first, and carrying the failed check."""
+    settings, store, notifier, provider, _, _ = lenv
+    fake = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
+    provider.files = [lf("a"), lf("b")]
+    provider.audio = {"a": fake, "b": fake}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    mp3 = store.get_track(r.track_id)
+    assert r.state == RequestState.DONE and mp3.source == "deezer_bot"
+    held = store.held_lossless(rid)
+    assert held is not None and held.kind == "held_lossless" and held.cutoff_hz == 11_000
+    assert Path(held.audio_path).parent == settings.rejected_dir and Path(held.audio_path).exists()
+    assert len(list(settings.rejected_dir.iterdir())) == 1           # one per request; the second is deleted
+    assert store.get_rejection_for_request(rid) is None              # the row's rejection is the Deezer copy's
+    assert not list(settings.tmp_dir.iterdir())
+    assert any(e["event"] == "held" for e in attempt_of(store, rid).timeline)
+    done = next(m for m, *_ in reversed(notifier.sent) if m.startswith("Done:"))
+    assert "refused is kept" in done
+
+    r = await w.keep_held_lossless(rid)
+    t = store.get_track(r.track_id)
+    assert t.id == mp3.id and t.source == "soulseek" and t.source_fmt == "flac" and t.fmt == "aiff"
+    assert not mp3.path.exists() and t.path.exists()
+    assert store.evidence_of(t.id, "quality_check")["status"] == "failed"
+    assert store.held_lossless(rid) is None and not list(settings.rejected_dir.iterdir())
+    assert not list(settings.tmp_dir.iterdir())
+    with pytest.raises(ValueError, match="nothing to keep"):
+        await w.keep_held_lossless(rid)
+
+
+async def test_a_held_copy_is_dropped_when_a_later_pick_passes(lenv, detector, tmp_path: Path):
+    settings, store, _, provider, _, _ = lenv
+    provider.files = [lf("a"), lf("b", queue_length=1)]
+    provider.audio["a"] = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert store.get_track(r.track_id).source == "soulseek"
+    assert store.held_lossless(rid) is None
+    assert not settings.rejected_dir.exists() or not list(settings.rejected_dir.iterdir())
+
+
+async def test_a_held_copy_that_is_another_recording_is_not_filed(lenv, detector, tmp_path: Path):
+    """The quality check stopped it before the fingerprint ever ran: Keep it anyway overrules the one, not
+    the other."""
+    settings, store, _, provider, fake_check, _ = lenv
+    fake = detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))
+    provider.files = [lf("a")]
+    provider.audio = {"a": fake}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    mp3 = store.get_track(r.track_id)
+    fake_check.result = FingerprintResult("failed", 0.2, None, "best score 0.20 below 0.79")
+    with pytest.raises(ValueError, match="same recording"):
+        await w.keep_held_lossless(rid)
+    assert store.get_track(mp3.id).path == mp3.path and mp3.path.exists()
+    assert store.held_lossless(rid) is not None and not list(settings.tmp_dir.iterdir())
+
+
+async def test_a_held_copy_is_filed_when_nothing_else_was(lenv, detector, monkeypatch, tmp_path: Path):
+    """The Deezer copy was refused too (a different recording): the held copy is the one that matches, and
+    Keep it anyway files it and lets go of the refused MP3."""
+    settings, store, _, provider, fake_check, _ = lenv
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", _per_file(
+        fake_check,
+        flac=FingerprintResult("matched", 0.98, 12.3, "preview found at 12.3 s, score 0.98", [1], [2]),
+        mp3=FingerprintResult("failed", 0.61, 40.0, "best score 0.61 below 0.79", [9], [8])))
+    provider.audio = {"a": detector.refuse(_flac(tmp_path / "lossy.flac", seed=3))}
+    w = make(lenv)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.REJECTED and store.held_lossless(rid) is not None
+    assert store.get_rejection_for_request(rid).kind == "different_recording"
+    r = await w.keep_held_lossless(rid)
+    t = store.get_track(r.track_id)
+    assert r.state == RequestState.DONE and t.source == "soulseek" and t.fmt == "aiff"
+    assert store.evidence_of(t.id, "quality_check")["status"] == "failed"
+    assert not list(settings.rejected_dir.iterdir()) and not list(settings.tmp_dir.iterdir())

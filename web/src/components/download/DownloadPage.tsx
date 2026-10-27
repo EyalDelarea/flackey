@@ -222,6 +222,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
     // Filing moves the very file the block above was playing, so the clip has to stop with it -- the row
     // is about to be redrawn as a finished track with no player on it at all.
     else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
+    else if (kind === 'keepHeld') { stop(); run(api.keepHeld(id).then(() => live.refresh())) }
     else if (kind === 'cancel') run(api.cancel(id))
     else if (kind === 'report') onReport?.(id)
     else if (kind === 'extended') void getExtended([id])

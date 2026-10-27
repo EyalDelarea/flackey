@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from .models import (
+    HELD_LOSSLESS,
     INFLIGHT_STATES,
     TERMINAL_STATES,
     Candidate,
@@ -147,6 +148,7 @@ class Store:
         self._ensure_column("candidates", "has_preview", "INTEGER")
         self._ensure_column("rejections", "kind", "TEXT NOT NULL DEFAULT 'quality'")
         self._ensure_column("rejections", "audio_path", "TEXT")
+        self._ensure_column("rejections", "analysis", "TEXT")
         self._ensure_column("requests", "fetch_source", "TEXT")
         self._ensure_column("requests", "lossless_retry", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("catalog_tracks", "tag_source", "TEXT")
@@ -644,17 +646,19 @@ class Store:
     # ---- rejections -----------------------------------------------------
     def add_rejection(self, request_id: int, reason: str, bitrate_kbps: int | None, cutoff_hz: int | None,
                       spectrogram_path: Path | None, *, kind: str = "quality",
-                      audio_path: Path | None = None) -> int:
+                      audio_path: Path | None = None, analysis: dict | None = None) -> int:
         """`kind` is what the file failed: 'quality' (the spectral check) or 'different_recording' (it is
-        genuine audio of the wrong track). `audio_path` is the refused file, kept for the owner to overrule.
+        genuine audio of the wrong track) for the copy the request filed from, or `HELD_LOSSLESS` for a
+        Soulseek copy the quality check refused on the way, held beside whatever was filed instead. `audio_path` is the refused file, kept for the owner to overrule.
         Both keyword-only so no caller can drift into the positional slot that the spectrogram already
         holds."""
         cur = self.conn.execute(
             "INSERT INTO rejections (request_id, reason, bitrate_kbps, cutoff_hz, spectrogram_path, created_at, "
-            "kind, audio_path) VALUES (?,?,?,?,?,?,?,?)",
+            "kind, audio_path, analysis) VALUES (?,?,?,?,?,?,?,?,?)",
             (request_id, reason, bitrate_kbps, cutoff_hz,
              None if spectrogram_path is None else str(spectrogram_path), _now(), kind,
-             None if audio_path is None else str(audio_path)))
+             None if audio_path is None else str(audio_path),
+             None if analysis is None else json.dumps(analysis)))
         self.conn.commit()
         return int(cur.lastrowid)
 
@@ -671,8 +675,18 @@ class Store:
         return Rejection(**dict(r))
 
     def get_rejection_for_request(self, request_id: int) -> Rejection | None:
-        r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? ORDER BY id DESC LIMIT 1",
-                              (request_id,)).fetchone()
+        """The refusal of the copy this request's own pass fetched (the Deezer one). A Soulseek copy held
+        back by the quality check (`HELD_LOSSLESS`) is not it: the request went on to the lossy copy, and
+        every reader of this one -- the row, Keep it anyway, Retry -- is about that copy."""
+        r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? AND kind != ? ORDER BY id DESC LIMIT 1",
+                              (request_id, HELD_LOSSLESS)).fetchone()
+        return None if r is None else Rejection(**dict(r))
+
+    def held_lossless(self, request_id: int) -> Rejection | None:
+        """The lossless copy a Soulseek attempt fetched and the quality check refused, kept so the owner can
+        hear it and keep it anyway (issue #97) -- while it is still on disk to keep."""
+        r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? AND kind=? AND audio_path IS NOT NULL "
+                              "ORDER BY id DESC LIMIT 1", (request_id, HELD_LOSSLESS)).fetchone()
         return None if r is None else Rejection(**dict(r))
 
     def rejections_for_request(self, request_id: int) -> list[Rejection]:
