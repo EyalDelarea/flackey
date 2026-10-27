@@ -1466,6 +1466,126 @@ h2 {
   font-weight: 550;
   letter-spacing: -0.01em;
 }
+/* ---- How it works, in detail ----
+   Closed by default. site.js animates the height on open and close; without it
+   the native toggle still works, just without the slide. */
+.deep {
+  grid-column: 1 / -1;
+  margin-top: 40px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.deep summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 21px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+}
+.deep summary::-webkit-details-marker {
+  display: none;
+}
+.deep summary:hover {
+  color: var(--blue);
+}
+.deep summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.deep summary svg {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.deep[open] summary svg {
+  transform: rotate(45deg);
+}
+.deep.closing summary svg {
+  transform: none;
+}
+.deep-body {
+  overflow: hidden;
+}
+.deep-inner {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 36px 10%;
+  padding: 8px 0 44px;
+}
+.deep h3 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 12px;
+}
+.deep p,
+.deep dd,
+.deep li {
+  color: var(--muted);
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+.deep p + p,
+.deep dl + p {
+  margin-top: 12px;
+}
+.deep p + dl {
+  margin-top: 14px;
+}
+.deep dl {
+  margin: 0;
+}
+.deep dt {
+  margin-top: 14px;
+  font-size: 15.5px;
+  font-weight: 550;
+  color: var(--ink);
+}
+.deep dt:first-child {
+  margin-top: 0;
+}
+.deep dt .spec-verdict {
+  display: inline-block;
+}
+.deep dd {
+  margin: 4px 0 0;
+}
+.deep ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.deep li {
+  position: relative;
+  padding-left: 18px;
+}
+.deep li + li {
+  margin-top: 10px;
+}
+.deep li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.68em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4c7ce;
+}
+.deep a {
+  color: var(--blue);
+}
 /* ---- Flackey inspecting a file (site.js) ----
    A dark inspection window on the light page, like the app window in the film.
    site.js sets the step classes on #inspect as the run plays:
@@ -1479,9 +1599,42 @@ h2 {
   --ix-bad: #ff453a;
   --ix-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ix-ease-back: cubic-bezier(0.34, 1.56, 0.64, 1);
-  grid-column: 1 / -1;
   margin: 0;
+  min-width: 0;
+}
+/* The demo with its short explainer: beside it on a wide screen, under it below */
+.ix-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 30px;
   padding-top: clamp(36px, 5vw, 64px);
+}
+@media (min-width: 1100px) {
+  .ix-row {
+    grid-template-columns: minmax(0, 1fr) clamp(240px, 21vw, 300px);
+    gap: clamp(30px, 3.4vw, 52px);
+  }
+  /* Level with the window, not the file chips above it */
+  .ix-explain {
+    padding-top: 62px;
+  }
+}
+.ix-explain h3 {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+.ix-explain p {
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--ink);
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.ix-explain p:last-child {
+  padding-bottom: 0;
 }
 .ix-bar {
   display: flex;
@@ -1739,7 +1892,10 @@ h2 {
   stroke-dashoffset: 20;
 }
 .ix-check.ok .ix-cross,
-.ix-check.bad .ix-tick {
+.ix-check.bad .ix-tick,
+.ix-check.none .ix-tick,
+.ix-check.none .ix-cross,
+.ix-check:not(.none) .ix-dash {
   display: none;
 }
 .ix-check-label {
@@ -1760,6 +1916,10 @@ h2 {
 }
 .ix-check.bad {
   --tone: var(--ix-bad);
+}
+/* Not found, on a file already failed: neither a pass nor a second fail */
+.ix-check.none {
+  --tone: var(--ix-dim);
 }
 .ix-row1 .ix-check:nth-child(1) circle,
 .ix-row2 .ix-check:nth-child(2) circle,
@@ -2786,8 +2946,18 @@ footer > a:last-child {
   }
   /* One column: the grid's own 38px row gap spaces these already */
   .lossless-check .verdicts,
-  .lossless-check .inspect {
+  .lossless-check .ix-row {
     padding-top: 0;
+  }
+  .deep {
+    margin-top: 0;
+  }
+  .deep summary {
+    font-size: 19px;
+  }
+  .deep-inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 30px;
   }
   .verdicts-note {
     margin-top: 0;

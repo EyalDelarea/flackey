@@ -775,8 +775,9 @@ if (inspect) {
   const CEILING = 16000;
   // Which way each check comes out, per file: real passes all three; the fake
   // fails the top end and the MP3 grid, and has no Opus or AAC traces - an MP3
-  // leaves an MP3 grid, not theirs.
-  const OUTCOME = { real: ["ok", "ok", "ok"], fake: ["bad", "bad", "ok"] };
+  // leaves an MP3 grid, not theirs. That row is neutral ("none", a grey dash),
+  // so nothing on the fake reads as a pass.
+  const OUTCOME = { real: ["ok", "ok", "ok"], fake: ["bad", "bad", "none"] };
 
   // ---- Timeline, in seconds from the start of a run ----
   const T = {
@@ -1144,6 +1145,7 @@ if (inspect) {
       res.textContent = res.dataset[next];
       row.classList.toggle("ok", OUTCOME[next][i] === "ok");
       row.classList.toggle("bad", OUTCOME[next][i] === "bad");
+      row.classList.toggle("none", OUTCOME[next][i] === "none");
     });
     stamp.textContent = stamp.dataset[next];
   };
@@ -1292,6 +1294,43 @@ if (
     { threshold: 0.2, rootMargin: "0px 0px -8% 0px" },
   );
   reveals.forEach((el) => io.observe(el));
+}
+
+// "How it works, in detail": slide the body open and shut instead of the
+// native jump. The <details> stays the source of truth (so find-in-page and
+// keyboard toggling still work); with reduced motion it is left native.
+const deep = document.querySelector("#lossless-detail");
+if (deep && deep.animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const body = deep.querySelector(".deep-body");
+  const ease = "cubic-bezier(0.16, 1, 0.3, 1)";
+  let anim = null;
+  deep.querySelector("summary").addEventListener("click", (e) => {
+    e.preventDefault();
+    // A closed body can still report its laid-out height, so closed means 0
+    const from = deep.open ? body.getBoundingClientRect().height : 0;
+    if (anim) anim.cancel();
+    const opening = !deep.open || deep.classList.contains("closing");
+    deep.classList.remove("closing");
+    if (opening) {
+      deep.open = true;
+      const to = body.scrollHeight;
+      anim = body.animate(
+        [{ height: `${from}px`, opacity: from ? 1 : 0 }, { height: `${to}px`, opacity: 1 }],
+        { duration: 520, easing: ease },
+      );
+    } else {
+      deep.classList.add("closing");
+      anim = body.animate([{ height: `${from}px` }, { height: "0px", opacity: 0 }], {
+        duration: 380,
+        easing: ease,
+      });
+      anim.onfinish = () => {
+        deep.open = false;
+        deep.classList.remove("closing");
+      };
+    }
+    anim.addEventListener("finish", () => (anim = null));
+  });
 }
 
 // Ambient sound-wave motifs: a track waveform under the hero, and a small

@@ -634,6 +634,7 @@
              reads the compression grid, the three checks tick in, and a verdict
              lands. Drawn in site.js; an illustration, not a real analysis. With
              reduced motion the finished state is shown and the chips swap it. -->
+        <div class="ix-row">
         <figure class="inspect" id="inspect" aria-labelledby="inspect-caption">
           <div class="ix-bar">
             <div class="ix-files" role="group" aria-label="Pick a file to inspect">
@@ -697,10 +698,11 @@
                       <circle cx="12" cy="12" r="10" />
                       <path class="ix-tick" d="m7.5 12.4 3 3 6-6.6" />
                       <path class="ix-cross" d="m8.5 8.5 7 7m0-7-7 7" />
+                      <path class="ix-dash" d="M8 12h8" />
                     </svg>
                   </span>
                   <span class="ix-check-label">Opus and AAC traces</span>
-                  <span class="ix-check-result" data-real="None" data-fake="None"></span>
+                  <span class="ix-check-result" data-real="None" data-fake="Not found"></span>
                 </li>
               </ol>
               <div class="ix-verdict">
@@ -714,6 +716,23 @@
             of a real track. Pick a file to watch it again.
           </figcaption>
         </figure>
+        <div class="ix-explain">
+          <h3>What it’s looking for</h3>
+          <p>
+            MP3 and AAC round sound off to coarse steps. What’s left sits on a
+            regular grid that real recordings don’t land on, and converting to
+            FLAC doesn’t undo it.
+          </p>
+          <p>
+            Opus leaves its own mark, in how it stores the sound of each
+            frequency band.
+          </p>
+          <p>
+            Most lossy files also lose the top end: above a certain line,
+            there’s nothing at all.
+          </p>
+        </div>
+        </div>
         <ul class="verdicts" aria-label="The three verdicts">
           <li data-reveal style="--i: 0">
             <span class="spec-verdict ok">Verified</span>
@@ -737,6 +756,113 @@
         <p class="verdicts-note">
           Flackey never deletes a file just because it’s unsure.
         </p>
+        <details class="deep" id="lossless-detail">
+          <summary>
+            <span>How it works, in detail</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          </summary>
+          <div class="deep-body">
+            <div class="deep-inner">
+              <section>
+                <h3>Three checks, one pass</h3>
+                <p>
+                  Flackey decodes each download once, start to finish, and runs
+                  all three checks on that one pass.
+                </p>
+                <dl>
+                  <dt>The top end</dt>
+                  <dd>
+                    The highest frequency the music reaches across the whole
+                    track. Lossy encoders throw the top away to save space, so
+                    the sound stops at a flat ceiling. A real master usually
+                    fades out gradually instead, with sound still reaching past
+                    where it fades.
+                  </dd>
+                  <dt>The MP3 and AAC trace</dt>
+                  <dd>
+                    These formats cut sound into short frames and round each
+                    frame’s frequencies to coarse steps. Flackey repeats the cut
+                    at every possible frame position. At the encoder’s own
+                    position the values fall back onto its grid, with far less
+                    rounding error than real audio gives. This check ignores the
+                    top end, so it can catch a high-bitrate copy that reaches all
+                    the way up.
+                  </dd>
+                  <dt>The Opus trace</dt>
+                  <dd>
+                    Opus stores the shape of each frequency band as a pattern of
+                    whole-number pulses. Flackey checks whether the audio lines up
+                    with that pattern at one frame position, which genuine audio
+                    has no reason to do.
+                  </dd>
+                </dl>
+              </section>
+              <section>
+                <h3>Avoiding false alarms</h3>
+                <ul>
+                  <li>
+                    It skips moments pushed past full volume. A master clipped
+                    hard can look like a faint grid in exactly those moments.
+                  </li>
+                  <li>
+                    It looks across the whole track. A trace has to run through
+                    it, not show up in one spot: traces in only part of a track,
+                    like an MP3 sample inside a real production, give Unverified,
+                    not Rejected.
+                  </li>
+                  <li>
+                    A trace has to clearly beat chance. The best frame position is
+                    weighed against all the others, and a narrow lead counts as a
+                    faint sign, not proof.
+                  </li>
+                  <li>
+                    One unclear sign is never enough on its own. A master that
+                    simply stops a little short of the top gets Unverified,
+                    unless a trace agrees with it.
+                  </li>
+                </ul>
+              </section>
+              <section>
+                <h3>What happens to the file</h3>
+                <dl>
+                  <dt><span class="spec-verdict ok">Verified</span></dt>
+                  <dd>No check found a sign of a lossy source. Filed and tagged as verified.</dd>
+                  <dt><span class="spec-verdict warn">Unverified</span></dt>
+                  <dd>
+                    One unclear sign, traces in part of the track, or too little
+                    sound to judge. Filed and tagged as unverified, and the app
+                    shows the reason.
+                  </dd>
+                  <dt><span class="spec-verdict bad">Rejected</span></dt>
+                  <dd>
+                    A hard ceiling, a strong trace through much of the track, or an
+                    unclear ceiling and a trace that agree. It isn’t filed as
+                    lossless. In most cases Flackey holds on to the refused copy so you can
+                    listen, and Keep it anyway files it, marked as unverified.
+                  </dd>
+                </dl>
+                <p>Nothing is deleted because Flackey is unsure.</p>
+              </section>
+              <section>
+                <h3>Credit and limits</h3>
+                <p>
+                  The MP3 and AAC checks are ported from Olivier Derrien’s
+                  <a href="https://github.com/craft-and-code/lac-transcoded"
+                    >True-lossless Audio Detector</a
+                  >
+                  (CNRS/PRISM, Marseille), open source under the MIT License.
+                </p>
+                <p>
+                  No check can prove a file is lossless. It can only find
+                  evidence that it isn’t. A well-hidden lossy source can still
+                  pass, and an unusual master can still come out Unverified.
+                  When the evidence is unclear, Flackey says so instead of
+                  guessing.
+                </p>
+              </section>
+            </div>
+          </div>
+        </details>
       </section>
       <section class="about wrap" id="about" aria-labelledby="about-title">
         <p class="eyebrow">About Flackey</p>
