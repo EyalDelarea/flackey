@@ -282,7 +282,7 @@ Answers Q6 and Q7.
 
 | Field | Type | Example | Class |
 |---|---|---|---|
-| `path` | enum `lossless`/`lossy` | `lossless` | SAFE |
+| `copy` | enum `lossless`/`lossy` | `lossless` | SAFE |
 | `format_in` | enum, as `source_format` | `flac` | SAFE |
 | `tier` | enum `clear`/`unverified`/`reject` | `unverified` | SAFE |
 | `flagged_by` | array of enum: the evidence-family names from `verify.summary`; the numbers are dropped | `["spectral"]` | SAFE |
@@ -629,7 +629,7 @@ Recommendation: **separate VPS** (D2).
 
 | Data | Retention |
 |---|---|
-| Raw `events` | `TTL event_date + 180 DAY` (D3) |
+| Raw `events` | `TTL received_date + 180 DAY` (D3) |
 | Recomputed rollups | Cover the same window |
 | k≥5 archive | 2 years |
 | `deletions` log (ID hashes, to prove deletions ran) | 30 days |
