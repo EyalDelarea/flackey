@@ -58,7 +58,9 @@ echo "==> update helper"
 # everything in there, and this links nothing but libSystem.
 HELPER_DIR="$BUILD/dist.noindex/Flackey.app/Contents/Frameworks/bin"
 mkdir -p "$HELPER_DIR"
-clang -O2 -Wall -Wextra -Werror -o "$HELPER_DIR/flackey-update-helper" packaging/update_helper.c
+# Pinned to the LSMinimumSystemVersion in Flackey.spec: left unset, clang targets the build machine's
+# SDK, and a helper that needs a newer macOS than the app breaks Update for everyone on an older one.
+clang -O2 -Wall -Wextra -Werror -mmacosx-version-min=12.0 -o "$HELPER_DIR/flackey-update-helper" packaging/update_helper.c
 chmod 755 "$HELPER_DIR/flackey-update-helper"
 
 # A bundle assembled file by file carries no signature, and macOS treats an unsigned-but-modified bundle
