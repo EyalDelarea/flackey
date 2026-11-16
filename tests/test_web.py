@@ -2816,3 +2816,31 @@ def test_get_extended_and_keep_this_answer_for_the_offer_on_the_track(client_wit
     assert c.post(f"/api/lossless/extended/{tid}/keep").json() == {"ok": True}
     assert store.evidence_of(tid, "extended_offer")["status"] == "kept"
     assert [e.kind for e in store.list_evidence(tid)] == ["extended_offer"]     # one row, replaced
+
+
+def test_usage_stats_routes(client, tmp_path):
+    """Privacy settings: unavailable without a client; with one, the toggle, New ID, the local log, the
+    catalogue, and the page's own setup events -- which are refused unless they are setup events."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    client = client[0]
+    assert client.get("/api/telemetry").json() == {"available": False, "enabled": False}
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    telemetry.install(t)
+    try:
+        on = client.put("/api/telemetry", json={"enabled": True}).json()
+        assert on["enabled"] and len(on["id_prefix"]) == 8 and on["collector"] == "http://127.0.0.1:9"
+        assert client.post("/api/telemetry/new-id").json()["id_prefix"] != on["id_prefix"]
+        assert client.post("/api/telemetry/ui", json={"event": "setup_step", "fields": {
+            "step": "welcome", "action": "completed", "time_on_step": "5-15s"}}).json() == {"ok": True}
+        assert client.post("/api/telemetry/ui", json={"event": "request_finished", "fields": {}}).status_code == 400
+        pending = client.get("/api/telemetry/log").json()["pending"]
+        assert [e["event"] for e in pending] == ["setup_step"]
+        assert "quality_check" in client.get("/api/telemetry/catalog").json()["events"]
+        off = client.put("/api/telemetry", json={"enabled": False}).json()
+        assert not off["enabled"] and off["pending_delete"] and off["id_prefix"] is None
+        assert client.put("/api/telemetry", json={"enabled": "yes"}).status_code == 400
+    finally:
+        telemetry.uninstall()

@@ -7,6 +7,7 @@ import Banner from './Banner'
 import CopyButton from './CopyButton'
 import { FORMAT_LABELS, shortFormatNote } from './FormatOptions'
 import LayoutOptions from './LayoutOptions'
+import PrivacySection from './PrivacySection'
 import Segmented from './Segmented'
 import SharingPanel from './SharingPanel'
 import Switch from './Switch'
@@ -412,6 +413,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions"><Switch label="Automatic update checks" checked={autoUpdateOn}
             onChange={setAutoUpdate} busy={autoUpdateBusy} /></div></div>
       </div>
+      <PrivacySection />
       <h2>Help</h2>
       <div className="group">
         {/* Stacks under 700px: a long path beside two buttons left the path a word per line. */}

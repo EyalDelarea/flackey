@@ -142,6 +142,19 @@ export interface UpdateDownload {
   /** Transfers in flight, for the restart prompt: restarting loses them. */
   busy:number }
 
+/** Usage stats (opt-in telemetry). A server with no client answers only `{available:false, enabled:false}`,
+    so everything past those two is optional. */
+export interface TelemetryState { available: boolean; enabled: boolean; mode?: 'on' | 'local' | 'off'
+  collector?: string | null; sending?: boolean; id_prefix?: string | null; opted_in?: string | null
+  pending_delete?: boolean; last_delete_confirmed?: string | null
+  last_send?: { status: string; events?: number; at: string; error?: string } | null; interval_s?: number }
+/** Every event exactly as it was (or will be) sent. */
+export interface TelemetryLog { pending: Record<string, unknown>[]; sent: Record<string, unknown>[] }
+/** Every event and field that can ever be sent, straight from the schema. */
+export interface TelemetryCatalog { schema: number; common: Record<string, unknown>
+  events: Record<string, Record<string, unknown>>; buckets: Record<string, string[]> }
+export type TelemetryUiEvent = 'setup_step' | 'setup_finished'
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
@@ -256,6 +269,15 @@ export const api = {
   // Answers with `checking: true` and does the work behind it: the result arrives on the status event,
   // not in this response. 409 when there is no Soulseek account to share anything from.
   checkSharing: () => post<SharingState>('/api/sharing/check'),
+  telemetry: () => call<TelemetryState>('/api/telemetry'),
+  // Turning it off deletes what was sent: the server queues the delete to the collector.
+  setTelemetry: (enabled: boolean) => call<TelemetryState>('/api/telemetry', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  telemetryNewId: () => post<TelemetryState>('/api/telemetry/new-id'),
+  telemetryLog: () => call<TelemetryLog>('/api/telemetry/log'),
+  telemetryCatalog: () => call<TelemetryCatalog>('/api/telemetry/catalog'),
+  // Dropped by the server unless the owner opted in, so the page may always post.
+  telemetryUi: (event: TelemetryUiEvent, fields: Record<string, string | boolean>) =>
+    post<{ ok: boolean }>('/api/telemetry/ui', { event, fields }),
 }
 export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/spectrogram.png`
 // Not a fetch: the `<audio>` element asks for this itself and follows the 302 to Deezer's CDN. The route

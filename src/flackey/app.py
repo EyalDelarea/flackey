@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import sqlite3
 import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
@@ -17,6 +18,7 @@ import uvicorn
 from telethon import TelegramClient
 
 from . import __version__, telegram
+from . import telemetry as usage
 from .catalog import BeatportCatalog
 from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
@@ -35,7 +37,8 @@ from .source.slskd import SlskdClient, SoulseekProvider
 from .store import Store
 from .tag_lookup import default_lookup
 from .telegram import TelegramLogin, probe_authorized
-from .tools import resource_dir
+from .telemetry import errors as usage_errors
+from .tools import resource_dir, tool_path
 from .web import create_app
 from .web.guard import MIN_TOKEN_CHARS, new_token
 from .web.pick import Picker, native_picker
@@ -166,8 +169,9 @@ async def supervise_worker(worker, status: dict, poll_s: float = 1.0) -> None:
         status["worker_running"] = True
         try:
             await worker.run_forever()
-        except Exception:
+        except Exception as e:
             log.exception("worker crashed; retrying in %ss", poll_s)
+            usage_errors.report("worker_loop", e)
         finally:
             status["worker_running"] = False
         await asyncio.sleep(poll_s)
@@ -305,6 +309,103 @@ def make_on_authorized(settings: Settings, status: dict) -> Callable[[], None]:
     return on_authorized
 
 
+# -- opt-in usage stats (spec PR #196). Everything below is a no-op until the owner opts in. -------------
+
+USAGE_WATCH_S = 15.0
+
+
+def telegram_state(settings: Settings, status) -> str:
+    if not settings.source_enabled:
+        return "off"
+    if not settings.telegram_configured:
+        return "not_set_up"
+    return "connected" if status.get("telegram_authorized", True) else "signed_out"
+
+
+def soulseek_state(settings: Settings, status) -> str:
+    if not settings.soulseek_enabled:
+        return "off"
+    got = (status.get("lossless_provider") or {}).get("status")
+    return got if got in ("ok", "not_logged_in") else "unreachable"
+
+
+def port_state(status) -> str:
+    reachable = (status.get("sharing") or {}).get("reachable")
+    return {True: "yes", False: "no"}.get(reachable, "unknown")
+
+
+def library_size(store: Store) -> int:
+    try:
+        return int(store.conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0])
+    except sqlite3.Error:
+        return 0
+
+
+def emit_app_started(settings: Settings, status, store: Store, session: dict, opted_in: str | None) -> None:
+    from datetime import UTC, date, datetime
+
+    from .fingerprint import fpcalc_available
+    from .telemetry import buckets
+
+    days = None
+    if opted_in:
+        try:
+            days = (datetime.now(UTC).date() - date.fromisoformat(opted_in)).days
+        except ValueError:
+            days = None
+    usage.emit("app_started", telegram=telegram_state(settings, status),
+               soulseek=soulseek_state(settings, status), filing_format=settings.lossless_filing_format,
+               library_layout=settings.library_layout, extended_mixes=settings.extended_mixes,
+               auto_update_check=settings.auto_update_check, has_ffmpeg=tool_path("ffmpeg") is not None,
+               has_fpcalc=fpcalc_available(), library_tracks=buckets.n(library_size(store)),
+               port_reachable=port_state(status), days_since_opt_in=buckets.days_since(days),
+               previous_exit=session.get("previous_exit"), updated_from=session.get("updated_from"))
+
+
+async def watch_usage(tel: usage.Telemetry, worker, status, settings: Settings, store: Store,
+                      session: dict, poll_s: float = USAGE_WATCH_S) -> None:
+    """Sample the sources for the day's health and their transitions, and send `app_started` once the
+    sidecar and Telegram have had a moment to settle. Reads only; never raises out."""
+    last = tel.clock()
+    while True:
+        await asyncio.sleep(poll_s)
+        try:
+            if not tel.enabled:
+                last = tel.clock()
+                continue
+            if session:     # the launch's own start; an opt-in mid-run sends its own (`on_opt_in`)
+                emit_app_started(settings, status, store, session, tel.opted_in)
+                session.clear()
+            now = tel.clock()
+            tg, sk = telegram_state(settings, status), soulseek_state(settings, status)
+            blocked = bool(getattr(worker, "_catalog_blocked", False))
+            tel.health_tick(now - last,
+                            soulseek=None if sk == "off" else sk == "ok",
+                            telegram=None if tg in ("off", "not_set_up") else tg == "connected",
+                            beatport=not blocked)
+            last = now
+            if tg not in ("off", "not_set_up"):
+                tel.source_status("telegram", "ok" if tg == "connected" else "signed_out")
+            if sk != "off":
+                tel.source_status("soulseek", sk)
+            tel.source_status("beatport", "blocked" if blocked else "ok")
+            port = port_state(status)
+            if port != "unknown":
+                tel.source_status("port", "open" if port == "yes" else "closed")
+        except Exception:
+            log.debug("usage stats watcher tick failed", exc_info=True)
+
+
+async def run_usage_sender(tel: usage.Telemetry, retry_s: float = 30.0) -> None:
+    """The sender, restarted after a failure: it must never take the app down with it."""
+    while True:
+        try:
+            await tel.run()
+        except Exception:
+            log.debug("usage stats sender stopped; restarting", exc_info=True)
+        await asyncio.sleep(retry_s)
+
+
 async def _run(settings: Settings, handle: ServerHandle) -> None:
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.rejected_dir,
               settings.library_root, settings.lossless_raw_dir):
@@ -312,6 +413,11 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     repair_share(settings)
     log_startup_banner(settings, __version__)
     store = Store(settings.db_path)
+    tel = usage.from_settings(settings, __version__)
+    usage.install(tel)
+    usage_errors.install_hooks()
+    asyncio.get_running_loop().set_exception_handler(usage_errors.asyncio_handler)
+    session = tel.start_session()
     bus = EventBus()
     # `telegram_unreachable` tells "signed out" from "signed in, as far as anyone knows, but Telegram
     # did not answer": both pause the Deezer bot, only one of them is fixed by signing in.
@@ -399,6 +505,9 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     display_host = "localhost" if settings.web_host in ("0.0.0.0", "::") else settings.web_host
     url = f"http://{display_host}:{settings.web_port}"
 
+    # Opting in mid-run counts as this launch's start: the session begins at that click.
+    tel.on_opt_in = lambda info: emit_app_started(settings, status, store, info, tel.opted_in)
+
     log.info("flackey started, worker running")
     try:
         await run_until_server_stops(
@@ -407,9 +516,13 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
             supervise_worker(worker, status),
             close_streams_on_exit(server, bus),
             watch_telegram_session(login, status),
-            sharing.run_forever())
+            sharing.run_forever(),
+            run_usage_sender(tel),
+            watch_usage(tel, worker, status, settings, store, session))
     finally:
         server.should_exit = True
+        tel.end_session()
+        usage.uninstall()
         await sharing.release()       # give the port back before the sidecar that used it goes away
         if link.process is not None:      # the link owns the handle after adopt(); it may have replaced it
             await link.process.stop()

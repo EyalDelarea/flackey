@@ -911,3 +911,11 @@ it('offers Report a bug beside the logs', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Report a bug…' }))
   expect(onReport).toHaveBeenCalled()
 })
+
+it('shows a Privacy section only when usage stats are available', async () => {
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ available: true, enabled: false, mode: 'local', collector: null, sending: false,
+    id_prefix: null, opted_in: null, pending_delete: false, last_delete_confirmed: null, last_send: null, interval_s: 60 })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  expect(await screen.findByRole('heading', { name: 'Privacy' })).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
+})

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import './app.css'
 import { api } from './api'
@@ -21,6 +21,8 @@ import WelcomeStep from './components/setup/WelcomeStep'
 import { useLive } from './live'
 import type { Live } from './live'
 import { insetTitlebar, PlatformContext } from './platform'
+import { durationBucket, SETUP_STEPS, track } from './telemetry'
+import type { SetupStepName, StepAction } from './telemetry'
 
 const inset = insetTitlebar()
 
@@ -74,6 +76,25 @@ function AppBody({ live }: { live: Live }) {
   // mid-session on any re-render that flipped `setup_done`. `.setup-content` scrolls, so a step that does
   // not fit scrolls instead -- the window stays the size it was left at, which desktop.py remembers.
 
+  // Usage-stats funnel: which setup step is on screen, and since when. Posted fire-and-forget, and the
+  // server drops it unless the owner opted in. A rerun (Reconnect) is marked so it never reads as a first run.
+  const setupStep: SetupStepName | null = !h || (h.setup_done && !reconnecting) ? null
+    : !reconnecting && !welcomeSeen ? 'welcome' : SETUP_STEPS[reconnecting && step === 1 ? 3 : step]
+  const funnel = useRef<{ step: SetupStepName | null; since: number; started: number }>({ step: null, since: 0, started: 0 })
+  useEffect(() => {
+    const f = funnel.current
+    if (setupStep === f.step) return  // the ref guard keeps StrictMode's second run from posting twice
+    const now = Date.now()
+    if (f.step === null) f.started = now
+    f.step = setupStep; f.since = now
+    if (setupStep) track('setup_step', { step: setupStep, action: 'shown', ...(reconnecting ? { rerun: true } : {}) })
+  }, [setupStep, reconnecting])
+  const leaveStep = (action: StepAction) => {
+    const f = funnel.current
+    if (!f.step) return
+    track('setup_step', { step: f.step, action, time_on_step: durationBucket(Date.now() - f.since), ...(reconnecting ? { rerun: true } : {}) })
+  }
+
   if (!h) {
     return (<div className="app-loading">
       {live.loading ? 'Starting…'
@@ -82,7 +103,7 @@ function AppBody({ live }: { live: Live }) {
     </div>)
   }
   if (!h.setup_done || reconnecting) {
-    if (!reconnecting && !welcomeSeen) return <WelcomeStep onStart={() => setWelcomeSeen(true)} />
+    if (!reconnecting && !welcomeSeen) return <WelcomeStep onStart={() => { leaveStep('completed'); setWelcomeSeen(true) }} />
     const current = reconnecting && step === 1 ? 3 : step
     const startApp = async () => {
       try {
@@ -92,6 +113,12 @@ function AppBody({ live }: { live: Live }) {
         return
       }
       setSetupError(null)
+      leaveStep('completed')
+      if (!reconnecting) {
+        const fmt: Record<string, string> = ['aiff', 'wav', 'flac'].includes(filingFormat) ? { filing_format: filingFormat } : {}
+        track('setup_finished', { total_time: durationBucket(Date.now() - funnel.current.started),
+          telegram_connected: !telegramSkipped, soulseek_connected: soulseekState === 'connected', ...fmt })
+      }
       await live.refresh()
       setReconnecting(false)
       setStep(1)
@@ -103,16 +130,16 @@ function AppBody({ live }: { live: Live }) {
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
       : current === 5 ? () => setStep(4)
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
-    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 3 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
+    return (<SetupShell step={current} onBack={back && (() => { leaveStep('back'); back() })} inset={inset} hint={current === 3 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
       skipped={{ 3: telegramSkipped, 4: soulseekState === 'skipped' }}>
-      {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
+      {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { leaveStep('completed'); setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <FormatStep libraryRoot={libraryRoot} initial={filingFormat}
         formats={live.settings?.filing_formats ?? ['aiff', 'wav', 'flac']}
         defaultFormat={live.settings?.default_filing_format}
-        onDone={f => { setFilingFormat(f); setStep(3) }} />}
-      {current === 3 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
-      {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { setSoulseekState('skipped'); setStep(5) }} />}
-      {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(3)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
+        onDone={f => { leaveStep('completed'); setFilingFormat(f); setStep(3) }} />}
+      {current === 3 && <TelegramStep onDone={() => { leaveStep('completed'); setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { leaveStep('skipped'); setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
+      {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { leaveStep('completed'); setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { leaveStep('skipped'); setSoulseekState('skipped'); setStep(5) }} />}
+      {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => { leaveStep('back'); setStep(3) }} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
   const update = live.update

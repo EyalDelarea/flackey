@@ -16,7 +16,8 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
-             "source_enabled", "auto_update_check", "window_size", "extended_mixes")
+             "source_enabled", "auto_update_check", "window_size", "extended_mixes",
+             "telemetry_enabled", "telemetry_install_id", "telemetry_opted_in")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
@@ -94,6 +95,12 @@ class Settings(BaseSettings):
     # has, and an extended mix found afterwards is offered on its Done row. "always": the extended mix is
     # looked for first and downloaded instead, the normal one when there is none. "off": neither.
     extended_mixes: str = "ask"
+    # Opt-in usage stats (spec PR #196): off until the owner says yes at the Welcome step or in Settings.
+    # The ID is random, made at opt-in, and wiped at opt-out; there is no collector address here at all --
+    # `FLACKEY_TELEMETRY_URL` names one, and only a loopback address is accepted (`telemetry.local_url`).
+    telemetry_enabled: bool = False
+    telemetry_install_id: str | None = None
+    telemetry_opted_in: str | None = None
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
