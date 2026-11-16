@@ -346,6 +346,15 @@ it('can get the extended mix every time instead of asking', async () => {
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(current.settings.library_root, { extended_mixes: 'always' }))
 })
 
+it('does not promise an offer when it is set to always get the extended mix', () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const always = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'always' } })
+  render(<SettingsPage live={always} onReconnect={() => {}} />)
+  // The line beside the switch is on the main view; the row explaining "always" is folded away under it.
+  expect(within(section('Library')).getByText('Gets the longer extended or club mix instead, when there is one.')).toBeVisible()
+  expect(screen.queryByText(/its Done row offers it/)).not.toBeInTheDocument()
+})
+
 it('shows extended mixes as off, with no choice under it, when the setting is saved that way', async () => {
   const current = live as unknown as { settings: AppSettings; health: Health }
   const off = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'off' } })

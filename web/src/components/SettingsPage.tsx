@@ -330,7 +330,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
             Library box, not a box of its own: it is the one download choice a DJ changes, and a heading over
             a single row cost the page a screen. */}
         <div className="srow"><div className="srow-body"><div className="k">Offer extended mixes when available</div>
-          <div className="v">If a longer extended or club mix turns up, its Done row offers it.</div>
+          {/* By mode: in "always" nothing is offered -- the longer mix is simply fetched -- and the row that
+              says so is inside the fold, so this line has to be right on its own. */}
+          <div className="v">{extendedMixes === 'always'
+            ? 'Gets the longer extended or club mix instead, when there is one.'
+            : 'If a longer extended or club mix turns up, its Done row offers it.'}</div>
           {extendedError && <div className="err">{extendedError}</div>}</div>
           <div className="actions"><Switch label="Offer extended mixes when available" checked={extendedMixes !== 'off'}
             onChange={on => saveExtended(on ? 'ask' : 'off')} busy={extendedBusy} /></div></div>
