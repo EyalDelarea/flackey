@@ -1137,3 +1137,16 @@ def test_a_stop_signal_while_the_window_is_open_closes_it_and_restores_the_handl
     desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
     assert windows["window"].destroyed
     assert signal.getsignal(signal.SIGINT) == before
+
+
+def test_pywebview_is_kept_from_taking_ctrl_c_on_the_mac(monkeypatch):
+    """pywebview calls AppHelper.installMachInterrupt() in webview.start; that handler ends the app without
+    closing the session, so the next launch would report a crash."""
+    from flackey import desktop
+
+    helper = types.SimpleNamespace(installMachInterrupt=lambda: pytest.fail("pywebview took SIGINT"))
+    monkeypatch.setitem(sys.modules, "PyObjCTools", types.SimpleNamespace(AppHelper=helper))
+    monkeypatch.setitem(sys.modules, "PyObjCTools.AppHelper", helper)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    desktop.keep_sigint_from_pywebview()
+    helper.installMachInterrupt()
