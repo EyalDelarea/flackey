@@ -133,7 +133,7 @@ def _today() -> dt.date:
 
 class Telemetry:
     def __init__(self, data_dir: Path, *, version: str, enabled: bool = False, install_id: str | None = None,
-                 opted_in: str | None = None, url: str | None = None, mode: str = "on",
+                 opted_in: str | None = None, asked: bool = False, url: str | None = None, mode: str = "on",
                  built_url: str | None = None, key: str | None = None,
                  interval_s: float | None = None, persist: Callable[..., None] | None = None,
                  clock: Callable[[], float] = time.time, today: Callable[[], dt.date] = _today,
@@ -152,6 +152,7 @@ class Telemetry:
         self.key = key or None
         self.install_id = install_id if enabled else None
         self.opted_in = opted_in
+        self.asked = bool(asked)
         self._enabled = bool(enabled and install_id)
         self.interval_s = max(MIN_INTERVAL_S, interval_s) if interval_s else DEFAULT_INTERVAL_S
         self._jitter = JITTER_S if interval_s is None else 0.0
@@ -232,6 +233,14 @@ class Telemetry:
             self._queue_delete(old)
         self.persist(telemetry_enabled=False, telemetry_install_id=None, telemetry_opted_in=None)
         self._next_send = 0.0
+
+    def mark_asked(self) -> None:
+        """The owner has answered the usage-stats question (either way, or by dismissing it), so the
+        one-time prompt is never shown again. Changes nothing about whether stats are on."""
+        if self.asked:
+            return
+        self.asked = True
+        self.persist(telemetry_asked=True)
 
     def reset_id(self) -> None:
         """New ID: the old one's data is deleted first, and what was queued under it goes with it."""
@@ -485,7 +494,7 @@ class Telemetry:
     def describe(self) -> dict:
         return {"available": self.available, "enabled": self.enabled, "mode": self.mode,
                 "collector": self.url, "sending": self.sending,
-                "id_prefix": (self.install_id or "")[:8] or None, "opted_in": self.opted_in,
+                "id_prefix": (self.install_id or "")[:8] or None, "opted_in": self.opted_in, "asked": self.asked,
                 "pending_delete": bool(self._pending_deletes()),
                 "last_delete_confirmed": self.last_delete_confirmed, "last_send": self.last_send,
                 "interval_s": self.interval_s}

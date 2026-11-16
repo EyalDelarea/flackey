@@ -190,7 +190,7 @@ def test_from_settings_reads_the_build_and_lets_the_environment_override(tmp_pat
     b.write_text(json.dumps({"telemetry_url": "https://collector.example", "telemetry_key": "r1-key"}))
     monkeypatch.setattr("flackey.config.BUILD_DEFAULTS_PATH", b)
     s = SimpleNamespace(data_dir=tmp_path, telemetry_enabled=False, telemetry_install_id=None,
-                        telemetry_opted_in=None)
+                        telemetry_opted_in=None, telemetry_asked=False)
     t = telemetry.from_settings(s, "0.6.1", environ={})
     assert (t.url, t.key) == ("https://collector.example", "r1-key")
     t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY_URL": "http://127.0.0.1:8790",
@@ -418,3 +418,36 @@ def test_a_build_without_the_schema_file_just_has_no_stats(tmp_path, monkeypatch
     assert not t.available and not t.enabled
     t.emit("app_started")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_usage_stats_are_off_and_unasked_by_default(tmp_path):
+    """A fresh install: stats off, never asked -- so an existing owner gets the one-time prompt, and nothing
+    is ever on until the owner turns it on."""
+    from flackey.config import load_settings
+
+    env = tmp_path / ".env"
+    env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
+    s = load_settings(env)
+    assert s.telemetry_enabled is False and s.telemetry_asked is False
+    t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY_URL": "http://127.0.0.1:9"})
+    d = t.describe()
+    assert d["enabled"] is False and d["asked"] is False and d["id_prefix"] is None
+
+
+def test_answering_the_question_is_remembered_and_never_turns_stats_on(tmp_path):
+    """Not now (or a dismissed prompt) persists `telemetry_asked` and leaves stats off; opting out later
+    keeps it, so the one-time prompt does not come back after a Settings round trip."""
+    from flackey.config import load_settings
+
+    env = tmp_path / ".env"
+    env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
+    s = load_settings(env)
+    t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY_URL": "http://127.0.0.1:9"})
+    t.mark_asked()
+    assert t.asked and not t.enabled
+    again = load_settings(env)
+    assert again.telemetry_asked is True and again.telemetry_enabled is False
+    t.opt_in()
+    t.opt_out()
+    assert load_settings(env).telemetry_asked is True
+    assert telemetry.from_settings(load_settings(env), "0.6.1", environ={}).describe()["asked"] is True

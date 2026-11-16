@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.spyOn(api, 'stats').mockResolvedValue(stats)
   vi.spyOn(api, 'qrStart').mockResolvedValue({ id: 'q1', url: 'tg://x', expires_at: '2999-01-01T00:00:00+00:00' })
   vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ available: false, enabled: false })
   vi.spyOn(api, 'update').mockResolvedValue({ ok: true, current: '0.1.0', newer: false, available: false,
     latest: '0.1.0', url: null, release_url: null, size: null, size_label: null, published_at: null,
     published_date: null, prerelease: false })
@@ -272,5 +273,95 @@ describe('the usage-stats setup funnel', () => {
     const calls = ui.mock.calls.map(([, f]) => `${f.step}:${f.action}`)
     expect(calls).toEqual(['welcome:shown', 'welcome:completed', 'folder:shown', 'folder:completed', 'format:shown'])
     for (const [, f] of ui.mock.calls) expect(Object.keys(f).every(k => ['step', 'action', 'time_on_step'].includes(k))).toBe(true)
+  })
+})
+
+describe('the one-time usage-stats question for an owner who set up before Welcome asked', () => {
+  const off = { available: true, enabled: false, mode: 'on' as const, collector: null, sending: false, id_prefix: null,
+    opted_in: null, pending_delete: false, last_delete_confirmed: null, last_send: null, interval_s: 60 }
+  /** The server's side: `asked` flips once any answer lands, exactly as /api/telemetry/asked and the PUT do. */
+  function server(start: Partial<typeof off> & { asked?: boolean } = {}) {
+    let t = { ...off, asked: false, ...start }
+    vi.spyOn(api, 'telemetry').mockImplementation(async () => t)
+    const asked = vi.spyOn(api, 'telemetryAsked').mockImplementation(async () => (t = { ...t, asked: true }))
+    const put = vi.spyOn(api, 'setTelemetry').mockImplementation(async on => (t = { ...t, enabled: on, asked: true }))
+    return { asked, put }
+  }
+
+  it('asks with the same wording and two equal, unchosen answers, without blocking the app', async () => {
+    server()
+    vi.spyOn(api, 'health').mockResolvedValue(health())
+    render(<App />)
+    expect(await screen.findByText('Share usage stats?')).toBeInTheDocument()
+    expect(screen.getByText(/We only see counts like “a Soulseek search found nothing”/)).toBeInTheDocument()
+    expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()      // a card, not a sheet
+    expect(screen.getByText('Not connected')).toBeInTheDocument()     // the app is right there behind it
+  })
+
+  it('Not now keeps stats off, and the question never comes back', async () => {
+    const { asked, put } = server()
+    vi.spyOn(api, 'health').mockResolvedValue(health())
+    const { unmount } = render(<App />)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Not now' }))
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect(put).not.toHaveBeenCalled()
+    unmount()
+    render(<App />)                                   // the next launch
+    await screen.findByText('Not connected')
+    await waitFor(() => expect(api.telemetry).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+  })
+
+  it('dismissing it counts as Not now', async () => {
+    const { asked, put } = server()
+    vi.spyOn(api, 'health').mockResolvedValue(health())
+    render(<App />)
+    await screen.findByText('Share usage stats?')
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('Share turns on the same setting as Settings > Privacy', async () => {
+    const { asked, put } = server()
+    vi.spyOn(api, 'health').mockResolvedValue(health())
+    render(<App />)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+    await waitFor(() => expect(put).toHaveBeenCalledWith(true))
+    expect(asked).not.toHaveBeenCalled()
+  })
+
+  it('is not shown when stats are already on, or not available here', async () => {
+    server({ enabled: true })
+    vi.spyOn(api, 'health').mockResolvedValue(health())
+    const { unmount } = render(<App />)
+    await waitFor(() => expect(api.telemetry).toHaveBeenCalled())
+    await screen.findByText('Not connected')
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+    unmount()
+    server({ available: false })
+    render(<App />)
+    await waitFor(() => expect(api.telemetry).toHaveBeenCalled())
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+  })
+
+  it('never follows a new owner out of setup: Welcome already asked', async () => {
+    const { asked, put } = server()
+    vi.spyOn(api, 'health').mockResolvedValue(health({ setup_done: false }))
+    render(<App />)
+    await screen.findByRole('radio', { name: 'Not now' })
+    fireEvent.click(screen.getByText('Get started'))             // skipped the question
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect(put).not.toHaveBeenCalled()
+    FakeEventSource.last!.emit('status', { telegram_authorized: false, source_enabled: true, worker_running: false, setup_done: true })
+    await screen.findByText('Not connected')
+    await waitFor(() => expect(vi.mocked(api.telemetry).mock.calls.length).toBeGreaterThanOrEqual(2))
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
   })
 })

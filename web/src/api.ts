@@ -146,6 +146,8 @@ export interface UpdateDownload {
     so everything past those two is optional. */
 export interface TelemetryState { available: boolean; enabled: boolean; mode?: 'on' | 'local' | 'off'
   collector?: string | null; sending?: boolean; id_prefix?: string | null; opted_in?: string | null
+  /** The owner has answered the question once (Welcome, the one-time prompt or the Settings switch). */
+  asked?: boolean
   pending_delete?: boolean; last_delete_confirmed?: string | null
   last_send?: { status: string; events?: number; at: string; error?: string } | null; interval_s?: number }
 /** Every event exactly as it was (or will be) sent. */
@@ -273,6 +275,8 @@ export const api = {
   // Turning it off deletes what was sent: the server queues the delete to the collector.
   setTelemetry: (enabled: boolean) => call<TelemetryState>('/api/telemetry', { method: 'PUT', body: JSON.stringify({ enabled }) }),
   telemetryNewId: () => post<TelemetryState>('/api/telemetry/new-id'),
+  /** "Not now", a dismissed prompt, or Welcome left without a choice: stats stay off, the question is not asked again. */
+  telemetryAsked: () => post<TelemetryState>('/api/telemetry/asked'),
   telemetryLog: () => call<TelemetryLog>('/api/telemetry/log'),
   telemetryCatalog: () => call<TelemetryCatalog>('/api/telemetry/catalog'),
   // Dropped by the server unless the owner opted in, so the page may always post.

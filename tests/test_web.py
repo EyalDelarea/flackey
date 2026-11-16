@@ -2830,8 +2830,10 @@ def test_usage_stats_routes(client, tmp_path):
                   platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
     telemetry.install(t)
     try:
+        assert client.get("/api/telemetry").json()["asked"] is False
         on = client.put("/api/telemetry", json={"enabled": True}).json()
         assert on["enabled"] and len(on["id_prefix"]) == 8 and on["collector"] == "http://127.0.0.1:9"
+        assert on["asked"] is True      # answering with the switch counts as having been asked
         assert client.post("/api/telemetry/new-id").json()["id_prefix"] != on["id_prefix"]
         assert client.post("/api/telemetry/ui", json={"event": "setup_step", "fields": {
             "step": "welcome", "action": "completed", "time_on_step": "5-15s"}}).json() == {"ok": True}
@@ -2842,6 +2844,29 @@ def test_usage_stats_routes(client, tmp_path):
         off = client.put("/api/telemetry", json={"enabled": False}).json()
         assert not off["enabled"] and off["pending_delete"] and off["id_prefix"] is None
         assert client.put("/api/telemetry", json={"enabled": "yes"}).status_code == 400
+    finally:
+        telemetry.uninstall()
+
+
+def test_not_now_marks_the_question_answered_and_leaves_stats_off(client, tmp_path):
+    """The Welcome step left without a choice, "Not now", or the one-time prompt dismissed: all post
+    /asked, which never turns stats on and stops the prompt from being shown again."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    client = client[0]
+    assert client.post("/api/telemetry/asked").status_code == 503      # no client: nothing to remember
+    saved: dict = {}
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"},
+                  persist=lambda **kw: saved.update(kw))
+    telemetry.install(t)
+    try:
+        after = client.post("/api/telemetry/asked").json()
+        assert after["asked"] is True and after["enabled"] is False and after["id_prefix"] is None
+        assert saved == {"telemetry_asked": True}
+        assert client.get("/api/telemetry").json()["asked"] is True
+        assert not (tmp_path / "usage").exists() or not any((tmp_path / "usage").iterdir())
     finally:
         telemetry.uninstall()
 

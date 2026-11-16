@@ -23,35 +23,61 @@ describe('usage stats opt-in', () => {
     resetTelemetryGate()
   })
 
-  it('shows the card with the box unticked', async () => {
+  it('asks with nothing chosen: both answers unraised and stats off', async () => {
     vi.spyOn(api, 'telemetry').mockResolvedValue(state)
     render(<WelcomeStep onStart={() => {}} />)
-    const box = await screen.findByRole('checkbox', { name: 'Share usage stats' })
-    expect(box).not.toBeChecked()
-    expect(screen.getByText('Help make Flackey better')).toBeInTheDocument()
+    const share = await screen.findByRole('radio', { name: 'Share usage stats' })
+    const notNow = screen.getByRole('radio', { name: 'Not now' })
+    expect(share).toHaveAttribute('aria-checked', 'false')
+    expect(notNow).toHaveAttribute('aria-checked', 'false')
+    expect(share.className).toBe(notNow.className)      // equal weight: neither is styled as the default
+    expect(screen.getByText('Share usage stats?')).toBeInTheDocument()
+    expect(screen.getByText(/Help us find out why downloads fail and make Flackey better over time/)).toBeInTheDocument()
+    expect(screen.getByText(/Never song names, links, files or your IP\./)).toBeInTheDocument()
+    expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
   })
 
-  it('turns stats on before any setup event when continuing with the box ticked', async () => {
+  it('turns stats on before any setup event when continuing with Share chosen', async () => {
     vi.spyOn(api, 'telemetry').mockResolvedValue(state)
     const order: string[] = []
     const put = vi.spyOn(api, 'setTelemetry').mockImplementation(async () => { order.push('put'); return { ...state, enabled: true } })
+    const asked = vi.spyOn(api, 'telemetryAsked').mockResolvedValue({ ...state, asked: true })
     vi.spyOn(api, 'telemetryUi').mockImplementation(async () => { order.push('ui'); return { ok: true } })
     const onStart = vi.fn(() => track('setup_step', { step: 'welcome', action: 'completed', time_on_step: '<1s' }))
     render(<WelcomeStep onStart={onStart} />)
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Share usage stats' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))
+    expect(put).not.toHaveBeenCalled()       // applied at Get started, so changing your mind costs nothing
     fireEvent.click(screen.getByText('Get started'))
     expect(onStart).toHaveBeenCalled()
     expect(put).toHaveBeenCalledWith(true)
+    expect(asked).not.toHaveBeenCalled()     // the PUT itself records the answer
     await waitFor(() => expect(order).toEqual(['put', 'ui']))
   })
 
-  it('does not turn stats on when the box is left unticked', async () => {
+  it('keeps stats off and records the answer when Not now is chosen', async () => {
     vi.spyOn(api, 'telemetry').mockResolvedValue(state)
     const put = vi.spyOn(api, 'setTelemetry').mockResolvedValue(state)
+    const asked = vi.spyOn(api, 'telemetryAsked').mockResolvedValue({ ...state, asked: true })
     render(<WelcomeStep onStart={() => {}} />)
-    await screen.findByRole('checkbox', { name: 'Share usage stats' })
+    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Not now' }))
+    expect(screen.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(screen.getByText('Get started'))
     expect(put).not.toHaveBeenCalled()
+    expect(asked).toHaveBeenCalledTimes(1)
+  })
+
+  it('skipping the question leaves stats off, and it is not asked again', async () => {
+    vi.spyOn(api, 'telemetry').mockResolvedValue(state)
+    const put = vi.spyOn(api, 'setTelemetry').mockResolvedValue(state)
+    const asked = vi.spyOn(api, 'telemetryAsked').mockResolvedValue({ ...state, asked: true })
+    const onStart = vi.fn()
+    render(<WelcomeStep onStart={onStart} />)
+    await screen.findByRole('radio', { name: 'Share usage stats' })
+    fireEvent.click(screen.getByText('Get started'))
+    expect(onStart).toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()
+    expect(asked).toHaveBeenCalledTimes(1)
   })
 
   it('still starts setup when turning stats on fails', async () => {
@@ -59,7 +85,7 @@ describe('usage stats opt-in', () => {
     vi.spyOn(api, 'setTelemetry').mockRejectedValue(new Error('down'))
     const onStart = vi.fn()
     render(<WelcomeStep onStart={onStart} />)
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Share usage stats' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))
     fireEvent.click(screen.getByText('Get started'))
     expect(onStart).toHaveBeenCalled()
   })
@@ -69,8 +95,8 @@ describe('usage stats opt-in', () => {
     render(<WelcomeStep onStart={() => {}} />)
     await waitFor(() => expect(get).toHaveBeenCalled())
     await Promise.resolve()
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(screen.queryByText('Help make Flackey better')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
   })
 
   it('lists the catalogue of events and fields', async () => {
@@ -78,7 +104,7 @@ describe('usage stats opt-in', () => {
     vi.spyOn(api, 'telemetryCatalog').mockResolvedValue({ schema: 1, common: { event: {}, os: {} },
       events: { setup_step: { step: {}, action: {} } }, buckets: {} })
     render(<WelcomeStep onStart={() => {}} />)
-    fireEvent.click(await screen.findByText("See exactly what's sent"))
+    fireEvent.click(await screen.findByText("What's shared?"))
     expect(await screen.findByText('setup_step')).toBeInTheDocument()
     expect(screen.getByText('step, action')).toBeInTheDocument()
     expect(screen.getByText('event, os')).toBeInTheDocument()

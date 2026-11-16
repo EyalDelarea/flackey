@@ -18,10 +18,12 @@ import SetupShell from './components/setup/SetupShell'
 import SoulseekStep from './components/setup/SoulseekStep'
 import TelegramStep from './components/setup/TelegramStep'
 import WelcomeStep from './components/setup/WelcomeStep'
+import UsageStatsAsk from './components/UsageStatsAsk'
+import type { UsageStatsChoice } from './components/UsageStatsAsk'
 import { useLive } from './live'
 import type { Live } from './live'
 import { insetTitlebar, PlatformContext } from './platform'
-import { durationBucket, SETUP_STEPS, track } from './telemetry'
+import { durationBucket, optIn, SETUP_STEPS, track } from './telemetry'
 import type { SetupStepName, StepAction } from './telemetry'
 
 const inset = insetTitlebar()
@@ -49,6 +51,10 @@ function AppBody({ live }: { live: Live }) {
   // What the Ready step is allowed to claim, and nothing else: each is set by the step it belongs to.
   const [telegramSkipped, setTelegramSkipped] = useState(false)
   const [soulseekState, setSoulseekState] = useState<'connected' | 'pending' | 'skipped'>('skipped')
+  // The one-time usage-stats question for an owner who finished setup before Welcome asked it. Shown only
+  // while stats can run here, are off, and the question was never answered; any answer, the × included,
+  // is remembered by the server, so it never comes back. Hidden on any error: no prompt beats a broken one.
+  const [askUsage, setAskUsage] = useState(false)
   const h = live.health
   const authorized = h?.telegram_authorized ?? true
   // A source the owner switched off is not signed out, so nothing about it is worth a banner.
@@ -61,6 +67,19 @@ function AppBody({ live }: { live: Live }) {
   // Only on the way out of the wizard, so an ordinary start does not fetch everything twice.
   const refresh = live.refresh
   useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
+  const setupDone = !!h?.setup_done
+  useEffect(() => {
+    if (!setupDone) return
+    let on = true
+    api.telemetry().then(t => { if (on) setAskUsage(!!t?.available && !t.enabled && !t.asked) }).catch(() => undefined)
+    return () => { on = false }
+  }, [setupDone])
+  // Gone at once, whatever the answer: the request runs behind it, and a failure leaves stats off.
+  const answerUsage = (c: UsageStatsChoice) => {
+    setAskUsage(false)
+    if (c === 'share') optIn()
+    else api.telemetryAsked().catch(() => undefined)
+  }
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   useEffect(() => { if (live.settings?.lossless_filing_format) setFilingFormat(live.settings.lossless_filing_format) }, [live.settings?.lossless_filing_format])
   // Reconnect only re-runs the Telegram step (see `current` below) -- Soulseek's own step never opens, so
@@ -173,6 +192,10 @@ function AppBody({ live }: { live: Live }) {
     banners.push(<Banner key="update" tone="amber" text={text}
       action={{ label: dl ? 'Show' : 'Update', onClick: () => { setTab('settings'); setFocusUpdate(n => n + 1) } }}
       onDismiss={() => setUpdateDismissed(true)} />)
+  }
+  if (askUsage) {
+    banners.push(<UsageStatsAsk key="usage" className="usage-prompt" value={null} onChoose={answerUsage}
+      onDismiss={() => answerUsage('not-now')} />)
   }
   const banner = banners.length ? banners : undefined
   return (

@@ -38,6 +38,15 @@ def router() -> APIRouter:
             t.opt_in() if on else t.opt_out()
         except ValueError as e:
             raise HTTPException(409, str(e))
+        t.mark_asked()
+        return t.describe()
+
+    @r.post("/telemetry/asked")
+    async def asked() -> dict:
+        """Not now, a dismissed one-time prompt, or a Welcome step left without a choice: stats stay as
+        they are (off), and the question is not asked again."""
+        t = _client()
+        t.mark_asked()
         return t.describe()
 
     @r.post("/telemetry/new-id")

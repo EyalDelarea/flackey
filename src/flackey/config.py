@@ -17,7 +17,7 @@ FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
              "source_enabled", "auto_update_check", "window_size", "extended_mixes",
-             "telemetry_enabled", "telemetry_install_id", "telemetry_opted_in")
+             "telemetry_enabled", "telemetry_install_id", "telemetry_opted_in", "telemetry_asked")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     telemetry_enabled: bool = False
     telemetry_install_id: str | None = None
     telemetry_opted_in: str | None = None
+    # Whether the owner has been asked once (Welcome, the one-time prompt, or the Settings switch). Only
+    # ever stops the one-time prompt from coming back; it never turns stats on.
+    telemetry_asked: bool = False
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
