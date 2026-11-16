@@ -390,7 +390,8 @@ async def watch_usage(tel: usage.Telemetry, worker, status, settings: Settings, 
                 tel.source_status("telegram", "ok" if tg == "connected" else "signed_out")
             if sk != "off":
                 tel.source_status("soulseek", sk)
-            tel.source_status("beatport", "blocked" if blocked else "ok")
+            tel.source_status("beatport", "blocked" if blocked else "ok",
+                              reason=getattr(worker, "_catalog_reason", "") or "unknown")
             port = port_state(status)
             if port != "unknown":
                 tel.source_status("port", "open" if port == "yes" else "closed")

@@ -28,7 +28,30 @@ class CatalogParseError(CatalogError):
 
 
 class CatalogUnavailable(CatalogError):
-    pass
+    """Beatport refused or could not be reached. `reason` is a fixed code for the usage stats (never the
+    message): http_403, http_429, http_5xx, cloudflare_challenge, timeout or network."""
+
+    def __init__(self, message: str = "", reason: str = "network"):
+        super().__init__(message)
+        self.reason = reason
+
+
+def refusal_reason(status: int, headers, body: str) -> str:
+    """Why Beatport said no, as a code. A Cloudflare challenge is told apart from a plain 403 by the
+    `cf-mitigated: challenge` header Cloudflare sets on it, or its challenge page in the body."""
+    h = {str(k).lower(): str(v).lower() for k, v in (headers or {}).items()}
+    if h.get("cf-mitigated") == "challenge" or "challenge-platform" in body or "cf-chl" in body:
+        return "cloudflare_challenge"
+    if status == 403:
+        return "http_403"
+    if status == 429:
+        return "http_429"
+    return "http_5xx" if status >= 500 else "http_other"
+
+
+def network_reason(exc: BaseException) -> str:
+    """By the exception's type, never its message: curl_cffi and httpx both name theirs *Timeout*."""
+    return "timeout" if any("timeout" in c.__name__.lower() for c in type(exc).__mro__) else "network"
 
 
 def _walk_tracks(obj):
@@ -274,7 +297,8 @@ class BeatportCatalog:
 
         r = requests.get(url, impersonate=BROWSER, timeout=30)
         if r.status_code in (403, 429, 503) or r.status_code >= 500:
-            raise CatalogUnavailable(f"beatport http {r.status_code}")
+            raise CatalogUnavailable(f"beatport http {r.status_code}",
+                                     refusal_reason(r.status_code, r.headers, (r.text or "")[:20_000]))
         return r.text
 
     @staticmethod
@@ -290,5 +314,5 @@ class BeatportCatalog:
         except CatalogUnavailable:
             raise
         except Exception as e:  # network errors
-            raise CatalogUnavailable(str(e)) from e
+            raise CatalogUnavailable(str(e), network_reason(e)) from e
         return parse_search_html(html)

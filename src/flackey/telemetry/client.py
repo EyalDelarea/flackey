@@ -271,7 +271,7 @@ class Telemetry:
     def pop_notes(self, request_id: int) -> dict:
         return self._notes.pop(request_id, {})
 
-    def source_status(self, source: str, state: str) -> None:
+    def source_status(self, source: str, state: str, reason: str | None = None) -> None:
         """A transition of one source's health (spec §3.2), at most one change an hour per source, with two
         exceptions so the dashboard never ends on a stale state (audit 2026-11-16: Soulseek dropped, came
         back a minute later, and the recovery was never sent, so it read as down while it filed tracks):
@@ -280,7 +280,9 @@ class Telemetry:
         - any other change held back by the hour is sent when the hour is up, as one net change, if the
           source is still not in the state last sent.
 
-        So a flapping source costs at most three events an hour, and the last one sent is the real state."""
+        So a flapping source costs at most three events an hour, and the last one sent is the real state.
+        `reason` is a fixed code for why it went down (e.g. cloudflare_challenge), sent only with a change
+        away from ok or open."""
         if not self.enabled:
             return
         now = self.clock()
@@ -290,11 +292,12 @@ class Telemetry:
             return
         if state == src["sent"]:
             return
+        why = reason if state not in ("ok", "open") else None
         if now - src["at"] >= SOURCE_CHANGE_EVERY_S:
-            self.emit("source_status_changed", source=source, **{"from": src["sent"], "to": state})
+            self.emit("source_status_changed", source=source, reason=why, **{"from": src["sent"], "to": state})
             src.update(sent=state, before=src["sent"], at=now, recovered=False)
         elif state == src["before"] and not src["recovered"]:
-            self.emit("source_status_changed", source=source, **{"from": src["sent"], "to": state})
+            self.emit("source_status_changed", source=source, reason=why, **{"from": src["sent"], "to": state})
             src.update(sent=state, before=src["sent"], recovered=True)
 
     # -- sessions and the daily health rollup ----------------------------------------------------------------

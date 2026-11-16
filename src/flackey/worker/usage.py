@@ -82,7 +82,11 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
         refused_then_passed=bool(refused and state == RequestState.DONE),
         retries_by_owner=min(notes.get("owner_retries", 0), 20), tag_source=tag_source,
         wait_to_start=notes.get("wait_to_start"), total_time=buckets.dur(_age_s(r.created_at)),
-        error_class=notes.get("error_class", "") if state == RequestState.ERROR else "")
+        error_class=notes.get("error_class", "") if state == RequestState.ERROR else "",
+        failure_reason=(notes.get("failure_reason") or (outcome_reason(outcome) if outcome and outcome != "filed"
+                                                         else "unknown"))
+        if state in (RequestState.ERROR, RequestState.NOT_FOUND, RequestState.REJECTED) else None,
+        catalog_reason=(worker._catalog_reason or "unknown") if worker._catalog_blocked else None)
 
 
 def quality_check(request_id: int, verdict: Verdict, summary: dict | None, *, route: str, rule: str,
@@ -189,6 +193,76 @@ def refusal_fields(rejection) -> dict:
             "strength": buckets.strength(quant.get("score", quant.get("z")), codec) if quant else None,
             "coverage": buckets.coverage(quant.get("cover")) if quant else None,
             "detector_version": detector_version(s)}
+
+
+# Why a request failed or a source was blocked, as a fixed code (schema: request_finished.failure_reason,
+# catalog_reason, source_status_changed.reason). Only from exception types, HTTP statuses and outcome
+# codes; never from a message, a title or anything a peer or a site wrote.
+REASONS = (
+    "no_results", "no_pick", "unidentified", "not_logged_in", "http_403", "http_429", "http_5xx",
+    "http_other", "cloudflare_challenge", "timeout", "network", "peer_queue_timeout", "first_byte_timeout",
+    "transfer_timeout", "too_slow", "transfer_failed", "unavailable", "interrupted", "fingerprint_mismatch",
+    "fingerprint_unavailable", "verify_unavailable", "quality_reject", "damaged", "convert_failed",
+    "tag_failed", "disk_full", "filesystem", "youtube_error", "spotify_error", "source_error",
+    "tool_missing", "internal_error", "unknown",
+)
+OUTCOME_REASON = {
+    "queued": "peer_queue_timeout", "first_byte_timeout": "first_byte_timeout",
+    "transfer_timeout": "transfer_timeout", "too_slow": "too_slow", "transfer_failed": "transfer_failed",
+    "verify_failed": "quality_reject", "damaged": "damaged", "verify_unavailable": "verify_unavailable",
+    "fingerprint_failed": "fingerprint_mismatch", "fingerprint_unavailable": "fingerprint_unavailable",
+    "convert_failed": "convert_failed", "unavailable": "unavailable", "interrupted": "interrupted",
+}
+
+
+def outcome_reason(outcome: str | None, *, no_results: bool = False) -> str:
+    """A Soulseek attempt's outcome as a failure reason; a pass with no pick is told apart by whether the
+    search found anything at all."""
+    if outcome == "no_pick":
+        return "no_results" if no_results else "no_pick"
+    return OUTCOME_REASON.get(outcome or "", "unknown")
+
+
+def reason_of(exc: BaseException) -> str:
+    """An exception as a failure reason, by its type (and an HTTP status, an errno) only."""
+    import errno
+
+    import httpx
+
+    from ..catalog import CatalogUnavailable
+    from ..convert import ConvertError
+    from ..fingerprint import FingerprintError
+    from ..source.base import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
+    from ..source.lossless import LosslessUnavailable, TooSlow
+    from ..spotify import SpotifyError
+    from ..tag import TagError
+    from ..verify import ToolMissing
+    from ..youtube import YouTubeError
+
+    if isinstance(exc, CatalogUnavailable):
+        return exc.reason if exc.reason in REASONS else "unknown"
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return ("http_403" if code == 403 else "http_429" if code == 429
+                else "http_5xx" if code >= 500 else "http_other")
+    for kind, code in ((SourceUnauthorized, "not_logged_in"), (SourceNotFound, "no_results"),
+                       (SourceTimeout, "timeout"), (httpx.TimeoutException, "timeout"),
+                       (TimeoutError, "timeout"), (httpx.TransportError, "network"),
+                       (ConnectionError, "network"), (SourceError, "source_error"), (TooSlow, "too_slow"),
+                       (LosslessUnavailable, "unavailable"), (FingerprintError, "fingerprint_unavailable"),
+                       (ConvertError, "convert_failed"), (TagError, "tag_failed"), (ToolMissing, "tool_missing"),
+                       (YouTubeError, "youtube_error"), (SpotifyError, "spotify_error")):
+        if isinstance(exc, kind):
+            return code
+    if isinstance(exc, OSError):
+        return "disk_full" if exc.errno == errno.ENOSPC else "filesystem"
+    return "internal_error"
+
+
+def failure_reason(request_id: int, code: str) -> None:
+    """Remember why this request is failing; the last one set before it ends is the one sent."""
+    if telemetry.enabled():
+        telemetry.notes(request_id)["failure_reason"] = code if code in REASONS else "unknown"
 
 
 def error_class(request_id: int, exc: BaseException) -> None:
