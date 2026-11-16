@@ -33,7 +33,7 @@ describe('usage stats opt-in', () => {
     expect(share.className).toBe(notNow.className)      // equal weight: neither is styled as the default
     expect(screen.getByText('Share usage stats?')).toBeInTheDocument()
     expect(screen.getByText(/Help us find out why downloads fail and make Flackey better over time/)).toBeInTheDocument()
-    expect(screen.getByText(/Never song names, links, files or your IP\./)).toBeInTheDocument()
+    expect(screen.getByText(/We can’t see what you download: .*never song names, links, files or your IP\./)).toBeInTheDocument()
     expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
   })
 
@@ -78,6 +78,24 @@ describe('usage stats opt-in', () => {
     expect(onStart).toHaveBeenCalled()
     expect(put).not.toHaveBeenCalled()
     expect(asked).toHaveBeenCalledTimes(1)
+  })
+
+  it('quitting or reloading before Get started records nothing: not asked, not enabled, nothing sent', async () => {
+    vi.spyOn(api, 'telemetry').mockResolvedValue(state)
+    const put = vi.spyOn(api, 'setTelemetry').mockResolvedValue({ ...state, enabled: true })
+    const asked = vi.spyOn(api, 'telemetryAsked').mockResolvedValue({ ...state, asked: true })
+    const ui = vi.spyOn(api, 'telemetryUi').mockResolvedValue({ ok: true })
+    const onStart = vi.fn()
+    const { unmount } = render(<WelcomeStep onStart={onStart} />)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))   // chose, then quit
+    unmount()
+    render(<WelcomeStep onStart={onStart} />)                                          // the reload
+    expect(await screen.findByRole('radio', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'false')
+    expect(onStart).not.toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()       // nothing enabled
+    expect(asked).not.toHaveBeenCalled()     // telemetry_asked stays false, so the question is asked again
+    expect(ui).not.toHaveBeenCalled()        // nothing sent
   })
 
   it('still starts setup when turning stats on fails', async () => {

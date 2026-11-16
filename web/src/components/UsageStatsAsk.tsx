@@ -8,8 +8,8 @@ export type UsageStatsChoice = 'share' | 'not-now'
    It promises only what is true of every event: counts and outcomes, never what was downloaded -- so it
    never says (or implies) that a failed song can be picked out. */
 export const ASK_TITLE = 'Share usage stats?'
-export const ASK_TEXT = 'Help us find out why downloads fail and make Flackey better over time. We only see counts '
-  + 'like “a Soulseek search found nothing”. Never song names, links, files or your IP.'
+export const ASK_TEXT = 'Help us find out why downloads fail and make Flackey better over time. We can’t see what you '
+  + 'download: we only get counts like “a Soulseek search found nothing”, never song names, links, files or your IP.'
 export const ASK_SETTINGS_LINE = 'You can change this any time in Settings › Privacy.'
 const OPTIONS = [['share', 'Share usage stats'], ['not-now', 'Not now']] as const
 

@@ -293,7 +293,7 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     vi.spyOn(api, 'health').mockResolvedValue(health())
     render(<App />)
     expect(await screen.findByText('Share usage stats?')).toBeInTheDocument()
-    expect(screen.getByText(/We only see counts like “a Soulseek search found nothing”/)).toBeInTheDocument()
+    expect(screen.getByText(/We can’t see what you download: we only get counts like “a Soulseek search found nothing”/)).toBeInTheDocument()
     expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'false')
