@@ -63,7 +63,8 @@ export default function PrivacySection() {
           <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>See exactly what's sent</button></div>
         {t.enabled ? <div className="v">Turning this off also deletes everything that was sent.</div>
           : t.pending_delete ? <div className="v">Turned off. What was sent is being deleted.</div>
-          : t.last_delete_confirmed ? <div className="v">Turned off. What was sent has been deleted.</div> : null}
+          : t.last_delete_confirmed ? <div className="v">Turned off. The delete was received: what was sent is
+            erased within the hour.</div> : null}
         {error && <div className="err">{error}</div>}</div>
         <div className="actions"><Switch label="Share usage stats" checked={t.enabled} onChange={toggle} busy={busy} /></div></div>
       {t.enabled && t.id_prefix && <div className="srow"><div className="srow-body"><div className="k">Your ID</div>
@@ -72,7 +73,7 @@ export default function PrivacySection() {
         <div className="actions"><button className="btn-secondary" onClick={newId} disabled={busy}>New ID</button></div></div>}
       <div className="srow"><div className="srow-body"><div className="k">Status</div>
         <div className="v">{statusLine(t)}</div>
-        {t.last_delete_confirmed && <div className="v">Delete confirmed at {when(t.last_delete_confirmed)}.</div>}</div></div>
+        {t.last_delete_confirmed && <div className="v">Delete received at {when(t.last_delete_confirmed)}.</div>}</div></div>
       <div className="srow"><div className="srow-body">
         <details className="tech" open={logOpen} onToggle={e => setLogOpen((e.currentTarget as HTMLDetailsElement).open)}>
           <summary>What's sent</summary>
