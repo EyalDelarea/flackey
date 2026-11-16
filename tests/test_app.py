@@ -670,3 +670,19 @@ async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, mon
         await client.disconnect()
         server.close()
         await server.wait_closed()
+
+
+async def test_a_sidecar_that_will_not_start_is_reported_as_a_class_only(tmp_path):
+    """With usage stats on, a failed slskd start becomes error_caught: where and class, never the message."""
+    from flackey import telemetry
+
+    t = telemetry.Telemetry(tmp_path, version="0.6.1", url=None, channel="checkout",
+                            platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        await start_sidecar(_Sidecar(SlskdBinaryError("slskd at /Users/me/x did not become healthy")))
+    finally:
+        telemetry.uninstall()
+    (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "error_caught"]
+    assert ev["where"] == "slskd_start" and ev["exc_class"] == "SlskdBinaryError" and "/Users" not in str(ev)

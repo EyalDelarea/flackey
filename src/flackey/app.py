@@ -268,8 +268,10 @@ async def start_sidecar(process: SlskdProcess | None) -> None:
         await process.start()
     except SlskdBinaryError as exc:
         log.warning("slskd not started: %s", exc)
-    except Exception:
+        usage_errors.report("slskd_start", exc)
+    except Exception as exc:
         log.exception("slskd not started")
+        usage_errors.report("slskd_start", exc)
 
 
 def build_providers(settings: Settings, http: httpx.AsyncClient) -> list[LosslessProvider]:
