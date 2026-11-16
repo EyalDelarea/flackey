@@ -2855,7 +2855,7 @@ def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client
 
     c, store, _settings = client
     rid = store.add_request("q", RequestKind.TEXT)
-    summary = {"version": 2, "tier": "reject", "reason": "lossless container but cutoff at 16012 Hz",
+    summary = {"version": "2.0", "tier": "reject", "reason": "lossless container but cutoff at 16012 Hz",
                "edge": {"finding": "unambiguous", "edge_hz": 16012, "drop_db": 40.0, "frames_above_edge": 0.0},
                "quant": {"finding": "none", "codec": None, "z": 0.3},
                "integrity": {"checked": ["length_header"], "failed": None}, "container": {}}
@@ -2873,4 +2873,5 @@ def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client
     assert ev["which"] == "keep_it_anyway" and ev["result"] == "failed" and ev["rejection_kind"] == "quality"
     assert ev["tier"] == "reject" and ev["reason_code"] == "edge_unambiguous"
     assert ev["detectors_fired"] == ["spectral"] and ev["edge"] == "16-17"
+    assert ev["detector_version"] == "2.0"          # audit 2026-11-16: the str version was never sent
     assert "16012" not in str(ev) and "cutoff" not in str(ev)

@@ -147,7 +147,7 @@
       "duration_mismatch": {"type": "bool"},
       "rule": {"enum": ["tiers", "legacy"]},
       "shadow_tier": {"enum": ["clear", "unverified", "reject", ""]},
-      "detector_version": {"type": "int", "max": 255},
+      "detector_version": {"type": "regex", "pattern": "^[0-9]{1,2}\\.[0-9]{1,2}$"},
       "candidate_index": {"type": "int", "max": 255},
       "run_time": {"bucket": "dur"}
     },
@@ -162,7 +162,7 @@
       "strength": {"bucket": "strength"},
       "coverage": {"bucket": "coverage"},
       "edge": {"bucket": "edge"},
-      "detector_version": {"type": "int", "max": 255},
+      "detector_version": {"type": "regex", "pattern": "^[0-9]{1,2}\\.[0-9]{1,2}$"},
       "listened": {"type": "bool"},
       "decision_delay": {"bucket": "dur"},
       "result": {"enum": ["filed", "could_not_check", "failed"]}
