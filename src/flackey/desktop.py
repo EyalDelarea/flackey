@@ -592,6 +592,18 @@ def quit_on_signals(on_signal, signals=(signal.SIGINT, signal.SIGTERM)):
     return restore
 
 
+def keep_sigint_from_pywebview() -> None:
+    """pywebview's Cocoa backend hands SIGINT to PyObjC's mach handler inside `webview.start`, which ends
+    the app without the window's `closed` path (no clean session end). Leave Ctrl-C to quit_on_signals."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from PyObjCTools import AppHelper
+    except ImportError:
+        return
+    AppHelper.installMachInterrupt = lambda: None
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
@@ -644,6 +656,7 @@ def run_in_window(settings: Settings) -> None:
         # Off macOS the only folder dialog there is belongs to this window; the Mac keeps AppleScript's,
         # which `web.pick` opens without one.
         handle.pick_folder = folder_picker(window, webview.FileDialog.FOLDER)
+    keep_sigint_from_pywebview()
     restore_signals = quit_on_signals(window.destroy)
     try:
         webview.start(icon=app_icon())
