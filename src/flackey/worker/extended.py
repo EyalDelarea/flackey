@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from .. import telemetry
 from ..lossless import downloaded_mix, extended_reference, pick, policy_from_settings, search_text
 from ..models import Request
 from ..source import LosslessError, LosslessUnavailable
+from ..telemetry import buckets
 from ..version import EXTENDED, extended_mix_name, wants_extended
 
 log = logging.getLogger(__name__)
@@ -69,6 +71,21 @@ class ExtendedMixin:
             self.store.set_evidence(track_id, OFFER, offer)
         except Exception:
             log.exception("track#%d: could not record the extended-mix search", track_id)
+        self._usage_offer(track_id, offer)
+
+    def _usage_offer(self, track_id: int, offer: dict) -> None:
+        if not telemetry.enabled() or offer.get("status") not in ("available", "none"):
+            return
+        try:
+            filed = self.store.get_track(track_id).duration_s
+            gain = (offer["length_s"] - filed) if offer.get("length_s") and filed else None
+            mix = (offer.get("mix_name") or "").lower()
+            telemetry.emit("extended_offer_found", status=offer["status"], gain=buckets.gain(gain),
+                           word="club mix" if "club" in mix else ("extended" if offer["status"] == "available"
+                                                                  else None),
+                           filed_length=buckets.length(filed))
+        except Exception:
+            log.debug("usage stats: extended offer failed", exc_info=True)
 
     async def _find_extended(self, track_id: int) -> dict | None:
         """The offer for one filed track: its extended mix's advertised length and name, or that there is
@@ -115,10 +132,15 @@ class ExtendedMixin:
         if track_id in self._extending:
             raise ValueError("the extended mix of this track is already being fetched")
         self._extending.add(track_id)
+        result = "failed"
         try:
-            return await self._get_extended(t, offer)
+            said = await self._get_extended(t, offer)
+            result = ("not_matched" if "didn't match" in said else "not_extended" if "not the extended" in said
+                      else "failed" if "could not" in said else "replaced")
+            return said
         finally:
             self._extending.discard(track_id)
+            telemetry.emit("extended_offer_answered", answer="get", result=result)
 
     async def _get_extended(self, t, offer: dict) -> str:
         req, cand, catalog = self._filed_request(t)
@@ -154,3 +176,4 @@ class ExtendedMixin:
         if not offer or offer.get("status") != "available":
             raise ValueError("there is no extended mix on offer for this track")
         self.store.set_evidence(track_id, OFFER, {**offer, "status": "kept"})
+        telemetry.emit("extended_offer_answered", answer="keep", result="")

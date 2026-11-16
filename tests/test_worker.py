@@ -1718,3 +1718,38 @@ async def test_a_quality_rejection_keeps_the_numbers_it_was_refused_on(env, monk
     kept = json.loads(store.get_rejection_for_request(rid).analysis)
     assert kept["tier"] == "reject" and kept["edge"] == {"finding": "unambiguous", "edge_hz": 16_000,
                                                          "drop_db": 40.0, "frames_above_edge": 0.0}
+
+
+async def test_usage_stats_describe_a_filed_track_in_labels_only(env, tmp_path):
+    """Opted in: a review, a verify and a filed track become events of enums and buckets, and nothing
+    about the track itself (its artist, title or path) reaches any of them."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        _settings, store, _notifier = env
+        ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+        other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
+                          duration_s=100, deezer_id=5, rank=1)
+        w = make_worker(env, FakeSource([other]), FakeCatalog([ct]))
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        await w.process(rid)
+        await w.choose(rid, store.get_candidates(rid)[0].id)
+        r = await w.process(rid)
+        assert r.state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    events = t.snapshot()["pending"]
+    by = {e["event"]: e for e in events}
+    assert by["review_answered"]["answer"] == "picked" and by["review_answered"]["picked_rank"] == "1"
+    assert by["quality_check"]["route"] == "telegram" and by["quality_check"]["claimed_format"] == "mp3"
+    done = by["request_finished"]
+    assert done["state"] == "done" and done["kind"] == "text" and done["route"] == "deezer_mp3"
+    assert done["reviewed"] is True and done["filed_format"] == "mp3" and done["checks_run"] == 1
+    blob = json.dumps(events)
+    for leaked in ("Astral", "Into the Void", "Someone", str(_settings.library_root)):
+        assert leaked not in blob

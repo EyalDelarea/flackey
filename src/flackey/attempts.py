@@ -10,8 +10,10 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from . import telemetry
 from .models import ATTEMPT_OUTCOMES
 from .store import Store
+from .telemetry import buckets
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +73,44 @@ class AttemptRecorder:
         self.timeline.append({"t_ms": total, "event": "outcome", "detail": {"outcome": outcome}})
         self.store.update_attempt(self.id, outcome=outcome, total_ms=total, timeline=self.timeline, **cols)
         log.info("req=%d slsk=%d outcome=%s total_ms=%d", self.request_id, self.id, outcome, total)
+        self._usage(outcome, total)
+
+    def _usage(self, outcome: str, total_ms: int) -> None:
+        """`lossless_attempt_finished` (spec §3.2), read off the timeline as counts and buckets only: the
+        timeline's `peer=` and `file=` details are never looked at."""
+        if not telemetry.enabled():
+            return
+        try:
+            def first(name: str) -> dict | None:
+                return next((e for e in self.timeline if e["event"] == name), None)
+
+            names = [e["event"] for e in self.timeline]
+            search = first("search_completed")
+            started = first("search_started")
+            enqueue, byte = first("enqueue"), first("first_byte")
+            size = enqueue["detail"].get("size") if enqueue else None
+            fp = next((e for e in reversed(self.timeline) if e["event"] == "fingerprint"), None)
+            fp_score = fp["detail"].get("score") if fp else None
+            transfer_s = None
+            done = first("completed")
+            if enqueue and done:
+                transfer_s = (done["t_ms"] - enqueue["t_ms"]) / 1000
+            speed = (size / 1000) / transfer_s if size and transfer_s else None
+            telemetry.emit(
+                "lossless_attempt_finished", provider="soulseek" if self.provider == "soulseek" else None,
+                outcome=outcome, results_seen=buckets.n(search["detail"].get("files")) if search else None,
+                picks_tried=min(names.count("enqueue"), 20), slow_switches=min(names.count("too_slow"), 20),
+                slow_fallback="slow_fallback" in names,
+                search_time=buckets.dur((search["t_ms"] - (started["t_ms"] if started else 0)) / 1000)
+                if search else None,
+                queue_wait=buckets.dur((byte["t_ms"] - enqueue["t_ms"]) / 1000) if enqueue and byte else None,
+                first_byte=buckets.dur(byte["detail"].get("ms", 0) / 1000) if byte else None,
+                transfer_time=buckets.dur(total_ms / 1000), speed=buckets.speed_kbps(speed),
+                file_size=buckets.size_mb(size) if isinstance(size, int) else None,
+                disk_full="disk_full" in names,
+                fingerprint_score=buckets.score(fp_score) if isinstance(fp_score, int | float) else None)
+        except Exception:
+            log.debug("usage stats: attempt event failed", exc_info=True)
 
 
 def prune_raw(raw_dir: Path, keep_days: int, now: Callable[[], float] = time.time) -> int:

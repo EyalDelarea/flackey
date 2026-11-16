@@ -256,3 +256,21 @@ describe('the setup hint on the Telegram step', () => {
     expect(await screen.findByText('Waiting for Telegram…')).toBeInTheDocument()
   })
 })
+
+describe('the usage-stats setup funnel', () => {
+  it('posts welcome completed, then folder shown and completed with a time bucket', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ setup_done: false }))
+    vi.spyOn(api, 'telemetry').mockResolvedValue({ available: false, enabled: false })
+    vi.spyOn(api, 'pickFolderAvailable').mockResolvedValue({ available: false })
+    vi.spyOn(api, 'saveSettings').mockResolvedValue(settings)
+    const ui = vi.spyOn(api, 'telemetryUi').mockResolvedValue({ ok: true })
+    render(<App />)
+    fireEvent.click(await screen.findByText('Get started'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(ui).toHaveBeenCalledWith('setup_step', { step: 'folder', action: 'completed', time_on_step: '<1s' }))
+    await waitFor(() => expect(ui).toHaveBeenCalledTimes(5))
+    const calls = ui.mock.calls.map(([, f]) => `${f.step}:${f.action}`)
+    expect(calls).toEqual(['welcome:shown', 'welcome:completed', 'folder:shown', 'folder:completed', 'format:shown'])
+    for (const [, f] of ui.mock.calls) expect(Object.keys(f).every(k => ['step', 'action', 'time_on_step'].includes(k))).toBe(true)
+  })
+})

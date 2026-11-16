@@ -7,6 +7,7 @@ import Banner from './Banner'
 import CopyButton from './CopyButton'
 import { FORMAT_LABELS, shortFormatNote } from './FormatOptions'
 import LayoutOptions from './LayoutOptions'
+import PrivacySection from './PrivacySection'
 import Segmented from './Segmented'
 import SharingPanel from './SharingPanel'
 import Switch from './Switch'
@@ -423,9 +424,10 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
               {releaseBusy ? 'Opening…' : 'View release'}</button>
           </div>}</div>
       </div>
-      {/* A Privacy box (the "Share usage stats" switch) lands here, between Updates and Advanced, when the
-          telemetry work arrives -- or, if it should stay out of the way, as a row in Advanced's General box.
-          Nothing is drawn for it until then. */}
+      {/* Privacy (the "Share usage stats" switch) sits on the main view, between Updates and Advanced: a DJ
+          asked "does this send anything?" finds the answer without opening the technical fold. Drawn only when
+          the build has usage stats at all. */}
+      <PrivacySection />
       {/* Everything nobody needs on an ordinary day: secrets, sharing, keys, logs, diagnostics, starting
           over. A real button in the heading rather than a <details>, so a screen reader hears "Advanced,
           collapsed", and the line under it says what is inside before anyone opens it. Grouped inside by

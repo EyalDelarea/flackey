@@ -137,6 +137,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     # here, not at module top: the routers import `Bundles` from this module
     from . import library, lossless, pick, report, requests, stream, telegram, update
     from . import sharing as sharing_web  # aliased: `sharing` here is the service, not the module
+    from . import telemetry as telemetry_web
 
     bus = bus if bus is not None else EventBus()
     if status is None:
@@ -215,6 +216,7 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(lossless.router(store, worker))
     app.include_router(sharing_web.router(sharing))
     app.include_router(update.router(status, settings, quit_app=quit_app))
+    app.include_router(telemetry_web.router())
     app.include_router(report.router(settings, status, store=store, **({"opener": opener} if opener else {})))
 
     if ui_dir is not None and ui_dir.exists():

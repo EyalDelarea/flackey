@@ -27,6 +27,7 @@ from ..version import (
     split_version,
     wants_extended,
 )
+from . import usage
 from .extended import OFFER
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
@@ -153,8 +154,11 @@ class FilingMixin:
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
             # (inbox bot, API) free
             async with self._cpu:
+                timer = usage.Timer()
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
                                                   f"req{req.id}-{tmp.stem}", self.settings.verification_rule)
+            usage.quality_check(req.id, verdict, summary(verdict.analysis), route="telegram",
+                                rule=self.settings.verification_rule, run_s=timer.s())
             if not verdict.passed:
                 # A spectral refusal is kept, not deleted, like the different recording below (issue #97). It
                 # used to be thrown away on the theory that "an MP3 wearing a FLAC extension is a fact about

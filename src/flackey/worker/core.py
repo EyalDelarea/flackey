@@ -26,6 +26,8 @@ from ..source import (
 from ..store import Store
 from ..tag import fetch_artwork
 from ..tag_lookup import TagLookup
+from ..telemetry import errors as usage_errors
+from . import usage
 from .acoustic import AcousticMixin
 from .extended import ExtendedMixin
 from .filing import FilingMixin
@@ -151,6 +153,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 was = req.state   # removed mid-flight; the snapshot is all that is left to ask
             kw.setdefault("failed_stage", STAGE_OF_STATE.get(was, "unknown"))
         self.store.update_request(req.id, state=state, **kw)
+        usage.on_state(self, req, state)
 
 
     def on_start(self) -> None:
@@ -363,6 +366,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             raise ValueError(f"candidate {candidate_id} does not belong to request {request_id}")
         if req.state != RequestState.AWAITING_REVIEW:
             raise ValueError(f"request {request_id} is {req.state.value}, not awaiting review")
+        usage.review_answered(self.store, req, "picked", candidate_id)
         self._set_state(req, RequestState.QUEUED, chosen_candidate_id=candidate_id, flag_reason=None,
                         confidence=cand.score, retry_after=None)
         return self.store.get_request(request_id)
@@ -381,6 +385,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             raise ValueError(f"request {request_id} is {req.state.value}; a track can be stopped while it "
                              f"is queued, waiting for a choice, downloading or failed -- not while its "
                              f"file is being checked or filed")
+        if req.state == RequestState.AWAITING_REVIEW:
+            usage.review_answered(self.store, req, "cancelled")
         self._set_state(req, RequestState.CANCELLED)
         task = self._tasks.get(request_id)
         if task is not None:
@@ -417,6 +423,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         a fresh search.
         """
         req = self.store.get_request(request_id)
+        usage.owner_retry(request_id)
         if req.state == RequestState.QUEUED and req.retry_after is not None:
             self.store.update_request(request_id, retry_after=None)
         elif req.state in RETRYABLE_STATES:
@@ -458,6 +465,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                                          f"the Deezer bot is paused; Soulseek downloads carry on.")
         except Exception as e:
             log.exception("req#%d failed", request_id)
+            usage.error_class(request_id, e)
+            usage_errors.report("request", e)
             self._set_state(self.store.get_request(request_id), RequestState.ERROR, error_message=str(e)[:500])
             await self.notifier.send(f"Error on request {request_id}: {str(e)[:200]}")
         try:
