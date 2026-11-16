@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import os
+import signal
 import sys
 import threading
 import types
@@ -1096,3 +1098,42 @@ def test_run_in_window_insets_the_titlebar_once_the_page_is_loaded(monkeypatch, 
     window = windows["window"]
     assert len(window.events.loaded) == 1
     assert len(window.events.shown) == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM to send to oneself on Windows")
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+def test_a_quit_signal_closes_the_window_instead_of_killing_the_app(sig):
+    """`demo.sh stop` (Ctrl-C) or a kill used to end window-mode Flackey with its session open, so the next
+    launch reported a crash. Now the signal closes the window, the clean path."""
+    from flackey.desktop import quit_on_signals
+
+    closed = threading.Event()
+    before = signal.getsignal(sig)
+    restore = quit_on_signals(closed.set)
+    try:
+        os.kill(os.getpid(), sig)
+        assert closed.wait(5), "the signal did not reach the window"
+    finally:
+        restore()
+    assert signal.getsignal(sig) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM to send to oneself on Windows")
+def test_a_stop_signal_while_the_window_is_open_closes_it_and_restores_the_handlers(monkeypatch, tmp_path):
+    from flackey import desktop
+
+    windows, _started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "startup_size", lambda settings: (1000, 700))
+    before = signal.getsignal(signal.SIGINT)
+
+    def start(**kw):
+        os.kill(os.getpid(), signal.SIGINT)   # what `demo.sh stop` sends
+        for _ in range(500):
+            if windows["window"].destroyed:
+                return
+            threading.Event().wait(0.01)
+
+    sys.modules["webview"].start = start
+    desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
+    assert windows["window"].destroyed
+    assert signal.getsignal(signal.SIGINT) == before
