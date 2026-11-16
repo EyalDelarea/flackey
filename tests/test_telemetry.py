@@ -27,7 +27,7 @@ from flackey.telemetry.schema import SCHEMA_PATH, schema
 
 # The collector's schemas/v1.json.sha256 (EyalDelarea/flackey-telemetry). A change on either side must
 # change both, or the collector refuses what the app sends.
-COLLECTOR_V1_SHA256 = "b61dc277283d151ef04bd4a981f3c538567f3499e4e48ec52fd2c7c184a4c05e"
+COLLECTOR_V1_SHA256 = "0721409d9e37b645c4e7adb2e6f4bdcec782ea5de36074312360bb999efeb045"
 MAC = {"os": "macos", "os_major": "26", "arch": "arm64"}
 FORBIDDEN = ("name", "title", "artist", "path", "url", "query", "user", "peer", "message", "ip", "email")
 
@@ -245,16 +245,40 @@ def test_a_crashed_session_and_yesterdays_health(tmp_path):
     assert t3.start_session()["previous_exit"] == "clean"
 
 
-def test_source_changes_are_sent_once_an_hour_at_most(tmp_path):
+def test_a_recovery_inside_the_hour_is_sent_so_a_source_never_reads_down_while_up(tmp_path):
+    """Audit 2026-11-16: Soulseek went ok -> not_logged_in, signed back in a minute later, and the recovery
+    was never sent, so the dashboard showed it down while it filed three tracks."""
+    now = [1000.0]
+    t, _ = make(tmp_path, clock=lambda: now[0])
+    t.opt_in()
+    t.source_status("soulseek", "ok")
+    t.source_status("soulseek", "not_logged_in")
+    now[0] += 60
+    t.source_status("soulseek", "ok")
+    changes = [e for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
+    assert [(e["from"], e["to"]) for e in changes] == [("ok", "not_logged_in"), ("not_logged_in", "ok")]
+
+
+def test_source_changes_are_held_to_an_hour_and_the_held_state_is_sent_when_it_is_up(tmp_path):
     now = [1000.0]
     t, _ = make(tmp_path, clock=lambda: now[0])
     t.opt_in()
     t.source_status("beatport", "ok")
+    for _ in range(5):                       # flapping: the drop, one recovery, then held back
+        t.source_status("beatport", "blocked")
+        now[0] += 60
+        t.source_status("beatport", "ok")
+        now[0] += 60
+    t.source_status("beatport", "blocked")   # where it ends inside the hour
+
+    def sent():
+        return [(e["from"], e["to"]) for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
+
+    assert sent() == [("ok", "blocked"), ("blocked", "ok")]
+    now[0] += 3600
+    t.source_status("beatport", "blocked")   # the next watcher tick after the hour
     t.source_status("beatport", "blocked")
-    now[0] += 60
-    t.source_status("beatport", "ok")
-    changes = [e for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
-    assert [(e["from"], e["to"]) for e in changes] == [("ok", "blocked")]
+    assert sent() == [("ok", "blocked"), ("blocked", "ok"), ("ok", "blocked")]
 
 
 def test_crash_location_is_code_coordinates_only():

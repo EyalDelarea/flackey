@@ -123,7 +123,7 @@ def quality_check(request_id: int, verdict: Verdict, summary: dict | None, *, ro
             encoder_family=family if fmt == "flac" else None,
             odd_blocksize=(blocksize not in (None, 4096)) if fmt == "flac" and blocksize is not None else None,
             rule=rule, shadow_tier=s.get("shadow_tier", ""),
-            detector_version=s.get("version") if isinstance(s.get("version"), int) else None,
+            detector_version=detector_version(s),
             candidate_index=min(notes["checks_run"], 255), run_time=buckets.dur(run_s))
     except Exception:
         log.debug("usage stats: quality_check failed", exc_info=True)
@@ -165,6 +165,13 @@ def reason_code(s: dict) -> str | None:
     return "insufficient" if edge == "insufficient" else None
 
 
+def detector_version(s: dict) -> str | None:
+    """The detector's version as "major.minor" (verify's EVIDENCE_VERSION is the string "2.0"). Audit
+    2026-11-16: this used to be sent only when it was an int, so it was never sent at all."""
+    v = s.get("version") if s else None
+    return str(v) if isinstance(v, (str, int, float)) and not isinstance(v, bool) and v != "" else None
+
+
 def refusal_fields(rejection) -> dict:
     """What `keep_anyway` says about the refusal being overruled: its tier, reason code, the detectors
     that fired and their bucketed measures. Built from the stored `verify.summary`, so it is the same
@@ -181,7 +188,7 @@ def refusal_fields(rejection) -> dict:
             "edge": buckets.edge_khz(edge.get("edge_hz")) if edge else None,
             "strength": buckets.strength(quant.get("score", quant.get("z")), codec) if quant else None,
             "coverage": buckets.coverage(quant.get("cover")) if quant else None,
-            "detector_version": s.get("version") if isinstance(s.get("version"), int) else None}
+            "detector_version": detector_version(s)}
 
 
 def error_class(request_id: int, exc: BaseException) -> None:

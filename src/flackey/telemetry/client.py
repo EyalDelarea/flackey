@@ -135,7 +135,9 @@ class Telemetry:
         self._dropped = 0                 # events lost to a full queue or outbox, sent as `dropped`
         self._fields_dropped = 0          # fields that failed the schema (never sent, only counted)
         self._notes: dict[int, dict] = {}
-        self._sources: dict[str, tuple[str, float]] = {}   # source -> (state, when its change was last sent)
+        # source -> {"sent": the state the collector last heard, "before": the state that change left,
+        # "at": when it was sent, "recovered": a recovery was already sent inside this hour}
+        self._sources: dict[str, dict] = {}
         self._state: dict = {}
         self._state_saved = 0.0
         self._next_send = 0.0
@@ -270,22 +272,30 @@ class Telemetry:
         return self._notes.pop(request_id, {})
 
     def source_status(self, source: str, state: str) -> None:
-        """A transition of one source's health; sent at most once an hour per source (spec §3.2)."""
+        """A transition of one source's health (spec §3.2), at most one change an hour per source, with two
+        exceptions so the dashboard never ends on a stale state (audit 2026-11-16: Soulseek dropped, came
+        back a minute later, and the recovery was never sent, so it read as down while it filed tracks):
+
+        - a recovery inside the hour (back to the state the last change left) is sent at once, once;
+        - any other change held back by the hour is sent when the hour is up, as one net change, if the
+          source is still not in the state last sent.
+
+        So a flapping source costs at most three events an hour, and the last one sent is the real state."""
         if not self.enabled:
             return
         now = self.clock()
-        prev = self._sources.get(source)
-        if prev is None:
-            self._sources[source] = (state, float("-inf"))
+        src = self._sources.get(source)
+        if src is None:
+            self._sources[source] = {"sent": state, "before": None, "at": float("-inf"), "recovered": False}
             return
-        was, last_sent = prev
-        if was == state:
+        if state == src["sent"]:
             return
-        if now - last_sent >= SOURCE_CHANGE_EVERY_S:
-            self.emit("source_status_changed", source=source, **{"from": was, "to": state})
-            self._sources[source] = (state, now)
-        else:
-            self._sources[source] = (state, last_sent)
+        if now - src["at"] >= SOURCE_CHANGE_EVERY_S:
+            self.emit("source_status_changed", source=source, **{"from": src["sent"], "to": state})
+            src.update(sent=state, before=src["sent"], at=now, recovered=False)
+        elif state == src["before"] and not src["recovered"]:
+            self.emit("source_status_changed", source=source, **{"from": src["sent"], "to": state})
+            src.update(sent=state, before=src["sent"], recovered=True)
 
     # -- sessions and the daily health rollup ----------------------------------------------------------------
 

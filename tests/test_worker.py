@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1791,3 +1792,26 @@ async def test_usage_stats_describe_failures_by_state_and_stage_only(env, tmp_pa
     blob = json.dumps(events)
     for leaked in ("Astral", "Into the Void", "Nothing for", str(_settings.library_root)):
         assert leaked not in blob
+
+
+def test_quality_check_sends_the_detector_version_verify_really_uses(tmp_path):
+    """Audit 2026-11-16: verify's version is the string "2.0" and the event only sent ints, so
+    `detector_version` was never sent, on `quality_check` or on `keep_anyway`."""
+    from flackey import telemetry, verify
+    from flackey.telemetry import Telemetry
+    from flackey.worker import usage
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        summary = {"version": verify.DETECTOR_VERSION, "tier": "clear", "reason": "clean"}
+        usage.quality_check(1, Verdict(True, "flac", 0, 0, "", None), summary, route="soulseek", rule="tiers",
+                            run_s=2.0)
+        refusal = SimpleNamespace(analysis=json.dumps(summary))
+        assert usage.refusal_fields(refusal)["detector_version"] == verify.DETECTOR_VERSION
+    finally:
+        telemetry.uninstall()
+    (qc,) = [e for e in t.snapshot()["pending"] if e["event"] == "quality_check"]
+    assert qc["detector_version"] == verify.DETECTOR_VERSION == "2.0"
