@@ -14,7 +14,10 @@ import pytest
 from flackey import telemetry
 from flackey.telemetry import buckets
 from flackey.telemetry.client import (
+    DELETE_RETRY,
+    DRAIN_GAP_S,
     FILES,
+    MAX_BACKOFF_S,
     OUTBOX,
     PENDING_DELETE,
     SENT,
@@ -22,6 +25,7 @@ from flackey.telemetry.client import (
     Telemetry,
     build_url,
     local_url,
+    retry_after_s,
 )
 from flackey.telemetry.errors import code_location
 from flackey.telemetry.schema import SCHEMA_PATH, schema
@@ -456,3 +460,123 @@ def test_answering_the_question_is_remembered_and_never_turns_stats_on(tmp_path)
     t.opt_out()
     assert load_settings(env).telemetry_asked is True
     assert telemetry.from_settings(load_settings(env), "0.6.1", environ={}).describe()["asked"] is True
+
+
+class Clock:
+    def __init__(self, now: float = 1_800_000_000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_a_refused_delete_backs_off_keeps_trying_across_restarts_and_says_so(tmp_path):
+    """Security review M5: a 403 (a geo-block) on /v1/delete used to be retried every 5 s forever. Now it
+    doubles from a minute to the cap, survives a restart without starting over, and Privacy can say so."""
+    clock = Clock()
+    calls: list[str] = []
+    status = [403]
+
+    def collector(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(status[0], json={})
+
+    t, _ = make(tmp_path, clock=clock, interval_s=60)      # an explicit interval turns jitter off
+    t.opt_in()
+    old = t.install_id
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(collector))
+    assert calls == ["/v1/delete"]
+    retry = json.loads((tmp_path / DELETE_RETRY).read_text())
+    assert retry["attempts"] == 1 and retry["error"] == "HTTP 403" and retry["next"] == clock.now + 60
+    d = t.describe()
+    assert d["pending_delete"] and d["delete_retry"]["attempts"] == 1 and d["delete_retry"]["error"] == "HTTP 403"
+
+    for _ in range(11):                                    # ticks inside the wait send nothing
+        clock.now += 5
+        run_tick(t, httpx.MockTransport(collector))
+    assert calls == ["/v1/delete"]
+
+    waits = []
+    for _ in range(12):                                    # each failure doubles the wait, up to the cap
+        clock.now = json.loads((tmp_path / DELETE_RETRY).read_text())["next"]
+        run_tick(t, httpx.MockTransport(collector))
+        waits.append(json.loads((tmp_path / DELETE_RETRY).read_text())["next"] - clock.now)
+    assert waits[:4] == [120, 240, 480, 960] and max(waits) == MAX_BACKOFF_S and waits[-1] == MAX_BACKOFF_S
+    assert len(calls) == 13
+
+    # A restart: the owed delete and its wait are both still there, so nothing goes early...
+    t2, _ = make(tmp_path, clock=clock, interval_s=60)
+    run_tick(t2, httpx.MockTransport(collector))
+    assert len(calls) == 13 and t2.describe()["pending_delete"]
+    # ...and once the collector takes it, everything is gone.
+    status[0] = 202
+    clock.now += MAX_BACKOFF_S
+    run_tick(t2, httpx.MockTransport(collector))
+    assert len(calls) == 14 and t2.last_delete_confirmed
+    assert not (tmp_path / PENDING_DELETE).exists() and not (tmp_path / DELETE_RETRY).exists()
+    assert t2.describe()["delete_retry"] is None and old
+
+
+def test_a_delete_waits_for_retry_after_and_backoff_is_jittered(tmp_path):
+    clock = Clock()
+    t, _ = make(tmp_path, clock=clock)                     # default interval: jitter on
+    t.opt_in()
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "3600"})))
+    assert json.loads((tmp_path / DELETE_RETRY).read_text())["next"] == clock.now + 3600
+    (tmp_path / DELETE_RETRY).unlink()
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(503)))
+    wait = json.loads((tmp_path / DELETE_RETRY).read_text())["next"] - clock.now
+    assert 48 <= wait <= 72                                # a minute, give or take 20%
+
+
+def test_retry_after_reads_seconds_and_http_dates():
+    now = 1_800_000_000.0
+    r = lambda v: httpx.Response(429, headers={"Retry-After": v})
+    assert retry_after_s(r("120"), now) == 120
+    assert retry_after_s(r("99999999"), now) == MAX_BACKOFF_S
+    date = dt.datetime.fromtimestamp(now + 600, dt.UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    assert retry_after_s(r(date), now) == 600
+    assert retry_after_s(r("soon"), now) is None and retry_after_s(httpx.Response(429), now) is None
+
+
+def test_a_backlog_drains_one_batch_at_a_time_a_few_a_minute(tmp_path):
+    """Security review L6: a backlog used to leave as up to 10 batches in one burst."""
+    clock = Clock()
+    collector = Collector()
+    t, _ = make(tmp_path, clock=clock, interval_s=900)
+    t.opt_in()
+    for _ in range(450):
+        t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    assert len(collector.batches) == 1 and t._next_send == clock.now + DRAIN_GAP_S
+    sent_at = [clock.now]
+    for _ in range(12):                                    # a minute of 5 s ticks
+        clock.now += 5
+        before = len(collector.batches)
+        run_tick(t, httpx.MockTransport(collector))
+        if len(collector.batches) > before:
+            sent_at.append(clock.now)
+    assert len(collector.batches) == 3 and sent_at[1] - sent_at[0] >= DRAIN_GAP_S
+    assert sum(len(b["events"]) for b in collector.batches) >= 450
+    assert t._next_send == sent_at[-1] + 900               # drained: back to the normal interval
+
+
+def test_a_down_collector_backs_off_and_honours_retry_after(tmp_path):
+    clock = Clock()
+    t, _ = make(tmp_path, clock=clock, interval_s=60)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(503, headers={"Retry-After": "7200"})))
+    assert t._next_send == clock.now + 7200 and (tmp_path / OUTBOX).read_text().strip()
+    clock.now = t._next_send
+
+    def unreachable(request):
+        raise httpx.ConnectError("down")
+    run_tick(t, httpx.MockTransport(unreachable))
+    assert t._next_send == clock.now + 120                 # doubled, kept
+    for _ in range(20):
+        clock.now = t._next_send
+        run_tick(t, httpx.MockTransport(unreachable))
+    assert t._next_send - clock.now == MAX_BACKOFF_S and (tmp_path / OUTBOX).read_text().strip()

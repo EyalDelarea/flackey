@@ -20,6 +20,13 @@ function statusLine(t: TelemetryState): string {
   return `Sending to ${t.collector}. ${lastText}`
 }
 
+// Honest about a delete that has not gone through: the data is still on the collector until it does.
+function deletePending(r: NonNullable<TelemetryState['delete_retry']>): string {
+  const why = r.error ? ` (${r.error})` : ''
+  const next = r.next_at ? `, next at ${when(r.next_at)}` : ''
+  return `The delete hasn't gone through yet${why}, so what was sent is still stored. Flackey keeps trying${next}.`
+}
+
 /** Settings > Privacy: the usage-stats switch, the ID, and every event exactly as it leaves.
  *  Hidden entirely when the server says usage stats cannot run here (or does not answer). */
 export default function PrivacySection() {
@@ -73,7 +80,8 @@ export default function PrivacySection() {
         <div className="actions"><button className="btn-secondary" onClick={newId} disabled={busy}>New ID</button></div></div>}
       <div className="srow"><div className="srow-body"><div className="k">Status</div>
         <div className="v">{statusLine(t)}</div>
-        {t.last_delete_confirmed && <div className="v">Delete received at {when(t.last_delete_confirmed)}.</div>}</div></div>
+        {t.last_delete_confirmed && <div className="v">Delete received at {when(t.last_delete_confirmed)}.</div>}
+        {t.pending_delete && t.delete_retry && <div className="v">{deletePending(t.delete_retry)}</div>}</div></div>
       <div className="srow"><div className="srow-body">
         <details className="tech" open={logOpen} onToggle={e => setLogOpen((e.currentTarget as HTMLDetailsElement).open)}>
           <summary>What's sent</summary>

@@ -82,3 +82,11 @@ it('renders nothing when usage stats are not available', async () => {
   await Promise.resolve()
   expect(container).toBeEmptyDOMElement()
 })
+
+it('says plainly when a delete has not gone through and is still being retried', async () => {
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ ...off, pending_delete: true,
+    delete_retry: { attempts: 3, error: 'HTTP 403', next_at: '2026-11-16T12:00:00+00:00' } })
+  render(<PrivacySection />)
+  expect(await screen.findByText(/The delete hasn't gone through yet \(HTTP 403\), so what was sent is still stored\. Flackey keeps trying, next at/))
+    .toBeInTheDocument()
+})

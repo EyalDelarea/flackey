@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import email.utils
 import gzip
 import json
 import logging
@@ -47,7 +48,10 @@ SENT = "telemetry-sent.jsonl"
 PENDING_DELETE = "telemetry-delete-pending"
 STATE = "telemetry-state.json"
 MARKER = "telemetry-session"
-FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER)
+# When the next delete may go and why the last one failed: kept on disk so a restart neither forgets the
+# delete nor starts hammering the collector again.
+DELETE_RETRY = "telemetry-delete-retry.json"
+FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER, DELETE_RETRY)
 MAX_QUEUE = 500
 MAX_OUTBOX_EVENTS = 2000
 MAX_OUTBOX_BYTES = 1_000_000
@@ -57,6 +61,13 @@ DEFAULT_INTERVAL_S = 15 * 60
 JITTER_S = 5 * 60
 MIN_INTERVAL_S = 5.0
 MAX_BACKOFF_S = 6 * 3600
+# A backlog leaves one batch at a time, the next one this long after the last: at most 3 a minute against
+# the collector's per-IP limit, never a burst.
+DRAIN_GAP_S = 20.0
+# A refused or failed delete is retried from a minute later, doubling to MAX_BACKOFF_S, for as long as it
+# takes (the opt-out promised it). Every wait is jittered by this fraction so clients never line up.
+DELETE_BACKOFF_MIN_S = 60.0
+BACKOFF_JITTER = 0.2
 TIMEOUT_S = 10.0
 TICK_S = 5.0
 STATE_SAVE_EVERY_S = 60.0
@@ -117,6 +128,22 @@ def envelope_platform() -> dict:
     machine = platform.machine().lower()
     arch = "arm64" if machine in ("arm64", "aarch64") else "x64"
     return {"os": os_name, "os_major": major, "arch": arch}
+
+
+def retry_after_s(r: httpx.Response, now: float) -> float | None:
+    """The collector's Retry-After, in seconds from `now` (delta-seconds or an HTTP date), capped."""
+    raw = (r.headers.get("retry-after") or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return min(float(raw), float(MAX_BACKOFF_S))
+    try:
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=dt.UTC)
+    return min(max(0.0, when.timestamp() - now), float(MAX_BACKOFF_S))
 
 
 def detect_channel() -> str:
@@ -263,6 +290,18 @@ class Telemetry:
             ids.append(install_id)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(f"{i}\n" for i in ids), encoding="utf-8")
+        # A fresh delete is tried at once, whatever an older one was waiting on.
+        (self.data_dir / DELETE_RETRY).unlink(missing_ok=True)
+
+    def _delete_retry(self) -> dict:
+        try:
+            d = json.loads((self.data_dir / DELETE_RETRY).read_text(encoding="utf-8"))
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _jittered(self, s: float) -> float:
+        return s * random.uniform(1 - BACKOFF_JITTER, 1 + BACKOFF_JITTER) if self._jitter else s
 
     def _pending_deletes(self) -> list[str]:
         try:
@@ -495,9 +534,19 @@ class Telemetry:
         return {"available": self.available, "enabled": self.enabled, "mode": self.mode,
                 "collector": self.url, "sending": self.sending,
                 "id_prefix": (self.install_id or "")[:8] or None, "opted_in": self.opted_in, "asked": self.asked,
-                "pending_delete": bool(self._pending_deletes()),
+                "pending_delete": bool(self._pending_deletes()), "delete_retry": self._describe_delete_retry(),
                 "last_delete_confirmed": self.last_delete_confirmed, "last_send": self.last_send,
                 "interval_s": self.interval_s}
+
+    def _describe_delete_retry(self) -> dict | None:
+        """For Settings > Privacy: a delete that has failed, how often, why, and when it goes again."""
+        r = self._delete_retry() if self._pending_deletes() else {}
+        if not r.get("attempts"):
+            return None
+        nxt = r.get("next")
+        return {"attempts": int(r["attempts"]), "error": r.get("error"),
+                "next_at": dt.datetime.fromtimestamp(nxt, dt.UTC).isoformat(timespec="seconds")
+                if isinstance(nxt, (int, float)) else None}
 
     # -- sending -----------------------------------------------------------------------------------------------
 
@@ -515,7 +564,8 @@ class Telemetry:
                 await asyncio.sleep(TICK_S)
 
     async def tick(self, http: httpx.AsyncClient) -> None:
-        if self.url is not None and self.mode == "on" and self._pending_deletes():
+        if (self.url is not None and self.mode == "on" and self._pending_deletes()
+                and self.clock() >= float(self._delete_retry().get("next", 0) or 0)):
             await self._send_deletes(http)
         if not self.enabled:
             return
@@ -524,23 +574,23 @@ class Telemetry:
             self._save_state()
         if not self.sending or self._stopped or self.clock() < self._next_send:
             return
-        ok = True
-        for _ in range(10):            # drain a backlog in batches, then wait for the next turn
-            ok, more = await self._send_batch(http)
-            if not ok or not more:
-                break
+        # One batch per turn. A backlog drains DRAIN_GAP_S apart; a failure backs off (jittered, and never
+        # sooner than the collector's Retry-After), so a down collector costs one request per wait.
+        ok, more, wait = await self._send_batch(http)
         if ok:
             self._backoff = 0.0
-            self._next_send = self.clock() + self.interval_s + random.uniform(-self._jitter, self._jitter)
+            self._next_send = self.clock() + (DRAIN_GAP_S if more else
+                                              self.interval_s + random.uniform(-self._jitter, self._jitter))
         else:
             self._backoff = min(MAX_BACKOFF_S, max(self.interval_s, self._backoff * 2))
-            self._next_send = self.clock() + self._backoff
+            self._next_send = self.clock() + min(MAX_BACKOFF_S, max(self._jittered(self._backoff), wait or 0.0))
 
-    async def _send_batch(self, http: httpx.AsyncClient) -> tuple[bool, bool]:
-        """(the send worked or the batch was dropped as refused, there is more to send)."""
+    async def _send_batch(self, http: httpx.AsyncClient) -> tuple[bool, bool, float | None]:
+        """(the send worked or the batch was dropped as refused, there is more to send, the collector's
+        Retry-After in seconds when it gave one)."""
         lines = self._outbox_lines()
         if not lines or not self.install_id:
-            return True, False
+            return True, False, None
         batch = lines[:BATCH]
         body = {"schema": SCHEMA_VERSION, "install_id": self.install_id,
                 "dropped": min(self._dropped, 1_000_000), "events": [json.loads(ln) for ln in batch]}
@@ -552,14 +602,14 @@ class Telemetry:
             r = await http.post(f"{self.url}/v1/batch", content=data, headers=headers)
         except httpx.HTTPError as e:
             self.last_send = {"status": "failed", "error": type(e).__name__, "at": self._stamp()}
-            return False, True
+            return False, True, None
         code = r.status_code
         # What Settings > Privacy shows: "ok", or "failed" with why (kept and retried, or refused and dropped)
         self.last_send = ({"status": "ok", "events": len(batch), "at": self._stamp()} if 200 <= code < 300 else
                           {"status": "failed", "error": f"HTTP {code}, will retry" if code == 429 or code >= 500
                            else f"HTTP {code}, refused and dropped", "at": self._stamp()})
         if r.status_code == 429 or r.status_code >= 500:
-            return False, True
+            return False, True, retry_after_s(r, self.clock())
         rest = lines[len(batch):]
         stop = False
         if 200 <= r.status_code < 300:
@@ -584,26 +634,40 @@ class Telemetry:
             log.warning("usage stats: the collector refused a batch (%d %s); dropped it", r.status_code, field)
             self._dropped += len(batch)
         self._write_lines(self.data_dir / OUTBOX, rest)
-        return True, bool(rest)
+        return True, bool(rest), None
 
     async def _send_deletes(self, http: httpx.AsyncClient) -> None:
-        left = []
+        """Every owed delete, one after another. Only a 2xx clears one; anything else (a 403 from a geo-block,
+        a 429, a network error) keeps it and backs off -- doubling from DELETE_BACKOFF_MIN_S to MAX_BACKOFF_S,
+        jittered, never sooner than Retry-After -- with the wait kept on disk across restarts."""
+        left, error, wait = [], None, None
         for install_id in self._pending_deletes():
             try:
                 r = await http.post(f"{self.url}/v1/delete", json={"install_id": install_id})
                 done = 200 <= r.status_code < 300
-            except httpx.HTTPError:
-                done = False
+                if not done:
+                    error = f"HTTP {r.status_code}"
+                    wait = retry_after_s(r, self.clock())
+            except httpx.HTTPError as e:
+                done, error = False, type(e).__name__
             if done:
                 self.last_delete_confirmed = self._stamp()
                 log.info("usage stats: the collector confirmed a delete")
             else:
                 left.append(install_id)
         path = self.data_dir / PENDING_DELETE
-        if left:
-            path.write_text("".join(f"{i}\n" for i in left), encoding="utf-8")
-        else:
+        retry = self.data_dir / DELETE_RETRY
+        if not left:
             path.unlink(missing_ok=True)
+            retry.unlink(missing_ok=True)
+            return
+        path.write_text("".join(f"{i}\n" for i in left), encoding="utf-8")
+        attempts = int(self._delete_retry().get("attempts", 0) or 0) + 1
+        backoff = min(float(MAX_BACKOFF_S), DELETE_BACKOFF_MIN_S * 2 ** min(attempts - 1, 20))
+        delay = min(float(MAX_BACKOFF_S), max(self._jittered(backoff), wait or 0.0))
+        retry.write_text(json.dumps({"attempts": attempts, "next": self.clock() + delay, "error": error}),
+                         encoding="utf-8")
+        log.info("usage stats: a delete did not go through (%s); retrying in %.0fs", error, delay)
 
     def _stamp(self) -> str:
         return dt.datetime.fromtimestamp(self.clock(), dt.UTC).isoformat(timespec="seconds")
