@@ -172,7 +172,7 @@ describe('the update banner', () => {
     render(<App />)
     fireEvent.click(await screen.findByText('Update'))
     // Settings, where the progress is shown -- not a window the webview would silently drop.
-    await screen.findByText('Automatic update checks')
+    await screen.findByText('Check for updates automatically')
     expect(open).not.toHaveBeenCalled()
   })
 

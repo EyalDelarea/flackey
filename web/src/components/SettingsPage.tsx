@@ -319,7 +319,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           source fetched it, so it sits beside the folder they all land in rather than with Soulseek. */}
       <h2>Library</h2>
       <div className="group">
-        <div className="srow"><div className="srow-body"><div className="k">Library folder</div>
+        <div className="srow stack-narrow"><div className="srow-body"><div className="k">Library folder</div>
+          {!editing && <div className="v">Where Flackey saves your tracks.</div>}
           {editing ? <><input className="input" value={path} onChange={e => setPath(e.target.value)} />{err && <div className="err">{err}</div>}</> : <div className="v mono">{breakablePath(s.library_root)}</div>}</div>
           <div className="actions">{editing
             ? <>{pickerAvailable && <button className="btn-secondary" onClick={chooseFolderClicked} disabled={busy}>Choose…</button>}<button className="btn-secondary" onClick={() => { setEditing(false); setErr(null) }} disabled={busy}>Cancel</button><button className="btn-primary" onClick={save} disabled={busy}>Save</button></>
@@ -330,11 +331,15 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="v">For new downloads. Filed tracks stay put for Rekordbox.</div>
           <LayoutOptions value={currentLayout} onChange={saveLayout} busy={layoutBusy} />
           {layoutError && <div className="err">{layoutError}</div>}</div></div>
-        <div className="srow"><div className="srow-body"><div className="k">File format</div>
+        <div className="srow stack-narrow"><div className="srow-body"><div className="k">File format</div>
           <div className="v">{shortFormatNote(currentFormat, defaultFormat)}</div>
           {formatError && <div className="err">{formatError}</div>}</div>
           <div className="actions"><Segmented label="File format" options={formatOptions} value={currentFormat}
             onChange={saveFormat} busy={formatBusy} /></div></div>
+      </div>
+      {/* What gets fetched, as opposed to where it lands. Its own box so Library stays about the folder. */}
+      <h2>Downloads</h2>
+      <div className="group">
         {/* Issue #187. On by default, and asking: every download is still the version asked for. */}
         <div className="srow"><div className="srow-body"><div className="k">Offer extended mixes when available</div>
           <div className="v">You get the version you asked for. If a longer extended or club mix turns up, its Done row offers it.</div>
@@ -342,7 +347,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions"><Switch label="Offer extended mixes when available" checked={extendedMixes !== 'off'}
             onChange={on => saveExtended(on ? 'ask' : 'off')} busy={extendedBusy} /></div></div>
         {extendedMixes !== 'off' && (
-          <div className="srow"><div className="srow-body"><div className="k">When one is found</div>
+          <div className="srow stack-narrow"><div className="srow-body"><div className="k">When one is found</div>
             <div className="v">{extendedMixes === 'always'
               ? 'Look for the extended mix first and download it instead. If there is none, you get the normal one.'
               : 'Ask on the Done row. Nothing waits for your answer.'}</div></div>
@@ -407,90 +412,106 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
             <button className="btn-secondary" onClick={openRelease} disabled={releaseBusy}>
               {releaseBusy ? 'Opening…' : 'View release'}</button>
           </div>}</div>
-        <div className="srow"><div className="srow-body"><div className="k">Automatic update checks</div>
+        <div className="srow"><div className="srow-body"><div className="k">Check for updates automatically</div>
+          <div className="v">Tells you when a new version of Flackey is out.</div>
           {autoUpdateError && <div className="err">{autoUpdateError}</div>}</div>
-          <div className="actions"><Switch label="Automatic update checks" checked={autoUpdateOn}
+          <div className="actions"><Switch label="Check for updates automatically" checked={autoUpdateOn}
             onChange={setAutoUpdate} busy={autoUpdateBusy} /></div></div>
       </div>
-      <h2>Help</h2>
-      <div className="group">
-        {/* Stacks under 700px: a long path beside two buttons left the path a word per line. */}
-        <div className="srow stack-narrow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{breakablePath(s.data_dir)}</div></div>
-          <div className="actions"><button className="btn-secondary" onClick={reveal}>{revealLabel(platform)}</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
-        {onReport && <div className="srow"><div className="srow-body"><div className="k">Report a problem</div>
-          <div className="v">Sends the details we need to fix it.</div></div>
-          <div className="actions"><button className="btn-secondary" onClick={onReport}>Report a bug…</button></div></div>}
+      {/* A Privacy box (the "Share usage stats" switch) lands here, between Updates and Advanced, when the
+          telemetry work arrives. Nothing is drawn for it until then. */}
+      {/* Everything nobody needs on an ordinary day: secrets, sharing, keys, logs, diagnostics, starting
+          over. A real button in the heading rather than a <details>, so a screen reader hears "Advanced,
+          collapsed", and the line under it says what is inside before anyone opens it. Grouped inside by
+          what each thing belongs to, so a DJ sent here to fix one thing finds it under a name they know.
+          Stays named "Advanced": the Soulseek row and the Uploads banner both send people "under Advanced". */}
+      <div className="disclosure-head">
+        <h2 className="disclosure"><button type="button" aria-expanded={advancedOpen} aria-controls="settings-advanced"
+          onClick={() => setAdvancedOpen(o => !o)}>Advanced</button></h2>
+        <p className="disclosure-note">Passwords, sharing, problem reports and starting over. Only needed when something isn't working.</p>
       </div>
-      {/* Everything nobody needs on an ordinary day: secrets, sharing, keys, diagnostics, starting over.
-          A real button in the heading rather than a <details>, so the box below stays the heading's next
-          sibling and a screen reader hears "Advanced, collapsed". */}
-      <h2 className="disclosure"><button type="button" aria-expanded={advancedOpen} aria-controls="settings-advanced"
-        onClick={() => setAdvancedOpen(o => !o)}>Advanced</button></h2>
-      <div className="group" id="settings-advanced" hidden={!advancedOpen}>
-        {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
-            Flackey generated both. So the owner has to be able to get this string back -- without it they
-            cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
-            printed in the panel, because a secret on screen is a secret over someone's shoulder. */}
-        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Soulseek password</div>
-          {soulseekPassword
-            ? <div className="v mono">{soulseekPassword}</div>
-            : <div className="v">Soulseek can't reset it. Keep a copy somewhere safe.</div>}
-          {passwordError && <div className="err">{passwordError}</div>}</div>
-          <div className="actions">{soulseekPassword
-            ? <><CopyButton value={soulseekPassword} />
-              <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
-            : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
-                {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>}
-        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Helper web login</div>
-          <div className="v">For the local slskd page. Not your Soulseek password.</div>
-          {webLogin && <div className="v mono">{webLogin.username} · {webLogin.password}</div>}
-          {webLoginError && <div className="err">{webLoginError}</div>}</div>
-          <div className="actions">{webLogin ? <><CopyButton value={webLogin.password} /><button className="btn-secondary" onClick={() => setWebLogin(null)}>Hide</button></>
-            : <button className="btn-secondary" onClick={showWebLogin}>Show login</button>}</div></div>}
-        {/* Downloading works behind any router; being downloaded from does not, and an account nobody can
-            pull from is the one Soulseek eventually stops trusting. The state arrives on the status event,
-            so the answer to a re-check lands here by itself and the response is discarded. */}
-        {s.soulseek_enabled && <div className="srow"><div className="srow-body"><div className="k">Sharing</div>
-          <SharingPanel state={live.health?.sharing ?? null} onCheck={checkSharing} />
-          {checkError && <p className="hint-row warn">{checkError}</p>}</div></div>}
-        {/* Flackey ships with keys of its own and almost nobody needs to replace them. It exists for the
-            owner whose copy was built without keys, or who would rather use their own. */}
-        <div className="srow"><div className="srow-body">
-          <details className="tech">
-            <summary>Use your own Telegram API keys</summary>
-            <div className="keys">
-              <div className="field"><label htmlFor="settings-tg-api-id">API ID</label>
-                <input id="settings-tg-api-id" className="input" autoComplete="off" spellCheck={false}
-                  value={apiId} onChange={e => { setApiId(e.target.value); setKeysSaved(false) }} /></div>
-              <div className="field"><label htmlFor="settings-tg-api-hash">API hash</label>
-                <input id="settings-tg-api-hash" className="input" type="password" autoComplete="off" spellCheck={false}
-                  value={apiHash} onChange={e => { setApiHash(e.target.value); setKeysSaved(false) }} /></div>
-            </div>
-            {keysError && <div className="err">{keysError}</div>}
-            {keysSaved && <div className="hint-row">Saved. Sign in again from the Telegram row.</div>}
-            <div className="row-gap"><button className="btn-secondary" onClick={saveKeys}
-              disabled={keysBusy || !apiId.trim() || !apiHash.trim()}>{keysBusy ? 'Saving…' : 'Save keys'}</button></div>
-          </details></div></div>
-        {/* Ports and the pick rules are the two things nobody needs until something is wrong. Folded away,
-            not dropped: they are the first thing to ask for when a transfer never starts or a copy is refused. */}
-        {showTech && <div className="srow"><div className="srow-body">
-          <details className="tech">
-            <summary>Technical details</summary>
-            {s.ports && <><div className="k">Ports</div>
-              <div className="v mono">{PORT_ROWS.map(([key, label]) => {
-                const p = s.ports![key]
-                return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : `· ${thisComputer(platform)} only`}</div>
-              })}</div></>}
-            {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
-              <div className="v">Files a peer offers are tried nearest the video's length first
-                {s.ranking.max_queue != null ? ` (queues longer than ${s.ranking.max_queue} are skipped)` : ''}; the
-                recording check decides. Survivors are then ordered by quality and by who can send now. Flackey tries
-                up to {s.ranking.max_picks} of them, and keeps a copy only if its fingerprint matches the original
-                at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
-          </details></div></div>}
-        <div className="srow"><div className="srow-body"><div className="k">Run setup again</div>
-          <div className="v">Keeps your library folder and Telegram sign-in.</div></div>
-          <div className="actions"><button className="btn-secondary destructive" onClick={resetSetup} disabled={resettingSetup}>Run setup again…</button></div></div>
+      <div className="advanced" id="settings-advanced" hidden={!advancedOpen}>
+        {s.soulseek_enabled && <>
+          <h3>Soulseek account</h3>
+          <div className="group">
+            {/* Soulseek has no password reset: the name is bound to the password it was claimed with, and
+                Flackey generated both. So the owner has to be able to get this string back -- without it they
+                cannot sign in from any other machine, ever, and the account is gone. Behind a press rather than
+                printed in the panel, because a secret on screen is a secret over someone's shoulder. */}
+            <div className="srow"><div className="srow-body"><div className="k">Soulseek password</div>
+              {soulseekPassword
+                ? <div className="v mono">{soulseekPassword}</div>
+                : <div className="v">Soulseek can't reset it. Keep a copy somewhere safe.</div>}
+              {passwordError && <div className="err">{passwordError}</div>}</div>
+              <div className="actions">{soulseekPassword
+                ? <><CopyButton value={soulseekPassword} />
+                  <button className="btn-secondary" onClick={() => setSoulseekPassword(null)}>Hide</button></>
+                : <button className="btn-secondary" onClick={showSoulseekPassword} disabled={passwordBusy}>
+                    {passwordBusy ? 'Reading…' : 'Show'}</button>}</div></div>
+            {/* Downloading works behind any router; being downloaded from does not, and an account nobody can
+                pull from is the one Soulseek eventually stops trusting. The state arrives on the status event,
+                so the answer to a re-check lands here by itself and the response is discarded. */}
+            <div className="srow"><div className="srow-body"><div className="k">Sharing</div>
+              <SharingPanel state={live.health?.sharing ?? null} onCheck={checkSharing} />
+              {checkError && <p className="hint-row warn">{checkError}</p>}</div></div>
+            <div className="srow"><div className="srow-body"><div className="k">Helper web login</div>
+              <div className="v">For the helper's own web page (slskd). Not your Soulseek password.</div>
+              {webLogin && <div className="v mono">{webLogin.username} · {webLogin.password}</div>}
+              {webLoginError && <div className="err">{webLoginError}</div>}</div>
+              <div className="actions">{webLogin ? <><CopyButton value={webLogin.password} /><button className="btn-secondary" onClick={() => setWebLogin(null)}>Hide</button></>
+                : <button className="btn-secondary" onClick={showWebLogin}>Show login</button>}</div></div>
+          </div>
+        </>}
+        <h3>Telegram</h3>
+        <div className="group">
+          {/* Flackey ships with keys of its own and almost nobody needs to replace them. It exists for the
+              owner whose copy was built without keys, or who would rather use their own. */}
+          <div className="srow"><div className="srow-body">
+            <details className="tech">
+              <summary>Use your own Telegram API keys</summary>
+              <div className="keys">
+                <div className="field"><label htmlFor="settings-tg-api-id">API ID</label>
+                  <input id="settings-tg-api-id" className="input" autoComplete="off" spellCheck={false}
+                    value={apiId} onChange={e => { setApiId(e.target.value); setKeysSaved(false) }} /></div>
+                <div className="field"><label htmlFor="settings-tg-api-hash">API hash</label>
+                  <input id="settings-tg-api-hash" className="input" type="password" autoComplete="off" spellCheck={false}
+                    value={apiHash} onChange={e => { setApiHash(e.target.value); setKeysSaved(false) }} /></div>
+              </div>
+              {keysError && <div className="err">{keysError}</div>}
+              {keysSaved && <div className="hint-row">Saved. Sign in again from the Telegram row.</div>}
+              <div className="row-gap"><button className="btn-secondary" onClick={saveKeys}
+                disabled={keysBusy || !apiId.trim() || !apiHash.trim()}>{keysBusy ? 'Saving…' : 'Save keys'}</button></div>
+            </details></div></div>
+        </div>
+        <h3>Troubleshooting</h3>
+        <div className="group">
+          {onReport && <div className="srow"><div className="srow-body"><div className="k">Report a problem</div>
+            <div className="v">Sends the details we need to fix it.</div></div>
+            <div className="actions"><button className="btn-secondary" onClick={onReport}>Report a bug…</button></div></div>}
+          {/* Stacks under 700px: a long path beside two buttons left the path a word per line. */}
+          <div className="srow stack-narrow"><div className="srow-body"><div className="k">App data</div><div className="v mono">{breakablePath(s.data_dir)}</div></div>
+            <div className="actions"><button className="btn-secondary" onClick={reveal}>{revealLabel(platform)}</button><button className="btn-secondary" onClick={showLogs}>Show logs</button></div></div>
+          {/* Ports and the pick rules are the two things nobody needs until something is wrong. Folded away,
+              not dropped: they are the first thing to ask for when a transfer never starts or a copy is refused. */}
+          {showTech && <div className="srow"><div className="srow-body">
+            <details className="tech">
+              <summary>Technical details</summary>
+              {s.ports && <><div className="k">Ports</div>
+                <div className="v mono">{PORT_ROWS.map(([key, label]) => {
+                  const p = s.ports![key]
+                  return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : `· ${thisComputer(platform)} only`}</div>
+                })}</div></>}
+              {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
+                <div className="v">Files a peer offers are tried nearest the video's length first
+                  {s.ranking.max_queue != null ? ` (queues longer than ${s.ranking.max_queue} are skipped)` : ''}; the
+                  recording check decides. Survivors are then ordered by quality and by who can send now. Flackey tries
+                  up to {s.ranking.max_picks} of them, and keeps a copy only if its fingerprint matches the original
+                  at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
+            </details></div></div>}
+          <div className="srow"><div className="srow-body"><div className="k">Run setup again</div>
+            <div className="v">Keeps your library folder and Telegram sign-in.</div></div>
+            <div className="actions"><button className="btn-secondary destructive" onClick={resetSetup} disabled={resettingSetup}>Run setup again…</button></div></div>
+        </div>
       </div>
     </div>
   )

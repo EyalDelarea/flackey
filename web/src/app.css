@@ -552,6 +552,15 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .settings h2.disclosure button[aria-expanded="true"]::before { transform: rotate(90deg); }
 .settings h2.disclosure button:hover { color: var(--text); }
 .settings h2.disclosure button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* The heading and the line saying what is folded inside it. In a wrapper so the column's gap does not
+   open between them; the note is indented to the heading's text, past the chevron. */
+.settings .disclosure-head { margin-top: 8px; }
+.settings .disclosure-head h2 { margin: 0 2px; }
+.settings .disclosure-note { margin: 0 2px 0 14px; font-size: 12px; color: var(--secondary); line-height: 1.4; }
+/* Advanced holds a box per subject, each under a smaller heading than the page's own sections. */
+.settings .advanced { display: flex; flex-direction: column; gap: 14px; }
+.settings .advanced[hidden] { display: none; }
+.settings h3 { margin: 4px 2px -7px 14px; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--tertiary); }
 /* 28px, not the toolbar's 22: these rows are read one at a time, and a small target in a sparse panel
    only makes it harder to hit. Scoped here so the denser screens keep theirs. */
 .settings .btn-secondary, .settings .btn-primary { height: 28px; }
@@ -757,6 +766,8 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   .scroll { padding: 14px 12px 18px; }
   .settings { padding: 18px 12px; }
   .srow.stack-narrow { flex-direction: column; align-items: stretch; }
+  /* Whatever a stacked row's buttons are, they sit under its text at the left, not stretched across. */
+  .srow.stack-narrow .actions { justify-content: flex-start; flex-wrap: wrap; }
   .welcome-body { padding: 0 20px 24px; }
   /* Four nowrap steps and three 22px gaps do not fit, and a stepper that overflows pushes the step
      titles out of the window rather than ellipsizing -- they are the only guide through setup. */
