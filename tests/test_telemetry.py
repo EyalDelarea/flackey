@@ -437,12 +437,17 @@ def test_usage_stats_are_off_and_unasked_by_default(tmp_path):
 def test_answering_the_question_is_remembered_and_never_turns_stats_on(tmp_path):
     """Not now (or a dismissed prompt) persists `telemetry_asked` and leaves stats off; opting out later
     keeps it, so the one-time prompt does not come back after a Settings round trip."""
-    from flackey.config import load_settings
+    from functools import partial
+
+    from flackey.config import load_settings, save_settings
 
     env = tmp_path / ".env"
     env.write_text(f"DATA_DIR={tmp_path / 'data'}\n")
     s = load_settings(env)
-    t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY_URL": "http://127.0.0.1:9"})
+    # The envelope is pinned to macOS: on Linux (CI) the schema has no os_major, so stats are unavailable.
+    t = Telemetry(s.data_dir, version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"},
+                  persist=partial(save_settings, s))
     t.mark_asked()
     assert t.asked and not t.enabled
     again = load_settings(env)
