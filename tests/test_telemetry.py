@@ -27,7 +27,7 @@ from flackey.telemetry.schema import SCHEMA_PATH, schema
 
 # The collector's schemas/v1.json.sha256 (EyalDelarea/flackey-telemetry). A change on either side must
 # change both, or the collector refuses what the app sends.
-COLLECTOR_V1_SHA256 = "0721409d9e37b645c4e7adb2e6f4bdcec782ea5de36074312360bb999efeb045"
+COLLECTOR_V1_SHA256 = "815444a829da341a270b8fc052ce892dd1cf3f2496c0ccca8da53680cfe81db0"
 MAC = {"os": "macos", "os_major": "26", "arch": "arm64"}
 FORBIDDEN = ("name", "title", "artist", "path", "url", "query", "user", "peer", "message", "ip", "email")
 
@@ -257,6 +257,18 @@ def test_a_recovery_inside_the_hour_is_sent_so_a_source_never_reads_down_while_u
     t.source_status("soulseek", "ok")
     changes = [e for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
     assert [(e["from"], e["to"]) for e in changes] == [("ok", "not_logged_in"), ("not_logged_in", "ok")]
+
+
+def test_a_source_going_down_says_why_in_a_code_and_a_recovery_does_not(tmp_path):
+    now = [1000.0]
+    t, _ = make(tmp_path, clock=lambda: now[0])
+    t.opt_in()
+    t.source_status("beatport", "ok", reason="unknown")
+    t.source_status("beatport", "blocked", reason="cloudflare_challenge")
+    now[0] += 60
+    t.source_status("beatport", "ok", reason="cloudflare_challenge")
+    changes = [e for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
+    assert [(e["to"], e.get("reason")) for e in changes] == [("blocked", "cloudflare_challenge"), ("ok", None)]
 
 
 def test_source_changes_are_held_to_an_hour_and_the_held_state_is_sent_when_it_is_up(tmp_path):

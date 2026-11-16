@@ -597,6 +597,31 @@ async def test_beatport_blocked_downloads_without_it(env):
     assert r.state == RequestState.DONE and r.attempts == 0
 
 
+async def test_a_blocked_beatport_says_why_in_a_code(env, tmp_path):
+    """What was blocked and why (owner, 2026-11-16): the source and a fixed reason, never the page."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    class Challenged(FakeCatalog):
+        async def search(self, query):
+            raise CatalogUnavailable("beatport http 403", "cloudflare_challenge")
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        _settings, store, _notifier = env
+        w = make_worker(env, FakeSource([good_cand()]), Challenged())
+        assert (await w.process(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    (done,) = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert done["catalog"] == "blocked" and done["catalog_reason"] == "cloudflare_challenge"
+    assert "failure_reason" not in done          # it filed: nothing failed
+    assert "403" not in json.dumps({k: v for k, v in done.items() if k != "catalog_reason"})
+
+
 class FakeTagLookup:
     """Deezer + Discogs (issue #146) without the network: answers `found` and remembers what it was asked."""
 
@@ -1787,6 +1812,8 @@ async def test_usage_stats_describe_failures_by_state_and_stage_only(env, tmp_pa
     events = t.snapshot()["pending"]
     finished = [e["state"] for e in events if e["event"] == "request_finished"]
     assert finished == ["not_found", "rejected", "cancelled"]
+    reasons = [e.get("failure_reason") for e in events if e["event"] == "request_finished"]
+    assert reasons == ["unidentified", "quality_reject", None]   # a cancel is not a failure
     (qc,) = [e for e in events if e["event"] == "quality_check"]
     assert qc["tier"] == "reject"
     blob = json.dumps(events)

@@ -90,6 +90,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
         # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
         self._catalog_blocked = False
+        self._catalog_reason = ""     # why, as a usage-stats code (CatalogUnavailable.reason)
         # The shadow comparison of a noisy title's readings (`interpret`): request id -> its background task,
         # one comparison at a time so a playlist of noisy titles is a queue rather than a burst, and when
         # it last called Deezer's API.
@@ -466,6 +467,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         except Exception as e:
             log.exception("req#%d failed", request_id)
             usage.error_class(request_id, e)
+            usage.failure_reason(request_id, usage.reason_of(e))
             usage_errors.report("request", e)
             self._set_state(self.store.get_request(request_id), RequestState.ERROR, error_message=str(e)[:500])
             await self.notifier.send(f"Error on request {request_id}: {str(e)[:200]}")

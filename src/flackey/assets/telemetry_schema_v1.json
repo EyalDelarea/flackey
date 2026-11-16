@@ -91,7 +91,9 @@
       "retries_by_owner": {"type": "int", "max": 20},
       "wait_to_start": {"bucket": "dur"},
       "total_time": {"bucket": "dur"},
-      "error_class": {"type": "regex", "pattern": "^([A-Za-z][A-Za-z0-9_]{0,48})?$"}
+      "error_class": {"type": "regex", "pattern": "^([A-Za-z][A-Za-z0-9_]{0,48})?$"},
+      "failure_reason": {"enum": ["no_results", "no_pick", "unidentified", "not_logged_in", "http_403", "http_429", "http_5xx", "http_other", "cloudflare_challenge", "timeout", "network", "peer_queue_timeout", "first_byte_timeout", "transfer_timeout", "too_slow", "transfer_failed", "unavailable", "interrupted", "fingerprint_mismatch", "fingerprint_unavailable", "verify_unavailable", "quality_reject", "damaged", "convert_failed", "tag_failed", "disk_full", "filesystem", "youtube_error", "spotify_error", "source_error", "tool_missing", "internal_error", "unknown"]},
+      "catalog_reason": {"enum": ["no_results", "no_pick", "unidentified", "not_logged_in", "http_403", "http_429", "http_5xx", "http_other", "cloudflare_challenge", "timeout", "network", "peer_queue_timeout", "first_byte_timeout", "transfer_timeout", "too_slow", "transfer_failed", "unavailable", "interrupted", "fingerprint_mismatch", "fingerprint_unavailable", "verify_unavailable", "quality_reject", "damaged", "convert_failed", "tag_failed", "disk_full", "filesystem", "youtube_error", "spotify_error", "source_error", "tool_missing", "internal_error", "unknown"]}
     },
     "review_answered": {
       "answer": {"enum": ["picked", "cancelled"]},
@@ -198,7 +200,8 @@
     "source_status_changed": {
       "source": {"enum": ["telegram", "soulseek", "beatport", "port"]},
       "from": {"enum": ["ok", "blocked", "signed_out", "unreachable", "not_logged_in", "open", "closed"]},
-      "to": {"enum": ["ok", "blocked", "signed_out", "unreachable", "not_logged_in", "open", "closed"]}
+      "to": {"enum": ["ok", "blocked", "signed_out", "unreachable", "not_logged_in", "open", "closed"]},
+      "reason": {"enum": ["no_results", "no_pick", "unidentified", "not_logged_in", "http_403", "http_429", "http_5xx", "http_other", "cloudflare_challenge", "timeout", "network", "peer_queue_timeout", "first_byte_timeout", "transfer_timeout", "too_slow", "transfer_failed", "unavailable", "interrupted", "fingerprint_mismatch", "fingerprint_unavailable", "verify_unavailable", "quality_reject", "damaged", "convert_failed", "tag_failed", "disk_full", "filesystem", "youtube_error", "spotify_error", "source_error", "tool_missing", "internal_error", "unknown"]}
     },
     "error_caught": {
       "where": {"enum": ["worker_loop", "request", "server_thread", "excepthook", "asyncio", "ui", "slskd_start"]},
