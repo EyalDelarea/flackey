@@ -1750,6 +1750,7 @@ async def test_usage_stats_describe_a_filed_track_in_labels_only(env, tmp_path):
     done = by["request_finished"]
     assert done["state"] == "done" and done["kind"] == "text" and done["route"] == "deezer_mp3"
     assert done["reviewed"] is True and done["filed_format"] == "mp3" and done["checks_run"] == 1
+    assert done["tag_source"] == "beatport"   # a Beatport match; a stand-in reads deezer/discogs/none
     blob = json.dumps(events)
     for leaked in ("Astral", "Into the Void", "Someone", str(_settings.library_root)):
         assert leaked not in blob

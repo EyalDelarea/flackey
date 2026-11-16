@@ -4,6 +4,7 @@ cost a download."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import time
 
@@ -11,6 +12,7 @@ from .. import telemetry
 from ..models import TERMINAL_STATES, Request, RequestState, Verdict
 from ..telemetry import buckets
 
+TAG_SOURCES = ("deezer", "discogs", "deezer+discogs")
 log = logging.getLogger(__name__)
 FORMATS = ("flac", "aiff", "wav", "alac", "mp3")
 
@@ -61,6 +63,11 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
         sf = (track.source_fmt or "").lower()
         source_fmt = sf if sf in FORMATS + ("wav",) else ("other" if sf else "")
         bit_depth = {16: "16", 24: "24"}.get(track.bit_depth or 0, "other" if track.bit_depth else "")
+    tag_source = None
+    if state == RequestState.DONE and r.catalog_track_id:
+        ct = store.get_catalog_track(r.catalog_track_id)
+        if ct is not None:
+            tag_source = "beatport" if ct.id > 0 else (ct.tag_source if ct.tag_source in TAG_SOURCES else "none")
     ready = worker._bot_ready()
     checks_run, refused = notes.get("checks_run", 0), notes.get("checks_refused", 0)
     telemetry.emit(
@@ -73,7 +80,7 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
         verify_tier=notes.get("tier", ""), filed_format=filed, source_format=source_fmt, bit_depth=bit_depth,
         checks_run=min(checks_run, 20), checks_refused=min(refused, 20),
         refused_then_passed=bool(refused and state == RequestState.DONE),
-        retries_by_owner=min(notes.get("owner_retries", 0), 20),
+        retries_by_owner=min(notes.get("owner_retries", 0), 20), tag_source=tag_source,
         wait_to_start=notes.get("wait_to_start"), total_time=buckets.dur(_age_s(r.created_at)),
         error_class=notes.get("error_class", "") if state == RequestState.ERROR else "")
 
@@ -95,11 +102,7 @@ def quality_check(request_id: int, verdict: Verdict, summary: dict | None, *, ro
         edge = s.get("edge") or {}
         quant = s.get("quant") or {}
         codec = quant.get("codec") or ""
-        fired = []
-        if edge.get("finding") in ("unambiguous", "ambiguous"):
-            fired.append("spectral")
-        if quant.get("finding") in ("weak", "partial", "strong") and codec in ("mp3", "aac", "opus"):
-            fired.append(codec)
+        fired = detectors_fired(s)
         vendor = ((s.get("container") or {}).get("vendor") or "").lower()
         family = "none" if not vendor else ("libflac" if "libflac" in vendor or "reference libflac" in vendor
                                              else "ffmpeg" if "lavf" in vendor or "ffmpeg" in vendor else "other")
@@ -124,6 +127,61 @@ def quality_check(request_id: int, verdict: Verdict, summary: dict | None, *, ro
             candidate_index=min(notes["checks_run"], 255), run_time=buckets.dur(run_s))
     except Exception:
         log.debug("usage stats: quality_check failed", exc_info=True)
+
+
+def detectors_fired(s: dict) -> list[str]:
+    """Which evidence families spoke up in a `verify.summary`: the spectral edge, and a codec's traces."""
+    edge, quant = s.get("edge") or {}, s.get("quant") or {}
+    codec = quant.get("codec") or ""
+    fired = []
+    if edge.get("finding") in ("unambiguous", "ambiguous"):
+        fired.append("spectral")
+    if quant.get("finding") in ("weak", "partial", "strong") and codec in ("mp3", "aac", "opus"):
+        fired.append(codec)
+    return fired
+
+
+def reason_code(s: dict) -> str | None:
+    """The refusal's reason as one of the schema's codes, read from the summary's findings the way
+    `verify.decide` reads them. Never the reason sentence itself: that carries the measured numbers."""
+    if not s:
+        return None
+    if s.get("tier") == "clear":
+        return "clear"
+    if "error" in s:
+        return "detector_crashed"
+    if (s.get("integrity") or {}).get("failed"):
+        return "damaged"
+    edge = (s.get("edge") or {}).get("finding")
+    quant = (s.get("quant") or {}).get("finding")
+    if edge == "unambiguous":
+        return "edge_unambiguous"
+    if quant in ("strong", "partial"):
+        return f"quant_{quant}"
+    if edge == "ambiguous":
+        return "edge_and_quant_weak" if quant == "weak" else "edge_ambiguous"
+    if quant == "weak":
+        return "quant_weak"
+    return "insufficient" if edge == "insufficient" else None
+
+
+def refusal_fields(rejection) -> dict:
+    """What `keep_anyway` says about the refusal being overruled: its tier, reason code, the detectors
+    that fired and their bucketed measures. Built from the stored `verify.summary`, so it is the same
+    vocabulary as `quality_check`; a refusal for a different recording has no audio findings."""
+    try:
+        s = json.loads(rejection.analysis) if rejection is not None and rejection.analysis else {}
+    except (TypeError, ValueError):
+        s = {}
+    if not isinstance(s, dict) or not s:
+        return {}
+    edge, quant = s.get("edge") or {}, s.get("quant") or {}
+    codec = quant.get("codec") or ""
+    return {"tier": s.get("tier"), "reason_code": reason_code(s), "detectors_fired": detectors_fired(s),
+            "edge": buckets.edge_khz(edge.get("edge_hz")) if edge else None,
+            "strength": buckets.strength(quant.get("score", quant.get("z")), codec) if quant else None,
+            "coverage": buckets.coverage(quant.get("cover")) if quant else None,
+            "detector_version": s.get("version") if isinstance(s.get("version"), int) else None}
 
 
 def error_class(request_id: int, exc: BaseException) -> None:
