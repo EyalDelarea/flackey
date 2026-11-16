@@ -80,16 +80,30 @@ Write-Host '==> build defaults'
 # The Telegram keys a packaged copy carries. From CI these come from repository secrets; locally, set
 # FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before running this script, or leave them unset
 # to build a copy whose setup screen asks for keys.
+# The usage-stats collector likewise: FLACKEY_BUILD_TELEMETRY_URL (https only) and FLACKEY_BUILD_TELEMETRY_KEY,
+# set only by the release workflow from repository secrets. Unset, the copy sends nothing. Never printed.
 $BuildJson = Join-Path $Root 'src\flackey\assets\build.json'
+# A build.json left over from an earlier keyed build would otherwise ship in a copy meant to be keyless.
+if (Test-Path -LiteralPath $BuildJson) { Remove-Item -Force -LiteralPath $BuildJson }
+$Defaults = [ordered]@{}
 if ($env:FLACKEY_TELEGRAM_API_ID -and $env:FLACKEY_TELEGRAM_API_HASH) {
-    Write-Utf8NoBom $BuildJson ('{"telegram_api_id": ' + $env:FLACKEY_TELEGRAM_API_ID +
-        ', "telegram_api_hash": "' + $env:FLACKEY_TELEGRAM_API_HASH + '"}' + "`n")
+    $Defaults['telegram_api_id'] = [int64]$env:FLACKEY_TELEGRAM_API_ID
+    $Defaults['telegram_api_hash'] = $env:FLACKEY_TELEGRAM_API_HASH
     Write-Host '    Telegram keys: baked in'
 } else {
-    # A build.json left over from an earlier keyed build would otherwise ship in a copy meant to be keyless.
-    if (Test-Path -LiteralPath $BuildJson) { Remove-Item -Force -LiteralPath $BuildJson }
     Write-Host '    Telegram keys: none (setup will ask)'
 }
+if ($env:FLACKEY_BUILD_TELEMETRY_URL -or $env:FLACKEY_BUILD_TELEMETRY_KEY) {
+    if (-not ("$env:FLACKEY_BUILD_TELEMETRY_URL".StartsWith('https://') -and $env:FLACKEY_BUILD_TELEMETRY_KEY)) {
+        throw 'FLACKEY_BUILD_TELEMETRY_URL must be https:// and come with FLACKEY_BUILD_TELEMETRY_KEY'
+    }
+    $Defaults['telemetry_url'] = $env:FLACKEY_BUILD_TELEMETRY_URL
+    $Defaults['telemetry_key'] = $env:FLACKEY_BUILD_TELEMETRY_KEY
+    Write-Host '    Usage stats collector: baked in'
+} else {
+    Write-Host '    Usage stats collector: none (sends nothing)'
+}
+if ($Defaults.Count -gt 0) { Write-Utf8NoBom $BuildJson (($Defaults | ConvertTo-Json -Compress) + "`n") }
 
 Write-Host '==> helpers'
 # ffmpeg, ffprobe and fpcalc ride inside the app: a stock Windows machine has none of them.

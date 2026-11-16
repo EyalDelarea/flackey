@@ -96,8 +96,9 @@ class Settings(BaseSettings):
     # looked for first and downloaded instead, the normal one when there is none. "off": neither.
     extended_mixes: str = "ask"
     # Opt-in usage stats (spec PR #196): off until the owner says yes at the Welcome step or in Settings.
-    # The ID is random, made at opt-in, and wiped at opt-out; there is no collector address here at all --
-    # `FLACKEY_TELEMETRY_URL` names one, and only a loopback address is accepted (`telemetry.local_url`).
+    # The ID is random, made at opt-in, and wiped at opt-out. No collector address is a setting: a release
+    # build carries one in build.json (`build_telemetry`), and `FLACKEY_TELEMETRY_URL` may override it with a
+    # loopback address only (`telemetry.local_url`), for development and the local demo.
     telemetry_enabled: bool = False
     telemetry_install_id: str | None = None
     telemetry_opted_in: str | None = None
@@ -297,6 +298,22 @@ def _read_build_defaults(path: Path = BUILD_DEFAULTS_PATH) -> dict:
     if isinstance(data.get("telegram_api_hash"), str) and data["telegram_api_hash"]:
         out["telegram_api_hash"] = data["telegram_api_hash"]
     return out
+
+
+def build_telemetry(path: Path | None = None) -> tuple[str | None, str | None]:
+    """(collector URL, release key) a release build carries, or (None, None) in a checkout, a dev build and
+    the demo. packaging/build_app.sh writes them into build.json from FLACKEY_BUILD_TELEMETRY_URL and
+    FLACKEY_BUILD_TELEMETRY_KEY, which only the release workflow sets, from repository secrets. The key is
+    not secret (it ships in every copy); it lets the collector tell release builds apart and revoke one."""
+    path = path or BUILD_DEFAULTS_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    url, key = data.get("telemetry_url"), data.get("telemetry_key")
+    return (url if isinstance(url, str) and url else None, key if isinstance(key, str) and key else None)
 
 
 def _read_settings_file(path: Path) -> dict:

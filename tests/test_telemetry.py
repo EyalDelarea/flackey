@@ -20,6 +20,7 @@ from flackey.telemetry.client import (
     SENT,
     STATE,
     Telemetry,
+    build_url,
     local_url,
 )
 from flackey.telemetry.errors import code_location
@@ -112,6 +113,101 @@ def test_loopback_collectors_are_accepted(url):
                                  "http://user:pw@127.0.0.1:1", "ftp://127.0.0.1", "", None, "127.0.0.1:8790"])
 def test_anything_off_this_computer_is_refused(url):
     assert local_url(url) is None
+
+
+# ---- finding 2: a release build can reach its collector; nothing else can redirect it --------------------------
+# Only reserved test names (.example, .invalid): no real host is named anywhere in this repository.
+@pytest.mark.parametrize(("raw", "want"), [
+    ("https://collector.example", "https://collector.example"),
+    ("https://collector.example:8443/base/", "https://collector.example:8443/base"),
+])
+def test_a_build_s_https_collector_is_accepted(raw, want):
+    assert build_url(raw) == want
+
+
+@pytest.mark.parametrize("raw", ["http://collector.example", "https://user:pw@collector.example",
+                                 "https://collector.example/?k=v", "https://collector.example/#x", "https://",
+                                 "ftp://collector.example", "collector.example", "", None])
+def test_anything_but_plain_https_is_refused_for_a_build(raw):
+    assert build_url(raw) is None
+
+
+def test_the_build_s_collector_and_key_are_used_and_the_key_is_sent(tmp_path):
+    seen = []
+
+    def collector(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("x-flackey-key")))
+        return httpx.Response(202, json={})
+
+    t, _ = make(tmp_path, url=None, built_url="https://collector.invalid", key="release-key-1")
+    assert t.url == "https://collector.invalid" and t.sending is False
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    assert seen and all(u == "https://collector.invalid/v1/batch" and k == "release-key-1" for u, k in seen)
+
+
+def test_the_environment_may_only_point_at_this_computer_even_in_a_keyed_build(tmp_path):
+    t, _ = make(tmp_path, url="http://127.0.0.1:8790", built_url="https://collector.invalid", key="k")
+    assert t.url == "http://127.0.0.1:8790", "the local demo overrides the build's address"
+    t, _ = make(tmp_path, url="https://elsewhere.invalid", built_url="https://collector.invalid", key="k")
+    assert t.url is None, "a refused override sends nothing rather than quietly falling back"
+
+
+def test_a_stop_is_never_shown_as_sent(tmp_path):
+    """Final review 2026-11-16: with a key the collector does not accept, it answers 202 {"stop": true} and
+    stores nothing. The app used to record that batch as sent."""
+    def stop(_request):
+        return httpx.Response(202, json={"stop": True})
+
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(stop))
+    assert t.snapshot()["sent"] == []
+    assert t.describe()["last_send"]["status"] == "failed"
+    assert "stop" in t.describe()["last_send"]["error"]
+    assert t._stopped and t._dropped > 0
+
+
+def test_build_json_carries_the_collector_only_when_the_build_wrote_one(tmp_path):
+    from flackey.config import build_telemetry
+
+    assert build_telemetry(tmp_path / "absent.json") == (None, None)
+    p = tmp_path / "build.json"
+    p.write_text(json.dumps({"telegram_api_id": 1, "telegram_api_hash": "h"}))
+    assert build_telemetry(p) == (None, None)
+    p.write_text(json.dumps({"telemetry_url": "https://collector.example", "telemetry_key": "r1-key"}))
+    assert build_telemetry(p) == ("https://collector.example", "r1-key")
+    p.write_text("not json")
+    assert build_telemetry(p) == (None, None)
+
+
+def test_from_settings_reads_the_build_and_lets_the_environment_override(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    b = tmp_path / "build.json"
+    b.write_text(json.dumps({"telemetry_url": "https://collector.example", "telemetry_key": "r1-key"}))
+    monkeypatch.setattr("flackey.config.BUILD_DEFAULTS_PATH", b)
+    s = SimpleNamespace(data_dir=tmp_path, telemetry_enabled=False, telemetry_install_id=None,
+                        telemetry_opted_in=None)
+    t = telemetry.from_settings(s, "0.6.1", environ={})
+    assert (t.url, t.key) == ("https://collector.example", "r1-key")
+    t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY_URL": "http://127.0.0.1:8790",
+                                                     "FLACKEY_TELEMETRY_KEY": "demo-key"})
+    assert (t.url, t.key) == ("http://127.0.0.1:8790", "demo-key")
+
+
+def test_no_real_collector_host_is_named_in_the_app():
+    """Finding 2's rule: the address and key come from CI secrets at build time, never from the repository."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    hosts = set()
+    for path in [*(root / "src" / "flackey" / "telemetry").rglob("*.py"), root / "src" / "flackey" / "config.py"]:
+        hosts |= set(re.findall(r"https://([A-Za-z0-9.-]+)", path.read_text(encoding="utf-8")))
+    assert {h for h in hosts if not h.endswith((".example", ".invalid"))} == set()
 
 
 def test_off_is_silent_and_writes_nothing(tmp_path):

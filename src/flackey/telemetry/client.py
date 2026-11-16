@@ -2,9 +2,13 @@
 download: `emit` never raises, never awaits and never blocks; the sender runs on its own task with its own
 HTTP client; a dead collector costs a bounded local file.
 
-Nothing leaves the machine except to a collector on this computer: `local_url` refuses every address but
-loopback, and there is no default address at all. Without `FLACKEY_TELEMETRY_URL` the events are kept in
-the outbox for the owner to read, and never sent.
+Where the events go, and nowhere else:
+- a release build carries its collector in build.json (packaging writes it from CI secrets): an HTTPS
+  address and the release key, sent as `X-Flackey-Key`. Nothing in the repository names a real host.
+- `FLACKEY_TELEMETRY_URL` overrides it for development and the local demo, and only a loopback address is
+  accepted there (`local_url`), so an environment variable can never point the app at someone else's server.
+- a checkout, a dev build or the demo with neither has no address at all: the events are kept in the
+  outbox for the owner to read, and never sent.
 """
 from __future__ import annotations
 
@@ -34,7 +38,9 @@ from .schema import SCHEMA_VERSION, schema
 log = logging.getLogger(__name__)
 
 ENV_MODE = "FLACKEY_TELEMETRY"            # "off" overrides everything; "local" builds events, never sends
-ENV_URL = "FLACKEY_TELEMETRY_URL"         # the collector; loopback only on this branch
+ENV_URL = "FLACKEY_TELEMETRY_URL"         # a collector on this computer (dev, demo); loopback only
+ENV_KEY = "FLACKEY_TELEMETRY_KEY"         # the release key to send with it, for testing a keyed collector
+KEY_HEADER = "X-Flackey-Key"
 ENV_INTERVAL = "FLACKEY_TELEMETRY_INTERVAL_S"
 OUTBOX = "telemetry-outbox.jsonl"
 SENT = "telemetry-sent.jsonl"
@@ -80,6 +86,23 @@ def local_url(raw: str | None) -> str | None:
     return f"http://{netloc}{f':{port}' if port else ''}{parts.path.rstrip('/')}"
 
 
+def build_url(raw: str | None) -> str | None:
+    """The collector a release build carries: HTTPS to a named host, no user, query or fragment; else None.
+    Only ever read from build.json, never from the environment or the settings file."""
+    if not raw:
+        return None
+    try:
+        parts = urlsplit(raw.strip())
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not host or parts.username or parts.password or parts.query or parts.fragment:
+        return None
+    netloc = f"[{host}]" if ":" in host else host
+    return f"https://{netloc}{f':{port}' if port else ''}{parts.path.rstrip('/')}"
+
+
 def envelope_platform() -> dict:
     if sys.platform == "darwin":
         os_name, major = "macos", (platform.mac_ver()[0] or "").split(".")[0]
@@ -111,6 +134,7 @@ def _today() -> dt.date:
 class Telemetry:
     def __init__(self, data_dir: Path, *, version: str, enabled: bool = False, install_id: str | None = None,
                  opted_in: str | None = None, url: str | None = None, mode: str = "on",
+                 built_url: str | None = None, key: str | None = None,
                  interval_s: float | None = None, persist: Callable[..., None] | None = None,
                  clock: Callable[[], float] = time.time, today: Callable[[], dt.date] = _today,
                  transport: httpx.AsyncBaseTransport | None = None, channel: str | None = None,
@@ -118,9 +142,14 @@ class Telemetry:
         self.data_dir = Path(data_dir)
         self.version = version
         self.mode = mode if mode in ("on", "local", "off") else "on"
-        self.url = local_url(url)
+        # The environment may only name this computer; a release build's own address comes from build.json.
+        # A refused override sends nothing rather than falling back: whoever set it meant somewhere else.
+        self.url = local_url(url) if url else build_url(built_url)
         if url and self.url is None:
             log.warning("usage stats: refusing a collector that is not on this computer; nothing will be sent")
+        elif built_url and not url and self.url is None:
+            log.warning("usage stats: this build's collector address is not HTTPS; nothing will be sent")
+        self.key = key or None
         self.install_id = install_id if enabled else None
         self.opted_in = opted_in
         self._enabled = bool(enabled and install_id)
@@ -508,8 +537,10 @@ class Telemetry:
                 "dropped": min(self._dropped, 1_000_000), "events": [json.loads(ln) for ln in batch]}
         data = gzip.compress(json.dumps(body, separators=(",", ":")).encode())
         try:
-            r = await http.post(f"{self.url}/v1/batch", content=data,
-                                headers={"Content-Type": "application/json", "Content-Encoding": "gzip"})
+            headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
+            if self.key:
+                headers[KEY_HEADER] = self.key
+            r = await http.post(f"{self.url}/v1/batch", content=data, headers=headers)
         except httpx.HTTPError as e:
             self.last_send = {"status": "failed", "error": type(e).__name__, "at": self._stamp()}
             return False, True
@@ -521,12 +552,21 @@ class Telemetry:
         if r.status_code == 429 or r.status_code >= 500:
             return False, True
         rest = lines[len(batch):]
+        stop = False
         if 200 <= r.status_code < 300:
+            with contextlib.suppress(ValueError, AttributeError):
+                stop = bool(r.json().get("stop"))
+        if stop:
+            # "stop" (a revoked or missing key, or the collector's kill switch) means nothing was stored. Never
+            # shown as sent: the batch is dropped, counted, and this run sends no more.
+            self._stopped = True
+            self._dropped += len(batch)
+            self.last_send = {"status": "failed", "error": "the collector asked this version to stop sending; "
+                              "nothing was stored", "at": self._stamp()}
+            log.warning("usage stats: the collector said stop; %d events dropped", len(batch))
+        elif 200 <= r.status_code < 300:
             self._record_sent(batch)
             self._dropped = 0
-            with contextlib.suppress(ValueError):
-                if r.json().get("stop"):
-                    self._stopped = True
         else:
             # The collector refuses this shape; retrying it would be refused forever (spec §6.1)
             field = ""

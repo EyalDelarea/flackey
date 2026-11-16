@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 from functools import partial
 
-from .client import ENV_INTERVAL, ENV_MODE, ENV_URL, FILES, Telemetry, local_url
+from .client import ENV_INTERVAL, ENV_KEY, ENV_MODE, ENV_URL, FILES, Telemetry, build_url, local_url
 
-__all__ = ["FILES", "Telemetry", "current", "emit", "enabled", "install", "local_url", "notes", "pop_notes",
+__all__ = ["FILES", "Telemetry", "build_url", "current", "emit", "enabled", "install", "local_url", "notes", "pop_notes",
            "uninstall"]
 
 _current: Telemetry | None = None
@@ -42,16 +42,18 @@ def pop_notes(request_id: int) -> dict:
 
 
 def from_settings(settings, version: str, environ=os.environ) -> Telemetry:
-    from ..config import save_settings
+    from ..config import build_telemetry, save_settings
 
     mode = (environ.get(ENV_MODE) or "on").strip().lower()
     try:
         interval = float(environ[ENV_INTERVAL]) if environ.get(ENV_INTERVAL) else None
     except ValueError:
         interval = None
+    built_url, built_key = build_telemetry()
     return Telemetry(settings.data_dir, version=version, enabled=settings.telemetry_enabled,
                      install_id=settings.telemetry_install_id, opted_in=settings.telemetry_opted_in,
-                     url=environ.get(ENV_URL), mode=mode, interval_s=interval,
+                     url=environ.get(ENV_URL), built_url=built_url, key=environ.get(ENV_KEY) or built_key,
+                     mode=mode, interval_s=interval,
                      persist=partial(save_settings, settings))
 
 

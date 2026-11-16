@@ -44,7 +44,17 @@ it('shows the collector, the last send and a confirmed delete', async () => {
   vi.spyOn(api, 'telemetry').mockResolvedValue({ ...on, last_delete_confirmed: '2026-11-15T09:00:00Z' })
   render(<PrivacySection />)
   expect(await screen.findByText(/Sending to http:\/\/127\.0\.0\.1:8787/)).toBeInTheDocument()
-  expect(screen.getByText(/Delete confirmed at/)).toBeInTheDocument()
+  expect(screen.getByText(/Delete received at/)).toBeInTheDocument()
+})
+
+it('never says the data is already gone when only the delete request was received', async () => {
+  // Final review 2026-11-16, finding 3: the collector accepts the delete at once, and the hourly cleanup
+  // erases the rows later. "has been deleted" was said up to an hour early.
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ ...on, enabled: false, id_prefix: null,
+                                                 last_delete_confirmed: '2026-11-15T09:00:00Z' })
+  render(<PrivacySection />)
+  expect(await screen.findByText(/erased within the hour/)).toBeInTheDocument()
+  expect(screen.queryByText(/has been deleted/)).toBeNull()
 })
 
 it('says it is not sending without a collector', async () => {
