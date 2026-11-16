@@ -1,5 +1,7 @@
+import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from flackey.cli import app
@@ -152,3 +154,29 @@ def test_sweep_writes_the_report_and_touches_nothing_else(tmp_path: Path, monkey
     assert r.exit_code == 0, r.output
     assert seen == [0.79] and f"wrote {out}" in r.output and "A - B" in r.output
     assert "| 0.97 | 1.00 |" in out.read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM to send to oneself on Windows")
+def test_a_term_stops_a_windowless_start_cleanly(tmp_path: Path, monkeypatch):
+    """`demo.sh stop` sends TERM; without this the process died with its session open, and the next
+    launch reported previous_exit=crash. Now it is Ctrl-C: the main task is cancelled and cleans up."""
+    import asyncio
+    import os
+    import signal
+
+    import flackey.app as app_mod
+
+    cleaned = []
+
+    async def fake_run(settings, open_browser=True, handle=None):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.sleep(10)
+        finally:
+            cleaned.append(True)
+
+    before = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(app_mod, "run", fake_run)
+    r = runner.invoke(app, ["--env", str(_env(tmp_path)), "start", "--no-browser"])
+    assert r.exit_code == 0 and "stopped" in r.output and cleaned == [True]
+    assert signal.getsignal(signal.SIGTERM) == before
