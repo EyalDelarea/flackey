@@ -27,7 +27,7 @@ beforeEach(() => {
 /* The whole point of the Connections section is where things sit, and a `getByText` passes just as
    happily when the three connections are scattered over three cards again. Everything below asks which
    box, and in what order, rather than only whether the words are on screen. */
-const section = (name: string) => screen.getByRole('heading', { name }).nextElementSibling as HTMLElement
+const section = (name: string) => screen.getByRole('heading', { name, hidden: true }).nextElementSibling as HTMLElement
 const connections = () => section('Connections')
 /* Scoped to that box on purpose: "Soulseek" is both a connection row and the heading of the box holding
    everything else about it, so an unscoped lookup would have two answers. */
@@ -35,7 +35,8 @@ const connRow = (name: string) => within(connections()).getByText(name).closest(
 const dot = (r: HTMLElement) => r.querySelector('.status-dot') as HTMLElement
 /* Advanced is folded shut on every visit, and a role query cannot see into a hidden box. */
 const openAdvanced = () => fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
-const advanced = () => section('Advanced')
+const openMoreLibrary = () => fireEvent.click(screen.getByRole('button', { name: 'More library options' }))
+const advanced = () => document.getElementById('settings-advanced') as HTMLElement
 
 it('shows the settings cards and saves a new folder', async () => {
   const result = { library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/flackey.log' }
@@ -303,7 +304,8 @@ it('defaults automatic update checks to on and lets the owner turn them off', as
   const result = { ...liveSettings, auto_update_check: false }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
   render(<SettingsPage live={live} onReconnect={() => {}} />)
-  const toggle = within(section('Updates')).getByRole('switch', { name: 'Automatic update checks' })
+  openAdvanced()
+  const toggle = within(section('General')).getByRole('switch', { name: 'Check for updates automatically' })
   expect(toggle).toHaveAttribute('aria-checked', 'true')
   fireEvent.click(toggle)
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(liveSettings.library_root, { auto_update_check: false }))
@@ -314,15 +316,17 @@ it('shows automatic update checks as off when the setting is saved that way', as
   const current = live as unknown as { settings: AppSettings; health: Health }
   const off = makeLive({ ...current, settings: { ...current.settings, auto_update_check: false } })
   render(<SettingsPage live={off} onReconnect={() => {}} />)
-  expect(screen.getByRole('switch', { name: 'Automatic update checks' })).toHaveAttribute('aria-checked', 'false')
+  openAdvanced()
+  expect(screen.getByRole('switch', { name: 'Check for updates automatically' })).toHaveAttribute('aria-checked', 'false')
 })
 
-it('offers extended mixes and asks, beside the library settings, and the switch turns them off', async () => {
+it('offers extended mixes and asks, in the Library box, and the switch turns them off', async () => {
   const current = live as unknown as { settings: AppSettings; health: Health }
   const asking = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'ask' } })
   const result = { ...current.settings, extended_mixes: 'off' as const }
   vi.spyOn(api, 'saveSettings').mockResolvedValue(result)
   render(<SettingsPage live={asking} onReconnect={() => {}} />)
+  openMoreLibrary()
   const toggle = within(section('Library')).getByRole('switch', { name: 'Offer extended mixes when available' })
   expect(toggle).toHaveAttribute('aria-checked', 'true')
   expect(within(section('Library')).getByRole('radio', { name: 'Always ask' })).toHaveAttribute('aria-checked', 'true')
@@ -337,8 +341,18 @@ it('can get the extended mix every time instead of asking', async () => {
   const asking = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'ask' } })
   vi.spyOn(api, 'saveSettings').mockResolvedValue({ ...current.settings, extended_mixes: 'always' })
   render(<SettingsPage live={asking} onReconnect={() => {}} />)
+  openMoreLibrary()
   fireEvent.click(screen.getByRole('radio', { name: 'Always get extended' }))
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(current.settings.library_root, { extended_mixes: 'always' }))
+})
+
+it('does not promise an offer when it is set to always get the extended mix', () => {
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const always = makeLive({ ...current, settings: { ...current.settings, extended_mixes: 'always' } })
+  render(<SettingsPage live={always} onReconnect={() => {}} />)
+  // The line beside the switch is on the main view; the row explaining "always" is folded away under it.
+  expect(within(section('Library')).getByText('Gets the longer extended or club mix instead, when there is one.')).toBeVisible()
+  expect(screen.queryByText(/its Done row offers it/)).not.toBeInTheDocument()
 })
 
 it('shows extended mixes as off, with no choice under it, when the setting is saved that way', async () => {
@@ -392,8 +406,8 @@ it('lets an already signed-in account turn the Deezer bot source back on', async
   render(<SettingsPage live={offline} onReconnect={() => {}} />)
   expect(screen.getByText('Off — requests use Soulseek only')).toBeInTheDocument()
   // Switched off on purpose is not a fault: grey, not the amber that means something needs attention.
-  expect(dot(connRow('Deezer bot'))).toHaveClass('off')
-  const toggle = within(connRow('Deezer bot')).getByRole('switch', { name: 'Deezer bot' })
+  expect(dot(connRow('Deezer'))).toHaveClass('off')
+  const toggle = within(connRow('Deezer')).getByRole('switch', { name: 'Deezer (through Telegram)' })
   expect(toggle).toHaveAttribute('aria-checked', 'false')
   fireEvent.click(toggle)
   // Busy while it saves: held, and saying so, rather than only greyed out.
@@ -414,7 +428,7 @@ describe('the Connections section', () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
     const box = connections()
     expect(box).toHaveClass('group')
-    for (const name of ['Telegram', 'Deezer bot', 'Soulseek']) {
+    for (const name of ['Telegram', 'Deezer', 'Soulseek']) {
       expect(box).toContainElement(within(box).getByText(name))
     }
     expect(box).not.toContainElement(screen.getByText('Library folder'))
@@ -424,10 +438,10 @@ describe('the Connections section', () => {
 
   it('puts the Deezer bot right after Telegram and says in its name that it uses Telegram', () => {
     render(<SettingsPage live={live} onReconnect={() => {}} />)
-    const bot = connRow('Deezer bot')
+    const bot = connRow('Deezer')
     expect(connRow('Telegram').nextElementSibling).toBe(bot)
-    expect(within(bot).getByText('· uses Telegram')).toBeInTheDocument()
-    expect(within(bot).getByRole('switch', { name: 'Deezer bot' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(bot).getByText('(through Telegram)')).toBeInTheDocument()
+    expect(within(bot).getByRole('switch', { name: 'Deezer (through Telegram)' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('keeps the three status rows together, with the API keys moved to Advanced', () => {
@@ -435,7 +449,7 @@ describe('the Connections section', () => {
     const details = screen.getByText('Use your own Telegram API keys').closest('details')!
     expect(connections()).not.toContainElement(details)
     expect(advanced()).toContainElement(details)
-    expect(connRow('Deezer bot').nextElementSibling).toBe(connRow('Soulseek'))
+    expect(connRow('Deezer').nextElementSibling).toBe(connRow('Soulseek'))
   })
 
   it('does not let the Deezer bot look fine while Telegram is signed out', async () => {
@@ -444,7 +458,7 @@ describe('the Connections section', () => {
     render(<SettingsPage live={signedOut()} onReconnect={() => {}} />)
     await waitFor(() => expect(within(connRow('Telegram')).getByText('Signed out')).toBeInTheDocument())
     expect(dot(connRow('Telegram'))).toHaveClass('amber')
-    const bot = connRow('Deezer bot')
+    const bot = connRow('Deezer')
     expect(within(bot).getByText('Paused — Telegram is signed out')).toBeInTheDocument()
     expect(dot(bot)).toHaveClass('amber')
     expect(dot(bot).className).not.toBe('status-dot')
@@ -453,7 +467,7 @@ describe('the Connections section', () => {
   it('says Telegram could not be reached rather than signed out when it never answered', async () => {
     render(<SettingsPage live={signedOut({ telegram_unreachable: true })} onReconnect={() => {}} />)
     await waitFor(() => expect(within(connRow('Telegram')).getByText("Can't reach Telegram")).toBeInTheDocument())
-    expect(within(connRow('Deezer bot')).getByText("Paused — can't reach Telegram")).toBeInTheDocument()
+    expect(within(connRow('Deezer')).getByText("Paused — can't reach Telegram")).toBeInTheDocument()
     expect(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
   })
 
@@ -470,7 +484,7 @@ describe('the Connections section', () => {
     const onReconnect = vi.fn()
     vi.spyOn(api, 'telegramSource').mockResolvedValue({ source_enabled: true })
     render(<SettingsPage live={signedOut({ source_enabled: false })} onReconnect={onReconnect} />)
-    const bot = connRow('Deezer bot')
+    const bot = connRow('Deezer')
     expect(within(bot).getByText('Off — and Telegram is signed out')).toBeInTheDocument()
     expect(dot(bot)).toHaveClass('off')
     // One way back, on the account it fixes: not a second Reconnect stacked under the first.
@@ -478,7 +492,7 @@ describe('the Connections section', () => {
     fireEvent.click(within(connRow('Telegram')).getByRole('button', { name: 'Reconnect' }))
     expect(onReconnect).toHaveBeenCalled()
     // And the bot can still be switched back on; until Telegram is back it reads as paused.
-    const toggle = within(bot).getByRole('switch', { name: 'Deezer bot' })
+    const toggle = within(bot).getByRole('switch', { name: 'Deezer (through Telegram)' })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     fireEvent.click(toggle)
     await waitFor(() => expect(api.telegramSource).toHaveBeenCalledWith(true))
@@ -502,7 +516,7 @@ describe('the Connections section', () => {
       expect(dot(row)).toHaveClass('off')
       expect(dot(row)).not.toHaveClass('amber')
       expect(within(connections()).queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument()
-      const bot = connRow('Deezer bot')
+      const bot = connRow('Deezer')
       expect(within(bot).getByText('Off — requests use Soulseek only')).toBeInTheDocument()
       expect(within(bot).queryByText(/signed out/)).not.toBeInTheDocument()
       expect(dot(bot)).toHaveClass('off')
@@ -517,7 +531,7 @@ describe('the Connections section', () => {
       const row = connRow('Telegram')
       expect(within(row).getByText('Not set up')).toBeInTheDocument()
       expect(dot(row)).toHaveClass('off')
-      const bot = connRow('Deezer bot')
+      const bot = connRow('Deezer')
       expect(within(bot).getByText("Paused — Telegram isn't set up")).toBeInTheDocument()
       expect(dot(bot)).toHaveClass('amber')
       await waitFor(() => expect(api.telegramStatus).toHaveBeenCalled())
@@ -722,6 +736,7 @@ describe('the Soulseek panel', () => {
   it('lets the owner choose the future lossless filing format', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ lossless_filing_format: 'wav' }))
     show(lossless())
+    openMoreLibrary()
     const format = within(section('Library')).getByRole('radiogroup', { name: 'File format' })
     expect(within(format).getByRole('radio', { name: 'AIFF' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Uncompressed, with tags and artwork. Recommended.')).toBeInTheDocument()
@@ -734,6 +749,7 @@ describe('the Soulseek panel', () => {
   it('lets the owner choose how new tracks are foldered, and says old ones stay put', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'flat' }))
     show(lossless())
+    openMoreLibrary()
     const library = section('Library')
     expect(within(library).getByText(/Filed tracks stay put for Rekordbox/)).toBeInTheDocument()
     expect(within(library).getByText('Bicep/Bicep - Glue.aiff')).toBeInTheDocument()
@@ -747,6 +763,7 @@ describe('the Soulseek panel', () => {
   it('picks By date per month first, then lets the owner switch to per day', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'month' }))
     show(lossless())
+    openMoreLibrary()
     fireEvent.click(screen.getByRole('radio', { name: 'By date' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { library_layout: 'month' }))
   })
@@ -754,6 +771,7 @@ describe('the Soulseek panel', () => {
   it('shows the month/day choice once the layout is by date', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'day' }))
     show(lossless(), settings({ library_layout: 'month' }))
+    openMoreLibrary()
     expect(screen.getByRole('radio', { name: 'By date' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText(/^\d{4}-\d{2}\/Bicep - Glue\.aiff$/)).toBeInTheDocument()
     const period = screen.getByRole('radiogroup', { name: 'New folder every' })
@@ -799,6 +817,7 @@ describe('the Soulseek panel', () => {
 
   it('hides the ranking diagnostics when no account is set up, but still allows choosing a future format', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }))
+    openMoreLibrary()
     expect(screen.getByText(/Not set up — run setup again, under Advanced/)).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'WAV' })).toBeInTheDocument()
     expect(screen.queryByText(/keeps a copy only if its fingerprint matches/)).not.toBeInTheDocument()
@@ -900,14 +919,107 @@ describe('using your own Telegram API keys', () => {
 
 it('lets a long path wrap between folders rather than mid-word', () => {
   render(<SettingsPage live={live} onReconnect={() => {}} />)
-  const path = within(section('Help')).getByText(/Application Support/)
+  const path = within(section('Troubleshooting')).getByText(/Application Support/)
   expect(path.querySelectorAll('wbr').length).toBeGreaterThan(2)
   expect(path.textContent).toBe('/Users/me/Library/Application Support/Flackey')
 })
 
-it('offers Report a bug beside the logs', () => {
+it('offers Report a bug beside the logs, under Troubleshooting', () => {
   const onReport = vi.fn()
   render(<SettingsPage live={live} onReconnect={() => {}} onReport={onReport} />)
+  expect(section('Troubleshooting')).toContainElement(screen.getByText('Report a problem'))
+  expect(section('Troubleshooting')).toContainElement(screen.getByText('Show logs'))
+  openAdvanced()
   fireEvent.click(screen.getByRole('button', { name: 'Report a bug…' }))
   expect(onReport).toHaveBeenCalled()
+})
+
+describe('the simplified layout', () => {
+  const full = () => makeLive({
+    settings: { library_root: '/Users/me/Music/DJ Library', data_dir: '/Users/me/Library/Application Support/Flackey',
+      version: '0.1.0', telegram_configured: true, log_path: '/Users/me/Library/Application Support/Flackey/flackey.log',
+      soulseek_enabled: true, lossless_filing_format: 'aiff', filing_formats: ['aiff', 'wav', 'flac'], extended_mixes: 'ask',
+      ports: {
+        app: { port: 8765, host: '127.0.0.1', public: false },
+        sidecar: { port: 5030, host: '127.0.0.1', public: false },
+        soulseek_listen: { port: 50300, host: '0.0.0.0', public: true },
+      },
+      ranking: { max_picks: 4, max_queue: null, fingerprint_min: 0.79 } },
+    health: { ok: true, version: '0.1.0', telegram_authorized: true, worker_running: true, setup_done: true,
+      lossless: { enabled: true, provider: { name: 'soulseek', status: 'ok', username: 'digger' }, fpcalc: true,
+        attempts_24h: {}, raw_mb: 0 } } })
+
+  it('opens on the everyday sections only, in the order a DJ reads them', () => {
+    render(<SettingsPage live={full()} onReconnect={() => {}} onReport={() => {}} />)
+    const visible = screen.getAllByRole('heading', { level: 2 }).map(h => h.textContent)
+    expect(visible).toEqual(['Connections', 'Library', 'Updates', 'Advanced'])
+    // The old Help box is gone from the main page; its rows live under Troubleshooting now.
+    expect(screen.queryByRole('heading', { name: 'Help' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show logs' })).not.toBeInTheDocument()
+  })
+
+  it('keeps technical words off the main page until Advanced is opened', () => {
+    const { container } = render(<SettingsPage live={full()} onReconnect={() => {}} onReport={() => {}} />)
+    const main = [...container.querySelectorAll('.settings > *')].filter(el => el.id !== 'settings-advanced')
+    const text = main.map(el => el.textContent).join(' ')
+    for (const word of [/slskd/i, /\bports?\b/i, /\bAPI\b/, /\blogs?\b/i, /Application Support/, /\b50300\b/]) expect(text).not.toMatch(word)
+    expect(screen.getByText(/Only needed when something isn't working/)).toBeVisible()
+  })
+
+  it('sorts Advanced into Soulseek account, Telegram and Troubleshooting', () => {
+    render(<SettingsPage live={full()} onReconnect={() => {}} onReport={() => {}} />)
+    openAdvanced()
+    const sub = within(advanced()).getAllByRole('heading', { level: 3 }).map(h => h.textContent)
+    expect(sub).toEqual(['General', 'Soulseek account', 'Telegram', 'Troubleshooting'])
+    expect(section('General')).toContainElement(screen.getByRole('switch', { name: 'Check for updates automatically' }))
+    for (const name of ['Soulseek password', 'Sharing']) {
+      expect(section('Soulseek account')).toContainElement(screen.getByText(name))
+    }
+    expect(section('Telegram')).toContainElement(screen.getByText('Use your own Telegram API keys'))
+    for (const name of ['Report a problem', 'App data', 'Technical details', 'Run setup again']) {
+      expect(section('Troubleshooting')).toContainElement(screen.getByText(name))
+    }
+    // The slskd page's login is a developer's tool: folded inside Technical details, not beside the password.
+    const tech = screen.getByText('Technical details').closest('details')!
+    expect(tech).toContainElement(screen.getByText('Helper web login'))
+    expect(tech).not.toHaveAttribute('open')
+  })
+
+  it('draws no Soulseek account box when there is no Soulseek account', () => {
+    const live = full() as unknown as { settings: AppSettings; health: Health }
+    render(<SettingsPage live={makeLive({ ...live, settings: { ...live.settings, soulseek_enabled: false } })} onReconnect={() => {}} />)
+    openAdvanced()
+    expect(screen.queryByRole('heading', { name: 'Soulseek account' })).not.toBeInTheDocument()
+    expect(within(advanced()).getAllByRole('heading', { level: 3 }).map(h => h.textContent)).toEqual(['General', 'Telegram', 'Troubleshooting'])
+    expect(section('Troubleshooting')).toContainElement(screen.getByText('Run setup again'))
+  })
+
+  it('tells the DJ what the library folder is for, and the update switch what it does', () => {
+    render(<SettingsPage live={full()} onReconnect={() => {}} />)
+    expect(within(section('Library')).getByText('Where Flackey saves your tracks.')).toBeInTheDocument()
+    expect(within(section('General')).getByText('Tells you when a new version of Flackey is out.')).toBeInTheDocument()
+  })
+
+  it('shows only the folder and extended mixes in Library, with layout, format and the extended choice folded away', () => {
+    render(<SettingsPage live={full()} onReconnect={() => {}} />)
+    const fold = screen.getByRole('button', { name: 'More library options' })
+    expect(fold).toHaveAttribute('aria-expanded', 'false')
+    expect(within(section('Library')).getByRole('switch', { name: 'Offer extended mixes when available' })).toBeVisible()
+    for (const name of ['Folder layout', 'File format', 'When an extended mix is found']) {
+      expect(screen.getByText(name)).not.toBeVisible()
+    }
+    openMoreLibrary()
+    expect(fold).toHaveAttribute('aria-expanded', 'true')
+    for (const name of ['Folder layout', 'File format', 'When an extended mix is found']) {
+      expect(screen.getByText(name)).toBeVisible()
+    }
+    expect(section('Library')).toContainElement(screen.getByText('File format'))
+  })
+
+  it('keeps the update status on the main page and the automatic check under Advanced', () => {
+    render(<SettingsPage live={full()} onReconnect={() => {}} />)
+    expect(within(section('Updates')).getByText('Flackey 0.1.0')).toBeVisible()
+    expect(within(section('Updates')).queryByRole('switch')).not.toBeInTheDocument()
+    expect(advanced()).toContainElement(screen.getByText('Check for updates automatically'))
+  })
 })

@@ -126,7 +126,7 @@ function AppBody({ live }: { live: Live }) {
   if (sourceOn && !authorized) {
     const why = !telegramConfigured ? "Telegram isn't set up" : h.telegram_unreachable ? "can't reach Telegram" : 'Telegram is signed out'
     const fix = telegramConfigured ? 'reconnect' : 'set it up'
-    banners.push(<Banner key="telegram" tone="amber" text={`Deezer bot paused — ${why}. Soulseek keeps downloading; ${fix} to get the bot's MP3 copies back.`} action={{ label: telegramConfigured ? 'Reconnect' : 'Set up', onClick: () => setReconnecting(true) }} />)
+    banners.push(<Banner key="telegram" tone="amber" text={`Deezer (through Telegram) paused — ${why}. Soulseek keeps downloading; ${fix} to get Deezer's MP3 copies back.`} action={{ label: telegramConfigured ? 'Reconnect' : 'Set up', onClick: () => setReconnecting(true) }} />)
   }
   // Only when there is something to click: a newer tag with no installer yet is detail for the
   // Settings page, not a launch-time nag with nowhere for the click to go. `live.update` is null when
