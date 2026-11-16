@@ -2844,3 +2844,33 @@ def test_usage_stats_routes(client, tmp_path):
         assert client.put("/api/telemetry", json={"enabled": "yes"}).status_code == 400
     finally:
         telemetry.uninstall()
+
+
+def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client, tmp_path):
+    """`keep_anyway` carries the overruled refusal's tier, reason code and detectors (review 2026-11-16),
+    read from the stored summary, and never its reason sentence or measured numbers. (It used to read
+    the stored analysis as a dict, so a successful keep of an analysed refusal answered 500.)"""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    c, store, _settings = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    summary = {"version": 2, "tier": "reject", "reason": "lossless container but cutoff at 16012 Hz",
+               "edge": {"finding": "unambiguous", "edge_hz": 16012, "drop_db": 40.0, "frames_above_edge": 0.0},
+               "quant": {"finding": "none", "codec": None, "z": 0.3},
+               "integrity": {"checked": ["length_header"], "failed": None}, "container": {}}
+    store.add_rejection(rid, summary["reason"], 900, 16012, None, kind="quality", analysis=summary)
+    store.set_state(rid, RequestState.REJECTED)
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        assert c.post(f"/api/requests/{rid}/accept").status_code == 400   # no copy kept: the keep fails
+    finally:
+        telemetry.uninstall()
+    (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "keep_anyway"]
+    assert ev["which"] == "keep_it_anyway" and ev["result"] == "failed" and ev["rejection_kind"] == "quality"
+    assert ev["tier"] == "reject" and ev["reason_code"] == "edge_unambiguous"
+    assert ev["detectors_fired"] == ["spectral"] and ev["edge"] == "16-17"
+    assert "16012" not in str(ev) and "cutoff" not in str(ev)

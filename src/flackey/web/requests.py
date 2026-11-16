@@ -13,7 +13,7 @@ from ..inbox import BadLink, Inbox
 from ..models import FAILED_STATES, SWEEPABLE_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
 from ..telemetry import buckets
-from ..worker import CANCELLABLE, Worker
+from ..worker import CANCELLABLE, Worker, usage
 from . import Bundles, to_dict
 
 log = logging.getLogger(__name__)
@@ -108,18 +108,29 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
         action(name or "retry", before)
         return out
 
+    def kept(which: str, rejection, result: str) -> None:
+        """`keep_anyway`: which refusal was overruled -- its kind, tier, reason code and the detectors that
+        fired, bucketed as `quality_check` sends them -- so a check that is overruled often shows up."""
+        if not telemetry.enabled():
+            return
+        try:
+            kind = getattr(rejection, "kind", None) if which == "keep_it_anyway" else "quality"
+            telemetry.emit("keep_anyway", which=which, result=result,
+                           rejection_kind=kind if kind in ("quality", "different_recording") else None,
+                           route="soulseek" if which == "keep_lossless" else "telegram",
+                           **usage.refusal_fields(rejection))
+        except Exception:
+            log.debug("usage stats: keep_anyway failed", exc_info=True)
+
     async def keep(rid: int, which: str, fn):
         rejection = store.get_rejection_for_request(rid) if which == "keep_it_anyway" else store.held_lossless(rid)
         try:
             out = await act(rid, fn)
         except HTTPException:
-            telemetry.emit("keep_anyway", which=which, result="failed",
-                           rejection_kind=getattr(rejection, "kind", None) if which == "keep_it_anyway" else None)
+            kept(which, rejection, "failed")
             raise
         state = out.get("state") if isinstance(out, dict) else None
-        telemetry.emit("keep_anyway", which=which, result="filed" if state == "done" else "could_not_check",
-                       rejection_kind=getattr(rejection, "kind", None) if which == "keep_it_anyway" else "quality",
-                       tier=((getattr(rejection, "analysis", None) or {}).get("tier")) if rejection else None)
+        kept(which, rejection, "filed" if state == "done" else "could_not_check")
         return out
 
     async def act(rid: int, fn):

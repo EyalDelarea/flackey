@@ -20,6 +20,26 @@ log = logging.getLogger(__name__)
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 
 
+QUEUED_STATES = ("Requested", "Queued")
+
+
+def transfer_marks(timeline: list[dict]) -> tuple[dict | None, dict | None, dict | None]:
+    """The last pick's `enqueue`, the moment it left the peer's queue, and its first byte.
+
+    The two waits the attempt event reports are told apart here (review 2026-11-16: they were the same
+    span): `queue_wait` runs from the enqueue to the first transfer state that is no longer Requested or
+    Queued (or the first byte, if that came first); `first_byte` runs from there to the first byte. Only
+    the last pick counts, because that is the transfer the outcome is about."""
+    idx = max((i for i, e in enumerate(timeline) if e["event"] == "enqueue"), default=None)
+    if idx is None:
+        return None, None, None
+    after = timeline[idx + 1:]
+    byte = next((e for e in after if e["event"] == "first_byte"), None)
+    left = next((e for e in after if e["event"] == "first_byte" or (
+        e["event"] == "transfer_state" and not str(e["detail"].get("state") or "").startswith(QUEUED_STATES))), None)
+    return timeline[idx], left, byte
+
+
 class AttemptRecorder:
     def __init__(self, store: Store, raw_dir: Path, request_id: int, provider: str, query: str,
                  clock: Callable[[], float] = time.monotonic):
@@ -87,12 +107,13 @@ class AttemptRecorder:
             names = [e["event"] for e in self.timeline]
             search = first("search_completed")
             started = first("search_started")
-            enqueue, byte = first("enqueue"), first("first_byte")
+            enqueue, left_queue, byte = transfer_marks(self.timeline)
             size = enqueue["detail"].get("size") if enqueue else None
             fp = next((e for e in reversed(self.timeline) if e["event"] == "fingerprint"), None)
             fp_score = fp["detail"].get("score") if fp else None
             transfer_s = None
-            done = first("completed")
+            done = next((e for e in self.timeline if e["event"] == "completed" and enqueue
+                         and e["t_ms"] >= enqueue["t_ms"]), None)
             if enqueue and done:
                 transfer_s = (done["t_ms"] - enqueue["t_ms"]) / 1000
             speed = (size / 1000) / transfer_s if size and transfer_s else None
@@ -103,8 +124,8 @@ class AttemptRecorder:
                 slow_fallback="slow_fallback" in names,
                 search_time=buckets.dur((search["t_ms"] - (started["t_ms"] if started else 0)) / 1000)
                 if search else None,
-                queue_wait=buckets.dur((byte["t_ms"] - enqueue["t_ms"]) / 1000) if enqueue and byte else None,
-                first_byte=buckets.dur(byte["detail"].get("ms", 0) / 1000) if byte else None,
+                queue_wait=buckets.dur((left_queue["t_ms"] - enqueue["t_ms"]) / 1000) if left_queue else None,
+                first_byte=buckets.dur((byte["t_ms"] - left_queue["t_ms"]) / 1000) if byte and left_queue else None,
                 transfer_time=buckets.dur(total_ms / 1000), speed=buckets.speed_kbps(speed),
                 file_size=buckets.size_mb(size) if isinstance(size, int) else None,
                 disk_full="disk_full" in names,
