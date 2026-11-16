@@ -1753,3 +1753,40 @@ async def test_usage_stats_describe_a_filed_track_in_labels_only(env, tmp_path):
     blob = json.dumps(events)
     for leaked in ("Astral", "Into the Void", "Someone", str(_settings.library_root)):
         assert leaked not in blob
+
+
+async def test_usage_stats_describe_failures_by_state_and_stage_only(env, tmp_path, monkeypatch):
+    """The failure recipes in the local demo: a not-found, a quality rejection and a cancel each end in a
+    `request_finished` with the state, and the rejection also sends its `quality_check` verdict. No error
+    text, artist, title or path rides along."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        _settings, store, _notifier = env
+        w = make_worker(env, FakeSource(error=SourceNotFound("bot said: Nothing for Astral")), FakeCatalog([CT]))
+        assert (await w.process(store.add_request("q", RequestKind.TEXT))).state == RequestState.NOT_FOUND
+
+        def refusal(path, spectrogram_dir, name=None, rule="tiers"):
+            return replace(_spectral_refusal(path, spectrogram_dir, name), tier="reject")
+
+        ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+        w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+        monkeypatch.setattr(filing_mod, "verify", refusal)
+        assert (await w.process(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.REJECTED
+
+        assert (await w.cancel(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.CANCELLED
+    finally:
+        telemetry.uninstall()
+    events = t.snapshot()["pending"]
+    finished = [e["state"] for e in events if e["event"] == "request_finished"]
+    assert finished == ["not_found", "rejected", "cancelled"]
+    (qc,) = [e for e in events if e["event"] == "quality_check"]
+    assert qc["tier"] == "reject"
+    blob = json.dumps(events)
+    for leaked in ("Astral", "Into the Void", "Nothing for", str(_settings.library_root)):
+        assert leaked not in blob
