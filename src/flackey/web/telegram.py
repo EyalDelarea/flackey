@@ -101,7 +101,7 @@ def router(login: TelegramLogin | None, status: dict,
         if not isinstance(enabled, bool):
             raise HTTPException(400, "enabled must be true or false")
         if enabled and not settings.telegram_configured:
-            raise HTTPException(409, "Telegram isn't set up yet. Set it up before switching on the Deezer bot.")
+            raise HTTPException(409, "Telegram isn't set up yet. Set it up before switching on Deezer (through Telegram).")
         save_settings(settings, source_enabled=enabled)
         status["source_enabled"] = enabled
         return {"source_enabled": enabled}

@@ -90,12 +90,12 @@ describe('the Telegram banner', () => {
   it('says only the Deezer bot is paused, and that Soulseek keeps going, while Telegram is signed out', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: true }))
     render(<App />)
-    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    const banner = (await screen.findByText(/Deezer \(through Telegram\) paused/)).closest('.banner') as HTMLElement
     expect(banner).toHaveClass('amber')
     expect(banner).toHaveTextContent('Telegram is signed out')
     expect(banner).toHaveTextContent('Soulseek keeps downloading')
     expect(banner).not.toHaveTextContent('keep digging')   // the old line said downloads waited on Telegram
-    expect(screen.getAllByText(/Deezer bot paused/)).toHaveLength(1)
+    expect(screen.getAllByText(/Deezer \(through Telegram\) paused/)).toHaveLength(1)
     fireEvent.click(within(banner).getByRole('button', { name: 'Reconnect' }))
     expect(await screen.findByText('Scan with the Telegram app on your phone')).toBeInTheDocument()
   })
@@ -103,7 +103,7 @@ describe('the Telegram banner', () => {
   it('says Telegram could not be reached, not that it signed out, when it never answered', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_unreachable: true, source_enabled: true }))
     render(<App />)
-    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    const banner = (await screen.findByText(/Deezer \(through Telegram\) paused/)).closest('.banner') as HTMLElement
     expect(banner).toHaveTextContent("can't reach Telegram")
     expect(banner).not.toHaveTextContent('signed out')
     expect(banner).toHaveTextContent('Soulseek keeps downloading')
@@ -114,7 +114,7 @@ describe('the Telegram banner', () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: false }))
     render(<App />)
     await screen.findByText('Not connected')
-    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Deezer \(through Telegram\) paused/)).not.toBeInTheDocument()
   })
 
   it('says nothing about Telegram when it was never set up and the bot is off, and Settings says "Not set up"', async () => {
@@ -125,7 +125,7 @@ describe('the Telegram banner', () => {
     // Soulseek alone is a working source, so the sidebar is green rather than pointing at Settings.
     await screen.findByText('Connected')
     expect(screen.queryByText('Not connected')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Deezer \(through Telegram\) paused/)).not.toBeInTheDocument()
     // Where the sidebar's dot leads: the account that was never made reads as such, with no sign-out in it.
     fireEvent.click(screen.getByRole('button', { name: /Settings/ }))
     const row = (await screen.findByText('Not set up')).closest('.srow') as HTMLElement
@@ -140,7 +140,7 @@ describe('the Telegram banner', () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, telegram_configured: false, source_enabled: true }))
     vi.spyOn(api, 'telegramStatus').mockResolvedValue({ authorized: false, configured: false, phone_masked: null })
     render(<App />)
-    const banner = (await screen.findByText(/Deezer bot paused/)).closest('.banner') as HTMLElement
+    const banner = (await screen.findByText(/Deezer \(through Telegram\) paused/)).closest('.banner') as HTMLElement
     expect(banner).toHaveTextContent("Telegram isn't set up")
     expect(banner).toHaveTextContent('set it up to get')
     expect(banner).not.toHaveTextContent('signed out')
@@ -153,7 +153,7 @@ describe('the Telegram banner', () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true, source_enabled: true }))
     render(<App />)
     await screen.findByText('Connected')
-    expect(screen.queryByText(/Deezer bot paused/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Deezer \(through Telegram\) paused/)).not.toBeInTheDocument()
   })
 })
 

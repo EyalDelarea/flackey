@@ -26,7 +26,7 @@ it('says Telegram is optional on the sign-in screen, the way the Soulseek step d
   vi.spyOn(api, 'qrState').mockResolvedValue({ state: 'waiting' })
   render(<TelegramStep onDone={vi.fn()} onSkip={vi.fn()} pollMs={10} />)
   await screen.findByText('Scan with the Telegram app on your phone')
-  expect(screen.getByText(/^Optional — Telegram is only how Flackey reaches the Deezer bot/)).toBeInTheDocument()
+  expect(screen.getByText(/^Optional — Telegram is only how Flackey reaches Deezer/)).toBeInTheDocument()
   fireEvent.click(screen.getByText('Use phone number instead'))
   expect(screen.getByText(/^Optional — /)).toBeInTheDocument()      // the step's, not one sign-in screen's
 })
