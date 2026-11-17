@@ -84,7 +84,7 @@ export default function PrivacySection({ onReport }: { onReport?: () => void } =
         {t.pending_delete && t.delete_retry && <div className="v">{deletePending(t.delete_retry)}</div>}
         {t.delete_refused && <div className="err" role="alert">Couldn't confirm deletion: our server refused the
           request{t.delete_refused.at ? ` at ${when(t.delete_refused.at)}` : ''}, so what was sent may still be
-          stored. Contact us and we'll erase it by hand.{' '}
+          stored. Contact us and we'll look into it.{' '}
           {onReport ? <button type="button" className="btn-link" onClick={onReport}>Report a bug…</button>
             : 'Use Report a bug in the sidebar.'}</div>}</div></div>
       <div className="srow"><div className="srow-body">
