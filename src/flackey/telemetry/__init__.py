@@ -51,7 +51,9 @@ def from_settings(settings, version: str, environ=os.environ) -> Telemetry:
         interval = None
     built_url, built_key = build_telemetry()
     return Telemetry(settings.data_dir, version=version, enabled=settings.telemetry_enabled,
-                     install_id=settings.telemetry_install_id, opted_in=settings.telemetry_opted_in,
+                     install_id=settings.telemetry_install_id,
+                     install_secret=getattr(settings, "telemetry_install_secret", None),
+                     opted_in=settings.telemetry_opted_in,
                      asked=settings.telemetry_asked,
                      url=environ.get(ENV_URL), built_url=built_url, key=environ.get(ENV_KEY) or built_key,
                      mode=mode, interval_s=interval,

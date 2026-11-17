@@ -224,7 +224,8 @@ def known_secrets(settings: Settings) -> list[str | None]:
     web = read_web_credentials(settings.data_dir)
     return [str(settings.telegram_api_id) if settings.telegram_api_id else None,
             settings.telegram_api_hash, settings.slskd_api_key, read_api_key(settings.data_dir),
-            read_username(settings.data_dir), read_password(settings.data_dir), web[1] if web else None]
+            read_username(settings.data_dir), read_password(settings.data_dir), web[1] if web else None,
+            settings.telemetry_install_secret]
 
 
 def display_summary() -> str:

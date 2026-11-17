@@ -22,6 +22,7 @@ import logging
 import os
 import platform
 import random
+import secrets
 import sys
 import threading
 import time
@@ -45,6 +46,8 @@ KEY_HEADER = "X-Flackey-Key"
 ENV_INTERVAL = "FLACKEY_TELEMETRY_INTERVAL_S"
 OUTBOX = "telemetry-outbox.jsonl"
 SENT = "telemetry-sent.jsonl"
+# One owed delete per line: "<install id> <install secret>". The secret goes with its ID, so a delete still owed
+# after New ID proves ownership of the OLD ID. Written 0600: it holds secrets.
 PENDING_DELETE = "telemetry-delete-pending"
 STATE = "telemetry-state.json"
 MARKER = "telemetry-session"
@@ -158,9 +161,26 @@ def _today() -> dt.date:
     return dt.datetime.now(dt.UTC).date()
 
 
+def new_secret() -> str:
+    """The install secret: 32 random bytes, URL-safe (43 characters). Proves to the collector that a batch or a
+    delete comes from the install that first used the ID, so knowing the ID alone is not enough. Never shown,
+    never logged, never in a bug report (`report.known_secrets`)."""
+    return secrets.token_urlsafe(32)
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` readable by this user only, replacing the file whole."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 class Telemetry:
     def __init__(self, data_dir: Path, *, version: str, enabled: bool = False, install_id: str | None = None,
-                 opted_in: str | None = None, asked: bool = False, url: str | None = None, mode: str = "on",
+                 install_secret: str | None = None, opted_in: str | None = None, asked: bool = False, url: str | None = None, mode: str = "on",
                  built_url: str | None = None, key: str | None = None,
                  interval_s: float | None = None, persist: Callable[..., None] | None = None,
                  clock: Callable[[], float] = time.time, today: Callable[[], dt.date] = _today,
@@ -178,12 +198,18 @@ class Telemetry:
             log.warning("usage stats: this build's collector address is not HTTPS; nothing will be sent")
         self.key = key or None
         self.install_id = install_id if enabled else None
+        self.install_secret = install_secret if enabled else None
         self.opted_in = opted_in
         self.asked = bool(asked)
         self._enabled = bool(enabled and install_id)
         self.interval_s = max(MIN_INTERVAL_S, interval_s) if interval_s else DEFAULT_INTERVAL_S
         self._jitter = JITTER_S if interval_s is None else 0.0
         self.persist = persist or (lambda **_kw: None)
+        if self._enabled and not self.install_secret:
+            # Opted in before the secret existed (a pre-release build): it gets one now. Its ID has never been
+            # registered with a secret on a collector that requires one, so the first batch registers this.
+            self.install_secret = new_secret()
+            self.persist(telemetry_install_secret=self.install_secret)
         self.clock, self.today, self.transport = clock, today, transport
         self.session_id = str(uuid.uuid4())
         self._seq = 0
@@ -234,10 +260,11 @@ class Telemetry:
         if self._enabled:
             return
         self.install_id = str(uuid.uuid4())
+        self.install_secret = new_secret()
         self.opted_in = self.today().isoformat()
         self._enabled = True
         self.persist(telemetry_enabled=True, telemetry_install_id=self.install_id,
-                     telemetry_opted_in=self.opted_in)
+                     telemetry_install_secret=self.install_secret, telemetry_opted_in=self.opted_in)
         info = self.start_session()
         self._next_send = 0.0
         if self.on_opt_in is not None:
@@ -246,9 +273,10 @@ class Telemetry:
     def opt_out(self) -> None:
         """Off, and everything sent is deleted: the delete is queued on disk and retried until the
         collector confirms it. Nothing else of telemetry is left on this computer."""
-        old = self.install_id
+        old, old_secret = self.install_id, self.install_secret
         self._enabled = False
         self.install_id = None
+        self.install_secret = None
         self.opted_in = None
         with self._lock:
             self._queue.clear()
@@ -256,9 +284,10 @@ class Telemetry:
         self._state = {}
         for name in (OUTBOX, SENT, STATE, MARKER):
             (self.data_dir / name).unlink(missing_ok=True)
-        if old:
-            self._queue_delete(old)
-        self.persist(telemetry_enabled=False, telemetry_install_id=None, telemetry_opted_in=None)
+        if old and old_secret:
+            self._queue_delete(old, old_secret)
+        self.persist(telemetry_enabled=False, telemetry_install_id=None, telemetry_install_secret=None,
+                     telemetry_opted_in=None)
         self._next_send = 0.0
 
     def mark_asked(self) -> None:
@@ -273,23 +302,23 @@ class Telemetry:
         """New ID: the old one's data is deleted first, and what was queued under it goes with it."""
         if not self._enabled:
             raise ValueError("usage stats are off")
-        old = self.install_id
+        old, old_secret = self.install_id, self.install_secret
         with self._lock:
             self._queue.clear()
         (self.data_dir / OUTBOX).unlink(missing_ok=True)
-        if old:
-            self._queue_delete(old)
+        if old and old_secret:
+            self._queue_delete(old, old_secret)   # the OLD pair: the collector knows the old ID by the old secret
         self.install_id = str(uuid.uuid4())
-        self.persist(telemetry_install_id=self.install_id)
+        self.install_secret = new_secret()
+        self.persist(telemetry_install_id=self.install_id, telemetry_install_secret=self.install_secret)
         self._next_send = 0.0
 
-    def _queue_delete(self, install_id: str) -> None:
-        path = self.data_dir / PENDING_DELETE
-        ids = self._pending_deletes()
-        if install_id not in ids:
-            ids.append(install_id)
+    def _queue_delete(self, install_id: str, install_secret: str) -> None:
+        owed = self._pending_deletes()
+        if install_id not in {i for i, _ in owed}:
+            owed.append((install_id, install_secret))
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(f"{i}\n" for i in ids), encoding="utf-8")
+        self._write_pending(owed)
         # A fresh delete is tried at once, whatever an older one was waiting on.
         (self.data_dir / DELETE_RETRY).unlink(missing_ok=True)
 
@@ -303,11 +332,22 @@ class Telemetry:
     def _jittered(self, s: float) -> float:
         return s * random.uniform(1 - BACKOFF_JITTER, 1 + BACKOFF_JITTER) if self._jitter else s
 
-    def _pending_deletes(self) -> list[str]:
+    def _pending_deletes(self) -> list[tuple[str, str]]:
+        """Every owed delete as (install id, install secret). A line without a secret (written by a pre-release
+        build) cannot prove ownership, so it is dropped rather than retried forever."""
         try:
-            return [ln.strip() for ln in (self.data_dir / PENDING_DELETE).read_text().splitlines() if ln.strip()]
+            lines = (self.data_dir / PENDING_DELETE).read_text(encoding="utf-8").splitlines()
         except OSError:
             return []
+        owed = []
+        for ln in lines:
+            parts = ln.split()
+            if len(parts) == 2:
+                owed.append((parts[0], parts[1]))
+        return owed
+
+    def _write_pending(self, owed: list[tuple[str, str]]) -> None:
+        _write_private(self.data_dir / PENDING_DELETE, "".join(f"{i} {s}\n" for i, s in owed))
 
     # -- emitting --------------------------------------------------------------------------------------------
 
@@ -589,10 +629,10 @@ class Telemetry:
         """(the send worked or the batch was dropped as refused, there is more to send, the collector's
         Retry-After in seconds when it gave one)."""
         lines = self._outbox_lines()
-        if not lines or not self.install_id:
+        if not lines or not self.install_id or not self.install_secret:
             return True, False, None
         batch = lines[:BATCH]
-        body = {"schema": SCHEMA_VERSION, "install_id": self.install_id,
+        body = {"schema": SCHEMA_VERSION, "install_id": self.install_id, "install_secret": self.install_secret,
                 "dropped": min(self._dropped, 1_000_000), "events": [json.loads(ln) for ln in batch]}
         data = gzip.compress(json.dumps(body, separators=(",", ":")).encode())
         try:
@@ -641,9 +681,10 @@ class Telemetry:
         a 429, a network error) keeps it and backs off -- doubling from DELETE_BACKOFF_MIN_S to MAX_BACKOFF_S,
         jittered, never sooner than Retry-After -- with the wait kept on disk across restarts."""
         left, error, wait = [], None, None
-        for install_id in self._pending_deletes():
+        for install_id, install_secret in self._pending_deletes():
             try:
-                r = await http.post(f"{self.url}/v1/delete", json={"install_id": install_id})
+                r = await http.post(f"{self.url}/v1/delete",
+                                    json={"install_id": install_id, "install_secret": install_secret})
                 done = 200 <= r.status_code < 300
                 if not done:
                     error = f"HTTP {r.status_code}"
@@ -654,14 +695,14 @@ class Telemetry:
                 self.last_delete_confirmed = self._stamp()
                 log.info("usage stats: the collector confirmed a delete")
             else:
-                left.append(install_id)
+                left.append((install_id, install_secret))
         path = self.data_dir / PENDING_DELETE
         retry = self.data_dir / DELETE_RETRY
         if not left:
             path.unlink(missing_ok=True)
             retry.unlink(missing_ok=True)
             return
-        path.write_text("".join(f"{i}\n" for i in left), encoding="utf-8")
+        self._write_pending(left)
         attempts = int(self._delete_retry().get("attempts", 0) or 0) + 1
         backoff = min(float(MAX_BACKOFF_S), DELETE_BACKOFF_MIN_S * 2 ** min(attempts - 1, 20))
         delay = min(float(MAX_BACKOFF_S), max(self._jittered(backoff), wait or 0.0))

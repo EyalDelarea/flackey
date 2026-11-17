@@ -17,7 +17,8 @@ FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
              "source_enabled", "auto_update_check", "window_size", "extended_mixes",
-             "telemetry_enabled", "telemetry_install_id", "telemetry_opted_in", "telemetry_asked")
+             "telemetry_enabled", "telemetry_install_id", "telemetry_install_secret", "telemetry_opted_in",
+             "telemetry_asked")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
@@ -101,6 +102,9 @@ class Settings(BaseSettings):
     # loopback address only (`telemetry.local_url`), for development and the local demo.
     telemetry_enabled: bool = False
     telemetry_install_id: str | None = None
+    # Proves to the collector that this install owns its ID (a copied ID alone can neither delete nor send).
+    # Made with the ID, replaced with it, wiped with it. Never shown, never logged, redacted from bug reports.
+    telemetry_install_secret: str | None = None
     telemetry_opted_in: str | None = None
     # Whether the owner has been asked once (Welcome, the one-time prompt, or the Settings switch). Only
     # ever stops the one-time prompt from coming back; it never turns stats on.

@@ -16,6 +16,7 @@
   },
   "batch": {
     "install_id": {"type": "uuid4"},
+    "install_secret": {"type": "regex", "pattern": "^[A-Za-z0-9_-]{43}$"},
     "dropped": {"type": "int", "max": 1000000}
   },
   "common": {

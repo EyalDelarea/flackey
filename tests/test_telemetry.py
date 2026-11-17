@@ -7,6 +7,9 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import logging
+import re
+import sys
 
 import httpx
 import pytest
@@ -32,7 +35,7 @@ from flackey.telemetry.schema import SCHEMA_PATH, schema
 
 # The collector's schemas/v1.json.sha256 (EyalDelarea/flackey-telemetry). A change on either side must
 # change both, or the collector refuses what the app sends.
-COLLECTOR_V1_SHA256 = "815444a829da341a270b8fc052ce892dd1cf3f2496c0ccca8da53680cfe81db0"
+COLLECTOR_V1_SHA256 = "f0f0df16fd88cda39e9dddd19a81353164422533f52c9e6a9d410910042b69ce"
 MAC = {"os": "macos", "os_major": "26", "arch": "arm64"}
 FORBIDDEN = ("name", "title", "artist", "path", "url", "query", "user", "peer", "message", "ip", "email")
 
@@ -53,18 +56,31 @@ def run_tick(t: Telemetry, transport: httpx.MockTransport) -> None:
 
 
 class Collector:
-    """Accepts like the real one: gzip JSON, validated against the same schema."""
+    """Accepts like the real one: gzip JSON, and owner proof by trust on first use (collector migration 012):
+    the first batch registers an ID's secret, a later batch or delete with another secret is 403."""
 
     def __init__(self, status: int = 202):
         self.status, self.batches, self.deletes = status, [], []
+        self.owners: dict[str, str] = {}
+        self.delete_secrets: list[str] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/delete":
-            self.deletes.append(json.loads(request.content)["install_id"])
+            body = json.loads(request.content)
+            assert set(body) == {"install_id", "install_secret"}
+            owner = self.owners.get(body["install_id"])
+            if owner is not None and owner != body["install_secret"]:
+                return httpx.Response(403, json={"error": "not_owner"})
+            self.deletes.append(body["install_id"])
+            self.delete_secrets.append(body["install_secret"])
             return httpx.Response(202, json={})
         assert request.headers["content-encoding"] == "gzip"
         body = json.loads(gzip.decompress(request.content))
         self.batches.append(body)
+        if self.status == 202:
+            owner = self.owners.setdefault(body["install_id"], body["install_secret"])
+            if owner != body["install_secret"]:
+                return httpx.Response(403, json={"error": "not_owner"})
         return httpx.Response(self.status, json={})
 
 
@@ -305,7 +321,7 @@ def test_opt_out_deletes_everything_here_and_asks_the_collector_to_delete(tmp_pa
     run_tick(t, httpx.MockTransport(collector))
     t.opt_out()
     assert saved["telemetry_enabled"] is False and saved["telemetry_install_id"] is None
-    assert (tmp_path / PENDING_DELETE).read_text().strip() == old
+    assert (tmp_path / PENDING_DELETE).read_text().split()[0] == old
     for name in (OUTBOX, SENT, STATE):
         assert not (tmp_path / name).exists()
     run_tick(t, httpx.MockTransport(collector))
@@ -580,3 +596,147 @@ def test_a_down_collector_backs_off_and_honours_retry_after(tmp_path):
         clock.now = t._next_send
         run_tick(t, httpx.MockTransport(unreachable))
     assert t._next_send - clock.now == MAX_BACKOFF_S and (tmp_path / OUTBOX).read_text().strip()
+
+
+# --- the install secret (owner proof, collector migration 012) ---------------------------------------------
+
+SECRET_SHAPE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
+
+def test_opt_in_makes_a_secret_saves_it_and_sends_it_with_every_batch(tmp_path):
+    collector = Collector()
+    t, saved = make(tmp_path)
+    t.opt_in()
+    assert SECRET_SHAPE.fullmatch(t.install_secret)
+    assert saved["telemetry_install_secret"] == t.install_secret
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.batches[0]["install_secret"] == t.install_secret
+    assert collector.owners == {t.install_id: t.install_secret}
+    other, _ = make(tmp_path / "b")
+    other.opt_in()
+    assert other.install_secret != t.install_secret
+
+
+def test_opt_out_wipes_the_secret_and_the_delete_carries_it(tmp_path):
+    collector = Collector()
+    t, saved = make(tmp_path)
+    t.opt_in()
+    old, old_secret = t.install_id, t.install_secret
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    t.opt_out()
+    assert t.install_secret is None and saved["telemetry_install_secret"] is None
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == [old] and collector.delete_secrets == [old_secret]
+
+
+def test_new_id_makes_a_new_secret_and_the_pending_delete_keeps_the_old_pair(tmp_path):
+    """The delete owed after New ID must prove ownership of the OLD ID, so it goes out with the old secret,
+    even after a refused try and a restart; the new ID's batches carry the new secret."""
+    clock = Clock()
+    collector = Collector()
+    t, saved = make(tmp_path, clock=clock, interval_s=60)
+    t.opt_in()
+    old, old_secret = t.install_id, t.install_secret
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))               # the old pair is registered
+    t.reset_id()
+    assert t.install_secret != old_secret and SECRET_SHAPE.fullmatch(t.install_secret)
+    assert saved["telemetry_install_id"] == t.install_id and saved["telemetry_install_secret"] == t.install_secret
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(503)))   # the delete fails once
+    assert (tmp_path / PENDING_DELETE).read_text() == f"{old} {old_secret}\n"
+    t2, _ = make(tmp_path, clock=clock, interval_s=60, enabled=True, install_id=t.install_id,
+                 install_secret=t.install_secret)            # a restart
+    clock.now += MAX_BACKOFF_S
+    t2.emit("app_started", filing_format="aiff")
+    run_tick(t2, httpx.MockTransport(collector))
+    assert collector.deletes == [old] and collector.delete_secrets == [old_secret]
+    assert collector.batches[-1]["install_id"] == t.install_id
+    assert collector.batches[-1]["install_secret"] == t.install_secret
+
+
+def test_a_delete_with_the_wrong_secret_stays_owed(tmp_path):
+    collector = Collector()
+    t, _ = make(tmp_path, interval_s=60)
+    t.opt_in()
+    collector.owners[t.install_id] = "x" * 43                 # someone else registered this ID first
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == [] and t.describe()["pending_delete"]
+    assert t.describe()["delete_retry"]["error"] == "HTTP 403"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_the_pending_delete_file_is_private(tmp_path):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.opt_out()
+    assert (tmp_path / PENDING_DELETE).stat().st_mode & 0o777 == 0o600
+
+
+def test_a_pending_line_without_a_secret_is_dropped(tmp_path):
+    (tmp_path / PENDING_DELETE).write_text("5b0e2c1a-0000-4000-8000-000000000000\n", encoding="utf-8")
+    t, _ = make(tmp_path)
+    assert t._pending_deletes() == [] and not t.describe()["pending_delete"]
+
+
+def test_an_install_opted_in_before_the_secret_gets_one(tmp_path):
+    t, saved = make(tmp_path, enabled=True, install_id="5b0e2c1a-0000-4000-8000-000000000000")
+    assert SECRET_SHAPE.fullmatch(t.install_secret) and saved == {"telemetry_install_secret": t.install_secret}
+
+
+def test_from_settings_reads_the_secret(tmp_path):
+    from types import SimpleNamespace
+
+    s = SimpleNamespace(data_dir=tmp_path, telemetry_enabled=True,
+                        telemetry_install_id="5b0e2c1a-0000-4000-8000-000000000000",
+                        telemetry_install_secret="s" * 43, telemetry_opted_in=None, telemetry_asked=True)
+    assert telemetry.from_settings(s, "0.6.1", environ={}).install_secret == "s" * 43
+
+
+def test_the_secret_is_never_shown_or_logged(tmp_path, caplog):
+    """Not in Settings > Privacy (describe), not in What's sent (snapshot), not in any log line, through
+    a send, a refusal, a failing delete and a confirmed one."""
+    caplog.set_level(logging.DEBUG)
+    collector = Collector()
+    t, _ = make(tmp_path, interval_s=60)
+    t.opt_in()
+    secrets_seen = [t.install_secret]
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    t.emit("app_started", filing_format="aiff")
+    t._next_send = 0
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(403, json={"error": "not_owner"})))
+    shown = json.dumps(t.describe()) + json.dumps(t.snapshot())
+    t.reset_id()
+    secrets_seen.append(t.install_secret)
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(403)))
+    t.opt_out()
+    (tmp_path / DELETE_RETRY).unlink(missing_ok=True)
+    run_tick(t, httpx.MockTransport(collector))
+    shown += json.dumps(t.describe())
+    for secret in secrets_seen:
+        assert secret not in shown
+        assert secret not in caplog.text
+
+
+def test_the_privacy_api_never_returns_the_secret(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from flackey.web import telemetry as telemetry_web
+
+    t, _ = make(tmp_path)
+    telemetry.install(t)
+    try:
+        app = FastAPI()
+        app.include_router(telemetry_web.router())
+        c = TestClient(app)
+        on = c.put("/api/telemetry", json={"enabled": True}).text
+        secret = t.install_secret
+        bodies = on + c.get("/api/telemetry").text + c.get("/api/telemetry/log").text
+        bodies += c.get("/api/telemetry/catalog").text + c.post("/api/telemetry/new-id").text
+        assert secret not in bodies and t.install_secret not in bodies
+    finally:
+        telemetry.uninstall()
