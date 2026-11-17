@@ -151,6 +151,8 @@ export interface TelemetryState { available: boolean; enabled: boolean; mode?: '
   pending_delete?: boolean; last_delete_confirmed?: string | null
   /** A delete the collector has not taken yet: how many tries, the last failure, and when it goes again. */
   delete_retry?: { attempts: number; error: string | null; next_at: string | null } | null
+  /** A delete the server refused for good (wrong secret, unreadable request): no longer retried. */
+  delete_refused?: { at: string | null; reason: string | null } | null
   last_send?: { status: string; events?: number; at: string; error?: string } | null; interval_s?: number }
 /** Every event exactly as it was (or will be) sent. */
 export interface TelemetryLog { pending: Record<string, unknown>[]; sent: Record<string, unknown>[] }

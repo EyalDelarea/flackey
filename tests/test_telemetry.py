@@ -17,6 +17,7 @@ import pytest
 from flackey import telemetry
 from flackey.telemetry import buckets
 from flackey.telemetry.client import (
+    DELETE_REFUSED,
     DELETE_RETRY,
     DRAIN_GAP_S,
     FILES,
@@ -656,15 +657,48 @@ def test_new_id_makes_a_new_secret_and_the_pending_delete_keeps_the_old_pair(tmp
     assert collector.batches[-1]["install_secret"] == t.install_secret
 
 
-def test_a_delete_with_the_wrong_secret_stays_owed(tmp_path):
+def test_a_delete_with_the_wrong_secret_is_dropped_and_shown(tmp_path, caplog):
+    """Review finding 2: the collector's 403 not_owner can never turn into a 2xx, so it is not retried
+    forever: the entry goes, Settings > Privacy says the delete was refused, and the log names neither."""
+    caplog.set_level(logging.DEBUG)
     collector = Collector()
     t, _ = make(tmp_path, interval_s=60)
     t.opt_in()
-    collector.owners[t.install_id] = "x" * 43                 # someone else registered this ID first
+    iid, secret = t.install_id, t.install_secret
+    collector.owners[iid] = "x" * 43                          # someone else registered this ID first
     t.opt_out()
     run_tick(t, httpx.MockTransport(collector))
-    assert collector.deletes == [] and t.describe()["pending_delete"]
-    assert t.describe()["delete_retry"]["error"] == "HTTP 403"
+    d = t.describe()
+    assert collector.deletes == [] and not d["pending_delete"] and d["delete_retry"] is None
+    assert d["delete_refused"]["reason"] == "not_owner" and d["delete_refused"]["at"]
+    assert not (tmp_path / PENDING_DELETE).exists()
+    assert "refused a delete for good" in caplog.text
+    assert iid not in caplog.text and secret not in caplog.text
+    assert iid not in (tmp_path / DELETE_REFUSED).read_text() and secret not in (tmp_path / DELETE_REFUSED).read_text()
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(400, json={"error": "invalid", "field": "install_secret"}),
+                                    httpx.Response(403, json={"error": "not_owner"})])
+def test_a_permanent_refusal_drops_only_that_delete(tmp_path, answer):
+    t, _ = make(tmp_path)
+    good = ("5b0e2c1a-0000-4000-8000-000000000001", "g" * 43)
+    bad = ("5b0e2c1a-0000-4000-8000-000000000002", "b" * 43)
+    t._write_pending([bad, good])
+    run_tick(t, httpx.MockTransport(lambda r: answer if bad[0] in r.content.decode() else httpx.Response(503)))
+    assert t._pending_deletes() == [good], "the refused one goes; the one that failed for now stays"
+    assert t.describe()["delete_refused"]["reason"] == answer.json()["error"]
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(403), httpx.Response(400, text="Bad Request"),
+                                    httpx.Response(403, json={"error": "forbidden"})])
+def test_a_403_or_400_that_is_not_the_collectors_own_is_still_retried(tmp_path, answer):
+    """A geo-block or a proxy in between answers without the collector's body: never a reason to give up."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(lambda r: answer))
+    d = t.describe()
+    assert d["pending_delete"] and d["delete_refused"] is None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")

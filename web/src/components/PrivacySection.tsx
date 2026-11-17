@@ -29,7 +29,7 @@ function deletePending(r: NonNullable<TelemetryState['delete_retry']>): string {
 
 /** Settings > Privacy: the usage-stats switch, the ID, and every event exactly as it leaves.
  *  Hidden entirely when the server says usage stats cannot run here (or does not answer). */
-export default function PrivacySection() {
+export default function PrivacySection({ onReport }: { onReport?: () => void } = {}) {
   const [t, setT] = useState<TelemetryState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,7 +81,12 @@ export default function PrivacySection() {
       <div className="srow"><div className="srow-body"><div className="k">Status</div>
         <div className="v">{statusLine(t)}</div>
         {t.last_delete_confirmed && <div className="v">Delete received at {when(t.last_delete_confirmed)}.</div>}
-        {t.pending_delete && t.delete_retry && <div className="v">{deletePending(t.delete_retry)}</div>}</div></div>
+        {t.pending_delete && t.delete_retry && <div className="v">{deletePending(t.delete_retry)}</div>}
+        {t.delete_refused && <div className="err" role="alert">Couldn't confirm deletion: our server refused the
+          request{t.delete_refused.at ? ` at ${when(t.delete_refused.at)}` : ''}, so what was sent may still be
+          stored. Contact us and we'll erase it by hand.{' '}
+          {onReport ? <button type="button" className="btn-link" onClick={onReport}>Report a bug…</button>
+            : 'Use Report a bug in the sidebar.'}</div>}</div></div>
       <div className="srow"><div className="srow-body">
         <details className="tech" open={logOpen} onToggle={e => setLogOpen((e.currentTarget as HTMLDetailsElement).open)}>
           <summary>What's sent</summary>

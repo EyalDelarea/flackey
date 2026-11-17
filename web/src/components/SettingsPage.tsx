@@ -427,7 +427,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       {/* Privacy (the "Share usage stats" switch) sits on the main view, between Updates and Advanced: a DJ
           asked "does this send anything?" finds the answer without opening the technical fold. Drawn only when
           the build has usage stats at all. */}
-      <PrivacySection />
+      <PrivacySection onReport={onReport} />
       {/* Everything nobody needs on an ordinary day: secrets, sharing, keys, logs, diagnostics, starting
           over. A real button in the heading rather than a <details>, so a screen reader hears "Advanced,
           collapsed", and the line under it says what is inside before anyone opens it. Grouped inside by

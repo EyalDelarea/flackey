@@ -54,7 +54,10 @@ MARKER = "telemetry-session"
 # When the next delete may go and why the last one failed: kept on disk so a restart neither forgets the
 # delete nor starts hammering the collector again.
 DELETE_RETRY = "telemetry-delete-retry.json"
-FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER, DELETE_RETRY)
+# A delete the collector refused for good (wrong secret, or a request it can't read): retrying can never help,
+# so it is dropped and this records when and why, for Settings > Privacy. Holds no ID and no secret.
+DELETE_REFUSED = "telemetry-delete-refused.json"
+FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER, DELETE_RETRY, DELETE_REFUSED)
 MAX_QUEUE = 500
 MAX_OUTBOX_EVENTS = 2000
 MAX_OUTBOX_BYTES = 1_000_000
@@ -176,6 +179,18 @@ def _write_private(path: Path, text: str) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, path)
+
+
+def _refusal(r: httpx.Response) -> str | None:
+    """The collector's permanent answers to a delete: "not_owner" (403) or "invalid" (400), read from its JSON
+    body so a bare 403 or 400 from something in between (a geo-block, a proxy) is still retried."""
+    if r.status_code not in (400, 403):
+        return None
+    try:
+        err = r.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+    return err if (r.status_code, err) in ((403, "not_owner"), (400, "invalid")) else None
 
 
 class Telemetry:
@@ -575,8 +590,17 @@ class Telemetry:
                 "collector": self.url, "sending": self.sending,
                 "id_prefix": (self.install_id or "")[:8] or None, "opted_in": self.opted_in, "asked": self.asked,
                 "pending_delete": bool(self._pending_deletes()), "delete_retry": self._describe_delete_retry(),
+                "delete_refused": self._delete_refused(),
                 "last_delete_confirmed": self.last_delete_confirmed, "last_send": self.last_send,
                 "interval_s": self.interval_s}
+
+    def _delete_refused(self) -> dict | None:
+        """For Settings > Privacy: the last delete the collector refused for good, as {at, reason}."""
+        try:
+            d = json.loads((self.data_dir / DELETE_REFUSED).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return {"at": d.get("at"), "reason": d.get("reason")} if isinstance(d, dict) else None
 
     def _describe_delete_retry(self) -> dict | None:
         """For Settings > Privacy: a delete that has failed, how often, why, and when it goes again."""
@@ -677,16 +701,20 @@ class Telemetry:
         return True, bool(rest), None
 
     async def _send_deletes(self, http: httpx.AsyncClient) -> None:
-        """Every owed delete, one after another. Only a 2xx clears one; anything else (a 403 from a geo-block,
-        a 429, a network error) keeps it and backs off -- doubling from DELETE_BACKOFF_MIN_S to MAX_BACKOFF_S,
-        jittered, never sooner than Retry-After -- with the wait kept on disk across restarts."""
+        """Every owed delete, one after another. A 2xx clears one. The collector's own refusal (403 not_owner:
+        another secret owns the ID; 400 invalid: it can't read the request) can never succeed, so that one is
+        dropped and recorded for Settings > Privacy. Anything else (a bare 403 from a geo-block, a 429, a
+        network error) keeps it and backs off -- doubling from DELETE_BACKOFF_MIN_S to MAX_BACKOFF_S, jittered,
+        never sooner than Retry-After -- with the wait kept on disk across restarts."""
         left, error, wait = [], None, None
         for install_id, install_secret in self._pending_deletes():
+            refused = None
             try:
                 r = await http.post(f"{self.url}/v1/delete",
                                     json={"install_id": install_id, "install_secret": install_secret})
                 done = 200 <= r.status_code < 300
                 if not done:
+                    refused = _refusal(r)
                     error = f"HTTP {r.status_code}"
                     wait = retry_after_s(r, self.clock())
             except httpx.HTTPError as e:
@@ -694,6 +722,11 @@ class Telemetry:
             if done:
                 self.last_delete_confirmed = self._stamp()
                 log.info("usage stats: the collector confirmed a delete")
+            elif refused:
+                _write_private(self.data_dir / DELETE_REFUSED,
+                               json.dumps({"at": self._stamp(), "reason": refused}))
+                # Never the ID or the secret: only that one was refused, and why.
+                log.warning("usage stats: the collector refused a delete for good (%s); not retrying", refused)
             else:
                 left.append((install_id, install_secret))
         path = self.data_dir / PENDING_DELETE

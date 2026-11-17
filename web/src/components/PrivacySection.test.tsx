@@ -90,3 +90,12 @@ it('says plainly when a delete has not gone through and is still being retried',
   expect(await screen.findByText(/The delete hasn't gone through yet \(HTTP 403\), so what was sent is still stored\. Flackey keeps trying, next at/))
     .toBeInTheDocument()
 })
+
+it('says when the server refused a delete for good, and points to a bug report', async () => {
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ ...off, delete_refused: { at: '2026-11-16T12:00:00+00:00', reason: 'not_owner' } })
+  const onReport = vi.fn()
+  render(<PrivacySection onReport={onReport} />)
+  expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't confirm deletion: our server refused the request at .*Contact us/)
+  fireEvent.click(screen.getByRole('button', { name: 'Report a bug…' }))
+  expect(onReport).toHaveBeenCalled()
+})
