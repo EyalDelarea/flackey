@@ -5,7 +5,6 @@ import logging
 import shutil
 from pathlib import Path
 
-from ..catalog import CatalogUnavailable, best_match, with_original_date
 from ..identify import parse_text
 from ..library import find_duplicate, find_extended
 from ..match import candidate_query, candidate_version, decide, identification_order, same_version
@@ -15,7 +14,7 @@ from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
 from ..version import EXTENDED
 from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS, bot_paused
-from .records import CATALOG_SOURCE, QUERY_SOURCE, _mmss, catalog_candidate, query_candidate
+from .records import QUERY_SOURCE, _mmss, query_candidate
 
 log = logging.getLogger(__name__)
 
@@ -45,17 +44,17 @@ class PipelineMixin:
         await self._fetch_verify_file(req, cand, catalog)
 
     async def _identify(self, req: Request, query: Query) -> tuple[Candidate, CatalogTrack | None] | None:
-        """Search Beatport and the source, choose the record, and persist the choice. Answers with the
-        candidate and catalog match to fetch, or None when this pass has already been settled here --
-        retried, parked for review, a duplicate, or handed to the search on the request's own words."""
+        """Search the source, choose the record, and persist the choice. Answers with the candidate to
+        fetch (and no catalog record: tags are filled at filing, from Deezer and Discogs), or None when this
+        pass has already been settled here -- retried, parked for review, a duplicate, or handed to the
+        search on the request's own words.
+
+        There is no catalogue search before the download any more. Beatport was one, until its Cloudflare
+        challenge refused every lookup from 2026-10-14; it is gone, and the version, the duplicate check
+        and the pick all run on the request and the source's own candidates, as they did whenever Beatport
+        did not know a track (issue #69)."""
         self._set_state(req, RequestState.IDENTIFYING)
-        catalog_tracks = await self._catalog_search(req, query)
-        catalog = best_match(query, catalog_tracks)
-        if catalog:
-            # Dated by the earliest of its releases among the results in hand, not the reissue it is on.
-            catalog = self._dated_match(catalog, catalog_tracks, query.version)
-            self.store.upsert_catalog_track(catalog)
-            self.store.update_request(req.id, catalog_track_id=catalog.id)
+        catalog: CatalogTrack | None = None
 
         cands: list[Candidate] = []
         # What to tell the owner if nothing identifies the track. "No Deezer candidates" covers four
@@ -79,30 +78,15 @@ class PipelineMixin:
                 source_why = f"the Deezer bot found nothing ({e})"
                 log.info("req#%d not found at source: %s", req.id, e)
             except (SourceTimeout, SourceError) as e:
-                if catalog is None:
-                    # The source may be back in an hour and would offer a lossy fallback the query-only
-                    # path does not have; a retry is worth more than a Soulseek-or-nothing pass now.
-                    await self._retry_or_fail(req, f"source error: {e}")
-                    return None
-                # Beatport knows the track, so the request is still actionable: fall through to the
-                # catalog-only path rather than retrying a source that may be down for hours.
-                log.info("req#%d source gave nothing (%s); trying the lossless providers on the "
-                         "Beatport match alone", req.id, e)
+                # The source may be back in an hour and would offer a lossy fallback the query-only
+                # path does not have; a retry is worth more than a Soulseek-or-nothing pass now. (A
+                # Beatport match used to send this pass to Soulseek instead; there is none any more.)
+                await self._retry_or_fail(req, f"source error: {e}")
+                return None
 
         if not cands:
-            # Either the source is switched off, or it found nothing, or it failed with a Beatport
-            # match already in hand.
-            if catalog is not None:
-                # `catalog_candidate` explains what this costs; the short version is that the pick
-                # rules still run entirely on Beatport data, but a request with no video of its own
-                # then has nothing to fingerprint against and the attempt ends `fingerprint_unavailable`.
-                if not self._lossless_allowed(req):
-                    # Beatport knows the track, so it exists -- there is just no route to a file now.
-                    await self._no_route(req)
-                    return None
-                await self._fetch_verify_file(req, catalog_candidate(catalog), catalog)
-                return None
-            await self._search_on_the_request(req, query, None, f"{source_why} and no Beatport match")
+            # Either the source is switched off or it found nothing: the request's own words are left.
+            await self._search_on_the_request(req, query, None, source_why)
             return None
 
         # The record: by audio when the request has audio of its own, by text otherwise (issue #68).
@@ -132,17 +116,6 @@ class PipelineMixin:
             log.info("req#%d identification: %s (tried %s)", req.id, ident.reason, ident.tried)
         self._interpret(req, video, ident)   # labels the request in the background; changes nothing here
         chosen_obj = ident.chosen if ident is not None else decision.chosen
-        if chosen_obj is not None and chosen_obj.isrc:
-            # The source's recording ID disambiguates equally named Beatport releases. Never
-            # substitute a loosely matched release: require the normal search score first.
-            matched_catalog = best_match(query, catalog_tracks, chosen_obj.isrc)
-            if matched_catalog and matched_catalog.id != (catalog.id if catalog else None):
-                catalog = self._dated_match(matched_catalog, catalog_tracks, query.version)
-                self.store.upsert_catalog_track(catalog)
-                self.store.update_request(req.id, catalog_track_id=catalog.id)
-                if ident is None:
-                    decision = decide(query, cands, catalog)
-                    chosen_obj = decision.chosen
         saved = self.store.add_candidates(req.id, cands)
         confidence = (round(ident.score * 100) if ident is not None and ident.score is not None
                       else (chosen_obj.score if chosen_obj else None))
@@ -170,48 +143,19 @@ class PipelineMixin:
         self.store.update_request(req.id, chosen_candidate_id=chosen.id)
         return chosen, catalog
 
-    def _dated_match(self, catalog: CatalogTrack, tracks: list[CatalogTrack], asked: str | None) -> CatalogTrack:
-        """`catalog` dated by the earliest of its releases among `tracks`, the search results in hand -- and
-        by any earlier date already stored for the record. One search sees only some of Beatport's releases,
-        and the next request's (or the Deezer lookup at filing) may have found an earlier one: dated from this
-        search alone, the record would lose it, and a track filed as 2001 would read 2005 in the library."""
-        stored = self.store.get_catalog_track(catalog.id)
-        known = [stored.original_date] if stored is not None else []
-        return with_original_date(catalog, tracks, also=known, asked=asked)
-
-    async def _catalog_search(self, req: Request, query: Query) -> list[CatalogTrack]:
-        """Beatport's search, or nothing when Beatport refuses us. Beatport is a scraped web page and only
-        adds tags -- the file comes from the source and the fingerprint proves it -- so a Cloudflare
-        challenge (every lookup a 403 since 2026-10-14) must not cost the download; filing then takes what
-        tags it can from Deezer and Discogs instead (`_tags_for`, issue #146). The owner hears once
-        per outage, not once per track, and again only after Beatport has answered in between."""
-        try:
-            tracks = await self.catalog.search(query)
-        except CatalogUnavailable as e:
-            log.warning("req#%d: Beatport unavailable (%s); going on without its tags", req.id, e)
-            if not self._catalog_blocked:
-                self._catalog_blocked = True
-                await self.notifier.send(f"Beatport is blocking lookups ({e}). Downloads carry on, tagged "
-                                         f"from Deezer and Discogs where they know the track, until it "
-                                         f"answers again.")
-            return []
-        self._catalog_blocked = False
-        return tracks
-
     async def _catalog_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack | None:
-        """The catalog was matched for the video's title, i.e. for the original. When the candidate we are
-        downloading is another version (the owner picked a remix, or the video's length pinned an edit),
-        re-match Beatport against that version so the tags describe the recording in the file."""
+        """The stored record, while it describes the version being downloaded. A request identified before
+        Beatport was removed can still carry a Beatport record, matched for the video's title, i.e. for the
+        original. When the candidate is another version (the owner picked a remix, or the video's length
+        pinned an edit) that record is dropped rather than re-matched: filing then tags the file from the
+        candidate itself, filled from Deezer and Discogs (`_tags_for`), so the tags describe the recording
+        in the file."""
         if catalog is None or same_version(cand, catalog, req.query_version):
             return catalog
-        want = candidate_query(cand)
-        tracks = await self._catalog_search(req, want)
-        catalog = best_match(want, tracks)
-        if catalog:
-            catalog = self._dated_match(catalog, tracks, want.version)
-            self.store.upsert_catalog_track(catalog)
-        self.store.update_request(req.id, catalog_track_id=catalog.id if catalog else None)
-        return catalog
+        log.info("req#%d: the stored record is the %s, not the %s being fetched; tagging from the candidate",
+                 req.id, catalog.mix_name, candidate_version(cand))
+        self.store.update_request(req.id, catalog_track_id=None)
+        return None
 
 
     async def _search_on_the_request(self, req: Request, query: Query, catalog: CatalogTrack | None,
@@ -275,8 +219,8 @@ class PipelineMixin:
         acoustic = await self._acoustic_reference(req, cand)
         if acoustic.reference is None and acoustic.missing.startswith("video: ") and req.attempts + 1 < MAX_ATTEMPTS:
             # The same quick ladder `_process` gives a request whose record is chosen by audio, for the route
-            # that has no record at all. Since issue #69 the catalogue-less path is how a track Beatport has
-            # never heard of gets filed, and on it the video is the *only* reference: a stand-in candidate has
+            # that has no record at all. Since issue #69 the catalogue-less path is how a track the source has
+            # no record of gets filed, and on it the video is the *only* reference: a stand-in candidate has
             # no Deezer preview to fall back on, so a yt-dlp blip used to end the request in `error` on its
             # first pass -- after a real search and a download it then had nothing to check. Only a fetch that
             # failed ("video: "), never audio that arrived unreadable, and only while the ladder has budget:
@@ -301,17 +245,7 @@ class PipelineMixin:
             log.info("req#%d: no extended mix found; the normal version is already in the library", req.id)
             await self._mark_duplicate(req, owned.id, owned.path)
             return
-        if (hit is not None and hit.reference.from_query and catalog is not None
-                and cand.source in (CATALOG_SOURCE, QUERY_SOURCE)):
-            # No record vouches for this file: Beatport's spelling found nothing the recording check
-            # accepted and the owner's own words did. The Beatport record is not this recording, so it must
-            # not name the file either. (With a chosen Deezer record the record's tags stand, which is why
-            # the stand-in candidates are the only sources this applies to.)
-            log.info("req#%d: filing on the request's words; the Beatport match was a different recording", req.id)
-            catalog = None
-            cand = query_candidate(req.query(), req.id)
-            self.store.update_request(req.id, catalog_track_id=None)
-        if hit is None and cand.source not in (CATALOG_SOURCE, QUERY_SOURCE) and not self._bot_ready():
+        if hit is None and cand.source != QUERY_SOURCE and not self._bot_ready():
             # A record the bot offered on an earlier pass -- picked in review, or kept when a fetch was cut
             # short -- and the bot is not there to send it now: switched off since, or Telegram signed out.
             # Fetching anyway would only raise, so this pass ends the way a stand-in's does, below.
@@ -327,9 +261,9 @@ class PipelineMixin:
                 log.info("req#%d: filing on another reading of the title, %s - %s", req.id, reading.artist,
                          reading.title)
                 cand = query_candidate(reading, req.id)
-        if hit is None and cand.source in (CATALOG_SOURCE, QUERY_SOURCE):
-            # Neither stand-in has a source_ref the bot would recognise -- a Beatport id it has never heard
-            # of, or the request's own words -- so there is no Deezer copy to fall back to. The providers
+        if hit is None and cand.source == QUERY_SOURCE:
+            # The stand-in has no source_ref the bot would recognise -- it is the request's own words -- so
+            # there is no Deezer copy to fall back to. The providers
             # were the only route and this pass produced no file. This returns before the fetch below,
             # which is what spec §7's "no lossy fallback on that path" means in code.
             await self._no_route(req)

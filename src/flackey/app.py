@@ -17,7 +17,6 @@ import uvicorn
 from telethon import TelegramClient
 
 from . import __version__, telegram
-from .catalog import BeatportCatalog
 from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
 from .events import EventBus, Status
@@ -366,7 +365,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # Sign-out (TelegramLogin.log_out) rebuilds the client and reassigns login.client; the source must
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
-    worker = Worker(store, source, BeatportCatalog(), LogNotifier(), settings, status=status,
+    worker = Worker(store, source, LogNotifier(), settings, status=status,
                     providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
     inbox = Inbox(store, prefer_extended=lambda: settings.prefer_extended)
 

@@ -12,6 +12,7 @@ from flackey.models import (
     ATTEMPT_OUTCOMES,
     MISS_REASON,
     NO_RESULTS_REASON,
+    CatalogTrack,
     LosslessAttempt,
     Rejection,
     Request,
@@ -75,8 +76,8 @@ def test_every_attempt_outcome_has_a_diagnosis():
         rejection("a different recording: best score 0.41 below 0.60", None, kind="different_recording")]),
      "Rejected: a different recording (best score 0.41 below 0.60)"),
     (FailureRecord(request(RequestState.NOT_FOUND, error_message="could not identify this track: no Deezer "
-                           "candidates and no Beatport match")),
-     "Not found: could not identify this track: no Deezer candidates and no Beatport match"),
+                           "candidates")),
+     "Not found: could not identify this track: no Deezer candidates"),
     (FailureRecord(request(RequestState.ERROR, failed_stage="search", error_message="source error: timed out")),
      "Error at search: source error: timed out"),
     (FailureRecord(request(RequestState.ERROR, error_message="boom")), "Error at an unrecorded stage: boom"),
@@ -157,9 +158,9 @@ def test_not_found_says_why_even_when_an_earlier_pass_searched_soulseek():
     """not_found is only ever written when there was nothing to search with, so an attempt row on the request
     belongs to an earlier pass and must not stand in for this one's reason."""
     rec = FailureRecord(request(RequestState.NOT_FOUND, error_message="could not identify this track: no Deezer "
-                                "candidates and no Beatport match"),
+                                "candidates"),
                         attempts=[attempt("transfer_failed", survivors=5, events=[("enqueue", {})])])
-    assert diagnose(rec) == "Not found: could not identify this track: no Deezer candidates and no Beatport match"
+    assert diagnose(rec) == "Not found: could not identify this track: no Deezer candidates"
 
 
 def test_the_diagnosis_is_redacted_before_it_is_cut():
@@ -347,6 +348,19 @@ def test_the_record_reads_as_text(failed):
                  "Soulseek: 2 copies found, 1 tried, the transfers failed", "pick: 9 files: 7 bitrate",
                  "+1.5 s enqueue pick=1 peer=dj_x"):
         assert line in text, line
+
+
+@pytest.mark.parametrize(("record_id", "tag_source", "line"), [
+    (16552105, None, "Matched: Astral Projection – Into the Void (Original Mix), Beatport 16552105"),
+    (-42, "deezer+discogs", "Matched: Astral Projection – Into the Void (Original Mix), tags from deezer+discogs"),
+])
+def test_the_matched_line_names_beatport_only_for_a_stored_beatport_record(record_id, tag_source, line):
+    """A Beatport record stored before Beatport was removed still says so; a record built from the candidate
+    (negative id, Flackey's own) is not a Beatport id and must not read as one."""
+    rec = FailureRecord(request(RequestState.ERROR), catalog=CatalogTrack(
+        id=record_id, artist="Astral Projection", title="Into the Void", mix_name="Original Mix",
+        label="Unknown", genre="Unknown", tag_source=tag_source))
+    assert line in record_text(rec).splitlines()
 
 
 def test_a_failure_report_carries_the_record_its_rows_and_its_own_log_lines(failed):

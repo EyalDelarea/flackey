@@ -21,7 +21,7 @@ export default function CandidateCard({ c, player, onChoose, onPlay }: Props) {
   // pushes every card beside it down, mid-compare.
   const meta = stalled ? 'Still loading the sample…'
     : failed ? "Couldn't load — try again"
-    : [c.length, c.onBeatport ? 'On Beatport' : 'Not on Beatport', c.lengthNote].filter(Boolean).join(' · ')
+    : [c.length, c.lengthNote].filter(Boolean).join(' · ')
   return (
     // Playing lives on the fill axis and chosen on the border axis, so a card that is both composes
     // without either reading as the other.

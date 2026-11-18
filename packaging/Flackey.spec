@@ -10,7 +10,7 @@ without them and show its setup screen, which is the correct experience for a se
 import re
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).parent  # noqa: F821 - SPECPATH is injected by PyInstaller
 VERSION = re.search(
@@ -25,7 +25,6 @@ datas = [
     (str(ROOT / "web" / "dist"), "web/dist"),
     (str(ROOT / "src" / "flackey" / "assets"), "flackey/assets"),
 ]
-datas += collect_data_files("curl_cffi")   # the bundled CA bundle; without it every HTTPS call fails
 
 # The helper programs `flackey.tools` looks for first: `bundled_bin_dir()` is `sys._MEIPASS / "bin"`, and
 # a destination of "bin" here is exactly that folder. build_app.sh fetches them; a spec run without them

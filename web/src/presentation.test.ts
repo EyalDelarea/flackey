@@ -1,4 +1,4 @@
-import { asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { STEP_TIPS, asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -175,8 +175,8 @@ describe('presentRow', () => {
     expect(v.status).toBe('Needs your choice — best match is a Extended Mix; no version was requested. Pick the version you want.')
     expect(v.washed).toBe(true); expect(v.steps?.[1]).toEqual({ name: 'Choose', state: 'current' })
     expect(v.candidates).toEqual([
-      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true, sample: null },
-      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', onBeatport: false, lengthNote: '2:29 shorter than the video', chosen: false, sample: null },
+      { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', lengthNote: 'same length as the video', chosen: true, sample: null },
+      { id: 6, title: 'Vini Vici – The Tribe', version: 'Original Mix', score: 74, length: '6:12', lengthNote: '2:29 shorter than the video', chosen: false, sample: null },
     ])
     expect(v.action).toEqual({ label: 'Skip this track', kind: 'cancel' })
   })
@@ -446,8 +446,8 @@ describe('presentRow', () => {
       .some(s => reportable(s as Request['state']))).toBe(false)
   })
   it('backoff row counts down and paused rows say so when Telegram is signed out', () => {
-    const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'Beatport unreachable, will retry', attempts: 1 }), opts)
-    expect(v.status).toBe('Previous attempt: Beatport unreachable'); expect(v.retryInSeconds).toBe(25)
+    const v = presentRow(bundle({ retry_after: '2026-09-06T10:00:25+00:00', flag_reason: 'video audio unavailable, will retry', attempts: 1 }), opts)
+    expect(v.status).toBe('Previous attempt: video audio unavailable'); expect(v.retryInSeconds).toBe(25)
     const p = presentRow(bundle({ state: 'fetching' }), { ...opts, telegramAuthorized: false })
     // The tag counted rungs -- "step 3 of 6" -- against a ladder that has five, and the count was the
     // wrong thing to say anyway: the rung is right there beside it. It names where the row stopped.
@@ -460,7 +460,7 @@ describe('groupRows', () => {
   it('groups by playlist with a summary, then single tracks', () => {
     const g = groupRows([
       bundle({ id: 3, created_at: '2026-09-06T08:00:00Z', playlist_id: 7, state: 'done' }), bundle({ id: 4, created_at: '2026-09-06T09:00:00Z', playlist_id: 7, state: 'awaiting_review' }),
-      bundle({ id: 5, created_at: '2026-09-06T10:00:00Z', playlist_id: 7, state: 'rejected' }), bundle({ id: 6, created_at: '2026-09-06T11:00:00Z', playlist_id: 7, retry_after: '2026-09-06T10:00:30+00:00', flag_reason: 'Beatport unreachable, will retry' }),
+      bundle({ id: 5, created_at: '2026-09-06T10:00:00Z', playlist_id: 7, state: 'rejected' }), bundle({ id: 6, created_at: '2026-09-06T11:00:00Z', playlist_id: 7, retry_after: '2026-09-06T10:00:30+00:00', flag_reason: 'video audio unavailable, will retry' }),
       bundle({ id: 2, created_at: '2026-09-06T07:00:00Z' }),
     ], playlists, opts)
     expect(g.map(x => x.name)).toEqual(['Progressive Psy Set 2026', 'Single tracks'])
@@ -469,8 +469,8 @@ describe('groupRows', () => {
     expect(g[0].summary).toEqual({ filed: 1, total: 4, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 1,
       failed: 1, pct: 25, failedStages: { search: 0, choose: 0, download: 0, verify: 1, waiting: 0, stopped: 0, unknown: 0 } })
     expect(g[0].rows.map(r => r.id)).toEqual([6, 5, 4, 3])          // newest first with 'all' filter
-    expect(g[0].beatportDown).toEqual({ seconds: 30, requestIds: [6] })
-    expect(g[1].rows.map(r => r.id)).toEqual([2]); expect(g[1].beatportDown).toBeNull()
+    expect(g[0]).not.toHaveProperty('beatportDown')   // Beatport was removed, and its banner with it
+    expect(g[1].rows.map(r => r.id)).toEqual([2])
   })
 
   it('filters rows to the given bucket, keeps the unfiltered summary, and drops groups left empty', () => {
@@ -636,7 +636,7 @@ describe('failed states say why they are failed and whether they can come back',
   it('does not repeat a stale retry promise on a row it has just called final', () => {
     // `Worker.cancel` leaves `flag_reason` alone, so a request that had backed off and was then stopped
     // still carries "will retry" in the column the queued row renders. The cancelled row must not.
-    const v = presentRow(bundle({ state: 'cancelled', flag_reason: 'Beatport unreachable, will retry' }), opts)
+    const v = presentRow(bundle({ state: 'cancelled', flag_reason: 'video audio unavailable, will retry' }), opts)
     expect(v.status).toBe('Stopped by you')
     expect(v.status + v.outcome!.note).not.toMatch(/will retry/)
   })
@@ -830,8 +830,8 @@ describe('a queued track', () => {
 
   it('keeps its countdown when it is on a retry backoff, and can be stopped there', () => {
     const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
-      flag_reason: 'Beatport unreachable, will retry' }), opts)
-    expect(v.status).toBe('Previous attempt: Beatport unreachable')
+      flag_reason: 'video audio unavailable, will retry' }), opts)
+    expect(v.status).toBe('Previous attempt: video audio unavailable')
     expect(v.retryInSeconds).toBe(60)
     expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
     expect(v.removable).toBe(true)
@@ -969,5 +969,15 @@ describe('a parked row says where it picks up', () => {
     expect(parked.steps!.map(s => s.state)).toEqual(['paused', 'pending', 'pending', 'pending'])
     expect(presentRow(bundle({ state: 'queued' }), opts).steps!.map(s => s.state))
       .toEqual(['pending', 'pending', 'pending', 'pending'])
+  })
+})
+
+describe('Beatport is gone', () => {
+  // Beatport refused every lookup from 2026-10-14 and was removed; no row may still promise it.
+  it('names it in no step tip, progress line or not-found note', () => {
+    expect(Object.values(STEP_TIPS).join(' ')).not.toMatch(/Beatport/)
+    for (const state of ['identifying', 'not_found'] as const) {
+      expect(JSON.stringify(presentRow(bundle({ state }), opts))).not.toMatch(/Beatport/)
+    }
   })
 })

@@ -36,8 +36,8 @@ ISRC_RETRY_AFTER_S = 600
 
 
 def _same_length(duration_s: int | None, catalog: CatalogTrack) -> bool:
-    """A Deezer record is the same cut as the Beatport record only at the same length, give or take the
-    rounding `catalog._same_recording` allows. Unknown on either side is not the same."""
+    """A Deezer record is the same cut as a stored record only at the same length, give or take a few
+    seconds of encoding slack. Unknown on either side is not the same."""
     return (duration_s is not None and duration_s > 0 and catalog.duration_s is not None
             and abs(duration_s - catalog.duration_s) <= DURATION_SLACK_S)
 
@@ -233,13 +233,13 @@ class FilingMixin:
 
 
     async def _tags_for(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> CatalogTrack:
-        """The record whose tags go into the file. A Beatport match is used as it is. Without one -- Beatport
-        refused the lookup or found nothing -- the stand-in built from the candidate is filled in from Deezer
-        and Discogs (issue #146), and saved so the row and the library read the same tags.
+        """The record whose tags go into the file. A Beatport record stored before Beatport was removed is used
+        as it is. Otherwise the stand-in built from the candidate is filled in from Deezer and Discogs
+        (issue #146), and saved so the row and the library read the same tags.
 
         A stand-in is any record with a negative id: `_fallback_catalog`'s, built now or on an earlier pass.
-        `fill_missing` only fills empty fields, so Beatport's tags are never touched and a row filled once
-        is not looked up again."""
+        `fill_missing` only fills empty fields, so a stored record's tags are never touched and a row filled
+        once is not looked up again."""
         if catalog is not None and catalog.id > 0:
             return await self._dated(req, cand, catalog)
         if catalog is None:
@@ -253,7 +253,7 @@ class FilingMixin:
                 log.exception("req#%d: tag lookup failed; filing with the stand-in's tags", req.id)
             else:
                 catalog = fill_missing(catalog, found)
-                log.info("req#%d: no Beatport tags; %s", req.id, f"filled from {catalog.tag_source}"
+                log.info("req#%d: tags %s", req.id, f"filled from {catalog.tag_source}"
                          if catalog.tag_source else "Deezer and Discogs had none")
                 for note in found.notes:
                     log.debug("req#%d tag lookup: %s", req.id, note)
@@ -263,8 +263,8 @@ class FilingMixin:
 
 
     async def _dated(self, req: Request, cand: Candidate, catalog: CatalogTrack) -> CatalogTrack:
-        """A Beatport record dated by the recording's first release where Deezer knows an earlier one. Beatport
-        often sells only a later compilation ("One More Time" on a 2005 one), and Deezer, asked by the
+        """A stored Beatport record dated by the recording's first release where Deezer knows an earlier one.
+        Beatport often sold only a later compilation ("One More Time" on a 2005 one), and Deezer, asked by the
         record's ISRC, usually answers with the original album. Asked here, at filing, rather than before the
         download: it only ever moves a year. The Deezer record the bot downloaded counts as well, when its ISRC
         is the record's. A remaster -- the record's or the request's -- keeps its own year, so it asks nothing."""

@@ -75,7 +75,7 @@ const failures: Bundle[] = [
   failure(41, 'error', { query_artist: 'Ace Ventura', query_title: 'Presence', attempts: 3,
     error_message: 'the people who had it stopped sending part-way through' }),
   failure(42, 'not_found', { query_artist: 'Vibrasphere', query_title: 'Lime Twig',
-    error_message: 'could not identify this track: no Deezer candidates and no Beatport match; no artist and title could be read from the request, so there is nothing to search for' }),
+    error_message: 'could not identify this track: no Deezer candidates; no artist and title could be read from the request, so there is nothing to search for' }),
   /* The row issue #92 is about: genuine audio the fingerprint called a different recording. Its copy was
      kept, and the reference it was checked against is a Deezer preview, so both halves of the compare
      block are playable -- which is the whole state the screenshot has to show. */
@@ -87,7 +87,7 @@ const failures: Bundle[] = [
   }),
   failure(44, 'cancelled', { query_artist: 'Human Element', query_title: 'The Answer' }),
   failure(45, 'cancelled', { query_artist: 'Atmos', query_title: 'Klein Aber Doctor',
-    flag_reason: 'Beatport unreachable, will retry' }),
+    flag_reason: 'video audio unavailable, will retry' }),
 ]
 
 /* ---- issue #60: the download list split by pipeline stage --------------------------------------
@@ -151,7 +151,7 @@ function stageBundles(): Bundle[] {
     flag_reason: 'waiting for Soulseek — nobody sharing it came online; 3 of 4 looks left' }))
   // Failed, one of each way of stopping -- the rows the Failed tab's chips and stage tags are read from.
   rows.push(stageRow('Man With No Name', 'Teleport', 'not_found', {
-    error_message: 'no copy turned up on Beatport, Deezer or Soulseek' }))
+    error_message: 'no copy turned up on Deezer or Soulseek' }))
   rows.push(stageRow('Juno Reactor', 'Guardian Angel', 'error', { attempts: 7, failed_stage: 'download',
     error_message: 'gave up after 7 tries — every peer refused the transfer' }))
   rows.push(stageRow('Shpongle', 'Divine Moments Of Truth', 'error', { attempts: 4, failed_stage: 'download',
@@ -166,7 +166,7 @@ function stageBundles(): Bundle[] {
   fill(4, (a, t) => stageRow(a, t, 'queued'))
   fill(38, (a, t) => stageRow(a, t, 'queued', { attempts: 2, retry_after: inSeconds(600 + goaAt * 7), flag_reason: NO_MATCH }))
   fill(16, (a, t) => stageRow(a, t, 'done'))
-  fill(11, (a, t) => stageRow(a, t, 'not_found', { error_message: 'no copy turned up on Beatport, Deezer or Soulseek' }))
+  fill(11, (a, t) => stageRow(a, t, 'not_found', { error_message: 'no copy turned up on Deezer or Soulseek' }))
   fill(36, (a, t) => stageRow(a, t, 'error', { attempts: 5, failed_stage: 'download',
     error_message: 'gave up after 5 tries — every peer refused the transfer' }))
   fill(3, (a, t) => stageRow(a, t, 'rejected'))
@@ -186,9 +186,9 @@ const stageProgress = (requestId: number) => ({
    what the sample buttons are for. Two rows, because the page holds one player for all of them and
    starting a sample in one row stops the one running in the other -- a thing only a screenshot shows. */
 const cand = (id: number, artist: string, title: string, mix: string, duration_s: number, score: number,
-              onBeatport: boolean, hasPreview = true): Candidate => ({
+              hasPreview = true): Candidate => ({
   id, request_id: 0, source: 'deezer', source_ref: String(id), artist, title, mix_name: mix, duration_s,
-  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: onBeatport ? id : null, has_preview: hasPreview,
+  deezer_id: id, isrc: null, rank: id, score, catalog_track_id: null, has_preview: hasPreview,
 })
 const choice = (id: number, over: Partial<Request>, candidates: Candidate[]): Bundle => ({
   request: {
@@ -205,18 +205,18 @@ const choice = (id: number, over: Partial<Request>, candidates: Candidate[]): Bu
 const choices: Bundle[] = [
   choice(71, { created_at: '2026-09-21T11:00:00Z', query_artist: 'Vibrasphere', query_title: 'Landmark',
     query_duration_s: 489, flag_reason: 'three versions matched and none of them won outright' }, [
-    cand(1, 'Vibrasphere', 'Landmark', 'Original Mix', 412, 91, true),
-    cand(2, 'Vibrasphere', 'Landmark', 'Extended Mix', 487, 88, true),
+    cand(1, 'Vibrasphere', 'Landmark', 'Original Mix', 412, 91),
+    cand(2, 'Vibrasphere', 'Landmark', 'Extended Mix', 487, 88),
     // No sample available for this one: `has_preview: false` means no control renders at all -- the
     // state the no-sample screenshot exists to prove.
-    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false, false),
+    cand(3, 'Vibrasphere', 'Landmark', 'Ticon Remix', 454, 74, false),
   ]),
   /* Two candidates in the second row, not three: at the window's own 1100x720 both rows then stand in one
      frame, which is the only way a screenshot shows a sample starting here stopping the one above. */
   choice(72, { created_at: '2026-09-21T10:52:00Z', query_artist: 'Ace Ventura', query_title: 'Presence',
     query_duration_s: 401, flag_reason: 'the full version and a radio edit both matched' }, [
-    cand(4, 'Ace Ventura', 'Presence', 'Original Mix', 398, 86, true),
-    cand(5, 'Ace Ventura', 'Presence', 'Radio Edit', 228, 69, false),
+    cand(4, 'Ace Ventura', 'Presence', 'Original Mix', 398, 86),
+    cand(5, 'Ace Ventura', 'Presence', 'Radio Edit', 228, 69),
   ]),
 ]
 

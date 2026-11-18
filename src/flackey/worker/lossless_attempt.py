@@ -111,19 +111,19 @@ class LosslessMixin:
 
     def _reference(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> Reference:
         """`from_query` says the words in this reference are the request's own. That is a fact about where
-        `reference_for` read them, not about which candidate was passed: a query candidate with a Beatport
-        match still searches and tags from the record, because the catalog wins inside `reference_for`."""
+        `reference_for` read them, not about which candidate was passed: a query candidate with a stored
+        record still searches and tags from the record, because the catalog wins inside `reference_for`."""
         ref = reference_for(catalog, cand, req.query_duration_s, req.query_version)
         return replace(ref, from_query=True) if cand.source == QUERY_SOURCE and catalog is None else ref
 
 
     def _search_references(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> list[Reference]:
-        """What to type into the network, in order: Beatport's spelling (clean, and for a channel-name artist
-        such as `ShpongleMusic` the only text that finds anything), then the chosen record's, then the
-        request's own words, then the other readings of a noisy title -- each only when its tokens differ from
-        what came before. A wrong Beatport record redirects the first search to a different track (`Power Of
-        Celtic` was searched as `The Power Of The Dark Side`); the fingerprint rejecting that search is what
-        lets the next spelling run.
+        """What to type into the network, in order: a stored record's spelling (a Beatport record kept from
+        before Beatport was removed, or the record a library track was filed under), then the chosen
+        record's, then the request's own words, then the other readings of a noisy title -- each only when its
+        tokens differ from what came before. A wrong record redirects the first search to a different track
+        (`Power Of Celtic` was searched as `The Power Of The Dark Side`); the fingerprint rejecting that
+        search is what lets the next spelling run.
 
         Every reference keeps `_reference`'s meaning of `from_query` -- these words are the request's own --
         so whichever one comes back attached to the hit says where the tags belong."""

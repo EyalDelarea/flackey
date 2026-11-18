@@ -42,7 +42,6 @@ from .policy import (
     SIDECAR_PATIENCE_S,
     STAGE_OF_STATE,
 )
-from .records import CatalogLike
 from .recovery import RecoveryMixin
 
 log = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ log = logging.getLogger(__name__)
 
 class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticMixin, InterpretMixin,
              ExtendedMixin):
-    def __init__(self, store: Store, source: Source, catalog: CatalogLike, notifier: Notifier,
+    def __init__(self, store: Store, source: Source, notifier: Notifier,
                  settings: Settings,
                  artwork_fetch: Callable[[str], Awaitable[bytes | None]] = fetch_artwork,
                  status: dict | None = None,
@@ -58,10 +57,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                  http: httpx.AsyncClient | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  tag_lookup: TagLookup | None = None):
-        self.store, self.source, self.catalog, self.notifier, self.settings = store, source, catalog, notifier, settings
+        self.store, self.source, self.notifier, self.settings = store, source, notifier, settings
         self.artwork_fetch = artwork_fetch
-        # Deezer + Discogs, for the tags of a track Beatport could not describe (issue #146). None files
-        # such a track with the stand-in's own tags, as before.
+        # Deezer + Discogs, for a track's tags at filing (issue #146). None files a track with the
+        # candidate's own tags.
         self.tag_lookup = tag_lookup
         # shared with /api/health (Task 14): {"telegram_authorized": bool}; the worker flips it to False
         # when the Telethon session dies. That pauses the Deezer bot and nothing else: Soulseek carries on.
@@ -86,8 +85,6 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # finish the playlist any sooner, they just take the machine down with them. Network stages stay
         # unbounded -- this bounds only the part where more parallelism buys nothing.
         self._cpu = asyncio.Semaphore(os.cpu_count() or 2)
-        # Whether the owner has been told Beatport is refusing lookups; reset when a lookup gets through.
-        self._catalog_blocked = False
         # The shadow comparison of a noisy title's readings (`interpret`): request id -> its background task,
         # one comparison at a time so a playlist of noisy titles is a queue rather than a burst, and when
         # it last called Deezer's API.
