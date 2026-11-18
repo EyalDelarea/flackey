@@ -3209,3 +3209,96 @@ async def test_a_held_copy_is_filed_when_nothing_else_was(lenv, detector, monkey
     assert r.state == RequestState.DONE and t.source == "soulseek" and t.fmt == "aiff"
     assert store.evidence_of(t.id, "quality_check")["status"] == "failed"
     assert not list(settings.rejected_dir.iterdir()) and not list(settings.tmp_dir.iterdir())
+
+
+# ---- the spelling ladder without a catalogue record: the request's own words, then the title's readings ----
+# The same Asteroids case the Beatport-spelling tests used, with Beatport gone: the noisy title reads first as
+# "Outputmessage - Asteroids" (the request's own words, a different act's track) and second as "Universal
+# Sound - Asteroids", the asked one. The bot has nothing, so Soulseek is searched on each in turn.
+ASTEROIDS_WORDS = Query(raw="", artist="Outputmessage", title="Asteroids", duration_s=3)
+ASTEROIDS_READING = Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3)
+
+
+def _asteroids_request(store: Store) -> int:
+    return store.add_request("Outputmessage - Asteroids - Universal Sound", RequestKind.YT_TRACK,
+                             source_url="https://www.youtube.com/watch?v=abc", query=ASTEROIDS_WORDS,
+                             interpretations=[ASTEROIDS_WORDS, ASTEROIDS_READING])
+
+
+def _asteroids_provider(settings, tmp_path: Path, wrong_on: str | None, right_on: str | None) -> FakeProvider:
+    """A peer offering a different recording to the `wrong_on` spelling and the right one to `right_on`."""
+    audio = {"w": _flac(tmp_path / "wrong.flac"), "r": _flac(tmp_path / "right.flac")}
+
+    def files_for(text: str):
+        if wrong_on and text.startswith(wrong_on):
+            return [lf("w", path="x\\Outputmessage - Asteroids.flac")]
+        if right_on and text.startswith(right_on):
+            return [lf("r", path="x\\Universal Sound - Asteroids.flac")]
+        return []
+
+    return FakeProvider(settings.slskd_downloads, audio=audio, files_for=files_for)
+
+
+async def _video(url, tmp_dir, *, duration_s=None):
+    return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
+
+
+async def test_a_wrong_first_spelling_is_overruled_by_the_titles_other_reading(lenv, tmp_path: Path, monkeypatch):
+    """The request's own words find another act's file and the fingerprint refuses it; the second reading
+    finds the right one. It files, named after the words that found it rather than the wrong ones."""
+    settings, store, _, _, _, _ = lenv
+    provider = _asteroids_provider(settings, tmp_path, wrong_on="Outputmessage", right_on="Universal Sound")
+    results = iter([FingerprintResult("failed", 0.6, 1.0, "best score 0.60 below 0.79"),
+                    FingerprintResult("matched", 0.97, 1.0, "ok", reference="youtube:abc")])
+
+    async def fake_check_seq(path, reference, *, minimum, missing=""):
+        return next(results)
+
+    monkeypatch.setattr(acoustic_mod, "fingerprint_check", fake_check_seq)
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video)
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
+    r = await w.process(_asteroids_request(store))
+    assert r.state == RequestState.DONE
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    t = store.get_track(r.track_id)
+    assert (t.artist, t.title) == ("Universal Sound", "Asteroids")
+
+
+async def test_two_spellings_ending_in_a_wrong_recording_wait_instead_of_parking(lenv, tmp_path: Path,
+                                                                                monkeypatch):
+    """Task 14's measured regression, on the rungs left after Beatport: the request's own words find nothing
+    (`no_pick`) and the title's other reading finds a copy the fingerprint rejects (`fingerprint_failed`).
+    `_lossless_allowed` reads only the *latest* attempt and `fingerprint_failed` is not in
+    `SEARCH_AGAIN_AFTER`, so the second spelling must not make the request worse than no second spelling:
+    it waits in the long wait rather than parking terminally in `error`."""
+    settings, store, _, _, fake_check, _ = lenv
+    provider = _asteroids_provider(settings, tmp_path, wrong_on="Universal Sound", right_on=None)
+    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video)
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
+    rid = _asteroids_request(store)
+
+    r = await w.process(rid)
+
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    assert sorted(a.outcome for a in store.list_attempts(limit=10)) == ["fingerprint_failed", "no_pick"]
+    assert r.state == RequestState.QUEUED and r.error_message is None    # not terminal
+
+
+async def test_a_wrong_recording_on_the_first_spelling_is_not_hidden_by_the_next(lenv, tmp_path: Path,
+                                                                                 monkeypatch):
+    """The other order: the request's own words find a copy the fingerprint refuses, the second reading
+    finds nothing. The last row says `no_pick`, but the pass found a different recording, so it waits rather
+    than coming back in 15 minutes for the same wrong copy."""
+    settings, store, _, _, fake_check, _ = lenv
+    provider = _asteroids_provider(settings, tmp_path, wrong_on="Outputmessage", right_on=None)
+    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
+    monkeypatch.setattr(acoustic_mod, "youtube_reference", _video)
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
+    rid = _asteroids_request(store)
+
+    r = await w.process(rid)
+
+    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
+    assert store.get_attempt_for_request(rid).outcome == "no_pick"
+    assert r.state == RequestState.QUEUED and r.lossless_retry == 1
