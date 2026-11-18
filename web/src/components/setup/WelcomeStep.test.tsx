@@ -33,7 +33,7 @@ describe('usage stats opt-in', () => {
     expect(share.className).toBe(notNow.className)      // equal weight: neither is styled as the default
     expect(screen.getByText('Share usage stats?')).toBeInTheDocument()
     expect(screen.getByText(/Help us find out why downloads fail and make Flackey better over time/)).toBeInTheDocument()
-    expect(screen.getByText(/We can’t see what you download: .*never song names, links, files or your IP\./)).toBeInTheDocument()
+    expect(screen.getByText(/We can’t see what you download: .*never song names, links or files\. Our stats server never stores or logs your IP address\./)).toBeInTheDocument()
     expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
   })
 
@@ -126,5 +126,7 @@ describe('usage stats opt-in', () => {
     expect(await screen.findByText('setup_step')).toBeInTheDocument()
     expect(screen.getByText('step, action')).toBeInTheDocument()
     expect(screen.getByText('event, os')).toBeInTheDocument()
+    // The detail behind the card's IP line: honest about the network in front of the stats server
+    expect(screen.getByText(/stats server never stores or logs your IP address\. .*Cloudflare and our hosting firewall.*up to 7 days.*up to 400 days.*we don’t link those logs to your stats\./)).toBeInTheDocument()
   })
 })

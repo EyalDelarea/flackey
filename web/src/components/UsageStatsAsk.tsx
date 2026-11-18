@@ -9,7 +9,16 @@ export type UsageStatsChoice = 'share' | 'not-now'
    never says (or implies) that a failed song can be picked out. */
 export const ASK_TITLE = 'Share usage stats?'
 export const ASK_TEXT = 'Help us find out why downloads fail and make Flackey better over time. We can’t see what you '
-  + 'download: we only get counts like “a Soulseek search found nothing”, never song names, links, files or your IP.'
+  + 'download: we only get counts like “a Soulseek search found nothing”, never song names, links or files. Our '
+  + 'stats server never stores or logs your IP address.'
+/* The detail behind "never stores or logs your IP address", for Settings › Privacy and "What's shared?". The
+   collector reads the address only to rate-limit, hashed in memory under a key replaced hourly; the edge in front
+   of it keeps addresses and headers. The ID and secret travel only in the request body, never in the URL or a
+   header, so nothing the edge logs carries them. */
+export const IP_NOTE = 'Flackey’s stats server never stores or logs your IP address. Like most websites, the '
+  + 'network in front of it (Cloudflare and our hosting firewall) sees IP addresses to block attacks, keeps them '
+  + 'for up to 7 days, and keeps a short list of the busiest addresses for up to 400 days. Your ID is never in '
+  + 'the web address or headers those logs keep, and we don’t link those logs to your stats.'
 export const ASK_SETTINGS_LINE = 'You can change this any time in Settings › Privacy.'
 const OPTIONS = [['share', 'Share usage stats'], ['not-now', 'Not now']] as const
 

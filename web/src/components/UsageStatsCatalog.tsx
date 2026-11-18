@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { TelemetryCatalog } from '../api'
 import Icon from './Icon'
+import { IP_NOTE } from './UsageStatsAsk'
 
 /** "See exactly what's sent": every event that can ever leave, with its field names, read from the same
  *  schema the server checks each event against -- so this list cannot promise less than is sent. */
@@ -29,6 +30,7 @@ export default function UsageStatsCatalog({ onClose }: { onClose: () => void }) 
         <div className="modal-body">
           <p className="muted">Every report is one of these events, with only these fields. Times and counts are sent as
             ranges like “1-5s”, never exact numbers.</p>
+          <p className="muted">{IP_NOTE}</p>
           {failed && <div className="err">Couldn't load the list.</div>}
           {!catalog && !failed && <div className="faint">Loading…</div>}
           {catalog && <dl className="usage-catalog">

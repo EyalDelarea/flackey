@@ -4,6 +4,7 @@ import type { TelemetryLog, TelemetryState } from '../api'
 import CopyButton from './CopyButton'
 import Switch from './Switch'
 import UsageStatsCatalog from './UsageStatsCatalog'
+import { IP_NOTE } from './UsageStatsAsk'
 
 const when = (iso: string) => {
   const d = new Date(iso)
@@ -68,6 +69,7 @@ export default function PrivacySection({ onReport }: { onReport?: () => void } =
         <div className="v">Which steps work, which fail, and how long they take. No names, links or file names, and
           nothing about the music you download.{' '}
           <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>See exactly what's sent</button></div>
+        <div className="v">{IP_NOTE}</div>
         {t.enabled ? <div className="v">Turning this off also deletes everything that was sent.</div>
           : t.pending_delete ? <div className="v">Turned off. What was sent is being deleted.</div>
           : t.last_delete_confirmed ? <div className="v">Turned off. The delete was received: what was sent is

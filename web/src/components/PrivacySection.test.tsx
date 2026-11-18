@@ -99,3 +99,10 @@ it('says when the server refused a delete for good, and points to a bug report',
   fireEvent.click(screen.getByRole('button', { name: 'Report a bug…' }))
   expect(onReport).toHaveBeenCalled()
 })
+
+it('says the stats server never keeps IPs, and what the network in front of it keeps', async () => {
+  vi.spyOn(api, 'telemetry').mockResolvedValue(off)
+  render(<PrivacySection />)
+  expect(await screen.findByText(/^Flackey’s stats server never stores or logs your IP address\. Like most websites, the network in front of it \(Cloudflare and our hosting firewall\) sees IP addresses to block attacks, keeps them for up to 7 days/)).toBeInTheDocument()
+  expect(screen.queryByText(/never .*your IP\.$/)).not.toBeInTheDocument()
+})
