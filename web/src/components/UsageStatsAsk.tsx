@@ -4,13 +4,17 @@ import UsageStatsCatalog from './UsageStatsCatalog'
 
 export type UsageStatsChoice = 'share' | 'not-now'
 
-/* The one wording for the question, on the Welcome step and in the one-time prompt an existing owner sees.
-   It promises only what is true of every event: counts and outcomes, never what was downloaded -- so it
-   never says (or implies) that a failed song can be picked out. */
-export const ASK_TITLE = 'Share usage stats?'
-export const ASK_TEXT = 'Help us find out why downloads fail and make Flackey better over time. We can’t see what you '
-  + 'download: we only get counts like “a Soulseek search found nothing”, never song names, links or files. Our '
-  + 'stats server never stores or logs your IP address.'
+/* The one wording for the question, on the Welcome step and in the one-time prompt an existing owner sees,
+   in the owner's own voice (approved 2026-11-18). It promises only what is true of every event: counts and
+   outcomes, never what was downloaded -- so it never says (or implies) that a failed song can be picked out. */
+export const ASK_TITLE = 'Hey! Eyal here 👋'
+export const ASK_TEXT = 'I’m adding usage stats to Flackey so I can see where downloads fail and fix them faster. I '
+  + 'never collect anything sensitive: no song names, links or files, just counts like “a Soulseek search found '
+  + 'nothing”. My stats server never stores your IP address.'
+export const ASK_PLEA = 'If you’re OK with it, please opt in. It really helps me improve Flackey as we go. Thank you! 🙏'
+/* The website's privacy page. A `target="_blank"` link: pywebview opens those in the system browser
+   (OPEN_EXTERNAL_LINKS_IN_BROWSER, on by default), as the Telegram step's link does. */
+export const PRIVACY_URL = 'https://eyaldelarea.github.io/flackey/privacy.html'
 /* The detail behind "never stores or logs your IP address", for Settings › Privacy and "What's shared?". The
    collector reads the address only to rate-limit, hashed in memory under a key replaced hourly; the edge in front
    of it keeps addresses and headers. The ID and secret travel only in the request body, never in the URL or a
@@ -34,9 +38,11 @@ export default function UsageStatsAsk({ value, onChoose, onDismiss, className = 
       {onDismiss && <button type="button" className="banner-dismiss" aria-label="Dismiss" onClick={onDismiss}>×</button>}
     </div>
     <p className="optin-text">{ASK_TEXT}</p>
+    <p className="optin-text">{ASK_PLEA}</p>
     <div className="optin-actions">
       <Segmented label="Usage stats" options={OPTIONS} value={value} onChange={onChoose} />
       <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>What's shared?</button>
+      <a className="btn-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy page</a>
     </div>
     <p className="optin-foot">{ASK_SETTINGS_LINE}</p>
     {catalogOpen && <UsageStatsCatalog onClose={() => setCatalogOpen(false)} />}

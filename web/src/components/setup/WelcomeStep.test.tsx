@@ -31,9 +31,14 @@ describe('usage stats opt-in', () => {
     expect(share).toHaveAttribute('aria-checked', 'false')
     expect(notNow).toHaveAttribute('aria-checked', 'false')
     expect(share.className).toBe(notNow.className)      // equal weight: neither is styled as the default
-    expect(screen.getByText('Share usage stats?')).toBeInTheDocument()
-    expect(screen.getByText(/Help us find out why downloads fail and make Flackey better over time/)).toBeInTheDocument()
-    expect(screen.getByText(/We can’t see what you download: .*never song names, links or files\. Our stats server never stores or logs your IP address\./)).toBeInTheDocument()
+    expect(screen.getByText('Hey! Eyal here 👋')).toBeInTheDocument()
+    expect(screen.getByText(/I’m adding usage stats to Flackey so I can see where downloads fail/)).toBeInTheDocument()
+    expect(screen.getByText(/no song names, links or files, just counts .*My stats server never stores your IP address\./)).toBeInTheDocument()
+    expect(screen.getByText(/If you’re OK with it, please opt in\./)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: "What's shared?" })).toBeInTheDocument()
+    const privacy = screen.getByRole('link', { name: 'Privacy page' })
+    expect(privacy).toHaveAttribute('href', 'https://eyaldelarea.github.io/flackey/privacy.html')
+    expect(privacy).toHaveAttribute('target', '_blank')
     expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
   })
 
@@ -114,7 +119,7 @@ describe('usage stats opt-in', () => {
     await waitFor(() => expect(get).toHaveBeenCalled())
     await Promise.resolve()
     expect(screen.queryByRole('radio')).not.toBeInTheDocument()
-    expect(screen.queryByText('Share usage stats?')).not.toBeInTheDocument()
+    expect(screen.queryByText('Hey! Eyal here 👋')).not.toBeInTheDocument()
   })
 
   it('lists the catalogue of events and fields', async () => {
