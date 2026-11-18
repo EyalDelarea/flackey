@@ -303,6 +303,14 @@ async def test_enrich_keeps_the_records_release_date():
     assert (await source._enrich(_candidate())).release_date == "2001-03-07"
 
 
+async def test_enrich_keeps_the_records_cover():
+    """Fetched anyway; the Downloads row shows it while the request is still in progress."""
+    track = DeezerTrack(id=1, isrc="X", title="T", artist="A", album=None, duration_s=224,
+                        release_date=None, title_version=None, cover_url="https://cdn/cover.jpg")
+    source = DeezerBotSource(FakeClient(None, None), "bot", deezer=FakeDeezer(track))
+    assert (await source._enrich(_candidate())).cover_url == "https://cdn/cover.jpg"
+
+
 async def test_enrich_leaves_the_sample_unknown_when_the_lookup_fails():
     """A lookup that never answered knows nothing. Recording False here would hide the play control on a
     candidate that does have a sample, and the owner would have no way to find out."""
@@ -399,15 +407,10 @@ async def test_a_disk_failure_during_a_download_is_not_a_sign_in_problem(tmp_pat
 
 
 # ---- what the worker makes of it (issue #91) -----------------------------
-class _NoCatalog:
-    async def search(self, query):
-        return []
-
-
 def _worker(tmp_path: Path, source: DeezerBotSource, status: dict) -> Worker:
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
-    return Worker(Store(settings.db_path), source, _NoCatalog(), MemoryNotifier(), settings, status=status)
+    return Worker(Store(settings.db_path), source, MemoryNotifier(), settings, status=status)
 
 
 async def test_a_revoked_session_keeps_the_request_queued_instead_of_burning_it(tmp_path: Path):

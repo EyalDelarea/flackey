@@ -39,11 +39,6 @@ class DummySource:
         raise NotImplementedError
 
 
-class DummyCatalog:
-    async def search(self, q):
-        return []
-
-
 async def fake_youtube(url: str):
     if "bad" in url:
         raise YouTubeError("boom")
@@ -55,7 +50,7 @@ def make(tmp_path: Path, **kw):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
-    worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
+    worker = Worker(store, DummySource(), MemoryNotifier(), settings)
     return create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, **kw), store, settings
 
 
@@ -78,7 +73,7 @@ def client_with_worker(tmp_path: Path):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
-    worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
+    worker = Worker(store, DummySource(), MemoryNotifier(), settings)
     return AppClient(create_app(store, worker, Inbox(store, youtube=fake_youtube), settings)), worker
 
 
@@ -816,7 +811,7 @@ def test_an_allowed_host_name_is_answered(tmp_path):
     s = Settings(_env_file=None, library_root=tmp_path / "lib2", data_dir=tmp_path / "data2",
                  web_allowed_hosts="nas.local, Other.Example")
     store = Store(s.db_path)
-    api = create_app(store, Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), s),
+    api = create_app(store, Worker(store, DummySource(), MemoryNotifier(), s),
                      Inbox(store, youtube=fake_youtube), s)
     c = AppClient(api)
     assert c.get("/api/health", headers={"host": "nas.local:8765"}).status_code == 200
@@ -1056,6 +1051,15 @@ def test_candidate_json_says_whether_deezer_has_a_sample(client):
         assert cands[0]["has_preview"] is True
         assert cands[1]["has_preview"] is False
         assert cands[2]["has_preview"] is None
+
+
+def test_candidate_json_carries_the_records_cover(client):
+    """The Downloads row falls back to the chosen record's cover until the request has a catalog one."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [Candidate(source="s", source_ref="a", artist="A", title="T", rank=1,
+                                         cover_url="https://cdn/cover.jpg")])
+    assert c.get("/api/queue").json()[0]["candidates"][0]["cover_url"] == "https://cdn/cover.jpg"
 
 
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
@@ -1364,7 +1368,7 @@ def test_remove_waits_for_a_running_task_to_unwind_before_deleting(tmp_path):
         await w.cancel_and_settle(rid)
         assert task.done() and seen == ["unwound"]
 
-    w = worker or Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), Settings(
+    w = worker or Worker(store, DummySource(), MemoryNotifier(), Settings(
         _env_file=None, telegram_api_id=1, telegram_api_hash="h",
         library_root=tmp_path / "lib", data_dir=tmp_path / "data"))
     asyncio.run(run())

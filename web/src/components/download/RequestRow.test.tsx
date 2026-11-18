@@ -96,14 +96,15 @@ it('says a six-hour wait in hours, and counts it down once a minute rather than 
 it('fires the row action and candidate choice', () => {
   const onAction = vi.fn(); const onChoose = vi.fn()
   const view: RowView = { ...base, dimmed: false, washed: true, action: { label: 'Skip this track', kind: 'cancel' },
-    candidates: [{ id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: 'same length as the video', chosen: true, sample: null }] }
+    candidates: [{ id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', lengthNote: 'same length as the video', chosen: true, sample: null }] }
   render(<RequestRow view={view} onAction={onAction} onChoose={onChoose} {...preview} />)
   fireEvent.click(screen.getByText('Use this'))
   expect(onChoose).toHaveBeenCalledWith(1, 5)
   fireEvent.click(screen.getByText('Skip this track'))
   expect(onAction).toHaveBeenCalledWith('cancel', 1, undefined)
   expect(screen.getByText('92% match')).toBeInTheDocument()
-  expect(screen.getByText('8:42 · On Beatport · same length as the video')).toBeInTheDocument()
+  expect(screen.getByText('8:42 · same length as the video')).toBeInTheDocument()
+  expect(screen.queryByText(/Beatport/)).toBeNull()
 })
 
 it('shows the spectrogram well when why is open', () => {
@@ -222,9 +223,9 @@ const sampleOf = (id: number, version: string): CandidateView['sample'] =>
   ({ key: `cand:${id}`, label: `Vini Vici – The Tribe (${version})`, url: `/api/candidates/${id}/preview` })
 
 const threeVersions: CandidateView[] = [
-  { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', onBeatport: true, lengthNote: '', chosen: false, sample: sampleOf(5, 'Extended Mix') },
-  { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', onBeatport: false, lengthNote: '', chosen: false, sample: sampleOf(6, 'Radio Edit') },
-  { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', onBeatport: false, lengthNote: '', chosen: false, sample: null }]
+  { id: 5, title: 'Vini Vici – The Tribe', version: 'Extended Mix', score: 92, length: '8:42', lengthNote: '', chosen: false, sample: sampleOf(5, 'Extended Mix') },
+  { id: 6, title: 'Vini Vici – The Tribe', version: 'Radio Edit', score: 71, length: '3:10', lengthNote: '', chosen: false, sample: sampleOf(6, 'Radio Edit') },
+  { id: 7, title: 'Vini Vici – The Tribe', version: 'Live', score: 60, length: '9:01', lengthNote: '', chosen: false, sample: null }]
 
 it('spreads the page\'s player state over its candidate cards', () => {
   // The row holds no player of its own: it turns "which key is playing" into one card\'s Stop, one card\'s

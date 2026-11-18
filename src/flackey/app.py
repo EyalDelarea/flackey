@@ -19,7 +19,6 @@ from telethon import TelegramClient
 
 from . import __version__, telegram
 from . import telemetry as usage
-from .catalog import BeatportCatalog
 from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
 from .events import EventBus, Status
@@ -380,18 +379,14 @@ async def watch_usage(tel: usage.Telemetry, worker, status, settings: Settings, 
                 session.clear()
             now = tel.clock()
             tg, sk = telegram_state(settings, status), soulseek_state(settings, status)
-            blocked = bool(getattr(worker, "_catalog_blocked", False))
             tel.health_tick(now - last,
                             soulseek=None if sk == "off" else sk == "ok",
-                            telegram=None if tg in ("off", "not_set_up") else tg == "connected",
-                            beatport=not blocked)
+                            telegram=None if tg in ("off", "not_set_up") else tg == "connected")
             last = now
             if tg not in ("off", "not_set_up"):
                 tel.source_status("telegram", "ok" if tg == "connected" else "signed_out")
             if sk != "off":
                 tel.source_status("soulseek", sk)
-            tel.source_status("beatport", "blocked" if blocked else "ok",
-                              reason=getattr(worker, "_catalog_reason", "") or "unknown")
             port = port_state(status)
             if port != "unknown":
                 tel.source_status("port", "open" if port == "yes" else "closed")
@@ -475,7 +470,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     # Sign-out (TelegramLogin.log_out) rebuilds the client and reassigns login.client; the source must
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
-    worker = Worker(store, source, BeatportCatalog(), LogNotifier(), settings, status=status,
+    worker = Worker(store, source, LogNotifier(), settings, status=status,
                     providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
     inbox = Inbox(store, prefer_extended=lambda: settings.prefer_extended)
 

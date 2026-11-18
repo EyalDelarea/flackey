@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     source_bot_username: str = "DeezerMusicBot"
     # The Telegram bot is one of two ways to get audio, and the flakier one: it is a third party that can
     # stop answering without any signal beyond a timeout. Turning it off skips it entirely -- no search, no
-    # fetch -- so a request goes straight to Soulseek on the Beatport match instead of burning three
+    # fetch -- so a request goes straight to Soulseek on its own words instead of burning three
     # 30-second timeouts per track first. See `Worker._process`.
     source_enabled: bool = True
     # On by default so an owner ends up on the latest release without hunting for it; /api/update still

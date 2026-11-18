@@ -24,7 +24,9 @@ export interface Request { id:number; created_at:string; updated_at:string; raw_
 // is offered a button like any other. Only an explicit `false` hides the control.
 export interface Candidate { id:number; request_id:number; source:string; source_ref:string; artist:string; title:string; mix_name:string|null;
   duration_s:number|null; deezer_id:number|null; isrc:string|null; rank:number; score:number|null; catalog_track_id:number|null;
-  has_preview?:boolean|null; album?:string|null }
+  has_preview?:boolean|null; album?:string|null
+  /** The Deezer record's album cover: what an in-progress row shows until the catalog has a cover. */
+  cover_url?:string|null }
 export interface Catalog { id:number; artist:string; title:string; mix_name:string; label:string; genre:string; isrc:string|null; sub_genre:string|null;
   catalog_number:string|null; release_name:string|null; release_date:string|null; bpm:number|null; key:string|null; duration_ms:number|null; artwork_url:string|null
   /** The recording's first release, where it predates this release: the date the file's tags carry. Absent

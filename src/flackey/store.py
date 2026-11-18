@@ -157,6 +157,7 @@ class Store:
         self._ensure_column("catalog_tracks", "original_date", "TEXT")
         self._ensure_column("candidates", "release_date", "TEXT")
         self._ensure_column("candidates", "album", "TEXT")
+        self._ensure_column("candidates", "cover_url", "TEXT")
         # Where a request was when it failed. Only `error` needs it: the other three failure states say
         # where they stopped by their own name. Rows written before the column keep NULL -- the stage is
         # genuinely not recorded for them and a guess reads worse than an honest gap.
@@ -444,11 +445,11 @@ class Store:
         for c in candidates:
             cur = self.conn.execute(
                 "INSERT INTO candidates (request_id, rank, source, source_ref, artist, title, mix_name, "
-                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview, release_date, album) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview, release_date, album, cover_url) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (request_id, c.rank, c.source, c.source_ref, c.artist, c.title, c.mix_name,
                  c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview, c.release_date,
-                 c.album))
+                 c.album, c.cover_url))
             out.append(Candidate(**{**c.__dict__, "id": int(cur.lastrowid), "request_id": request_id}))
         self.conn.commit()
         return out

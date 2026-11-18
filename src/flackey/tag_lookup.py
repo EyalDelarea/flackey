@@ -1,8 +1,8 @@
-"""Tags for a track Beatport could not describe (issue #146).
+"""A track's tags, from the catalogues that need no login (issue #146).
 
-Beatport stays the first choice. Since 2026-10-14 its search often answers with a Cloudflare challenge,
-and a track filed then used to carry `Unknown / Unknown`. This fills in what two catalogues that need no
-login can vouch for, and only the fields that are still empty:
+Beatport supplied them until 2026-10-14, when its search started answering every lookup with a Cloudflare
+challenge and a track filed then carried `Unknown / Unknown`; the Beatport lookup has since been removed.
+This fills in what two catalogues can vouch for, and only the fields that are still empty:
 
 - **Deezer**, when the record that was downloaded is a Deezer one: label, release date, ISRC, duration and
   the 1400 px cover, from that record's own album. Nothing to match -- the chosen record *is* the track.
@@ -557,7 +557,7 @@ def _empty(value) -> bool:
 
 def fill_missing(catalog: CatalogTrack, found: FoundTags) -> CatalogTrack:
     """`catalog` with each empty field filled from `found`. A field that already has a value keeps it, so
-    this can never overwrite what Beatport (or an earlier fill) supplied."""
+    this can never overwrite what a stored Beatport record (or an earlier fill) supplied."""
     changes = {}
     for name in ("label", "genre", "sub_genre", "catalog_number", "release_date", "isrc", "duration_ms",
                  "artwork_url"):

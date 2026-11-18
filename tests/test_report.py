@@ -377,17 +377,12 @@ class DummySource:
         raise NotImplementedError
 
 
-class DummyCatalog:
-    async def search(self, q):
-        return []
-
-
 @pytest.fixture
 def app(tmp_path: Path, monkeypatch):
     settings = settings_for(tmp_path)
     seed_logs(settings)
     store = Store(settings.db_path)
-    worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
+    worker = Worker(store, DummySource(), MemoryNotifier(), settings)
     revealed: list[Path] = []
     opened: list[str] = []
     monkeypatch.setattr(report, "open_url", opened.append)

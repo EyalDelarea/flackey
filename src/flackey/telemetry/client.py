@@ -419,7 +419,7 @@ class Telemetry:
           source is still not in the state last sent.
 
         So a flapping source costs at most three events an hour, and the last one sent is the real state.
-        `reason` is a fixed code for why it went down (e.g. cloudflare_challenge), sent only with a change
+        `reason` is a fixed code for why it went down (e.g. not_logged_in), sent only with a change
         away from ok or open."""
         if not self.enabled:
             return
@@ -512,7 +512,7 @@ class Telemetry:
 
             from .buckets import dur, n
             self.emit("health_daily", event_date=day, uptime=dur(st.get("uptime_s", 0)),
-                      soulseek_up=up("soulseek"), telegram_up=up("telegram"), beatport_up=up("beatport"),
+                      soulseek_up=up("soulseek"), telegram_up=up("telegram"),
                       sessions=min(st.get("sessions", 0), 255),
                       crashed_sessions=min(st.get("crashed_sessions", 0), 255),
                       requests_finished=n(st.get("requests_finished", 0)))

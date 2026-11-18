@@ -26,7 +26,6 @@ from .records import (
     CATALOG_SOURCE,
     QUERY_SOURCE,
     Acoustic,
-    CatalogLike,
     LosslessHit,
     catalog_candidate,
     format_line,
@@ -38,5 +37,5 @@ __all__ = [
     "LONG_RETRY_OUTCOMES",
     "LONG_RETRY_TIMES", "MAX_ATTEMPTS", "QUERY_SOURCE", "RETRY_BACKOFF_S", "RETRY_LOSSLESS_OUTCOMES",
     "SEARCH_AGAIN_AFTER", "SECOND_PICK_AFTER", "SECOND_SEARCH_AFTER", "STAGE_OF_STATE", "Acoustic",
-    "CatalogLike", "LosslessHit", "Worker", "catalog_candidate", "format_line", "query_candidate",
+    "LosslessHit", "Worker", "catalog_candidate", "format_line", "query_candidate",
 ]

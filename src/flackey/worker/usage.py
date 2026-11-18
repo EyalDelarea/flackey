@@ -67,7 +67,8 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
     if state == RequestState.DONE and r.catalog_track_id:
         ct = store.get_catalog_track(r.catalog_track_id)
         if ct is not None:
-            tag_source = "beatport" if ct.id > 0 else (ct.tag_source if ct.tag_source in TAG_SOURCES else "none")
+            # A positive id is a record stored before the catalogue lookup was removed: its tags are its own
+            tag_source = "stored" if ct.id > 0 else (ct.tag_source if ct.tag_source in TAG_SOURCES else "none")
     ready = worker._bot_ready()
     checks_run, refused = notes.get("checks_run", 0), notes.get("checks_refused", 0)
     telemetry.emit(
@@ -75,7 +76,6 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
         route=route, reviewed=bool(r.reviewed), passes=min(r.attempts, 20),
         lossless_outcome=outcome or "",
         lossless_no_results=bool(outcome and store.lossless_no_results(request_id, outcome)),
-        catalog="blocked" if worker._catalog_blocked else ("ok" if r.catalog_track_id else "no_match"),
         bot="ready" if ready else ("off" if not worker.settings.source_enabled else "paused"),
         verify_tier=notes.get("tier", ""), filed_format=filed, source_format=source_fmt, bit_depth=bit_depth,
         checks_run=min(checks_run, 20), checks_refused=min(refused, 20),
@@ -85,8 +85,7 @@ def request_finished(worker, request_id: int, state: RequestState) -> None:
         error_class=notes.get("error_class", "") if state == RequestState.ERROR else "",
         failure_reason=(notes.get("failure_reason") or (outcome_reason(outcome) if outcome and outcome != "filed"
                                                          else "unknown"))
-        if state in (RequestState.ERROR, RequestState.NOT_FOUND, RequestState.REJECTED) else None,
-        catalog_reason=(worker._catalog_reason or "unknown") if worker._catalog_blocked else None)
+        if state in (RequestState.ERROR, RequestState.NOT_FOUND, RequestState.REJECTED) else None)
 
 
 def quality_check(request_id: int, verdict: Verdict, summary: dict | None, *, route: str, rule: str,
@@ -196,11 +195,11 @@ def refusal_fields(rejection) -> dict:
 
 
 # Why a request failed or a source was blocked, as a fixed code (schema: request_finished.failure_reason,
-# catalog_reason, source_status_changed.reason). Only from exception types, HTTP statuses and outcome
+# source_status_changed.reason). Only from exception types, HTTP statuses and outcome
 # codes; never from a message, a title or anything a peer or a site wrote.
 REASONS = (
     "no_results", "no_pick", "unidentified", "not_logged_in", "http_403", "http_429", "http_5xx",
-    "http_other", "cloudflare_challenge", "timeout", "network", "peer_queue_timeout", "first_byte_timeout",
+    "http_other", "timeout", "network", "peer_queue_timeout", "first_byte_timeout",
     "transfer_timeout", "too_slow", "transfer_failed", "unavailable", "interrupted", "fingerprint_mismatch",
     "fingerprint_unavailable", "verify_unavailable", "quality_reject", "damaged", "convert_failed",
     "tag_failed", "disk_full", "filesystem", "youtube_error", "spotify_error", "source_error",
@@ -229,7 +228,6 @@ def reason_of(exc: BaseException) -> str:
 
     import httpx
 
-    from ..catalog import CatalogUnavailable
     from ..convert import ConvertError
     from ..fingerprint import FingerprintError
     from ..source.base import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
@@ -239,8 +237,6 @@ def reason_of(exc: BaseException) -> str:
     from ..verify import ToolMissing
     from ..youtube import YouTubeError
 
-    if isinstance(exc, CatalogUnavailable):
-        return exc.reason if exc.reason in REASONS else "unknown"
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return ("http_403" if code == 403 else "http_429" if code == 429

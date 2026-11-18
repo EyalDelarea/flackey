@@ -158,9 +158,9 @@ it('reads a queued entry\'s reason as a previous attempt, except the wait for So
   }) as Bundle
   const live = { ...makeLive(), playlists: [playlist], bundles: new Map([
     [2, queued(2, 2, 'Waiting one', 'waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')],
-    [3, queued(3, 3, 'Backing off', 'Beatport unreachable, will retry')],
+    [3, queued(3, 3, 'Backing off', 'video audio unavailable, will retry')],
   ]) }
   render(<LibraryPage live={live} selectedPlaylist={7} />)
   expect(await screen.findByText('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')).toBeInTheDocument()
-  expect(screen.getByText('Previous attempt: Beatport unreachable, will retry')).toBeInTheDocument()
+  expect(screen.getByText('Previous attempt: video audio unavailable, will retry')).toBeInTheDocument()
 })

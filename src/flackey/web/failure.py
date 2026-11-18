@@ -217,7 +217,9 @@ def record_text(rec: FailureRecord) -> str:
     matched = None
     if rec.catalog is not None:
         c = rec.catalog
-        matched = f"{c.artist} – {c.title} ({c.mix_name}), Beatport {c.id}"
+        matched = f"{c.artist} – {c.title} ({c.mix_name})"
+        if c.id > 0:   # a record stored before Beatport was removed; a negative id is Flackey's own
+            matched += f", Beatport {c.id}"
         if c.tag_source:
             matched += f", tags from {c.tag_source}"
     chosen = None
@@ -312,7 +314,7 @@ def window(r: Request) -> tuple[datetime, datetime]:
 def narrow_log(text: str, request_id: int, start: datetime, end: datetime, tz: tzinfo | None = None,
                own_links: Iterable[str | None] = ()) -> str:
     """The records that are about this request: every one that names it, and every warning or error inside
-    its lifetime that names no request at all -- Soulseek dropping, Beatport refusing, a crash in a provider
+    its lifetime that names no request at all -- Soulseek dropping, a catalogue refusing, a crash in a provider
     -- which is the context a request's own lines usually lack. A line naming another request is left out
     however loud it is. A traceback belongs to the record above it and comes along with it. In the records
     kept for their timing alone, any link but `own_links` (the request's own) reads `[other link]`, and any

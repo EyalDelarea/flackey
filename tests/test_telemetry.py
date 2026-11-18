@@ -37,7 +37,7 @@ from flackey.telemetry.schema import SCHEMA_PATH, schema
 
 # The collector's schemas/v1.json.sha256 (EyalDelarea/flackey-telemetry). A change on either side must
 # change both, or the collector refuses what the app sends.
-COLLECTOR_V1_SHA256 = "f0f0df16fd88cda39e9dddd19a81353164422533f52c9e6a9d410910042b69ce"
+COLLECTOR_V1_SHA256 = "c1190dd263ec55535bf94289bb5f74b4b57aa7c60fc55f3d95047dcbac747393"
 MAC = {"os": "macos", "os_major": "26", "arch": "arm64"}
 FORBIDDEN = ("name", "title", "artist", "path", "url", "query", "user", "peer", "message", "ip", "email")
 
@@ -236,7 +236,7 @@ def test_off_is_silent_and_writes_nothing(tmp_path):
     t, saved = make(tmp_path)
     t.emit("app_started", filing_format="aiff")
     t.health_tick(10, soulseek=True)
-    t.source_status("beatport", "ok")
+    t.source_status("soulseek", "ok")
     assert t.start_session() == {}
     t.end_session()
     collector = Collector()
@@ -405,7 +405,7 @@ def test_a_crashed_session_and_yesterdays_health(tmp_path):
     day = [dt.date(2026, 11, 15)]
     t, _ = make(tmp_path, today=lambda: day[0])
     t.opt_in()                       # session 1, never ended: a crash
-    t.health_tick(3600, soulseek=True, telegram=None, beatport=False)
+    t.health_tick(3600, soulseek=True, telegram=False)
     t._save_state()
     day[0] = dt.date(2026, 11, 16)
     t2, _ = make(tmp_path, enabled=True, install_id=t.install_id, today=lambda: day[0])
@@ -413,7 +413,7 @@ def test_a_crashed_session_and_yesterdays_health(tmp_path):
     assert info["previous_exit"] == "crash"
     (health,) = [e for e in t2.snapshot()["pending"] if e["event"] == "health_daily"]
     assert health["event_date"] == "2026-11-15" and health["uptime"] == "1-6h"
-    assert health["soulseek_up"] == "100%" and health["telegram_up"] == "off" and health["beatport_up"] == "0"
+    assert health["soulseek_up"] == "100%" and health["telegram_up"] == "0" and "beatport_up" not in health
     assert health["crashed_sessions"] == 0 and health["sessions"] == 1
     t2.end_session()
     t3, _ = make(tmp_path, enabled=True, install_id=t.install_id, today=lambda: day[0])
@@ -438,34 +438,43 @@ def test_a_source_going_down_says_why_in_a_code_and_a_recovery_does_not(tmp_path
     now = [1000.0]
     t, _ = make(tmp_path, clock=lambda: now[0])
     t.opt_in()
-    t.source_status("beatport", "ok", reason="unknown")
-    t.source_status("beatport", "blocked", reason="cloudflare_challenge")
+    t.source_status("soulseek", "ok", reason="unknown")
+    t.source_status("soulseek", "unreachable", reason="network")
     now[0] += 60
-    t.source_status("beatport", "ok", reason="cloudflare_challenge")
+    t.source_status("soulseek", "ok", reason="network")
     changes = [e for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
-    assert [(e["to"], e.get("reason")) for e in changes] == [("blocked", "cloudflare_challenge"), ("ok", None)]
+    assert [(e["to"], e.get("reason")) for e in changes] == [("unreachable", "network"), ("ok", None)]
+
+
+def test_beatport_is_no_longer_a_source_the_stats_can_name():
+    """Beatport was removed (#215): no source status, health share or tag source names it any more."""
+    s = json.loads(SCHEMA_PATH.read_text())
+    assert "beatport" not in s["events"]["source_status_changed"]["source"]["enum"]
+    assert "beatport_up" not in s["events"]["health_daily"]
+    assert "beatport" not in s["events"]["request_finished"]["tag_source"]["enum"]
+    assert not {"catalog", "catalog_reason"} & set(s["events"]["request_finished"])
 
 
 def test_source_changes_are_held_to_an_hour_and_the_held_state_is_sent_when_it_is_up(tmp_path):
     now = [1000.0]
     t, _ = make(tmp_path, clock=lambda: now[0])
     t.opt_in()
-    t.source_status("beatport", "ok")
+    t.source_status("telegram", "ok")
     for _ in range(5):                       # flapping: the drop, one recovery, then held back
-        t.source_status("beatport", "blocked")
+        t.source_status("telegram", "signed_out")
         now[0] += 60
-        t.source_status("beatport", "ok")
+        t.source_status("telegram", "ok")
         now[0] += 60
-    t.source_status("beatport", "blocked")   # where it ends inside the hour
+    t.source_status("telegram", "signed_out")   # where it ends inside the hour
 
     def sent():
         return [(e["from"], e["to"]) for e in t.snapshot()["pending"] if e["event"] == "source_status_changed"]
 
-    assert sent() == [("ok", "blocked"), ("blocked", "ok")]
+    assert sent() == [("ok", "signed_out"), ("signed_out", "ok")]
     now[0] += 3600
-    t.source_status("beatport", "blocked")   # the next watcher tick after the hour
-    t.source_status("beatport", "blocked")
-    assert sent() == [("ok", "blocked"), ("blocked", "ok"), ("ok", "blocked")]
+    t.source_status("telegram", "signed_out")   # the next watcher tick after the hour
+    t.source_status("telegram", "signed_out")
+    assert sent() == [("ok", "signed_out"), ("signed_out", "ok"), ("ok", "signed_out")]
 
 
 def test_crash_location_is_code_coordinates_only():
