@@ -181,16 +181,22 @@ def _write_private(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _refusal(r: httpx.Response) -> str | None:
-    """The collector's permanent answers to a delete: "not_owner" (403) or "invalid" (400), read from its JSON
-    body so a bare 403 or 400 from something in between (a geo-block, a proxy) is still retried."""
-    if r.status_code not in (400, 403):
+DELETE_REFUSALS = frozenset({(403, "not_owner"), (400, "invalid")})
+# A batch can also be refused for a schema the collector no longer takes (410 schema_retired).
+BATCH_REFUSALS = DELETE_REFUSALS | {(410, "schema_retired")}
+
+
+def _refusal(r: httpx.Response, refusals: frozenset[tuple[int, str]] = DELETE_REFUSALS) -> str | None:
+    """The collector's own permanent refusal, read from its JSON `error` (delete: 403 not_owner, 400 invalid;
+    a batch also 410 schema_retired). Anything else -- a bare 400 or 403, an HTML page, JSON that isn't the
+    collector's -- comes from something in between (a proxy, a WAF, a geo-block) and is retried."""
+    if r.status_code not in {code for code, _ in refusals}:
         return None
     try:
         err = r.json().get("error")
     except (ValueError, AttributeError):
         return None
-    return err if (r.status_code, err) in ((403, "not_owner"), (400, "invalid")) else None
+    return err if (r.status_code, err) in refusals else None
 
 
 class Telemetry:
@@ -668,11 +674,20 @@ class Telemetry:
             self.last_send = {"status": "failed", "error": type(e).__name__, "at": self._stamp()}
             return False, True, None
         code = r.status_code
+        refused = _refusal(r, BATCH_REFUSALS)
         # What Settings > Privacy shows: "ok", or "failed" with why (kept and retried, or refused and dropped)
-        self.last_send = ({"status": "ok", "events": len(batch), "at": self._stamp()} if 200 <= code < 300 else
-                          {"status": "failed", "error": f"HTTP {code}, will retry" if code == 429 or code >= 500
-                           else f"HTTP {code}, refused and dropped", "at": self._stamp()})
-        if r.status_code == 429 or r.status_code >= 500:
+        if 200 <= code < 300:
+            self.last_send = {"status": "ok", "events": len(batch), "at": self._stamp()}
+        elif refused:
+            self.last_send = {"status": "failed", "error": f"HTTP {code}, refused and dropped", "at": self._stamp()}
+        elif code == 429 or code >= 500:
+            self.last_send = {"status": "failed", "error": f"HTTP {code}, will retry", "at": self._stamp()}
+        else:
+            # Not the collector's answer (a proxy, WAF, geo-block or captive portal): it never saw the batch,
+            # so the batch stays and goes again on the usual backoff. The outbox cap still bounds it.
+            self.last_send = {"status": "failed", "at": self._stamp(),
+                              "error": f"Couldn't reach the stats server (HTTP {code}), will retry"}
+        if not (200 <= code < 300 or refused):
             return False, True, retry_after_s(r, self.clock())
         rest = lines[len(batch):]
         stop = False
@@ -691,11 +706,11 @@ class Telemetry:
             self._record_sent(batch)
             self._dropped = 0
         else:
-            # The collector refuses this shape; retrying it would be refused forever (spec §6.1)
+            # The collector's own refusal (invalid, not_owner, schema_retired): it would be refused forever (spec §6.1)
             field = ""
             with contextlib.suppress(ValueError, AttributeError):
                 field = str(r.json().get("field", ""))[:60]
-            log.warning("usage stats: the collector refused a batch (%d %s); dropped it", r.status_code, field)
+            log.warning("usage stats: the collector refused a batch (%d %s %s); dropped it", code, refused, field)
             self._dropped += len(batch)
         self._write_lines(self.data_dir / OUTBOX, rest)
         return True, bool(rest), None

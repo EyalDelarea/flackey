@@ -22,6 +22,7 @@ from flackey.telemetry.client import (
     DRAIN_GAP_S,
     FILES,
     MAX_BACKOFF_S,
+    MAX_OUTBOX_EVENTS,
     OUTBOX,
     PENDING_DELETE,
     SENT,
@@ -299,9 +300,66 @@ def test_a_refused_batch_is_dropped_and_a_down_collector_keeps_it(tmp_path):
     assert t._next_send > t.clock()            # backed off, kept
     assert t.last_send["status"] == "failed" and "retry" in t.last_send["error"]
     t._next_send = 0
-    refused = Collector(status=400)
-    run_tick(t, httpx.MockTransport(refused))
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(400, json={"error": "invalid", "field": "event"})))
     assert (tmp_path / OUTBOX).read_text() == "" and t._dropped == 1
+    assert "refused" in t.last_send["error"]
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(400, json={"error": "invalid", "field": "schema"}),
+                                    httpx.Response(403, json={"error": "not_owner"}),
+                                    httpx.Response(410, json={"error": "schema_retired", "min": 2})])
+def test_the_collectors_own_refusal_drops_the_batch(tmp_path, answer):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(lambda r: answer))
+    assert (tmp_path / OUTBOX).read_text() == "" and t._dropped == 1
+    assert t.last_send["error"] == f"HTTP {answer.status_code}, refused and dropped"
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(400), httpx.Response(400, text=""),
+                                    httpx.Response(403, html="<html><body>Access denied</body></html>"),
+                                    httpx.Response(404, text="Not Found"), httpx.Response(451),
+                                    httpx.Response(413), httpx.Response(415),
+                                    httpx.Response(400, json={"error": "bad_request"}),
+                                    httpx.Response(403, json={"error": "invalid"}),
+                                    httpx.Response(400, json=["invalid"])])
+def test_a_4xx_that_is_not_the_collectors_refusal_keeps_the_batch(tmp_path, answer):
+    """A proxy, WAF, geo-block or captive portal in front of the collector answers without the collector's
+    own body (today: a bare 400 for a gzip body). The collector never saw the batch, so it stays and retries."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(lambda r: answer))
+    assert (tmp_path / OUTBOX).read_text().strip() and t._dropped == 0
+    assert t._next_send > t.clock() and t._backoff > 0          # the usual backoff, not a drain
+    code = answer.status_code
+    assert t.last_send["error"] == f"Couldn't reach the stats server (HTTP {code}), will retry"
+
+
+@pytest.mark.parametrize("code", [429, 500, 502, 503])
+def test_429_and_5xx_keep_the_batch(tmp_path, code):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(code, headers={"Retry-After": "120"})))
+    assert (tmp_path / OUTBOX).read_text().strip() and t._dropped == 0
+    assert t._next_send >= t.clock() + 120
+    assert t.last_send["error"] == f"HTTP {code}, will retry"
+
+
+def test_a_batch_stuck_behind_a_proxy_is_bounded_by_the_outbox_cap(tmp_path):
+    """A non-collector 4xx that never clears: the outbox still holds at most MAX_OUTBOX_EVENTS, oldest
+    dropped (and counted), so the retries can't grow it without bound."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    for _ in range(MAX_OUTBOX_EVENTS + 50):
+        t.emit("app_started", filing_format="aiff")
+        if len(t._queue) >= 200:
+            t._flush()
+    t._flush()
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(400)))
+    assert len(t._outbox_lines()) == MAX_OUTBOX_EVENTS and t._dropped == 50
 
 
 def test_no_collector_means_the_outbox_only(tmp_path):
