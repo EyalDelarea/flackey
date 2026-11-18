@@ -453,48 +453,54 @@ p {
   color: var(--blue);
   white-space: nowrap;
 }
-/* Covers while downloading: a Downloads row with its cover and a part-filled bar */
-.wn-cover-row {
-  width: 180px;
+/* Playlists sidebar */
+.wn-sidebar {
+  width: 150px;
   display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px;
-  border-radius: 9px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f2f2f4;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.wn-search {
+  padding: 3px 7px 3px 20px;
+  border-radius: 6px;
   background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: rgba(0, 0, 0, 0.4);
+  position: relative;
+  margin-bottom: 2px;
 }
-.wn-cover {
-  flex: none;
-  width: 40px;
-  height: 40px;
+.wn-search::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid rgba(0, 0, 0, 0.4);
+  border-radius: 50%;
+  transform: translateY(-60%);
+}
+.wn-pl {
+  padding: 2px 7px;
   border-radius: 5px;
-  background:
-    radial-gradient(circle at 30% 30%, #ffd36b 0 18%, transparent 19%),
-    linear-gradient(135deg, #ff5e7e, #5b3cf5 60%, #1b1d4a);
 }
-.wn-cover-text {
-  flex: 1;
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.wn-cover-text span {
-  color: rgba(0, 0, 0, 0.55);
-}
-.wn-cover-bar {
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.08);
-  margin-top: 3px;
-  overflow: hidden;
-}
-.wn-cover-bar i {
-  display: block;
-  width: 58%;
-  height: 100%;
+.wn-pl:nth-child(2) {
   background: #007aff;
+  color: #fff;
+}
+.wn-albums {
+  display: flex;
+  justify-content: space-between;
+  color: rgba(0, 0, 0, 0.55);
+  font-weight: 600;
+}
+.wn-albums b {
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.35);
 }
 /* Extended mix: the Done row's offer, with the app's two buttons under it */
 .wn-ext {
