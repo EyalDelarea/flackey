@@ -12,7 +12,7 @@ from functools import partial
 from .client import ENV_INTERVAL, ENV_KEY, ENV_MODE, ENV_URL, FILES, Telemetry, build_url, local_url
 
 __all__ = ["FILES", "Telemetry", "build_url", "current", "emit", "enabled", "install", "local_url", "notes", "pop_notes",
-           "uninstall"]
+           "uninstall", "update_handed_over"]
 
 _current: Telemetry | None = None
 
@@ -39,6 +39,12 @@ def notes(request_id: int) -> dict:
 def pop_notes(request_id: int) -> dict:
     t = _current
     return t.pop_notes(request_id) if t is not None else {}
+
+
+def update_handed_over(to_version: str, how: str) -> None:
+    t = _current
+    if t is not None:
+        t.update_handed_over(to_version, how)
 
 
 def from_settings(settings, version: str, environ=os.environ) -> Telemetry:

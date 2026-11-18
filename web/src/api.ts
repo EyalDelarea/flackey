@@ -231,7 +231,8 @@ export const api = {
   playlists: () => call<Playlist[]>('/api/playlists'),
   stats: () => call<Stats>('/api/stats'),
   settings: () => call<AppSettings>('/api/settings'),
-  update: () => call<UpdateStatus>('/api/update'),
+  /** `trigger` says who asked, for the `update_step` usage stat: the launch's own check or Settings. */
+  update: (trigger: 'auto' | 'manual') => call<UpdateStatus>(`/api/update?trigger=${trigger}`),
   // No URL is passed: the server looks the release up again for itself, so a page left open on a stale
   // check cannot name what gets downloaded and opened.
   installUpdate: () => post<UpdateDownload>('/api/update/install'),

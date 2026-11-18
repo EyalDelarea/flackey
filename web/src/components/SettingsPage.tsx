@@ -113,7 +113,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   useEffect(() => { if (downloadState && downloadState !== 'downloading') setInstallStarting(false) }, [downloadState])
   useEffect(() => {
     setUpdateChecking(true)
-    api.update().then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
+    api.update('manual').then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
       available: false, latest: null, url: null, release_url: null, size: null, size_label: null,
       published_at: null, published_date: null, prerelease: false, error: 'Could not check for updates.' }))
       .finally(() => setUpdateChecking(false))

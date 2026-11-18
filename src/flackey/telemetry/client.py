@@ -57,7 +57,11 @@ DELETE_RETRY = "telemetry-delete-retry.json"
 # A delete the collector refused for good (wrong secret, or a request it can't read): retrying can never help,
 # so it is dropped and this records when and why, for Settings > Privacy. Holds no ID and no secret.
 DELETE_REFUSED = "telemetry-delete-refused.json"
-FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER, DELETE_RETRY, DELETE_REFUSED)
+# An update handed over to a restart or an installer: which version, which way, and when. Read once on the next
+# start to say whether it took (`update_step` stage `restart`), then removed.
+UPDATE_PENDING = "telemetry-update-pending.json"
+UPDATE_HOW = ("seamless", "installer")
+FILES = (OUTBOX, SENT, PENDING_DELETE, STATE, MARKER, DELETE_RETRY, DELETE_REFUSED, UPDATE_PENDING)
 MAX_QUEUE = 500
 MAX_OUTBOX_EVENTS = 2000
 MAX_OUTBOX_BYTES = 1_000_000
@@ -486,7 +490,42 @@ class Telemetry:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         marker.write_text(self.session_id, encoding="utf-8")
         self._save_state()
+        self._update_outcome()
         return {"previous_exit": previous, "updated_from": last if last and last != self.version else ""}
+
+    def update_handed_over(self, to_version: str, how: str) -> None:
+        """An update left the app's hands: a staged bundle armed for the swap on quit (`seamless`), or an
+        installer opened (`installer`). The next start says whether it took."""
+        if not self.enabled or how not in UPDATE_HOW:
+            return
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            _write_private(self.data_dir / UPDATE_PENDING,
+                           json.dumps({"to": to_version, "how": how, "at": self.clock()}))
+        except OSError:
+            log.debug("usage stats: could not note the pending update", exc_info=True)
+
+    def _update_outcome(self) -> None:
+        """Whether the update the last session handed over is the version now running. A seamless swap that
+        did not take is a failure; an installer the owner closed is not, so it is not reported."""
+        path = self.data_dir / UPDATE_PENDING
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = None
+        path.unlink(missing_ok=True)
+        if not isinstance(raw, dict) or raw.get("how") not in UPDATE_HOW or not isinstance(raw.get("to"), str):
+            return
+        to = raw["to"]
+        at = raw.get("at")
+        from .buckets import dur
+        took = dur(self.clock() - at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+        if to == self.version:
+            self.emit("update_step", stage="restart", result="ok", to_version=to, trigger="manual",
+                      error_code="", time=took)
+        elif raw["how"] == "seamless":
+            self.emit("update_step", stage="restart", result="failed", to_version=to, trigger="manual",
+                      error_code="install_failed", time=took)
 
     def end_session(self) -> None:
         if not self.enabled:

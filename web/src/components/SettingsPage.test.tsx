@@ -74,6 +74,13 @@ it('shows an available app update', async () => {
   expect(screen.getByText('Download update')).toBeInTheDocument()
 })
 
+/* Opening Settings is the owner asking, so its check is counted as a manual one (`update_step`). */
+it('says its update check is a manual one', async () => {
+  const check = vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(check).toHaveBeenCalledWith('manual'))
+})
+
 /* The bug this row was rebuilt for: the press went to `window.open`, which does nothing inside the
    webview, so nothing happened and nothing said so. The download is the server's job now. */
 it('hands the download to the server rather than opening a window', async () => {
