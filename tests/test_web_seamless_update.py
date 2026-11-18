@@ -27,7 +27,7 @@ from flackey.web.update import RELEASES_URL
 from flackey.worker import Worker
 from tests.appclient import AppClient
 
-from .test_web import DummyCatalog, DummySource, _settle, fake_youtube
+from .test_web import DummySource, _settle, fake_youtube
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="staging shells out to ditto and xattr")
 
@@ -116,7 +116,7 @@ def app(tmp_path, applications, private_key, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h",
                         library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
-    worker = Worker(store, DummySource(), DummyCatalog(), MemoryNotifier(), settings)
+    worker = Worker(store, DummySource(), MemoryNotifier(), settings)
     status = Status(None, telegram_authorized=True, worker_running=False, setup_done=True)
     quits = Quit()
     api = create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, status=status,

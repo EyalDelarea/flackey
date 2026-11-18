@@ -14,7 +14,7 @@ antivirus heuristics, and leaves the Inno Setup installer nothing stable to inst
 import re
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
     StringFileInfo,
@@ -40,7 +40,6 @@ datas = [
     (str(ROOT / "web" / "dist"), "web/dist"),
     (str(ROOT / "src" / "flackey" / "assets"), "flackey/assets"),
 ]
-datas += collect_data_files("curl_cffi")   # the bundled CA bundle; without it every HTTPS call fails
 
 # The helper programs `flackey.tools` looks for first: `bundled_bin_dir()` is `sys._MEIPASS / "bin"`, and
 # a destination of "bin" here is exactly that folder. build_windows.ps1 fetches them; a spec run without

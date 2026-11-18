@@ -1,4 +1,3 @@
-import Banner from '../Banner'
 import RequestRow from './RequestRow'
 import { plural, type GroupView, type RowAction, type Stage } from '../../presentation'
 import type { PlayerState } from './DownloadPage'
@@ -30,14 +29,13 @@ interface Props {
   whyOpen: Set<number>
   onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
   onChoose: (rowId: number, cid: number) => void
-  onTryNow: (ids: number[]) => void
   /** Get extended for every row of the batch with one on offer, one after another (issue #187). */
   onGetAllExtended?: (ids: number[]) => void
   /** Passed straight through to the rows: the page owns the one audio element, the group only
    *  hands it down. */
   player: PlayerState; onPlay: (key: string, url: string) => void
 }
-export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, onGetAllExtended, player, onPlay }: Props) {
+export default function Group({ g, view, whyOpen, onAction, onChoose, onGetAllExtended, player, onPlay }: Props) {
   const s = g.summary
   // Offered, and not already being fetched: a press while some are running takes only the rest.
   const offered = g.rows.filter(r => r.extendedOffer?.state === 'offer')
@@ -81,7 +79,6 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onTryNow, 
       <p className="group-scope">Showing {view === 'active' ? plural(g.rows.length, 'download') : plural(g.rows.length, view === 'failed' ? 'failed track' : 'history track')} matching this filter</p>
       <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
         player={player} onPlay={onPlay} />)}</div>
-      {g.beatportDown && <Banner tone="red" text={`Beatport is unreachable. Matching is paused — trying again in ${plural(g.beatportDown.seconds, 'second')}. Nothing is lost.`} action={{ label: 'Try now', onClick: () => onTryNow(g.beatportDown!.requestIds) }} />}
     </section>
   )
 }

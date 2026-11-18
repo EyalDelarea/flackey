@@ -11,7 +11,6 @@ import pytest
 
 from flackey import deezer as deezer_mod
 from flackey import worker as worker_mod
-from flackey.catalog import CatalogUnavailable
 from flackey.config import Settings
 from flackey.fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from flackey.match import decide
@@ -54,16 +53,6 @@ def _mp3(path: Path, kbps: int = 320, seconds: int = 3) -> Path:
                     f"anoisesrc=color=white:seed=1:sample_rate=44100:duration={seconds}",
                     "-c:a", "libmp3lame", "-b:a", f"{kbps}k", str(path)], check=True)
     return path
-
-
-class FakeCatalog:
-    def __init__(self, tracks=None, fail=False):
-        self.tracks, self.fail = tracks or [], fail
-
-    async def search(self, query: Query):
-        if self.fail:
-            raise CatalogUnavailable("403")
-        return self.tracks
 
 
 class FakeSource:
@@ -142,15 +131,24 @@ async def _video_ref(url, tmp_dir, *, duration_s=None):
     return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
 
 
-def make_worker(env, source, catalog):
+def make_worker(env, source):
     settings, store, notifier = env
-    return Worker(store, source, catalog, notifier, settings, artwork_fetch=no_art)
+    return Worker(store, source, notifier, settings, artwork_fetch=no_art)
+
+
+def with_stored_record(store, raw: str, record: CatalogTrack, cand: Candidate, query: Query | None = None) -> int:
+    """A request identified before Beatport was removed, as a restart finds it: its Beatport record stored
+    and on the row, its candidate chosen. `process` resumes it straight at the fetch."""
+    rid = store.add_request(raw, RequestKind.TEXT, query=query)
+    store.upsert_catalog_track(record)
+    saved = store.add_candidates(rid, [cand])
+    store.update_request(rid, catalog_track_id=record.id, chosen_candidate_id=saved[0].id)
+    return rid
 
 
 async def test_happy_path_files_tags_exports(env):
     settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.confidence == 100 and r.chosen_candidate_id is not None
@@ -169,7 +167,7 @@ async def test_happy_path_files_tags_exports(env):
 async def test_a_new_track_is_filed_by_the_library_layout(env, layout):
     settings, store, _ = env
     settings.library_layout = layout
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    w = make_worker(env, FakeSource([good_cand()]))
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     track = store.get_track(r.track_id)
     today = datetime.now().astimezone().date()
@@ -183,7 +181,6 @@ async def test_process_survives_a_request_removed_while_notifying(env, caplog):
     at the end of process() must tolerate the row being gone instead of letting KeyError escape run_forever()."""
     settings, store, _ = env
     caplog.set_level(logging.DEBUG, logger="flackey.worker")
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     rid = store.add_request(TEXT, RequestKind.TEXT)
 
     class VanishingNotifier:
@@ -194,7 +191,7 @@ async def test_process_survives_a_request_removed_while_notifying(env, caplog):
             self.sent.append((text, buttons))
             store.delete_request(rid)  # simulates a Remove click landing mid-notify
 
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), VanishingNotifier(), settings,
+    w = Worker(store, FakeSource([good_cand()]), VanishingNotifier(), settings,
               artwork_fetch=no_art)
     r = await w.process(rid)
     assert r is None
@@ -206,8 +203,7 @@ async def test_process_survives_a_request_removed_while_notifying(env, caplog):
 async def test_worker_logs_state_transitions(env, caplog):
     _, store, _ = env
     caplog.set_level(logging.DEBUG, logger="flackey.worker")
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     await w.process(rid)
     assert f"req#{rid} queued -> identifying" in caplog.text
@@ -217,7 +213,7 @@ async def test_worker_logs_parking_for_review(env, caplog):
     """A transition that used to go straight through store.update_request (no DEBUG line) now does too."""
     _, store, _ = env
     caplog.set_level(logging.DEBUG, logger="flackey.worker")
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)
     # match only what's after the arrow: `req` is threaded through _process unmutated, so the "from" half of
@@ -227,9 +223,8 @@ async def test_worker_logs_parking_for_review(env, caplog):
 
 async def test_duplicate_is_skipped(env):
     _settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     src = FakeSource([good_cand()])
-    w = make_worker(env, src, FakeCatalog([ct]))
+    w = make_worker(env, src)
     await w.process(store.add_request(TEXT, RequestKind.TEXT))
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert r.state == RequestState.DUPLICATE and r.track_id is not None and len(src.fetched) == 1
@@ -240,10 +235,9 @@ async def test_duplicate_is_rechecked_when_review_resumes(env):
     _settings, store, _notifier = env
     src = FakeSource([good_cand()])
     parked = store.add_request("q", RequestKind.TEXT)   # raw text nothing matches: parks below threshold
-    await make_worker(env, src, FakeCatalog([])).process(parked)       # parks: confidence below threshold
+    await make_worker(env, src).process(parked)       # parks: confidence below threshold
     assert store.get_request(parked).state == RequestState.AWAITING_REVIEW
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, src, FakeCatalog([ct]))
+    w = make_worker(env, src)
     await w.process(store.add_request(TEXT, RequestKind.TEXT))         # meanwhile the same track gets filed
     await w.choose(parked, store.get_candidates(parked)[0].id)
     r = await w.process(parked)                                        # must not fetch it a second time
@@ -252,10 +246,9 @@ async def test_duplicate_is_rechecked_when_review_resumes(env):
 
 async def test_low_confidence_parks_then_choice_resumes(env):
     _settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
                       duration_s=100, deezer_id=5, rank=1)
-    w = make_worker(env, FakeSource([other]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([other]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.AWAITING_REVIEW and "below" in r.flag_reason
@@ -272,7 +265,7 @@ async def test_low_confidence_parks_then_choice_resumes(env):
 
 async def test_choose_validates_candidate_and_state(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([good_cand()]))
     a = store.add_request("q", RequestKind.TEXT)
     b = store.add_request("q", RequestKind.TEXT)
     await w.process(a)
@@ -287,9 +280,8 @@ async def test_choose_validates_candidate_and_state(env):
 
 async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     _settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     src = FakeSource([good_cand()], fetch_error=SourceTimeout("slow"))
-    w = make_worker(env, src, FakeCatalog([ct]))
+    w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
@@ -302,7 +294,7 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
 async def test_not_on_beatport_files_when_confident(env):
     """No Beatport record, but the candidate convinces on text: the download's own check decides."""
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE
@@ -321,43 +313,44 @@ async def _park_then_choose(w, store, rid):
     return await w.process(rid)
 
 
-async def test_chosen_remix_is_tagged_from_its_own_catalog_record(env):
+async def test_a_stored_record_of_another_version_is_dropped_for_the_candidates_own_tags(env):
+    """A request parked before Beatport was removed carries the original mix's record; the owner then picks
+    the remix. Beatport is not asked again: the stored record is dropped and the remix is tagged from
+    itself, filled from Deezer and Discogs like any new track."""
     settings, store, _ = env
+    lookup = FakeTagLookup(FoundTags(label="Remix Label", sources=["deezer"]))
+    w = Worker(store, FakeSource([remix_cand()]), MemoryNotifier(), settings, artwork_fetch=no_art,
+               tag_lookup=lookup)
     original = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    remix = CatalogTrack(**{**CT.__dict__, "id": 99, "isrc": "REMIX0001", "mix_name": "Extended Remix",
-                            "label": "Remix Label", "duration_ms": 3000})
-    w = make_worker(env, FakeSource([remix_cand()]), FakeCatalog([original, remix]))
-    rid = store.add_request(TEXT, RequestKind.TEXT)
-    r = await _park_then_choose(w, store, rid)
-    assert r.state == RequestState.DONE and r.catalog_track_id == 99
+    rid = with_stored_record(store, TEXT, original, remix_cand())
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.catalog_track_id < 0       # the stand-in, not Beatport's record
     track = store.get_track(r.track_id)
     assert (track.mix_name, track.isrc) == ("Extended Remix", "REMIX0001")
-    assert track.path.parent == settings.library_root / "Astral Projection"
+    assert read_tags(track.path)["label"] == "Remix Label" and len(lookup.asked) == 1
+    assert store.get_catalog_track(original.id) is not None               # the stored record itself stays
 
 
+async def test_a_stored_record_of_the_same_version_still_tags_the_file(env):
+    """Existing Beatport rows keep working: a resumed request files with its stored record's tags."""
+    settings, store, _ = env
+    lookup = FakeTagLookup()
+    w = Worker(store, FakeSource([good_cand()]), MemoryNotifier(), settings, artwork_fetch=no_art,
+               tag_lookup=lookup)
+    rid = with_stored_record(store, TEXT, CatalogTrack(**{**CT.__dict__, "duration_ms": 3000}), good_cand())
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and r.catalog_track_id == CT.id and lookup.asked == []
+    tags = read_tags(store.get_track(r.track_id).path)
+    assert (tags["label"], tags["genre"]) == ("Sacred Technology", "Psy-Trance")
+    assert "beatport 16552105" in tags["comment"]
 async def test_chosen_remix_without_catalog_record_is_tagged_from_the_candidate(env):
     settings, store, _ = env
-    original = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([remix_cand()]), FakeCatalog([original]))
+    w = make_worker(env, FakeSource([remix_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await _park_then_choose(w, store, rid)
     assert r.state == RequestState.DONE and r.catalog_track_id < 0
     track = store.get_track(r.track_id)
     assert (track.mix_name, track.isrc) == ("Extended Remix", "REMIX0001")
-    assert track.path.parent == settings.library_root / "Astral Projection"
-
-
-async def test_auto_accepted_edit_is_tagged_from_its_own_catalog_record(env):
-    """The video's length pins an Album Edit (auto-accepted); the catalog was matched for the Original Mix."""
-    settings, store, _ = env
-    original = CatalogTrack(**{**CT.__dict__, "duration_ms": 544000})
-    edit = CatalogTrack(**{**CT.__dict__, "id": 99, "isrc": "EDIT00001", "mix_name": "Album Edit",
-                           "label": "Edit Label", "duration_ms": 531000})
-    w, rid = _edit_setup(env, [original, edit])
-    r = await w.process(rid)
-    assert r.state == RequestState.DONE and r.catalog_track_id == 99
-    track = store.get_track(r.track_id)
-    assert (track.mix_name, track.isrc) == ("Album Edit", "EDIT00001")
     assert track.path.parent == settings.library_root / "Astral Projection"
 
 
@@ -367,7 +360,7 @@ def _edit_setup(env, catalog_tracks):
     edit_cand = Candidate(source="deezer_bot", source_ref="dz_track:2:send", artist="Astral Projection",
                           title="Into the Void (Album Edit)", duration_s=531, deezer_id=2, isrc="EDIT00001", rank=2)
     _, store, _ = env
-    w = make_worker(env, FakeSource([orig_cand, edit_cand]), FakeCatalog(catalog_tracks))
+    w = make_worker(env, FakeSource([orig_cand, edit_cand]))
     rid = store.add_request("Into the Void", RequestKind.YT_TRACK, source_url="https://youtu.be/x",
                             query=Query(raw="Into the Void", artist="Astral Projection", title="Into the Void", duration_s=532))
     return w, rid
@@ -389,7 +382,7 @@ async def test_review_message_shows_the_video_length(env):
     _, store, notifier = env
     other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
                       duration_s=100, deezer_id=5, rank=1)
-    w = make_worker(env, FakeSource([other]), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource([other]))
     rid = store.add_request("Into the Void", RequestKind.YT_TRACK, source_url="https://youtu.be/x",
                             query=Query(raw="Into the Void", artist="Astral Projection", title="Into the Void", duration_s=443))
     r = await w.process(rid)
@@ -399,7 +392,7 @@ async def test_review_message_shows_the_video_length(env):
 
 async def test_chosen_without_beatport_is_tagged_from_the_candidate(env):
     settings, store, _notifier = env
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)
     await w.choose(rid, store.get_candidates(rid)[0].id)
@@ -429,7 +422,7 @@ async def test_a_youtube_request_files_the_candidate_whose_preview_is_the_video(
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make_worker(env, FakeSource([wrong, right]), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource([wrong, right]))
     # #70's real mistake: the video is titled after the record it is not. Text reads the title and agrees
     # with itself; only the audio knows better.
     rid = store.add_request("Astral Projection - Between The Lines", RequestKind.YT_TRACK,
@@ -455,7 +448,7 @@ async def test_a_youtube_request_with_no_matching_preview_does_not_file_the_text
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     # Since issue #69 a request with no record goes to Soulseek on its own words -- but this raw text
@@ -480,7 +473,7 @@ async def test_no_record_and_no_soulseek_errors_instead_of_filing_the_deezer_cop
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
     source = FakeSource([good_cand()])
-    w = make_worker(env, source, FakeCatalog([CT]))
+    w = make_worker(env, source)
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -492,14 +485,13 @@ async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypa
     """The epic's one rule: a text score of 95 does not overrule the audio, and there is no Choose window
     on this path -- the request parks instead of asking."""
     _settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
 
     async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
         return Identification(None, None, [(1754956977, 0.31)], "none of 1 Deezer previews is the video's recording")
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert store.get_candidates(rid)[0].score == 100        # text would have auto-filed it
@@ -509,14 +501,13 @@ async def test_audio_beats_a_text_score_that_would_have_auto_filed(env, monkeypa
 
 async def test_without_a_video_reference_text_still_decides(env, monkeypatch):
     _settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     called = []
 
     async def fake_identify(*a, **kw):
         called.append(1)
 
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)   # env's fake_youtube already fails
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert r.state == RequestState.DONE and called == [] and store.get_reference(rid)["kind"] == "deezer"
@@ -526,7 +517,6 @@ async def test_video_audio_failure_retries_before_the_text_path(env, monkeypatch
     """The video's audio identifies the record, so a yt-dlp blip earns the quick ladder; after it the pass
     goes on by text (checked by the preview on download), so a removed video cannot block the request."""
     settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     calls = []
 
     async def flaky_youtube(url, tmp_dir, *, duration_s=None):
@@ -534,7 +524,7 @@ async def test_video_audio_failure_retries_before_the_text_path(env, monkeypatch
         raise YouTubeError("HTTP Error 429: Too Many Requests")
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", flaky_youtube)
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1
@@ -552,8 +542,7 @@ async def test_unreadable_video_audio_goes_straight_to_the_text_path(env, monkey
     """The other half of the split: the audio arrived and could not be read, which the next pass would only
     repeat. `env`'s own fake raises exactly this, which is why every other test here chooses by text at once."""
     settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.attempts == 0
@@ -561,14 +550,14 @@ async def test_unreadable_video_audio_goes_straight_to_the_text_path(env, monkey
 
 async def test_source_not_found(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(error=SourceNotFound("source bot replied without results: Nothing")), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource(error=SourceNotFound("source bot replied without results: Nothing")))
     r = await w.process(store.add_request("q", RequestKind.TEXT))
     # Since issue #69 "not on Deezer" is not a verdict on its own: the request falls through to the
     # request's own words, and only lands here because "q" parses to neither an artist nor a title. The
     # bot's own sentence is still on the row, which is what a not-found is diagnosed from.
     assert r.state == RequestState.NOT_FOUND
     assert r.error_message == ("could not identify this track: the Deezer bot found nothing (source bot "
-                               "replied without results: Nothing) and no Beatport match; no artist and "
+                               "replied without results: Nothing); no artist and "
                                "title could be read from the request, so there is nothing to search for")
     # Three of the four failure states say where they stopped by their own name (issue #60), so only
     # `error` carries a stage: a not-found only ever comes out of identify.
@@ -577,7 +566,7 @@ async def test_source_not_found(env):
 
 async def test_source_timeout_retries_then_errors(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(error=SourceTimeout("slow")), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource(error=SourceTimeout("slow")))
     rid = store.add_request("q", RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.QUEUED
     assert (await w.process(rid)).state == RequestState.QUEUED
@@ -590,7 +579,7 @@ async def test_beatport_blocked_downloads_without_it(env):
     requests in the queue failed on it. Beatport only adds tags; the file comes from the source and the
     fingerprint proves it, so a blocked Beatport must not cost the download."""
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog(fail=True))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.attempts == 0
@@ -621,7 +610,7 @@ async def test_beatport_blocked_tags_from_deezer_and_discogs(env):
     async def fetch_art(url):
         art.append(url)
 
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(fail=True), notifier, settings,
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings,
                artwork_fetch=fetch_art, tag_lookup=lookup)
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert r.state == RequestState.DONE
@@ -637,19 +626,6 @@ async def test_beatport_blocked_tags_from_deezer_and_discogs(env):
     assert "tags Deezer + Discogs" in tags["comment"] and "beatport" not in tags["comment"]
     assert art == ["https://e-cdns-images.dzcdn.net/cover/1400.jpg"]
     assert "Psy-Trance / Sacred Technology" in notifier.sent[-1][0]
-
-
-async def test_a_beatport_match_is_never_looked_up_again(env):
-    settings, store, notifier = env
-    lookup = FakeTagLookup()
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog([ct]), notifier, settings,
-               artwork_fetch=no_art, tag_lookup=lookup)
-    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    assert r.state == RequestState.DONE and lookup.asked == []
-    tags = read_tags(store.get_track(r.track_id).path)
-    assert (tags["label"], tags["genre"]) == ("Sacred Technology", "Psy-Trance")
-    assert "beatport 16552105" in tags["comment"]
 
 
 # ---- the year: the recording's first release, not the reissue Beatport sells ------------------------------
@@ -674,88 +650,40 @@ def dp_cand(**kw) -> Candidate:
                         "rank": 1, **kw})
 
 
-async def test_the_year_is_the_recordings_first_release_among_beatports_results(env):
-    _, store, _ = env
-    w = make_worker(env, FakeSource([dp_cand()]), FakeCatalog([DP_REISSUE, DP_ALBUM, DP_REMIX]))
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
-    assert r.state == RequestState.DONE and r.catalog_track_id == DP_REISSUE.id   # still the record that won
-    ct = store.get_catalog_track(r.catalog_track_id)
-    # The release keeps its own date; the file carries the album's. The remix is a different recording, and
-    # its earlier single date counts for nothing.
-    assert (ct.release_date, ct.original_date) == ("2005-03-14", "2001-03-12")
-    assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-12"
-
-
-async def test_a_later_search_that_sees_less_never_erases_the_first_release_found(env):
-    """Request A's search listed the 2001 album and its file says 2001. Request B for the same record gets
-    a search without the album -- Beatport's results vary -- and saved its record before the duplicate
-    check, which used to set the stored date back to nothing: A's library row then read 2005."""
-    _, store, _ = env
-    catalog = FakeCatalog([DP_REISSUE, DP_ALBUM])
-    w = make_worker(env, FakeSource([dp_cand()]), catalog)
-    a = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
-    assert store.get_catalog_track(DP_REISSUE.id).original_date == "2001-03-12"
-
-    catalog.tracks = [DP_REISSUE]
-    b = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
-    assert b.state == RequestState.DUPLICATE
-    assert store.get_catalog_track(DP_REISSUE.id).original_date == "2001-03-12"
-
-    # Filed again (the first copy gone from the library), the record keeps its first release in the file too.
-    path = store.get_track(a.track_id).path
-    store.delete_track(a.track_id)
-    path.unlink()
-    c = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
-    assert c.state == RequestState.DONE
-    assert read_tags(store.get_track(c.track_id).path)["date"] == "2001-03-12"
-
-
 async def test_the_year_falls_back_to_the_release_when_nothing_earlier_is_known(env):
     _, store, _ = env
-    w = make_worker(env, FakeSource([dp_cand()]), FakeCatalog([DP_REISSUE, DP_REMIX]))
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    w = make_worker(env, FakeSource([dp_cand()]))
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, dp_cand()))
     assert store.get_catalog_track(r.catalog_track_id).original_date is None
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
-
-
 async def test_the_downloaded_deezer_records_date_counts_when_its_isrc_is_the_records(env):
     """With the bot on, the Deezer record that was downloaded was already looked up; its date is the
-    original album's even where Beatport only sells the reissue."""
+    original album's even where the stored Beatport record is the reissue."""
     _, store, _ = env
-    w = make_worker(env, FakeSource([dp_cand(release_date="2001-03-07")]), FakeCatalog([DP_REISSUE]))
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    cand = dp_cand(release_date="2001-03-07")
+    w = make_worker(env, FakeSource([cand]))
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, cand))
     assert store.get_catalog_track(r.catalog_track_id).original_date == "2001-03-07"
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-07"
-
-
 async def test_a_deezer_date_for_another_recording_does_not_count(env):
     _, store, _ = env
-    w = make_worker(env, FakeSource([dp_cand(release_date="1999-01-01", isrc="FRZ039800212")]),
-                    FakeCatalog([DP_REISSUE]))
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    cand = dp_cand(release_date="1999-01-01", isrc="FRZ039800212")
+    w = make_worker(env, FakeSource([cand]))
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, cand))
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
-
-
 async def test_a_remaster_keeps_its_own_year(env):
     """Asked for "Remastered 2021", the remaster is what was wanted and its year is what tells it apart."""
     _, store, _ = env
     remaster = CatalogTrack(**{**DP_REISSUE.__dict__, "id": 5004, "mix_name": "Remastered 2021",
                                "release_date": "2021-02-22"})
-    album = CatalogTrack(**{**DP_ALBUM.__dict__, "mix_name": "Remastered 2021"})
-    w = make_worker(env, FakeSource([dp_cand(mix_name="Remastered 2021", release_date="2001-03-07")]),
-                    FakeCatalog([remaster, album]))
-    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
-                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    cand = dp_cand(mix_name="Remastered 2021", release_date="2001-03-07")
+    w = make_worker(env, FakeSource([cand]))
+    rid = with_stored_record(store, "Daft Punk - One More Time (Remastered 2021)", remaster, cand,
+                             Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
     r = await w.process(rid)
     assert r.state == RequestState.DONE and r.catalog_track_id == remaster.id
     assert store.get_catalog_track(r.catalog_track_id).original_date is None
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2021-02-22"
-
-
-# Beatport has only the 2005 release; Deezer, asked by the record's ISRC through its public API, answers with
-# the original album's record. One lightweight call per ISRC per run, at filing, failing open. Its length is
-# the Beatport record's (3 s here, because that is what the fake source files): a cut of another length under
-# the same ISRC is a DJ mix or a compilation edit, and says nothing about when the recording came out.
 DEEZER_DISCOVERY = {"id": 3135556, "isrc": DP_ISRC, "title": "One More Time", "title_short": "One More Time",
                     "duration": 3, "release_date": "2001-03-07", "artist": {"name": "Daft Punk"},
                     "album": {"id": 302127, "title": "Discovery"}}
@@ -775,28 +703,26 @@ def _deezer_isrc(monkeypatch, answer):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler)), asked
 
 
-def _worker_with_http(env, http, cands, tracks, **kw):
+def _worker_with_http(env, http, cands, **kw):
     settings, store, notifier = env
-    return Worker(store, FakeSource(cands), FakeCatalog(tracks), notifier, settings, artwork_fetch=no_art, http=http,
+    return Worker(store, FakeSource(cands), notifier, settings, artwork_fetch=no_art, http=http,
                   **kw)
 
 
 async def test_deezer_dates_a_beatport_reissue_by_the_original_album(env, monkeypatch):
     _, store, _ = env
     http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
-    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    w = _worker_with_http(env, http, [dp_cand()])
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, dp_cand()))
     assert r.state == RequestState.DONE and asked == [f"/track/isrc:{DP_ISRC}"]
     ct = store.get_catalog_track(r.catalog_track_id)
     assert (ct.release_date, ct.original_date) == ("2005-03-14", "2001-03-07")
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2001-03-07"
     assert w._deezer_last > 0                    # it took its turn with the worker's other Deezer calls
-
-
 async def test_the_isrc_lookup_is_asked_once_per_isrc_in_a_run(env, monkeypatch):
     _, store, _ = env
     http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
-    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
+    w = _worker_with_http(env, http, [dp_cand()])
     req = store.get_request(store.add_request("daft punk one more time", RequestKind.TEXT))
     # A playlist with the recording twice -- or in two spellings of its ISRC -- asks Deezer once.
     assert (await w._isrc_record(req, DP_ISRC)).release_date == "2001-03-07"
@@ -812,7 +738,7 @@ async def test_a_failed_isrc_lookup_is_remembered_briefly(env, monkeypatch, answ
     _, store, _ = env
     now = [1000.0]
     http, asked = _deezer_isrc(monkeypatch, answer)
-    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE], clock=lambda: now[0])
+    w = _worker_with_http(env, http, [dp_cand()], clock=lambda: now[0])
     req = store.get_request(store.add_request("daft punk one more time", RequestKind.TEXT))
     assert await w._isrc_record(req, DP_ISRC) is None
     now[0] += filing_mod.ISRC_RETRY_AFTER_S - 1
@@ -833,8 +759,8 @@ async def test_a_failed_isrc_lookup_is_remembered_briefly(env, monkeypatch, answ
 async def test_a_failed_or_unhelpful_isrc_lookup_keeps_the_releases_year(env, monkeypatch, answer):
     _, store, _ = env
     http, asked = _deezer_isrc(monkeypatch, answer)
-    w = _worker_with_http(env, http, [dp_cand()], [DP_REISSUE])
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    w = _worker_with_http(env, http, [dp_cand()])
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, dp_cand()))
     assert r.state == RequestState.DONE and len(asked) == 1
     assert store.get_catalog_track(r.catalog_track_id).original_date is None
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2005-03-14"
@@ -853,9 +779,10 @@ async def test_a_remaster_request_keeps_its_year_and_asks_deezer_nothing(env, mo
     http, asked = _deezer_isrc(monkeypatch, DEEZER_DISCOVERY)
     remaster = CatalogTrack(**{**DP_REISSUE.__dict__, "id": 5004, "mix_name": "Remastered 2021",
                                "release_date": "2021-02-22", "release_name": "One More Time"})
-    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")], [remaster])
-    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
-                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")])
+    rid = with_stored_record(store, "Daft Punk - One More Time (Remastered 2021)", remaster,
+                             dp_cand(mix_name="Remastered 2021"),
+                             Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
     r = await w.process(rid)
     assert r.state == RequestState.DONE and asked == []
     assert read_tags(store.get_track(r.track_id).path)["date"] == "2021-02-22"
@@ -875,7 +802,7 @@ async def test_a_remaster_request_keeps_its_year_and_asks_deezer_nothing(env, mo
 async def test_nothing_found_files_the_stand_in_as_before(env):
     settings, store, notifier = env
     lookup = FakeTagLookup(FoundTags(notes=["discogs: no release found"]))
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(), notifier, settings,
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings,
                artwork_fetch=no_art, tag_lookup=lookup)
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert r.state == RequestState.DONE and len(lookup.asked) == 1
@@ -890,35 +817,28 @@ async def test_a_broken_tag_lookup_still_files_the_track(env):
         async def lookup(self, catalog, deezer_id=None):
             raise AttributeError("'list' object has no attribute 'get'")
 
-    w = Worker(store, FakeSource([good_cand()]), FakeCatalog(fail=True), notifier, settings,
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings,
                artwork_fetch=no_art, tag_lookup=Broken())
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
     assert r.state == RequestState.DONE
     assert store.get_catalog_track(r.catalog_track_id).label == "Unknown"
 
 
-async def test_beatport_blocked_tells_the_owner_once_per_outage(env):
-    _settings, store, notifier = env
-    catalog = FakeCatalog(fail=True)
-    w = make_worker(env, FakeSource([good_cand()]), catalog)
-
-    def notices():
-        return [m for m, *_ in notifier.sent if m.startswith("Beatport is blocking")]
-
-    await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    assert len(notices()) == 1
-    catalog.fail = False
-    await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    catalog.fail = True
-    await w.process(store.add_request(TEXT, RequestKind.TEXT))
-    assert len(notices()) == 2
-
-
+async def test_a_request_is_identified_without_any_catalogue_lookup(env):
+    """Beatport was removed (every lookup a Cloudflare 403 since 2026-10-14): a request is identified from
+    the source alone, never says Beatport to the owner, and is tagged from the candidate's own record."""
+    settings, store, notifier = env
+    lookup = FakeTagLookup(FoundTags(label="Sacred Technology", genre="Psy-Trance", sources=["deezer", "discogs"]))
+    w = Worker(store, FakeSource([good_cand()]), notifier, settings, artwork_fetch=no_art, tag_lookup=lookup)
+    assert not hasattr(w, "catalog")
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE and r.catalog_track_id < 0
+    assert not any("Beatport" in m for m, *_ in notifier.sent)
+    ct = store.get_catalog_track(r.catalog_track_id)
+    assert (ct.label, ct.genre, ct.tag_source) == ("Sacred Technology", "Psy-Trance", "deezer+discogs")
 async def test_verification_failure_rejects_and_deletes(env):
     settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()], kbps=128))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.REJECTED
@@ -933,8 +853,7 @@ async def _rejected_as_a_different_recording(env, monkeypatch):
     """Drive a request to the one rejection the owner is allowed to overrule: the file is genuine audio
     (the spectral check passes) and the recording check says it is not the track that was asked for."""
     _settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
 
     async def wrong_recording(path, reference, *, minimum, missing=""):
         return FingerprintResult("failed", 0.77, None, f"best score 0.77 below {minimum:.2f}",
@@ -976,8 +895,7 @@ def _spectral_refusal(path: Path, spectrogram_dir: Path, name: str | None = None
 async def _rejected_on_quality(env, monkeypatch):
     """Drive a request to a spectral quality rejection, the kind a copy is kept for."""
     _settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     monkeypatch.setattr(filing_mod, "verify", _spectral_refusal)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.REJECTED
@@ -1003,8 +921,7 @@ async def test_a_bitrate_rejection_keeps_nothing(env):
     """Under the bitrate floor is a measured fact, not spectral evidence: nothing to listen for, nothing to
     overrule, so the copy is deleted as it always was and the row offers no player."""
     settings, store, notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()], kbps=128), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()], kbps=128))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.REJECTED
     rj = store.get_rejection_for_request(rid)
@@ -1018,8 +935,7 @@ async def test_a_bitrate_rejection_keeps_nothing(env):
 async def test_a_quality_rejection_in_a_format_that_cannot_be_filed_keeps_nothing(env, monkeypatch):
     """"Keep it anyway" on a file Flackey cannot tag or file would be a button that fails, so there is none."""
     settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     monkeypatch.setattr(filing_mod, "verify", lambda path, *_a, **_k: Verdict(False, "m4a", 256, 0,
                                                                              "unsupported format m4a", None))
     rid = store.add_request(TEXT, RequestKind.TEXT)
@@ -1157,8 +1073,7 @@ async def test_keep_it_anyway_refuses_every_other_row(env, monkeypatch):
 
 async def test_playlist_membership(env):
     settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     pid = store.upsert_playlist("https://youtube.com/playlist?list=1", "Goa Set")
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, playlist_id=pid, playlist_position=3)
     r = await w.process(rid)
@@ -1171,7 +1086,7 @@ async def test_playlist_membership(env):
 
 async def test_cancel(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request("q", RequestKind.TEXT)
     await w.process(rid)
     r = await w.cancel(rid)
@@ -1180,7 +1095,7 @@ async def test_cancel(env):
 
 async def test_cancel_refuses_finished_requests(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(), FakeCatalog())
+    w = make_worker(env, FakeSource())
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.DONE)
     with pytest.raises(ValueError):
@@ -1192,7 +1107,7 @@ async def test_unauthorized_session_pauses_the_bot_and_the_request_goes_on_witho
     settings, store, notifier = env
     status = {"telegram_authorized": True}
     source = FakeSource(error=SourceUnauthorized("session revoked"))
-    w = Worker(store, source, FakeCatalog([CT]), notifier, settings, artwork_fetch=no_art, status=status)
+    w = Worker(store, source, notifier, settings, artwork_fetch=no_art, status=status)
     rid = store.add_request("q", RequestKind.TEXT)
     r = await w.process(rid)
     # Not the request's fault, so nothing is spent on it: queued, attempts untouched, due at once.
@@ -1214,13 +1129,13 @@ async def test_on_start_forgets_tracks_whose_files_are_gone(env):
     store.add_track(path=settings.library_root / "gone.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800,
                     file_size=1, artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
                     catalog_track_id=None, request_id=None)
-    make_worker(env, FakeSource(), FakeCatalog()).on_start()
+    make_worker(env, FakeSource()).on_start()
     assert store.list_tracks() == []
 
 
 async def test_on_start_resets_inflight(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(), FakeCatalog())
+    w = make_worker(env, FakeSource())
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.FETCHING)
     w.on_start()
@@ -1229,7 +1144,7 @@ async def test_on_start_resets_inflight(env):
 
 async def test_retry_clears_backoff_and_requeues_errors(env):
     settings, store, notifier = env
-    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource(), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request("q", RequestKind.TEXT)
     store.update_request(rid, retry_after="2999-01-01T00:00:00+00:00", attempts=1, flag_reason="Beatport unreachable, will retry")
     assert store.due_queued() == []
@@ -1253,7 +1168,7 @@ async def test_retry_restarts_a_track_the_owner_stopped(env):
     to be a dead end now comes straight back to the queue, keeping the version they had already chosen --
     changing your mind about stopping is not a reason to be asked to pick again."""
     settings, store, notifier = env
-    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource(), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request("q", RequestKind.TEXT)
     cid = store.add_candidates(rid, [good_cand()])[0].id
     store.update_request(rid, chosen_candidate_id=cid, attempts=2,
@@ -1275,7 +1190,7 @@ async def test_retry_still_refuses_a_rejected_track(env):
     """The one failure with no attempt left to repeat: the file was checked, failed and deleted. Widening
     retry to CANCELLED must not widen it to this -- `accept_rejection` is the way back here."""
     settings, store, notifier = env
-    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource(), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.REJECTED)
     with pytest.raises(ValueError, match="nothing to retry"):
@@ -1288,7 +1203,7 @@ async def test_retry_takes_back_exactly_the_retryable_states(env):
     every state rather than trust the handful the tests above happen to exercise, so widening the scope is
     something a person has to come here and choose."""
     settings, store, notifier = env
-    w = Worker(store, FakeSource(), FakeCatalog(), notifier, settings, artwork_fetch=no_art)
+    w = Worker(store, FakeSource(), notifier, settings, artwork_fetch=no_art)
     rid = store.add_request("q", RequestKind.TEXT)
     for state in RequestState:
         # retry_after cleared each time: a queued row with a backoff is the *other* thing retry accepts
@@ -1314,7 +1229,7 @@ async def test_a_failure_while_identifying_is_stamped_search(env):
     """The quick ladder spent while the row is still `identifying`: nothing was downloaded and nothing was
     checked, the track was never pinned down to begin with."""
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(error=SourceTimeout("slow")), FakeCatalog([CT]))
+    w = make_worker(env, FakeSource(error=SourceTimeout("slow")))
     rid = store.add_request("q", RequestKind.TEXT)
     for _ in range(worker_mod.MAX_ATTEMPTS - 1):
         assert (await w.process(rid)).state == RequestState.QUEUED
@@ -1328,8 +1243,7 @@ async def test_a_failure_while_fetching_is_stamped_download(env):
     biggest real population on the Failed tab, and it is exactly the one a `req.state` reading would
     mislabel."""
     _settings, store, _notifier = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("slow")), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("slow")))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     for _ in range(worker_mod.MAX_ATTEMPTS - 1):
         assert (await w.process(rid)).state == RequestState.QUEUED
@@ -1346,8 +1260,7 @@ async def test_a_failure_while_verifying_is_stamped_verify(env, monkeypatch):
         return FingerprintResult("skipped", None, None, "video: yt-dlp timed out")
 
     monkeypatch.setattr(acoustic_mod, "fingerprint_check", unverifiable)
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and "could not be checked acoustically" in r.error_message
@@ -1365,8 +1278,7 @@ async def test_the_last_resort_except_stamps_the_stage_the_row_was_in(env, monke
         raise RuntimeError("the tagger fell over")
 
     monkeypatch.setattr(filing_mod, "write_tags", boom)
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and r.error_message == "the tagger fell over"
@@ -1378,26 +1290,23 @@ async def test_retry_clears_the_stage_the_last_run_stopped_at(env):
     and this row is queued again -- but a row that keeps it is carrying a fact about a run that has been
     thrown away."""
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource(), FakeCatalog())
+    w = make_worker(env, FakeSource())
     rid = store.add_request("q", RequestKind.TEXT)
     store.set_state(rid, RequestState.ERROR, error_message="peers refused")
     store.update_request(rid, attempts=3, failed_stage="download")
     assert (await w.retry(rid)).failed_stage is None
 
 
-def test_the_catalog_stand_in_carries_beatport_data_and_no_deezer_id():
-    # Built when the source cannot offer a candidate. Everything `lossless.reference_for` needs comes off
-    # the Beatport record; `deezer_id` stays None, so a request with no video of its own has nothing to
-    # fingerprint against and the attempt ends `fingerprint_unavailable` rather than filing (issue #68).
+def test_the_catalog_stand_in_carries_the_stored_records_data_and_no_deezer_id():
+    # A search spelling built from a stored record (`_search_references`). Everything
+    # `lossless.reference_for` needs comes off the record; `deezer_id` stays None.
     ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 412_000})
     cand = catalog_candidate(ct)
 
     assert (cand.artist, cand.title, cand.mix_name) == (ct.artist, ct.title, ct.mix_name)
     assert cand.duration_s == 412 and cand.isrc == ct.isrc
     assert cand.deezer_id is None
-    assert cand.source == "beatport" and cand.source_ref == f"beatport:{ct.id}"
-
-
+    assert cand.source == "catalog" and cand.source_ref == f"catalog:{ct.id}"
 # ---- every track at once, and stopping one that is running -----------------------------------------
 
 class SlowSource(FakeSource):
@@ -1431,7 +1340,7 @@ async def test_the_whole_queue_runs_at_once_rather_than_taking_turns(env):
     about two requests makes an order necessary -- the peers sending them have their own upload slots."""
     _, store, _ = env
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    w = make_worker(env, src)
     ids = [store.add_request(TEXT, RequestKind.TEXT) for _ in range(5)]
 
     w._start_due()
@@ -1455,7 +1364,7 @@ async def test_a_request_already_running_is_never_started_a_second_time(env):
     the task table, or a track would be downloaded and filed twice."""
     _, store, _ = env
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CT]))
+    w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
 
     w._start_due()
@@ -1474,7 +1383,7 @@ async def test_the_owner_can_cap_how_many_run_at_once(env):
     settings, store, _ = env
     settings.max_concurrent_requests = 2
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CT]))
+    w = make_worker(env, src)
     for _ in range(5):
         store.add_request(TEXT, RequestKind.TEXT)
 
@@ -1493,7 +1402,7 @@ async def test_stopping_a_track_mid_download_cancels_it_and_leaves_it_stopped(en
     CANCELLED and stays there -- the task must not overwrite it on its way out."""
     _, store, _ = env
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CT]))
+    w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
 
     w._start_due()
@@ -1510,7 +1419,7 @@ async def test_stopping_a_track_mid_download_cancels_it_and_leaves_it_stopped(en
 async def test_stopping_one_track_leaves_the_others_downloading(env):
     _, store, _ = env
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})]))
+    w = make_worker(env, src)
     ids = [store.add_request(TEXT, RequestKind.TEXT) for _ in range(3)]
 
     w._start_due()
@@ -1534,7 +1443,7 @@ async def test_a_track_interrupted_by_shutdown_goes_back_on_the_queue(env):
     in a state nothing will move it out of."""
     _, store, _ = env
     src = SlowSource()
-    w = make_worker(env, src, FakeCatalog([CT]))
+    w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
 
     w._start_due()
@@ -1548,7 +1457,7 @@ async def test_a_file_being_verified_or_filed_cannot_be_stopped(env):
     """Those stages move the file into the library. There is no safe moment to cut them in half, and they
     are over in seconds -- so the honest answer is that it has already stopped."""
     _, store, _ = env
-    w = make_worker(env, FakeSource(), FakeCatalog())
+    w = make_worker(env, FakeSource())
     rid = store.add_request("q", RequestKind.TEXT)
     for state in (RequestState.VERIFYING, RequestState.FILING):
         store.set_state(rid, state)
@@ -1563,10 +1472,9 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
     `flag_reason`, so once the owner has picked there is no trace left of the pause -- the ladder would
     either forget the rung the moment they click it, or claim one on every track that never needed it."""
     _, store, _ = env
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
     other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
                       duration_s=100, deezer_id=5, rank=1)
-    w = make_worker(env, FakeSource([other]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([other]))
     rid = store.add_request(TEXT, RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.AWAITING_REVIEW
     assert store.get_request(rid).reviewed
@@ -1576,7 +1484,7 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
     assert store.get_request(rid).reviewed          # and survives all the way to filed
 
     auto = store.add_request(TEXT, RequestKind.TEXT)
-    w2 = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w2 = make_worker(env, FakeSource([good_cand()]))
     assert (await w2.process(auto)).state in (RequestState.DONE, RequestState.DUPLICATE)
     assert not store.get_request(auto).reviewed     # never paused, so it never earns the rung
 
@@ -1585,7 +1493,7 @@ async def test_a_request_remembers_that_it_was_sent_for_review(env):
 async def test_run_forever_keeps_going_with_telegram_signed_out(env, source_enabled):
     """Telegram signed out used to stop the loop whenever the bot was a source, and every Soulseek
     request with it. Now it pauses the bot and nothing else: only cancellation ends the loop."""
-    w = make_worker(env, FakeSource(), FakeCatalog())
+    w = make_worker(env, FakeSource())
     w.settings.source_enabled = source_enabled
     w.status["telegram_authorized"] = False
     ticks = []
@@ -1624,7 +1532,7 @@ async def test_a_remaster_video_is_identified_among_the_remaster_previews_only(e
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0), _lsd(2, "The Albums Remastered", 1)]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0), _lsd(2, "The Albums Remastered", 1)]))
     rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -1644,7 +1552,7 @@ async def test_a_remaster_video_with_no_remaster_on_deezer_searches_on_its_own_w
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", _video_ref)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0)]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([_lsd(1, "Twisted", 0)]))
     rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc")
     r = await w.process(rid)
@@ -1655,7 +1563,7 @@ async def test_an_original_request_filed_from_a_remastered_album_is_flagged_not_
     """Classic catalogue sits on "Remastered" albums, so a request that names no version still takes such a
     record when it is the one there is -- but the file says which it is, never silently (issue #172)."""
     _settings, store, notifier = env
-    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0)]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0)]))
     r = await w.process(store.add_request("Hallucinogen - LSD", RequestKind.TEXT))
     assert r.state == RequestState.DONE
     assert {e.kind: e.value for e in store.list_evidence(r.track_id)}["version_check"]["status"] == "unconfirmed"
@@ -1664,7 +1572,7 @@ async def test_an_original_request_filed_from_a_remastered_album_is_flagged_not_
 
 async def test_an_original_request_prefers_the_original_album_over_its_remaster(env):
     _settings, store, _notifier = env
-    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0), _lsd(1, "Twisted", 1)]), FakeCatalog([]))
+    w = make_worker(env, FakeSource([_lsd(2, "The Albums Remastered", 0), _lsd(1, "Twisted", 1)]))
     r = await w.process(store.add_request("Hallucinogen - LSD", RequestKind.TEXT))
     assert r.state == RequestState.DONE and store.get_candidate(r.chosen_candidate_id).deezer_id == 1
     assert "version_check" not in {e.kind for e in store.list_evidence(r.track_id)}
@@ -1678,10 +1586,11 @@ async def test_a_remaster_on_a_shared_record_keeps_its_own_year_on_the_track_row
     # "Original Mix" on a remastered release: the record does not call itself the remaster (#172)
     plain = CatalogTrack(**{**DP_REISSUE.__dict__, "release_date": "2021-02-22",
                             "release_name": "Discovery (Remastered 2021)"})
-    store.upsert_catalog_track(CatalogTrack(**{**plain.__dict__, "original_date": "2001-03-07"}))
-    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")], [plain])
-    rid = store.add_request("Daft Punk - One More Time (Remastered 2021)", RequestKind.TEXT,
-                            query=Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
+    w = _worker_with_http(env, http, [dp_cand(mix_name="Remastered 2021")])
+    rid = with_stored_record(store, "Daft Punk - One More Time (Remastered 2021)",
+                             CatalogTrack(**{**plain.__dict__, "original_date": "2001-03-07"}),
+                             dp_cand(mix_name="Remastered 2021"),
+                             Query(raw="", artist="Daft Punk", title="One More Time", version="Remastered 2021"))
     r = await w.process(rid)
     assert r.state == RequestState.DONE
     t = store.get_track(r.track_id)
@@ -1691,13 +1600,11 @@ async def test_a_remaster_on_a_shared_record_keeps_its_own_year_on_the_track_row
 
 async def test_a_filed_track_row_carries_the_date_written_to_its_file(env):
     _, store, _ = env
-    w = make_worker(env, FakeSource([dp_cand(release_date="1999-01-01", isrc="FRZ039800212")]),
-                    FakeCatalog([DP_REISSUE]))
-    r = await w.process(store.add_request("daft punk one more time", RequestKind.TEXT))
+    cand = dp_cand(release_date="1999-01-01", isrc="FRZ039800212")
+    w = make_worker(env, FakeSource([cand]))
+    r = await w.process(with_stored_record(store, "daft punk one more time", DP_REISSUE, cand))
     t = store.get_track(r.track_id)
     assert t.tag_date == read_tags(t.path)["date"]
-
-
 async def test_a_quality_rejection_keeps_the_numbers_it_was_refused_on(env, monkeypatch):
     """Issue #97: the rejection row carries each evidence family's finding, so a later look at why a copy
     was refused does not have to re-run the check on a file that may be gone."""
@@ -1710,8 +1617,7 @@ async def test_a_quality_rejection_keeps_the_numbers_it_was_refused_on(env, monk
     def refusal(path, spectrogram_dir, name=None, rule="tiers"):
         return replace(_spectral_refusal(path, spectrogram_dir, name), tier="reject", analysis=analysis)
 
-    ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
-    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([ct]))
+    w = make_worker(env, FakeSource([good_cand()]))
     monkeypatch.setattr(filing_mod, "verify", refusal)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     assert (await w.process(rid)).state == RequestState.REJECTED

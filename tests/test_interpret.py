@@ -38,7 +38,7 @@ from flackey.worker.interpret import (
 from flackey.worker.records import query_candidate
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
-from tests.test_worker import FakeCatalog, FakeSource, good_cand
+from tests.test_worker import FakeSource, good_cand
 from tests.test_worker_lossless import (
     CT3,
     FakeProvider,
@@ -221,16 +221,6 @@ NOISY = "Label - Astral Projection - Into the Void"
 URL = "https://www.youtube.com/watch?v=abc"
 
 
-class CountingCatalog(FakeCatalog):
-    def __init__(self, tracks=None):
-        super().__init__(tracks)
-        self.searches = 0
-
-    async def search(self, query):
-        self.searches += 1
-        return await super().search(query)
-
-
 class RecordingSource(FakeSource):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -312,13 +302,13 @@ async def test_the_pipelines_own_match_confirms_the_reading_that_accepts_it(lenv
         raise AssertionError("a preview the pipeline already compared was fetched again")
 
     monkeypatch.setattr(interpret_mod, "identify_record", no_previews)
-    source, catalog = RecordingSource([good_cand()]), CountingCatalog([CT3])
-    w = make(lenv, provider=provider, source=source, catalog=catalog)
+    source = RecordingSource([good_cand()])
+    w = make(lenv, provider=provider, source=source)
     rid = add()
     r = await run(w, rid)
     assert r.state == RequestState.DONE
     assert store.get_interpretation_outcome(rid) == (CONFIRMED, 1)
-    assert source.searches == 1 and catalog.searches == 1 and videos == [URL]
+    assert source.searches == 1 and videos == [URL]
     # The bot was asked exactly what it was asked before: today's parse, label and all
     assert source.texts == [BASE_TEXT]
     assert sorted(e for e in events if e.startswith("deezer:")) == [f"deezer:{ALT_TEXT}", f"deezer:{BASE_TEXT}"]
@@ -345,7 +335,7 @@ async def test_a_preview_that_is_the_video_confirms_the_reading(lenv, shadow, mo
 
     monkeypatch.setattr(pipeline_mod, "identify_record", pipeline_no_match)
     monkeypatch.setattr(interpret_mod, "identify_record", shadow_match)
-    w = make(lenv, provider=provider, source=FakeSource([bot]), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource([bot]))
     rid = add()
     r = await run(w, rid)
     assert previews == [[55]]                      # the bot's record was compared already; not again
@@ -455,7 +445,7 @@ async def test_a_failing_video_is_fetched_once_a_pass_and_compared_on_the_pass_t
         raise YouTubeError("HTTP Error 429")
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", failing)
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
     rid = add()
     r = await run(w, rid)
     assert calls == [URL] and r.state == RequestState.QUEUED
@@ -479,7 +469,7 @@ async def test_a_duplicate_costs_no_video_download(lenv, shadow, monkeypatch):  
     store.add_track(path=filed, fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050,
                     file_size=1, artist="Label", title="Astral Projection - Into the Void", mix_name="Original Mix",
                     duration_s=3, isrc=None, catalog_track_id=None, request_id=None)
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
     rid = add()
     r = await run(w, rid)
     assert r.state == RequestState.DUPLICATE and videos == [] and not events
@@ -509,7 +499,7 @@ async def test_the_other_readings_are_the_last_spellings_and_name_the_file_they_
     provider = OrderedProvider(settings.slskd_downloads, audio=lenv[3].audio, log=events,
                                files_for=lambda text: [lf("a", path="x\\Astral Projection - Into the Void.flac")]
                                if text == ALT_TEXT else [])
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
     rid = add()
     r = await run(w, rid)
     assert provider.searches == [BASE_TEXT, ALT_TEXT]
@@ -555,7 +545,7 @@ async def test_damaged_readings_cost_the_readings_never_the_request(lenv, shadow
     store, _, events, _, _, add = shadow
     provider = OrderedProvider(settings.slskd_downloads, audio=lenv[3].audio, log=events,
                                files_for=lambda text: [lf("a")] if text == BASE_TEXT else [])
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
     rid = add()
     store.conn.execute("UPDATE requests SET interpretations=? WHERE id=?", (damaged, rid))
     assert store.get_interpretations(rid) == []
@@ -575,7 +565,7 @@ async def test_another_spelling_finding_nothing_never_hides_a_wrong_recording(le
     fake_check.result = FingerprintResult("failed", 0.1, None, "best score 0.10 below 0.79")
     provider = OrderedProvider(settings.slskd_downloads, audio=lenv[3].audio, log=events,
                                files_for=lambda text: [lf("a")] if text == BASE_TEXT else [])
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")))
     rid = add()
     r = await run(w, rid)
     assert provider.searches == [BASE_TEXT, ALT_TEXT]
@@ -634,7 +624,7 @@ def bare(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", library_root=tmp_path / "lib",
                         data_dir=tmp_path / "data")
     store = Store(settings.db_path)
-    w = Worker(store, FakeSource(), FakeCatalog(), MemoryNotifier(), settings)
+    w = Worker(store, FakeSource(), MemoryNotifier(), settings)
     monkeypatch.setattr(interpret_mod, "DEEZER_INTERVAL_S", 0)
 
     async def search(text, http, *, limit=10):
@@ -763,7 +753,7 @@ def realistic(tmp_path, monkeypatch):
     pipeline's own, and a Deezer that answers the way the public search does."""
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     store = Store(settings.db_path)
-    w = Worker(store, FakeSource(), FakeCatalog(), MemoryNotifier(), settings)
+    w = Worker(store, FakeSource(), MemoryNotifier(), settings)
     monkeypatch.setattr(interpret_mod, "DEEZER_INTERVAL_S", 0)
     answers: dict[str, list[Candidate]] = {}
     previews: list[int] = []

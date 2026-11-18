@@ -54,10 +54,13 @@ from flackey.worker import lossless_attempt as lossless_attempt_mod
 from flackey.worker import pipeline as pipeline_mod
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
-from tests.test_worker import CT, TEXT, FakeCatalog, FakeSource, good_cand, no_art
+from tests.test_worker import CT, TEXT, FakeSource, FakeTagLookup, good_cand, no_art
 
 pytestmark = requires_ffmpeg
 CT3 = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+# The request's own words with an artist and a title in them: with no catalogue match to search on, they
+# are what Soulseek is asked for when the bot has nothing (issue #69).
+TEXT_AT = "Astral Projection - Into the Void"
 
 
 def _flac(path: Path, seconds: int = 3, seed: int = 2) -> Path:
@@ -288,10 +291,10 @@ def lenv(tmp_path: Path, monkeypatch):
     return settings, store, MemoryNotifier(), provider, fake_check, Clock()
 
 
-def make(lenv, provider=None, source=None, catalog=None, settings=None, **kw):
+def make(lenv, provider=None, source=None, settings=None, **kw):
     default_settings, store, notifier, default_provider, _, clock = lenv
     providers = kw.pop("providers", [provider or default_provider])
-    return Worker(store, source or FakeSource([good_cand()]), catalog or FakeCatalog([CT3]), notifier,
+    return Worker(store, source or FakeSource([good_cand()]), notifier,
                   settings or default_settings,
                   artwork_fetch=no_art, providers=providers, http=httpx.AsyncClient(), clock=clock, **kw)
 
@@ -557,7 +560,7 @@ async def test_every_copy_damaged_with_nothing_to_fall_back_on_waits_for_the_nex
     provider.files = [lf("a"), lf("b")]
     provider.audio = {"a": broken, "b": broken}
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
     assert attempt_of(store, rid).outcome == "damaged"
     assert r.state == RequestState.QUEUED and r.retry_after is not None and r.lossless_retry == 1
@@ -572,7 +575,7 @@ async def test_a_missing_ffmpeg_with_nothing_to_fall_back_on_fails_once_instead_
     settings, store, _, provider, _, _ = lenv
     provider.audio["a"] = detector.fail(_flac(tmp_path / "x.flac", seed=3), ToolMissing("ffmpeg is not installed"))
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
     assert attempt_of(store, rid).outcome == "verify_unavailable"
     assert r.state == RequestState.ERROR and r.retry_after is None
@@ -956,7 +959,7 @@ async def test_a_sidecar_still_starting_is_waited_for_not_warned_about(tmp_path:
     "could not cancel old downloads" and "rescan failed", and neither ever happened. Both now wait for it."""
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     sidecar = BootingSidecar(tmp_path / "dl", log=[])
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[sidecar], http=httpx.AsyncClient())
     caplog.set_level(logging.DEBUG, logger="flackey.worker.core")
     await w.startup()
@@ -980,7 +983,7 @@ async def test_a_refusal_that_is_not_the_sidecar_being_down_is_still_reported(tm
             raise LosslessError("http 401")
 
     sidecar = Refusing(tmp_path / "dl")
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[sidecar], http=httpx.AsyncClient())
     await w.startup()
     assert "soulseek: could not cancel old downloads: http 401" in caplog.text and not w._leftovers
@@ -990,7 +993,7 @@ async def test_a_sidecar_that_never_answers_is_reported_once(tmp_path: Path, cap
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     sidecar = BootingSidecar(tmp_path / "dl", log=[])
     now = [0.0]
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[sidecar], http=httpx.AsyncClient(), clock=lambda: now[0])
     await w.startup()
     for t in (60.0, 179.0, 181.0, 240.0, 600.0):
@@ -1015,7 +1018,7 @@ async def test_an_unexpected_answer_from_the_sidecar_never_stops_the_loop(tmp_pa
         async def rescan_shares(self):
             raise ValueError("Expecting value: line 1 column 1 (char 0)")
 
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[Garbled(tmp_path / "dl")], http=httpx.AsyncClient())
     await w.startup()
     assert not w._leftovers and not w._unscanned
@@ -1027,7 +1030,7 @@ async def test_each_worker_start_begins_a_run_on_every_provider(tmp_path: Path):
     crashed one enqueued is swept like any other leftover rather than kept as "ours" (#178)."""
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     sidecar = FakeProvider(tmp_path / "dl")
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[sidecar], http=httpx.AsyncClient())
     await w.startup()
     await w.startup()
@@ -1039,7 +1042,7 @@ async def test_a_reconnect_hands_an_owed_sweep_and_rescan_to_the_new_provider(tm
     takes the sweep and the rescan over, and is told which provider it replaces."""
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     old = BootingSidecar(tmp_path / "dl", log=[])
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[old], http=httpx.AsyncClient())
     await w.startup()
     assert w._leftovers == [old] and w._unscanned == [old]
@@ -1056,7 +1059,7 @@ async def test_a_reconnect_hands_an_owed_sweep_and_rescan_to_the_new_provider(tm
 async def test_a_reconnect_after_the_sweep_owes_nothing(tmp_path: Path):
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
     old = FakeProvider(tmp_path / "dl")
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[old], http=httpx.AsyncClient())
     await w.startup()
     assert not w._leftovers and not w._unscanned
@@ -1068,7 +1071,7 @@ async def test_a_reconnect_after_the_sweep_owes_nothing(tmp_path: Path):
 async def test_a_provider_new_to_the_run_is_swept(tmp_path: Path):
     """Soulseek switched on in the wizard after a start without it: its sidecar's old transfers are leftovers."""
     settings = Settings(_env_file=None, library_root=tmp_path / "lib", data_dir=tmp_path / "data")
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[], http=httpx.AsyncClient())
     await w.startup()
     new = FakeProvider(tmp_path / "dl")
@@ -1087,7 +1090,7 @@ async def test_a_swap_during_a_sweep_does_not_break_the_tick(tmp_path: Path):
             w.replace_providers([new])          # the wizard reconnects while this sweep is awaiting slskd
             return 0
 
-    w = Worker(Store(settings.db_path), FakeSource(), FakeCatalog(), MemoryNotifier(), settings,
+    w = Worker(Store(settings.db_path), FakeSource(), MemoryNotifier(), settings,
                providers=[Swapping(tmp_path / "dl")], http=httpx.AsyncClient())
     await w.startup()
     assert w._leftovers == [new]               # still owed, by the provider now in use
@@ -1295,7 +1298,7 @@ async def _file_on_deezer(lenv, provider, download_error=None):
         provider.files = [lf("a", extension="mp3")]      # nothing lossless on offer -> no_pick
     else:
         provider.files, provider.download_error = [lf("a")], download_error
-    w = make(lenv, provider=provider)
+    w = make(lenv, provider=provider, tag_lookup=FakeTagLookup())   # Deezer + Discogs supply the year
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE
@@ -1468,7 +1471,7 @@ async def test_source_switched_off_searches_the_providers_on_the_beatport_match_
     source = FakeSource([good_cand()])
     w = make(lenv, source=source, settings=settings.model_copy(update={"source_enabled": False}))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     assert (source.searches, source.fetched) == (0, [])   # the bot is never spoken to, not even to time out
@@ -1497,10 +1500,10 @@ async def test_with_the_bot_off_the_public_deezer_record_is_the_reference(lenv, 
     monkeypatch.setattr(acoustic_mod, "find_deezer_record", lookup)
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
-    assert looked_up == [(worker_mod.CATALOG_SOURCE, CT3.isrc)]   # the Beatport stand-in, ISRC and all
+    assert looked_up == [(worker_mod.QUERY_SOURCE, None)]   # the request's own words: no catalogue record
     assert seen == ["deezer:1754956977"]
     assert attempt_of(store, rid).outcome == "filed"
     assert r.state == RequestState.DONE and r.track_id is not None and provider.downloaded == ["a"]
@@ -1512,7 +1515,7 @@ async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeyp
     monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
     w = make(lenv, settings=settings.model_copy(update={"source_enabled": False}))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     # The spectral check ran and the Beatport rules picked the file, but nothing proved the audio is this
@@ -1523,34 +1526,29 @@ async def test_a_file_that_could_not_be_fingerprinted_is_not_filed(lenv, monkeyp
     assert r.flag_reason is None
 
 
-async def test_a_silent_source_still_tries_the_providers_before_giving_up(lenv, monkeypatch):
-    _, store, notifier, provider, fake_check, _ = lenv
-    _, check = _capture_reference(fake_check)
-    monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
-    # Exactly the live failure: `conv.get_response()` times out, so the bot offers no candidate at all.
+async def test_a_silent_source_retries_soon_rather_than_searching_soulseek(lenv):
+    """With no catalogue match to go on, a bot that times out is asked again shortly: it may be back in a
+    minute with a lossy copy the request-words path does not have. (A Beatport match used to send this pass
+    to Soulseek instead.)"""
+    _, store, _, provider, _, _ = lenv
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
     w = make(lenv, source=source)
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
-    r = await w.process(rid)
+    r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
 
-    # The request stays alive far enough to download from a peer -- that is the fallback this covers.
-    # Filing it is what issue #68 stopped: with no Deezer id and no video there is no acoustic reference,
-    # so the file is never vouched for and the owner is told exactly that.
-    assert provider.downloaded == ["a"]
-    assert attempt_of(store, rid).outcome == "fingerprint_unavailable"
-    assert r.state == RequestState.ERROR
-    assert "could not be checked acoustically" in notifier.sent[-1][0]
+    assert provider.downloaded == [] and provider.searches == []
+    assert r.state == RequestState.QUEUED and r.retry_after is not None and r.attempts == 1
+    assert "source error" in r.flag_reason
 
 
 async def test_the_stand_in_candidate_is_never_handed_to_the_source_to_fetch(lenv):
     settings, store, _, _, _, _ = lenv
     # The providers find nothing, so the old code would fall through to `source.fetch`. There is no Deezer
-    # candidate to fetch -- the stand-in's source_ref is a Beatport id the bot has never heard of.
-    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    # candidate to fetch -- the stand-in's source_ref is the request's own words.
+    source = FakeSource(error=SourceNotFound("no results"))
     w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []), source=source)
 
-    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
 
     assert source.fetched == []
     # The row waits rather than burning the 30 s ladder on a question nothing could have answered yet:
@@ -1564,7 +1562,7 @@ async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(
     # Nothing identified the track, so there is no reference to search Soulseek with and no stand-in to
     # build. This is the one case that must keep failing rather than guessing.
     source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
-    w = make(lenv, source=source, catalog=FakeCatalog([]))
+    w = make(lenv, source=source)
 
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
 
@@ -1575,18 +1573,17 @@ async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(
 
 async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_off(lenv):
     _, store, _, _, _, _ = lenv
-    # A DJ set or a track outside Beatport's catalogue, with the bot switched off: nothing identified it,
+    # A DJ set, or text with no artist and title in it, with the bot switched off: nothing identified it,
     # and nothing about that changes on the next pass. It must land terminally rather than burn the
     # backoff schedule re-asking two sources that already answered.
     source = FakeSource([good_cand()])
-    w = make(lenv, source=source, catalog=FakeCatalog([]),
-             settings=lenv[0].model_copy(update={"source_enabled": False}))
+    w = make(lenv, source=source, settings=lenv[0].model_copy(update={"source_enabled": False}))
 
     r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
 
     assert r.state == RequestState.NOT_FOUND
     assert r.retry_after is None                      # terminal: no backoff was scheduled
-    assert "Beatport" in r.error_message and "switched off" in r.error_message
+    assert "switched off" in r.error_message and "Beatport" not in r.error_message
     # Since issue #69 the message also says why there was no second chance: nothing parsed out of the raw
     # text, so there were no words to ask Soulseek with either.
     assert "nothing to search for" in r.error_message
@@ -1597,10 +1594,10 @@ async def test_try_again_searches_soulseek_once_more_after_a_definitive_miss(len
     _, store, _, _, fake_check, _ = lenv
     _, check = _capture_reference(fake_check)
     monkeypatch.setattr(acoustic_mod, "fingerprint_check", check)
-    source = FakeSource(error=SourceTimeout("source bot did not answer the search"))
+    source = FakeSource(error=SourceNotFound("no results"))
     empty = FakeProvider(lenv[0].slskd_downloads, [])
     w = make(lenv, provider=empty, source=source)
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
 
     for _ in range(3):                       # exhaust the backoff: no peer has it, no source to fall back to
         await w.process(rid)
@@ -1639,9 +1636,9 @@ def _queued(msg="still in the peer's queue after 300 s"):
 async def test_a_peers_queue_leaves_the_request_free_to_try_again(lenv):
     settings, store, _, _, _, _ = lenv
     provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no results")))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     assert attempt_of(store, rid).outcome == "queued"
@@ -1652,9 +1649,9 @@ async def test_a_peers_queue_leaves_the_request_free_to_try_again(lenv):
 async def test_the_wait_is_reported_as_a_wait_not_as_nothing_found(lenv):
     settings, store, notifier, _, _, _ = lenv
     provider = FakeProvider(settings.slskd_downloads, [lf("a")], download_error=_queued())
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceTimeout("bot silent")))
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no results")))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     assert "found nothing" not in r.flag_reason
@@ -1670,7 +1667,7 @@ async def test_an_empty_search_with_no_source_waits_on_the_long_backoff_and_then
     empty = FakeProvider(settings.slskd_downloads, [])
     w = make(lenv, provider=empty, settings=settings.model_copy(update={"source_enabled": False}))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1 and r.retry_after is not None
     assert "switched off" in r.flag_reason and "Soulseek found no copies of this track" in r.flag_reason
@@ -1696,7 +1693,7 @@ async def test_a_first_byte_timeout_says_the_peers_never_started_sending(lenv):
                             download_error=LosslessError("no bytes within 60 s", "first_byte_timeout"))
     w = make(lenv, provider=provider, settings=settings.model_copy(update={"source_enabled": False}))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     assert attempt_of(store, rid).outcome == "first_byte_timeout"
@@ -1739,9 +1736,9 @@ async def test_an_empty_search_is_asked_again_later_because_soulseek_is_not_a_fi
     on which the answer can change; MAX_ATTEMPTS still bounds it."""
     settings, store, _, _, _, _ = lenv
     empty = FakeProvider(settings.slskd_downloads, [])
-    w = make(lenv, provider=empty, source=FakeSource(error=SourceTimeout("bot silent")))
+    w = make(lenv, provider=empty, source=FakeSource(error=SourceNotFound("no results")))
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
 
     assert attempt_of(store, rid).outcome == "no_pick"
@@ -1832,7 +1829,7 @@ async def test_no_record_anywhere_still_searches_soulseek_on_the_request(lenv, m
     # Deezer preview to fall back on, so a request whose video cannot be fetched has nothing to check the
     # download against and ends `fingerprint_unavailable` (the test below its sibling covers that).
     monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
@@ -1846,7 +1843,7 @@ async def test_no_record_anywhere_still_searches_soulseek_on_the_request(lenv, m
 async def test_no_record_anywhere_and_no_lossless_copy_has_no_lossy_fallback(lenv):
     _, store, _, provider, _, _ = lenv
     provider.files = []
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK, query=Query(raw="", artist="A", title="B", duration_s=3))
     # `no_pick` is a retryable outcome (the people online turn over), so the quick ladder runs first; the
     # request parks once it is spent. What matters on every pass is that Deezer is never asked for a lossy
@@ -1863,7 +1860,7 @@ async def test_no_record_anywhere_and_no_lossless_copy_has_no_lossy_fallback(len
 
 async def test_a_bare_artist_request_ends_not_found_with_a_reason(lenv):
     _, store, _, provider, _, _ = lenv
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")), catalog=FakeCatalog([]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no results")))
     rid = store.add_request("Oforia", RequestKind.YT_TRACK, query=Query(raw="Oforia", artist="Oforia"))
     r = await w.process(rid)
     assert r.state == RequestState.NOT_FOUND and "no artist and title" in r.error_message and provider.searches == []
@@ -1882,36 +1879,12 @@ async def test_no_matching_preview_sends_the_request_words_to_soulseek(lenv, mon
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make(lenv, catalog=FakeCatalog([]))
+    w = make(lenv)
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
     r = await w.process(rid)
     assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
     assert store.get_track(r.track_id).catalog_track_id < 0
-
-
-async def test_a_beatport_match_still_tags_and_searches_from_the_record(lenv, monkeypatch):
-    """The other side of `from_query`: identification rejected every Deezer candidate, but Beatport did
-    match, so `reference_for` reads the words from the record and the flag must say so. Tasks 13 and 14
-    read it to decide which spelling found the file."""
-    _, store, _, provider, _, _ = lenv
-
-    async def fake_youtube(url, tmp_dir, *, duration_s=None):
-        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
-
-    async def fake_identify(reference, cands, http, tmp_dir, *, minimum, limit=5):
-        return Identification(None, None, [(c.deezer_id, 0.3) for c in cands],
-                              "none of 1 Deezer previews is the video's recording")
-
-    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
-    monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make(lenv)                                   # FakeCatalog([CT3]): Beatport knows this one
-    rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
-                            query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
-    r = await w.process(rid)
-    assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void"]
-    assert attempt_of(store, rid).report["reference"]["from_query"] is False
-    assert store.get_track(r.track_id).catalog_track_id == CT.id      # tagged from the record, not the words
 
 
 async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, monkeypatch):
@@ -1928,7 +1901,7 @@ async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, m
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
     monkeypatch.setattr(pipeline_mod, "identify_record", fake_identify)
-    w = make(lenv, provider=FakeProvider(lenv[0].slskd_downloads, []), catalog=FakeCatalog([]))
+    w = make(lenv, provider=FakeProvider(lenv[0].slskd_downloads, []))
     rid = store.add_request(TEXT, RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
     for _ in range(MAX_ATTEMPTS):                    # no_pick is retryable, so the whole ladder runs
@@ -1940,40 +1913,10 @@ async def test_a_retry_on_the_no_record_path_replaces_its_candidate_list(lenv, m
 # ---- one request, several spellings (issue #69) -----------------------------------------------------------
 
 
-async def test_a_wrong_catalogue_record_is_overruled_by_the_second_search(lenv, tmp_path: Path, monkeypatch):
-    """The Asteroids case with no Deezer record: Beatport matched a different act with the same title. The
-    catalogue's spelling finds that act's file, the fingerprint rejects it, the request's own words find the
-    right one, and the tags come from the request rather than the wrong record."""
-    settings, store, _, _, _, _ = lenv
-    wrong = _flac(tmp_path / "wrong.flac")
-    right = _flac(tmp_path / "right.flac")
-    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong, "r": right},
-                            files_for=lambda text: [lf("w", path="x\\Outputmessage - Asteroids.flac")]
-                            if text.startswith("Outputmessage") else [lf("r", path="x\\Universal Sound - Asteroids.flac")])
-    results = iter([FingerprintResult("failed", 0.6, 1.0, "best score 0.60 below 0.79"),
-                    FingerprintResult("matched", 0.97, 1.0, "ok", reference="youtube:abc")])
-
-    async def fake_check_seq(path, reference, *, minimum, missing=""):
-        return next(results)
-
-    monkeypatch.setattr(acoustic_mod, "fingerprint_check", fake_check_seq)
-    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
-    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
-                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
-    r = await w.process(rid)
-    assert r.state == RequestState.DONE
-    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
-    t = store.get_track(r.track_id)
-    assert (t.artist, t.title) == ("Universal Sound", "Asteroids") and t.catalog_track_id < 0
-    assert store.get_request(rid).catalog_track_id == t.catalog_track_id
-    assert sorted(a.outcome for a in store.list_attempts(limit=10)) == ["filed", "fingerprint_failed"]
-
-
 async def test_no_second_search_when_the_words_are_the_same(lenv):
     _, store, _, provider, _, _ = lenv
     provider.files = []
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
     await w.process(rid)
@@ -1986,50 +1929,12 @@ async def test_a_chosen_record_keeps_its_tags_whichever_spelling_found_the_file(
     right = _flac(tmp_path / "right.flac")
     provider = FakeProvider(settings.slskd_downloads, audio={"r": right},
                             files_for=lambda text: [] if text.startswith("Astral") else [lf("r", path="x\\AP - Into the Void.flac")])
-    w = make(lenv, provider=provider, catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider)
     rid = store.add_request("AP - Into the Void", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="AP", title="Into the Void", duration_s=3))
     r = await w.process(rid)
     assert r.state == RequestState.DONE and provider.searches == ["Astral Projection Into the Void", "AP Into the Void"]
     assert store.get_track(r.track_id).artist == "Astral Projection"          # good_cand()'s record, not the request's words
-
-
-async def test_two_spellings_ending_in_a_wrong_recording_wait_instead_of_parking(lenv, tmp_path: Path,
-                                                                                monkeypatch):
-    """Task 14's measured regression, and the reason this wait exists at all. The catalogue's spelling finds
-    nothing (`no_pick`) and the request's own words find a copy the fingerprint rejects
-    (`fingerprint_failed`). `_lossless_allowed` reads only the *latest* attempt and `fingerprint_failed` is
-    not in `SEARCH_AGAIN_AFTER`, so the second spelling used to make the request worse than no second
-    spelling at all: it parked terminally in `error` on the first pass where before it sat `queued` with a
-    15-minute retry. Every copy offered today being a different recording says nothing about the copies
-    tomorrow's peers will offer, so it belongs in the long wait."""
-    settings, store, notifier, _, fake_check, _ = lenv
-    wrong = _flac(tmp_path / "wrong.flac")
-    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong},
-                            files_for=lambda text: [] if text.startswith("Outputmessage")
-                            else [lf("w", path="x\\Universal Sound - Asteroids.flac")])
-    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
-
-    async def fake_youtube(url, tmp_dir, *, duration_s=None):
-        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
-
-    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
-    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
-    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
-                            source_url="https://www.youtube.com/watch?v=abc",
-                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
-
-    r = await w.process(rid)
-
-    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
-    assert sorted(a.outcome for a in store.list_attempts(limit=10)) == ["fingerprint_failed", "no_pick"]
-    assert r.state == RequestState.QUEUED and r.error_message is None    # not terminal
-    assert r.attempts == worker_mod.MAX_ATTEMPTS and r.lossless_retry == 1
-    assert r.flag_reason.startswith("waiting for Soulseek: the copies offered were a different recording")
-    wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
-    assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
-    assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
 
 
 # ---- the long wait for Soulseek (issue #74) ---------------------------------------------------------------
@@ -2040,7 +1945,7 @@ async def test_a_transient_soulseek_miss_waits_and_looks_again(lenv):
     `queued` and really searches again, LONG_RETRY_TIMES times, before it parks."""
     _, store, notifier, provider, _, _ = lenv
     provider.files = []                                                   # no_pick on every pass
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     store.update_request(rid, attempts=worker_mod.MAX_ATTEMPTS - 1)       # the quick ladder is spent
@@ -2063,7 +1968,7 @@ async def test_a_search_with_results_but_no_match_still_says_nothing_matched(len
     untrue here -- the owner can go and look at them in the attempt's report."""
     _, store, _, provider, _, _ = lenv
     provider.files = [lf("a", extension="mp3"), lf("b", extension="mp3")]   # on offer, but nothing lossless
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     r = await w.process(rid)
@@ -2078,7 +1983,7 @@ async def test_an_empty_later_spelling_does_not_hide_the_copies_an_earlier_one_f
     settings, store, notifier, _, _, _ = lenv
     provider = FakeProvider(settings.slskd_downloads,
                             files_for=lambda text: [lf("a", extension="mp3")] if text.startswith("Astral") else [])
-    w = make(lenv, provider=provider, catalog=FakeCatalog([]))
+    w = make(lenv, provider=provider)
     rid = store.add_request("AP - Into the Void", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="AP", title="Into the Void", duration_s=3))
     r = await w.process(rid)
@@ -2100,7 +2005,7 @@ async def test_a_lossy_fallback_after_an_empty_search_says_no_copies_were_found(
 async def test_the_long_wait_gives_up_after_its_budget(lenv):
     _, store, notifier, provider, _, _ = lenv
     provider.files = []
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     store.update_request(rid, attempts=worker_mod.MAX_ATTEMPTS + worker_mod.LONG_RETRY_TIMES - 1,
@@ -2121,37 +2026,6 @@ async def test_the_long_wait_gives_up_after_its_budget(lenv):
 ])
 def test_a_pass_outcome_keeps_a_wrong_recording_over_a_later_nothing(outcomes, expected):
     assert lossless_attempt_mod.pass_outcome(outcomes) == expected
-
-
-async def test_a_wrong_recording_on_beatports_spelling_is_not_hidden_by_the_requests_words(lenv, tmp_path: Path,
-                                                                                            monkeypatch):
-    """The ladder as it was before the title's readings joined it: the catalogue's spelling finds a copy the
-    fingerprint refuses, the request's own words find nothing. The last row says `no_pick`; the pass found a
-    different recording, so it waits rather than coming back in 15 minutes for the same wrong copy."""
-    settings, store, notifier, _, fake_check, _ = lenv
-    wrong = _flac(tmp_path / "wrong.flac")
-    provider = FakeProvider(settings.slskd_downloads, audio={"w": wrong},
-                            files_for=lambda text: [lf("w", path="x\\Outputmessage - Asteroids.flac")]
-                            if text.startswith("Outputmessage") else [])
-    fake_check.result = FingerprintResult("failed", 0.5, 1.0, "best score 0.50 below 0.79")
-
-    async def fake_youtube(url, tmp_dir, *, duration_s=None):
-        return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
-
-    monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)
-    ct = CatalogTrack(**{**CT3.__dict__, "artist": "Outputmessage", "title": "Asteroids"})
-    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([ct]))
-    rid = store.add_request("Universal Sound - Asteroids", RequestKind.YT_TRACK,
-                            source_url="https://www.youtube.com/watch?v=abc",
-                            query=Query(raw="", artist="Universal Sound", title="Asteroids", duration_s=3))
-    r = await w.process(rid)
-    assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
-    assert store.get_attempt_for_request(rid).outcome == "no_pick"
-    assert r.state == RequestState.QUEUED and r.lossless_retry == 1
-    assert r.flag_reason.startswith("waiting for Soulseek: the copies offered were a different recording")
-    wait = datetime.fromisoformat(r.retry_after) - datetime.now(UTC)
-    assert timedelta(hours=5, minutes=59) < wait <= timedelta(hours=6)
-    assert sum(m[0].startswith("Waiting for Soulseek") for m in notifier.sent) == 1
 
 
 async def test_a_pass_cut_short_is_read_from_its_own_rows_not_the_pass_before(lenv):
@@ -2178,7 +2052,7 @@ async def test_a_wrong_recording_everywhere_skips_the_quick_ladder(lenv, monkeyp
         return AcousticReference("youtube", "abc", [[1, 2, 3]], [1, 2, 3, 4], 0.0, 30.0)
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", fake_youtube)   # else there is nothing to check
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     r = await w.process(rid)
@@ -2191,7 +2065,7 @@ async def test_a_permanent_miss_still_parks_at_once(lenv):
     """No reference to check against: waiting changes nothing, and the advice must not send the owner back
     round the same dead end."""
     _, store, _, _, _, _ = lenv        # no source_url and no Deezer id: nothing to fingerprint against
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([CT3]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("A - B", RequestKind.YT_TRACK,
                             query=Query(raw="", artist="A", title="B", duration_s=3))
     r = await w.process(rid)
@@ -2213,7 +2087,7 @@ async def test_a_video_blip_on_the_no_record_route_retries_instead_of_parking(le
         raise YouTubeError("HTTP Error 429: Too Many Requests")
 
     monkeypatch.setattr(acoustic_mod, "youtube_reference", flaky_youtube)
-    w = make(lenv, source=FakeSource(error=SourceNotFound("no")), catalog=FakeCatalog([]))
+    w = make(lenv, source=FakeSource(error=SourceNotFound("no")))
     rid = store.add_request("Astral Projection - Into the Void", RequestKind.YT_TRACK,
                             source_url="https://www.youtube.com/watch?v=abc",
                             query=Query(raw="", artist="Astral Projection", title="Into the Void", duration_s=3))
@@ -2521,7 +2395,7 @@ async def test_the_worker_files_from_soulseek_while_telegram_is_signed_out(lenv,
     source = FakeSource([good_cand()])
     assert settings.source_enabled                       # the default: the bot is on
     w = make(lenv, source=source, status={"telegram_authorized": False})
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
 
     task = asyncio.create_task(w.run_forever(poll_s=0.01))
     deadline = asyncio.get_running_loop().time() + 10
@@ -2544,7 +2418,7 @@ async def test_a_soulseek_miss_says_the_bot_is_paused_not_switched_off(lenv):
     source = FakeSource([good_cand()])
     w = make(lenv, provider=empty, source=source, status={"telegram_authorized": False})
 
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.QUEUED and r.attempts == 1
     assert worker_mod.BOT_PAUSED in r.flag_reason and "Soulseek found no copies of this track" in r.flag_reason
@@ -2567,7 +2441,7 @@ async def test_a_copy_with_no_telegram_keys_says_telegram_isnt_set_up_and_is_sti
     status = {"telegram_authorized": False}
     w = make(lenv, provider=FakeProvider(settings.slskd_downloads, []), source=FakeSource([good_cand()]),
              status=status)
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
     r = await w.process(rid)
     assert worker_mod.BOT_PAUSED_NOT_SET_UP in r.flag_reason and "signed out" not in r.flag_reason
     store.update_request(rid, state=RequestState.ERROR, error_message=r.flag_reason)
@@ -2654,7 +2528,7 @@ async def test_telegram_coming_back_mid_pass_sends_the_request_round_again(lenv)
     empty = FakeProvider(settings.slskd_downloads, files_for=sign_in_meanwhile)
     source = FakeSource([good_cand()])
     w = make(lenv, provider=empty, source=source, status=status)
-    rid = store.add_request(TEXT, RequestKind.TEXT)
+    rid = store.add_request(TEXT_AT, RequestKind.TEXT)
 
     r = await w.process(rid)
     assert source.searches == 0                          # paused when the pass began
@@ -2731,7 +2605,7 @@ async def test_a_plain_named_remaster_is_filed_with_what_its_tags_say(lenv, tmp_
     audio = _tagged(_flac(tmp_path / "lsd.flac"), tags)
     provider.files = [lf("a", path="Twisted\\01. Hallucinogen - LSD.flac")]
     provider.audio = {"a": audio}
-    w = make(lenv, source=FakeSource([_remaster_cand()]), catalog=FakeCatalog([]))
+    w = make(lenv, source=FakeSource([_remaster_cand()]))
     rid = store.add_request("Hallucinogen - LSD (Remastered 2024)", RequestKind.TEXT)
     r = await w.process(rid)
     assert r.state == RequestState.DONE and provider.downloaded == ["a"]

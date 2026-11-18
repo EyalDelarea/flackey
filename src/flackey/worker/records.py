@@ -4,7 +4,6 @@ from __future__ import annotations
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 from ..fingerprint import AcousticReference, FingerprintError, FingerprintResult
 from ..lossless import Reference
@@ -14,17 +13,13 @@ from ..version import VersionCheck
 from ..youtube import YouTubeError
 
 
-class CatalogLike(Protocol):
-    async def search(self, query: Query) -> list[CatalogTrack]: ...
-
-
 def _mmss(seconds: int | None) -> str:
     if seconds is None:
         return "?:??"
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-CATALOG_SOURCE = "beatport"
+CATALOG_SOURCE = "catalog"   # a candidate built from a stored record; see catalog_candidate
 QUERY_SOURCE = "query"      # a candidate built from the request itself; see query_candidate
 # Exactly what `fingerprint.check` used to swallow on its own, now that the fetch happens here instead:
 # a missing reference is a "skipped" check, never a crashed request. fpcalc handing back unparseable JSON
@@ -33,20 +28,10 @@ QUERY_SOURCE = "query"      # a candidate built from the request itself; see que
 REFERENCE_ERRORS = (YouTubeError, FingerprintError, OSError, ValueError)
 
 def catalog_candidate(catalog: CatalogTrack) -> Candidate:
-    """A stand-in for the Deezer candidate, built from the Beatport record -- the mirror of
-    `_fallback_catalog`, which builds a catalog track from a candidate.
-
-    The Telegram bot is a third party that can go silent for hours (it did), and without a candidate the
-    whole request used to die at the source search even when Beatport had identified the track and a peer
-    was holding the file. Nothing downstream actually needs Deezer: `lossless.reference_for` takes artist,
-    title, mix name and duration from the catalog whenever one is present, so every pick rule already runs
-    on Beatport data rather than on anything a peer said.
-
-    `deezer_id` stays None. Since issue #67 the fingerprint's reference is the request's own video, so a
-    Beatport stand-in is checked acoustically like any other candidate; without a video or a Deezer id the
-    attempt ends `fingerprint_unavailable` rather than filing on the match alone. It is never persisted as
-    a candidate row -- a retry re-matches Beatport, which is cheap, instead of resuming from a candidate
-    the source never offered.
+    """A stand-in candidate built from a stored catalog record -- the mirror of `_fallback_catalog`, which
+    builds a catalog record from a candidate. Its only use is a search spelling (`_search_references`): the
+    record's artist, title and mix as the first text typed into Soulseek, for a request or a library track
+    that still carries one (a Beatport record stored before Beatport was removed). Never persisted.
     """
     return Candidate(source=CATALOG_SOURCE, source_ref=f"{CATALOG_SOURCE}:{catalog.id}",
                      artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
@@ -64,7 +49,7 @@ def query_candidate(query: Query, request_id: int) -> Candidate:
 
 
 def _fallback_catalog(cand: Candidate) -> CatalogTrack:
-    # negative so it never collides with a Beatport id; crc32 (not hash()) so it is stable across processes
+    # negative so it never collides with a stored Beatport id; crc32 (not hash()) so it is stable across processes
     fallback_id = -(cand.deezer_id or zlib.crc32(cand.source_ref.encode()) or 1)
     return CatalogTrack(id=fallback_id, isrc=cand.isrc,
                         artist=cand.artist, title=cand.title, mix_name=candidate_version(cand),

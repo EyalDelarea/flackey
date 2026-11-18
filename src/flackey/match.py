@@ -119,7 +119,7 @@ def score_candidate(query: Query, cand: Candidate, catalog: CatalogTrack | None)
     ref_title = catalog.title if catalog else (query.title or "")
     if not ref_artist and not ref_title:
         ref_title = query.raw
-        # token_sort: a candidate whose tokens are a subset of the query must not score 100 (see catalog.best_match)
+        # token_sort: a candidate whose tokens are a subset of the query must not score 100
         a = fuzz.token_sort_ratio(_norm(query.raw), _norm(f"{cand.artist} {cand.title}"))
         artist_pts = round(W_ARTIST * a / 100)
         title_pts = round(W_TITLE * a / 100)
@@ -127,7 +127,7 @@ def score_candidate(query: Query, cand: Candidate, catalog: CatalogTrack | None)
         artist_pts = round(W_ARTIST * fuzz.token_set_ratio(_norm(ref_artist), _norm(cand.artist)) / 100)
         title_pts = round(W_TITLE * fuzz.token_set_ratio(_norm(ref_title), _norm(_candidate_title(cand))) / 100)
     version_pts = _version_points(query, cand)
-    # the video's length is what was asked for; a wrongly matched Beatport release must not redefine it
+    # the video's length is what was asked for; a wrongly matched stored record must not redefine it
     ref_dur = query.duration_s or (catalog.duration_s if catalog else None)
     duration_pts = _duration_points(cand.duration_s, ref_dur, notes)
     # A remaster can carry the original's ISRC (Hallucinogen's "LSD", 2026-10-20): the ISRC names the
@@ -176,7 +176,7 @@ def decide(query: Query, cands: list[Candidate], catalog: CatalogTrack | None) -
     if pinned and not _original(top):
         return Decision(True, top, f"confidence {top.score}%; the {candidate_version(top)} is the video's length")
     if catalog is None:
-        return Decision(True, top, f"confidence {top.score}%; not on Beatport, the recording check decides")
+        return Decision(True, top, f"confidence {top.score}%; no catalog record, the recording check decides")
     return Decision(True, top, f"confidence {top.score}%")
 
 

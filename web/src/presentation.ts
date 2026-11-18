@@ -10,7 +10,7 @@ export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
 /** Hover text for each rung. Here rather than in Stepper.tsx for the same reason the "step N of 6" counter
  *  went: two places describing one ladder disagreed the moment the map below changed. */
 export const STEP_TIPS: Record<string, string> = {
-  Search: 'Working out which track this is. Beatport gives the official title, remix name and release; Deezer says who has a copy.',
+  Search: 'Working out which track this is. Deezer gives the official title, remix name and release, and who has a copy.',
   Choose: 'More than one copy could be the right one and none of them won outright, so it is waiting on you. Most tracks skip this.',
   Download: "Pulling the file down. Soulseek first for a lossless copy, which can mean waiting in a stranger's queue; Deezer as the fallback. A Soulseek copy is also checked and fingerprinted here, before it moves on.",
   Verify: 'Reading the spectrogram for signs of a lossy source. An MP3 re-wrapped as FLAC usually shows a sharp edge, often around 16 kHz, where the encoder threw the top away. A clean spectrum is consistent with lossless, not proof of it.',
@@ -48,7 +48,7 @@ export interface SamplesView { found: SampleView | null; reference: SampleView |
    *  quality check refused (issue #97): there is nothing to compare it with -- the reference is a 30 s
    *  preview, lossy itself -- so the block plays the found copy alone. */
   kind: 'compare' | 'listen' }
-export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; onBeatport: boolean; lengthNote: string; chosen: boolean
+export interface CandidateView { id: number; title: string; version: string; score: number | null; length: string; lengthNote: string; chosen: boolean
   /** Null when Deezer has no sample for this record, which is known before the card is drawn -- so the
    *  card shows no play control at all rather than a dead one. Built here rather than in the page,
    *  because this is where every other thing a control needs is decided. */
@@ -92,7 +92,7 @@ export interface FallbackView { label: string; reason: string }
  *  tab's own bar. */
 export interface GroupSummary { filed: number; total: number; needsChoice: number; rejected: number; inFlight: number
   waiting: number; failed: number; pct: number; failedStages: Record<Stage, number> }
-export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[]; beatportDown: { seconds: number; requestIds: number[] } | null }
+export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[] }
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
   soulseekConnected?: boolean
@@ -210,7 +210,7 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
   not_found: {
     tally: 'found no copy anywhere',
-    note: 'Nothing to download turned up last time. Try again searches again from scratch — Beatport listings and the people sharing on Soulseek both change.',
+    note: 'Nothing to download turned up last time. Try again searches again from scratch — Deezer listings and the people sharing on Soulseek both change.',
   },
   rejected: {
     tally: 'failed the quality check',
@@ -342,7 +342,7 @@ const REPORTABLE: RequestState[] = ['rejected', 'not_found', 'error']
 // No "step N of 6" here any more: the stepper itself says which rung we are on, and two places saying it
 // disagreed the moment the map changed. Each line describes what is happening, nothing else.
 const PROGRESS_TEXT: Partial<Record<RequestState, string>> = {
-  identifying: 'Looking it up on Beatport and Deezer', fetching: 'Downloading the file',
+  identifying: 'Looking it up on Deezer', fetching: 'Downloading the file',
   verifying: 'Checking the audio is genuine and that it is the right recording', filing: 'Tagging and filing',
 }
 
@@ -715,7 +715,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       const sorted = [...b.candidates].sort((a, c) => (c.score ?? 0) - (a.score ?? 0) || a.rank - c.rank).slice(0, 5)
       v.candidates = sorted.map(c => ({
         id: c.id, title: `${c.artist} – ${c.title}`, version: versionOf(c), score: c.score, length: mmss(c.duration_s),
-        onBeatport: c.catalog_track_id != null, lengthNote: lengthNote(c, r.query_duration_s), chosen: c.id === r.chosen_candidate_id,
+        lengthNote: lengthNote(c, r.query_duration_s), chosen: c.id === r.chosen_candidate_id,
         sample: sampleFor(c),
       }))
       v.action = { label: 'Skip this track', kind: 'cancel' }
@@ -805,7 +805,6 @@ function summaryOf(list: Bundle[]): GroupSummary {
   }
 }
 
-const BEATPORT_DOWN = /^Beatport unreachable/
 const byPlaylistId = (bundles: Bundle[]): Map<number | null, Bundle[]> => {
   const m = new Map<number | null, Bundle[]>()
   for (const b of bundles) {
@@ -834,14 +833,9 @@ export function groupRows(bundles: Bundle[], playlists: Playlist[], opts: Presen
         : a.request.id - c.request.id
     )
     const rows = sorted.filter(b => matchesFilter(b.request, filter)).map(b => presentRow(b, opts))
-    const down = sorted.filter(b => b.request.state === 'queued' && b.request.retry_after && BEATPORT_DOWN.test(b.request.flag_reason || ''))
-    const seconds = down.length ? Math.max(0, ...down.map(b => Math.round((new Date(b.request.retry_after!).getTime() - opts.now.getTime()) / 1000))) : 0
     return {
       key, name, rows,
       summary: summaryOf(whole.get(playlistKey) ?? sorted),
-      // Built from the rows on screen, not from `all`: the banner's "Try now" acts on the ids beside it,
-      // and a Failed tab is no place for a banner about rows it is not showing.
-      beatportDown: down.length ? { seconds, requestIds: down.map(b => b.request.id) } : null,
     }
   }
   for (const k of keys) groups.push(build(`pl-${k}`, names.get(k) ?? 'Playlist', byPlaylist.get(k)!, k))
