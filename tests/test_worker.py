@@ -1842,3 +1842,95 @@ def test_quality_check_sends_the_detector_version_verify_really_uses(tmp_path):
         telemetry.uninstall()
     (qc,) = [e for e in t.snapshot()["pending"] if e["event"] == "quality_check"]
     assert qc["detector_version"] == verify.DETECTOR_VERSION == "2.0"
+
+
+def _stats(tmp_path):
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    return t
+
+
+async def test_a_request_that_retries_sends_request_finished_once_with_its_final_state(env, tmp_path):
+    """Owner, 2026-11-18: a request waiting on a peer's queue goes back to `queued` and may still file. Only
+    the end of the road is a finish: two passes that fail and retry send nothing, the third that files
+    sends exactly one `request_finished`, saying done."""
+    from flackey import telemetry
+
+    t = _stats(tmp_path)
+    try:
+        _settings, store, _notifier = env
+        ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+        src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
+        w = make_worker(env, src, FakeCatalog([ct]))
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        aid = store.add_attempt(rid, "soulseek", TEXT)
+        store.update_attempt(aid, outcome="queued")
+        for _ in range(2):
+            assert (await w.process(rid)).state == RequestState.QUEUED
+        assert not [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+        src.fetch_error = None
+        assert (await w.process(rid)).state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    finished = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert [e["state"] for e in finished] == ["done"]
+
+
+async def test_a_give_up_on_the_bot_fetch_says_the_bot_timed_out_not_the_peer_queue(env, tmp_path):
+    """Owner's test session, 2026-11-18 (req#446, #447): Soulseek's peers kept the file queued, the Deezer
+    bot fallback then timed out on its fetch three passes running, and the request gave up. The finish said
+    `peer_queue_timeout`, read off the Soulseek attempt, because the fetch's own failure was never noted."""
+    from flackey import telemetry
+
+    t = _stats(tmp_path)
+    try:
+        _settings, store, _notifier = env
+        ct = CatalogTrack(**{**CT.__dict__, "duration_ms": 3000})
+        w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file")),
+                        FakeCatalog([ct]))
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        aid = store.add_attempt(rid, "soulseek", TEXT)
+        store.update_attempt(aid, outcome="queued")
+        store.update_request(rid, attempts=2)
+        assert (await w.process(rid)).state == RequestState.ERROR
+    finally:
+        telemetry.uninstall()
+    (done,) = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert done["state"] == "error" and done["failed_stage"] == "download"
+    assert done["failure_reason"] == "timeout"
+
+
+async def test_extended_offer_found_is_sent_only_when_an_extended_mix_was_found(env, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: one short session sent `extended_offer_found` 15 times, nearly all `status: none`.
+    It is sent for a find only: not for a search that found nothing, nor for one that crashed."""
+    from flackey import telemetry
+
+    settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()]), FakeCatalog([CT]))
+    tid = store.add_track(path=settings.library_root / "a.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050,
+                          file_size=1, artist="A", title="B", mix_name="Original Mix", duration_s=300, isrc=None,
+                          catalog_track_id=None, request_id=None)
+    answers = iter([{"status": "none"}, RuntimeError("boom"),
+                    {"status": "available", "length_s": 390, "mix_name": "Extended Mix"}])
+
+    async def find(track_id):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(w, "_find_extended", find)
+    t = _stats(tmp_path)
+    try:
+        for _ in range(3):
+            await w._scan_extended(tid)
+    finally:
+        telemetry.uninstall()
+    offers = [e for e in t.snapshot()["pending"] if e["event"] == "extended_offer_found"]
+    assert len(offers) == 1
+    assert offers[0]["status"] == "available" and offers[0]["word"] == "extended" and offers[0]["gain"] == "1-2m"

@@ -354,6 +354,9 @@ class PipelineMixin:
                 raise
             except (SourceTimeout, SourceError) as e:
                 self.store.update_request(req.id, fetch_source=None)
+                # Noted here as the search's failure is above: without it a give-up reads its reason off
+                # the Soulseek attempt, and a bot that timed out was sent as `peer_queue_timeout`.
+                usage.failure_reason(req.id, usage.reason_of(e))
                 await self._retry_or_fail(req, f"source error: {e}")
                 return
         else:

@@ -74,16 +74,16 @@ class ExtendedMixin:
         self._usage_offer(track_id, offer)
 
     def _usage_offer(self, track_id: int, offer: dict) -> None:
-        if not telemetry.enabled() or offer.get("status") not in ("available", "none"):
+        # A find only (owner, 2026-11-18): every filed track is searched once, so "found nothing" was most
+        # of what this sent -- 15 events in one short session, nearly all `none`.
+        if not telemetry.enabled() or offer.get("status") != "available":
             return
         try:
             filed = self.store.get_track(track_id).duration_s
             gain = (offer["length_s"] - filed) if offer.get("length_s") and filed else None
             mix = (offer.get("mix_name") or "").lower()
-            telemetry.emit("extended_offer_found", status=offer["status"], gain=buckets.gain(gain),
-                           word="club mix" if "club" in mix else ("extended" if offer["status"] == "available"
-                                                                  else None),
-                           filed_length=buckets.length(filed))
+            telemetry.emit("extended_offer_found", status="available", gain=buckets.gain(gain),
+                           word="club mix" if "club" in mix else "extended", filed_length=buckets.length(filed))
         except Exception:
             log.debug("usage stats: extended offer failed", exc_info=True)
 
