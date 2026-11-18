@@ -28,8 +28,9 @@ export default function UsageStatsCatalog({ onClose }: { onClose: () => void }) 
           <button className="modal-close" onClick={onClose} aria-label="Close"><Icon name="x" size={14} /></button>
         </div>
         <div className="modal-body">
-          <p className="muted">Every report is one of these events, with only these fields. Times and counts are sent as
-            ranges like “1-5s”, never exact numbers.</p>
+          <p className="muted">Every report is one of these events, with only these fields. Times and sizes are sent as
+            ranges like “1-5s”. Small counts, like how many times a download was retried, are sent as exact
+            numbers.</p>
           <p className="muted">{IP_NOTE}</p>
           {failed && <div className="err">Couldn't load the list.</div>}
           {!catalog && !failed && <div className="faint">Loading…</div>}

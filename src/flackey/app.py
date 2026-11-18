@@ -394,6 +394,33 @@ async def watch_usage(tel: usage.Telemetry, worker, status, settings: Settings, 
             log.debug("usage stats watcher tick failed", exc_info=True)
 
 
+def start_usage(settings: Settings) -> tuple[usage.Telemetry, dict]:
+    """The usage-stats client and how the last session ended. Never raises: a broken setting, a full disk or
+    a read-only data folder costs the stats for this launch, never the launch."""
+    try:
+        tel = usage.from_settings(settings, __version__)
+    except Exception:
+        log.debug("usage stats unavailable this launch", exc_info=True)
+        tel = usage.Telemetry(settings.data_dir, version=__version__, mode="off")
+    usage.install(tel)
+    try:
+        session = tel.start_session()
+    except Exception:
+        log.debug("usage stats could not start the session", exc_info=True)
+        session = {}
+    return tel, session
+
+
+def end_usage(tel: usage.Telemetry) -> None:
+    """Save and close the stats at quit. Never raises: slskd still has to stop and the port go back after."""
+    try:
+        tel.end_session()
+    except Exception:
+        log.debug("usage stats could not close the session", exc_info=True)
+    finally:
+        usage.uninstall()
+
+
 async def run_usage_sender(tel: usage.Telemetry, retry_s: float = 30.0) -> None:
     """The sender, restarted after a failure: it must never take the app down with it."""
     while True:
@@ -411,11 +438,9 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     repair_share(settings)
     log_startup_banner(settings, __version__)
     store = Store(settings.db_path)
-    tel = usage.from_settings(settings, __version__)
-    usage.install(tel)
+    tel, session = start_usage(settings)
     usage_errors.install_hooks()
     asyncio.get_running_loop().set_exception_handler(usage_errors.asyncio_handler)
-    session = tel.start_session()
     bus = EventBus()
     # `telegram_unreachable` tells "signed out" from "signed in, as far as anyone knows, but Telegram
     # did not answer": both pause the Deezer bot, only one of them is fixed by signing in.
@@ -519,8 +544,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
             watch_usage(tel, worker, status, settings, store, session))
     finally:
         server.should_exit = True
-        tel.end_session()
-        usage.uninstall()
+        end_usage(tel)
         await sharing.release()       # give the port back before the sidecar that used it goes away
         if link.process is not None:      # the link owns the handle after adopt(); it may have replaced it
             await link.process.stop()

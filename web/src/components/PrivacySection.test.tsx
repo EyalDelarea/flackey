@@ -60,7 +60,7 @@ it('never says the data is already gone when only the delete request was receive
 it('says it is not sending without a collector', async () => {
   vi.spyOn(api, 'telemetry').mockResolvedValue({ ...on, collector: null, sending: false })
   render(<PrivacySection />)
-  expect(await screen.findByText('Not sending: no local collector configured')).toBeInTheDocument()
+  expect(await screen.findByText('Not sending: this copy of Flackey has no stats server, so reports stay on this computer.')).toBeInTheDocument()
 })
 
 it("shows pending and sent events as JSON under What's sent", async () => {

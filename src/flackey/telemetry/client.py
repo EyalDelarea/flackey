@@ -190,6 +190,30 @@ DELETE_REFUSALS = frozenset({(403, "not_owner"), (400, "invalid")})
 BATCH_REFUSALS = DELETE_REFUSALS | {(410, "schema_retired")}
 
 
+# `dropped` leaves as the lower edge of the `n` bucket (0, 1, 2, 5, 20, 100), not the exact count: the schema
+# types it as a plain int, so a coarse value is the most it can carry without a schema change.
+DROPPED_STEPS = (100, 20, 5, 2, 1)
+
+
+def coarse_dropped(count: int) -> int:
+    return next((step for step in DROPPED_STEPS if count >= step), 0)
+
+
+def _parse_lines(lines: list[str]) -> tuple[list[str], list[dict]]:
+    """The lines that hold one event each, and those events. A line that does not parse (a write cut short by
+    a crash, a hand edit) or is not an event is skipped, so one bad line never blocks the rest."""
+    kept, events = [], []
+    for ln in lines:
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            kept.append(ln)
+            events.append(ev)
+    return kept, events
+
+
 def _refusal(r: httpx.Response, refusals: frozenset[tuple[int, str]] = DELETE_REFUSALS) -> str | None:
     """The collector's own permanent refusal, read from its JSON `error` (delete: 403 not_owner, 400 invalid;
     a batch also 410 schema_retired). Anything else -- a bare 400 or 403, an HTML page, JSON that isn't the
@@ -238,7 +262,13 @@ class Telemetry:
         self.clock, self.today, self.transport = clock, today, transport
         self.session_id = str(uuid.uuid4())
         self._seq = 0
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()     # the in-memory queue; held only for a moment, so emit never waits
+        # The day's state and the local files. Re-entrant: _bump_state rolls the day, which emits.
+        # Order is always _io then _lock.
+        self._io = threading.RLock()
+        # Bumped by opt-in, opt-out and New ID. A send that started under an older generation writes nothing
+        # back when it returns: the files it read belong to an ID that is gone.
+        self._gen = 0
         self._queue: deque[dict] = deque(maxlen=MAX_QUEUE)
         self._dropped = 0                 # events lost to a full queue or outbox, sent as `dropped`
         self._fields_dropped = 0          # fields that failed the schema (never sent, only counted)
@@ -269,7 +299,12 @@ class Telemetry:
 
     @property
     def available(self) -> bool:
-        return self.mode != "off" and self._envelope_ok
+        """Whether to offer stats at all. A packaged or Docker build with no collector baked in could never
+        send, so it never asks; a checkout without one keeps the outbox for the developer, and the local
+        demo (`FLACKEY_TELEMETRY=local`) never sends by design."""
+        if self.mode == "off" or not self._envelope_ok:
+            return False
+        return self.url is not None or self.mode == "local" or self._base.get("channel") == "checkout"
 
     @property
     def enabled(self) -> bool:
@@ -284,10 +319,16 @@ class Telemetry:
             raise ValueError("usage stats are switched off on this computer")
         if self._enabled:
             return
-        self.install_id = str(uuid.uuid4())
-        self.install_secret = new_secret()
-        self.opted_in = self.today().isoformat()
-        self._enabled = True
+        with self._io:
+            self._gen += 1
+            with self._lock:
+                self._queue.clear()
+            # Only ever written while stats were on, so one found now is from before an opt-out: stale.
+            (self.data_dir / UPDATE_PENDING).unlink(missing_ok=True)
+            self.install_id = str(uuid.uuid4())
+            self.install_secret = new_secret()
+            self.opted_in = self.today().isoformat()
+            self._enabled = True
         self.persist(telemetry_enabled=True, telemetry_install_id=self.install_id,
                      telemetry_install_secret=self.install_secret, telemetry_opted_in=self.opted_in)
         info = self.start_session()
@@ -298,17 +339,19 @@ class Telemetry:
     def opt_out(self) -> None:
         """Off, and everything sent is deleted: the delete is queued on disk and retried until the
         collector confirms it. Nothing else of telemetry is left on this computer."""
-        old, old_secret = self.install_id, self.install_secret
-        self._enabled = False
-        self.install_id = None
-        self.install_secret = None
-        self.opted_in = None
-        with self._lock:
-            self._queue.clear()
-            self._notes.clear()
-        self._state = {}
-        for name in (OUTBOX, SENT, STATE, MARKER):
-            (self.data_dir / name).unlink(missing_ok=True)
+        with self._io:
+            old, old_secret = self.install_id, self.install_secret
+            self._gen += 1
+            self._enabled = False
+            self.install_id = None
+            self.install_secret = None
+            self.opted_in = None
+            with self._lock:
+                self._queue.clear()
+                self._notes.clear()
+            self._state.clear()
+            for name in (OUTBOX, SENT, STATE, MARKER, UPDATE_PENDING):
+                (self.data_dir / name).unlink(missing_ok=True)
         if old and old_secret:
             self._queue_delete(old, old_secret)
         self.persist(telemetry_enabled=False, telemetry_install_id=None, telemetry_install_secret=None,
@@ -327,14 +370,16 @@ class Telemetry:
         """New ID: the old one's data is deleted first, and what was queued under it goes with it."""
         if not self._enabled:
             raise ValueError("usage stats are off")
-        old, old_secret = self.install_id, self.install_secret
-        with self._lock:
-            self._queue.clear()
-        (self.data_dir / OUTBOX).unlink(missing_ok=True)
+        with self._io:
+            old, old_secret = self.install_id, self.install_secret
+            self._gen += 1
+            with self._lock:
+                self._queue.clear()
+            (self.data_dir / OUTBOX).unlink(missing_ok=True)
+            self.install_id = str(uuid.uuid4())
+            self.install_secret = new_secret()
         if old and old_secret:
             self._queue_delete(old, old_secret)   # the OLD pair: the collector knows the old ID by the old secret
-        self.install_id = str(uuid.uuid4())
-        self.install_secret = new_secret()
         self.persist(telemetry_install_id=self.install_id, telemetry_install_secret=self.install_secret)
         self._next_send = 0.0
 
@@ -353,6 +398,22 @@ class Telemetry:
             return d if isinstance(d, dict) else {}
         except (OSError, ValueError):
             return {}
+
+    def _delete_due(self) -> float:
+        """When the owed delete may go. Never more than MAX_BACKOFF_S past the moment this first sees it: a
+        time written while the clock was ahead is pulled in and saved, so once the clock is put right the
+        delete waits at most the longest backoff, not for the old "future"."""
+        r = self._delete_retry()
+        try:
+            nxt = float(r.get("next", 0) or 0)
+        except (TypeError, ValueError):
+            nxt = 0.0
+        limit = self.clock() + MAX_BACKOFF_S
+        if nxt > limit:
+            nxt = limit
+            with contextlib.suppress(OSError):
+                (self.data_dir / DELETE_RETRY).write_text(json.dumps({**r, "next": nxt}), encoding="utf-8")
+        return nxt
 
     def _jittered(self, s: float) -> float:
         return s * random.uniform(1 - BACKOFF_JITTER, 1 + BACKOFF_JITTER) if self._jitter else s
@@ -386,6 +447,8 @@ class Telemetry:
                 self._fields_dropped += len(dropped)
                 log.debug("usage stats: %s dropped fields %s", event, dropped)
             with self._lock:
+                if not self._enabled:             # opt-out may have landed since the check above
+                    return
                 ev = {"event": event, "session_id": self.session_id, "seq": self._seq,
                       "event_date": event_date or self.today().isoformat(), **self._base, **clean}
                 self._seq += 1
@@ -457,22 +520,34 @@ class Telemetry:
     def _save_state(self) -> None:
         if not self.enabled:
             return
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.data_dir / (STATE + ".tmp")
-        tmp.write_text(json.dumps(self._state), encoding="utf-8")
-        os.replace(tmp, self.data_dir / STATE)
+        with self._io:                # a worker thread's _bump_state must not change the dict mid-dump
+            text = json.dumps(self._state)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.data_dir / (STATE + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, self.data_dir / STATE)
         self._state_saved = self.clock()
 
     def _bump_state(self, key: str) -> None:
-        st = self._load_state()
-        self._roll_day()
-        st[key] = st.get(key, 0) + 1
+        with self._io:
+            st = self._load_state()
+            self._roll_day()
+            st[key] = st.get(key, 0) + 1
 
     def start_session(self) -> dict:
         """Mark this launch as running, and say how the last one ended (spec `previous_exit`): a marker
-        still there is a session that never reached `end_session`."""
+        still there is a session that never reached `end_session`. Never raises: a full or read-only disk
+        costs this launch's stats, never the launch."""
         if not self.enabled:
             return {}
+        try:
+            with self._io:
+                return self._start_session()
+        except Exception:
+            log.debug("usage stats: could not start the session", exc_info=True)
+            return {}
+
+    def _start_session(self) -> dict:
         st = self._load_state()
         marker = self.data_dir / MARKER
         if not st:
@@ -528,14 +603,26 @@ class Telemetry:
                       error_code="install_failed", time=took)
 
     def end_session(self) -> None:
+        """Never raises: shutdown still has to stop slskd and give the port back after this."""
         if not self.enabled:
             return
-        self._flush()
-        self._save_state()
-        (self.data_dir / MARKER).unlink(missing_ok=True)
+        try:
+            for step in (self._flush, self._save_state):
+                try:
+                    step()
+                except Exception:
+                    log.debug("usage stats: could not save at quit", exc_info=True)
+        finally:
+            with contextlib.suppress(Exception):
+                (self.data_dir / MARKER).unlink(missing_ok=True)
 
     def _roll_day(self) -> None:
-        """Send yesterday's (or an earlier day's) health once, dated that day, and start today's."""
+        """Send yesterday's (or an earlier day's) health once, dated that day, and start today's. Under _io,
+        so the worker thread and the loop rolling at midnight together send it once."""
+        with self._io:
+            self._roll_day_locked()
+
+    def _roll_day_locked(self) -> None:
         st = self._load_state()
         today = self.today().isoformat()
         day = st.get("day")
@@ -566,22 +653,31 @@ class Telemetry:
         if not self.enabled:
             return
         try:
-            st = self._load_state()
-            self._roll_day()
-            st["uptime_s"] = st.get("uptime_s", 0.0) + max(0.0, elapsed_s)
-            probes = st.setdefault("probes", {})
-            for name, up in sources.items():
-                if up is None:
-                    continue
-                ok, total = probes.get(name, [0, 0])
-                probes[name] = [ok + int(bool(up)), total + 1]
+            with self._io:
+                self._health_tick(elapsed_s, sources)
         except Exception:
             log.debug("usage stats: health sample failed", exc_info=True)
+
+    def _health_tick(self, elapsed_s: float, sources: dict) -> None:
+        st = self._load_state()
+        self._roll_day()
+        st["uptime_s"] = st.get("uptime_s", 0.0) + max(0.0, elapsed_s)
+        probes = st.setdefault("probes", {})
+        for name, up in sources.items():
+            if up is None:
+                continue
+            ok, total = probes.get(name, [0, 0])
+            probes[name] = [ok + int(bool(up)), total + 1]
 
     # -- the local files ---------------------------------------------------------------------------------------
 
     def _flush(self) -> None:
-        """Move the in-memory queue to the outbox, capped at 2,000 events or 1 MB, oldest dropped first."""
+        """Move the in-memory queue to the outbox, capped at 2,000 events or 1 MB, oldest dropped first.
+        Under _io, so an opt-out can't land between reading the outbox and writing it back."""
+        with self._io:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
         with self._lock:
             if not self._queue:
                 return
@@ -589,7 +685,10 @@ class Telemetry:
             self._queue.clear()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self.data_dir / OUTBOX
-        lines = self._outbox_lines() + [json.dumps(e, separators=(",", ":")) for e in items]
+        raw = self._outbox_lines()
+        good, _ = _parse_lines(raw)
+        self._dropped += len(raw) - len(good)
+        lines = good + [json.dumps(e, separators=(",", ":")) for e in items]
         over = max(0, len(lines) - MAX_OUTBOX_EVENTS)
         while sum(len(ln) + 1 for ln in lines[over:]) > MAX_OUTBOX_BYTES and over < len(lines):
             over += 1
@@ -623,11 +722,12 @@ class Telemetry:
         sent, exactly as they leave (before gzip)."""
         with self._lock:
             queued = list(self._queue)
-        pending = [json.loads(ln) for ln in self._outbox_lines()] + queued
+        pending = _parse_lines(self._outbox_lines())[1] + queued
         try:
-            sent = [json.loads(ln) for ln in (self.data_dir / SENT).read_text(encoding="utf-8").splitlines() if ln]
+            sent_lines = [ln for ln in (self.data_dir / SENT).read_text(encoding="utf-8").splitlines() if ln]
         except OSError:
-            sent = []
+            sent_lines = []
+        sent = _parse_lines(sent_lines)[1]
         return {"pending": pending, "sent": sent}
 
     def describe(self) -> dict:
@@ -674,7 +774,7 @@ class Telemetry:
 
     async def tick(self, http: httpx.AsyncClient) -> None:
         if (self.url is not None and self.mode == "on" and self._pending_deletes()
-                and self.clock() >= float(self._delete_retry().get("next", 0) or 0)):
+                and self.clock() >= self._delete_due()):
             await self._send_deletes(http)
         if not self.enabled:
             return
@@ -697,12 +797,19 @@ class Telemetry:
     async def _send_batch(self, http: httpx.AsyncClient) -> tuple[bool, bool, float | None]:
         """(the send worked or the batch was dropped as refused, there is more to send, the collector's
         Retry-After in seconds when it gave one)."""
-        lines = self._outbox_lines()
-        if not lines or not self.install_id or not self.install_secret:
+        with self._io:
+            gen = self._gen
+            raw = self._outbox_lines()
+            lines, events = _parse_lines(raw)
+            if len(lines) != len(raw):          # a corrupt line: skipped for good, counted, never blocks the rest
+                self._dropped += len(raw) - len(lines)
+                self._write_lines(self.data_dir / OUTBOX, lines)
+            install_id, install_secret = self.install_id, self.install_secret
+        if not lines or not install_id or not install_secret:
             return True, False, None
         batch = lines[:BATCH]
-        body = {"schema": SCHEMA_VERSION, "install_id": self.install_id, "install_secret": self.install_secret,
-                "dropped": min(self._dropped, 1_000_000), "events": [json.loads(ln) for ln in batch]}
+        body = {"schema": SCHEMA_VERSION, "install_id": install_id, "install_secret": install_secret,
+                "dropped": coarse_dropped(self._dropped), "events": events[:BATCH]}
         data = gzip.compress(json.dumps(body, separators=(",", ":")).encode())
         try:
             headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
@@ -712,6 +819,14 @@ class Telemetry:
         except httpx.HTTPError as e:
             self.last_send = {"status": "failed", "error": type(e).__name__, "at": self._stamp()}
             return False, True, None
+        with self._io:
+            if self._gen != gen:
+                # Opt-out or New ID landed while this was on the wire: the outbox and sent log it read are
+                # gone with that ID, and must not be written back (nor go later under a new ID).
+                return True, False, None
+            return self._after_batch(r, lines, batch)
+
+    def _after_batch(self, r: httpx.Response, lines: list[str], batch: list[str]) -> tuple[bool, bool, float | None]:
         code = r.status_code
         refused = _refusal(r, BATCH_REFUSALS)
         # What Settings > Privacy shows: "ok", or "failed" with why (kept and retried, or refused and dropped)
@@ -751,6 +866,12 @@ class Telemetry:
                 field = str(r.json().get("field", ""))[:60]
             log.warning("usage stats: the collector refused a batch (%d %s %s); dropped it", code, refused, field)
             self._dropped += len(batch)
+            if refused == "schema_retired":
+                # Every batch of this schema would be refused the same way: stop for this run rather than
+                # drain the outbox batch by batch. What is left stays, and goes nowhere until an update.
+                self._stopped = True
+                self._write_lines(self.data_dir / OUTBOX, rest)
+                return True, False, None
         self._write_lines(self.data_dir / OUTBOX, rest)
         return True, bool(rest), None
 
@@ -761,7 +882,8 @@ class Telemetry:
         network error) keeps it and backs off -- doubling from DELETE_BACKOFF_MIN_S to MAX_BACKOFF_S, jittered,
         never sooner than Retry-After -- with the wait kept on disk across restarts."""
         left, error, wait = [], None, None
-        for install_id, install_secret in self._pending_deletes():
+        owed = self._pending_deletes()
+        for install_id, install_secret in owed:
             refused = None
             try:
                 r = await http.post(f"{self.url}/v1/delete",
@@ -785,6 +907,9 @@ class Telemetry:
                 left.append((install_id, install_secret))
         path = self.data_dir / PENDING_DELETE
         retry = self.data_dir / DELETE_RETRY
+        # An opt-out or New ID while these were on the wire queued another delete: keep it.
+        tried = {i for i, _ in owed}
+        left += [p for p in self._pending_deletes() if p[0] not in tried]
         if not left:
             path.unlink(missing_ok=True)
             retry.unlink(missing_ok=True)

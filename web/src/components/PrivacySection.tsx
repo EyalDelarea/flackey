@@ -13,7 +13,7 @@ const when = (iso: string) => {
 
 function statusLine(t: TelemetryState): string {
   if (!t.enabled) return 'Off. Nothing is collected or sent.'
-  if (!t.collector) return 'Not sending: no local collector configured'
+  if (!t.collector) return 'Not sending: this copy of Flackey has no stats server, so reports stay on this computer.'
   const last = t.last_send
   const lastText = !last ? 'Nothing sent yet.'
     : last.status === 'ok' ? `Last sent ${when(last.at)}${last.events != null ? ` · ${last.events} ${last.events === 1 ? 'event' : 'events'}` : ''}.`

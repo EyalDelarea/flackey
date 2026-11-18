@@ -841,3 +841,250 @@ def test_the_privacy_api_never_returns_the_secret(tmp_path):
         assert secret not in bodies and t.install_secret not in bodies
     finally:
         telemetry.uninstall()
+
+
+# -- review 212 (final): in-flight opt-out, failure-proof sessions, corrupt outbox, 410, stale marker, no URL --
+
+
+@pytest.mark.parametrize("action", ["opt_out", "reset_id"])
+def test_opt_out_or_new_id_during_a_send_writes_nothing_back(tmp_path, action):
+    """The owner flips stats off (or presses New ID) while a batch is on the wire. When the answer comes back,
+    the old outbox and sent log must not be written again, and no old-ID event may leave under the new ID."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    old = t.install_id
+    for _ in range(250):                          # more than one batch, so there is a "rest" to write back
+        t.emit("app_started", filing_format="aiff")
+    t._flush()
+    seen: list[dict] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/batch":
+            body = json.loads(gzip.decompress(request.content))
+            seen.append(body)
+            if len(seen) == 1:
+                getattr(t, action)()              # lands while this POST is in flight
+        return httpx.Response(202, json={})
+
+    run_tick(t, httpx.MockTransport(answer))
+    assert not (tmp_path / OUTBOX).exists() and not (tmp_path / SENT).exists()
+    if action == "reset_id":
+        t._next_send = 0
+        run_tick(t, httpx.MockTransport(answer))
+        assert seen[0]["install_id"] == old
+        assert len(seen) == 1                    # nothing of the old ID was left to go under the new one
+
+
+def test_an_event_racing_opt_out_is_not_kept(tmp_path, monkeypatch):
+    """emit passes its enabled check on a worker thread, then opt_out clears the queue, then emit appends:
+    the event must not survive into the next opt-in's ID."""
+    from flackey.telemetry import client
+
+    t, _ = make(tmp_path)
+    t.opt_in()
+    real = client.schema()
+
+    class Racing:
+        def clean(self, event, fields):
+            t.opt_out()                           # lands between the check and the append
+            return real.clean(event, fields)
+
+    monkeypatch.setattr(client, "schema", lambda: Racing())
+    t.emit("app_started", filing_format="aiff")
+    monkeypatch.setattr(client, "schema", lambda: real)
+    assert not t._queue
+    t.opt_in()
+    assert not [e for e in t._queue if e.get("filing_format") == "aiff"]
+
+
+def test_end_session_never_raises_and_still_clears_the_marker(tmp_path, monkeypatch):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+
+    def boom(*_a, **_k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(t, "_flush", boom)
+    monkeypatch.setattr(t, "_save_state", boom)
+    t.end_session()                               # disk full at quit: must not break shutdown
+    assert not (tmp_path / "telemetry-session").exists()
+
+
+def test_start_session_never_raises(tmp_path, monkeypatch):
+    t, _ = make(tmp_path)
+    t.opt_in()
+
+    def boom(*_a, **_k):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(t, "_save_state", boom)
+    assert t.start_session() == {}
+
+
+def test_save_state_survives_a_concurrent_bump(tmp_path):
+    """json.dumps over the live dict while a worker thread bumps it raised 'dictionary changed size'."""
+    import threading
+
+    t, _ = make(tmp_path)
+    t.opt_in()
+    stop = threading.Event()
+
+    def bump():
+        i = 0
+        while not stop.is_set():
+            with t._io:
+                t._state[f"k{i % 50}"] = i
+                t._state.pop(f"k{(i + 25) % 50}", None)
+            i += 1
+
+    th = threading.Thread(target=bump)
+    th.start()
+    try:
+        for _ in range(300):
+            t._save_state()
+    finally:
+        stop.set()
+        th.join()
+
+
+def test_health_daily_is_sent_once_when_two_threads_roll_the_day(tmp_path):
+    import threading
+
+    day = [dt.date(2026, 11, 15)]
+    t, _ = make(tmp_path, today=lambda: day[0])
+    t.opt_in()
+    t.health_tick(60, soulseek=True)
+    day[0] = dt.date(2026, 11, 16)
+    go = threading.Barrier(8)
+
+    def roll():
+        go.wait()
+        t._bump_state("requests_finished")
+
+    threads = [threading.Thread(target=roll) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sum(1 for e in t._queue if e["event"] == "health_daily") == 1
+
+
+def test_a_corrupt_outbox_line_is_skipped_and_counted(tmp_path):
+    collector = Collector()
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    t._flush()
+    with (tmp_path / OUTBOX).open("a", encoding="utf-8") as f:
+        f.write('{"event":"app_sta\n["not", "an", "event"]\n')
+    t.emit("app_started", filing_format="flac")
+    assert len(t.snapshot()["pending"]) >= 2          # "What's sent" still opens
+    run_tick(t, httpx.MockTransport(collector))
+    (batch,) = collector.batches
+    assert [e.get("filing_format") for e in batch["events"] if e["event"] == "app_started"][-2:] == ["aiff", "flac"]
+    assert batch["dropped"] >= 1                      # the bad lines were counted (bucketed)
+    assert (tmp_path / OUTBOX).read_text() == ""
+
+
+def test_a_corrupt_sent_line_does_not_break_whats_sent(tmp_path):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    (tmp_path / SENT).write_text('{"event":"a"}\n{broken\n', encoding="utf-8")
+    assert t.snapshot()["sent"] == [{"event": "a"}]
+
+
+def test_schema_retired_stops_the_run_and_keeps_the_rest(tmp_path):
+    calls = []
+
+    def answer(r):
+        calls.append(r)
+        return httpx.Response(410, json={"error": "schema_retired", "min": 2})
+
+    t, _ = make(tmp_path)
+    t.opt_in()
+    for _ in range(250):
+        t.emit("app_started", filing_format="aiff")
+    t._flush()
+    run_tick(t, httpx.MockTransport(answer))
+    assert t._stopped and len(calls) == 1
+    t._next_send = 0
+    run_tick(t, httpx.MockTransport(answer))
+    assert len(calls) == 1                            # no draining batch by batch
+
+
+@pytest.mark.parametrize(("raw", "sent"), [(0, 0), (1, 1), (3, 2), (7, 5), (50, 20), (999_999, 100)])
+def test_dropped_is_sent_as_a_coarse_number(tmp_path, raw, sent):
+    collector = Collector()
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    t._dropped = raw
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.batches[0]["dropped"] == sent
+
+
+def test_delete_retry_time_is_clamped_against_a_clock_jump(tmp_path):
+    collector = Collector()
+    now = [1_000_000.0]
+    t, _ = make(tmp_path, clock=lambda: now[0])
+    t.opt_in()
+    t.opt_out()
+    # written while the clock was a year ahead, then the clock was corrected
+    (tmp_path / DELETE_RETRY).write_text(json.dumps({"attempts": 3, "next": now[0] + 365 * 86400}))
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == []                    # not yet: the usual wait still applies
+    now[0] += MAX_BACKOFF_S + 1
+    run_tick(t, httpx.MockTransport(collector))
+    assert len(collector.deletes) == 1                # at most the longest backoff, not a year
+
+
+def test_opt_out_removes_a_pending_update_marker(tmp_path):
+    from flackey.telemetry.client import UPDATE_PENDING
+
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.update_handed_over("0.7.0", "seamless")
+    assert (tmp_path / UPDATE_PENDING).exists()
+    t.opt_out()
+    assert not (tmp_path / UPDATE_PENDING).exists()
+
+
+def test_opting_in_later_does_not_report_a_stale_update(tmp_path):
+    from flackey.telemetry.client import UPDATE_PENDING
+
+    t, _ = make(tmp_path)
+    (tmp_path / UPDATE_PENDING).write_text(json.dumps({"to": "0.5.0", "how": "seamless", "at": 1.0}))
+    t.opt_in()
+    assert not [e for e in t._queue if e["event"] == "update_step"]
+
+
+@pytest.mark.parametrize("channel", ["packaged", "docker"])
+def test_a_build_without_a_collector_never_asks(tmp_path, channel):
+    t = Telemetry(tmp_path, version="0.6.1", url=None, built_url=None, channel=channel, platform_fields=MAC)
+    assert t.describe()["available"] is False
+    with pytest.raises(ValueError):
+        t.opt_in()
+    on = Telemetry(tmp_path, version="0.6.1", built_url="https://stats.example.test", channel=channel,
+                   platform_fields=MAC)
+    assert on.describe()["available"] is True
+    local = Telemetry(tmp_path, version="0.6.1", url=None, mode="local", channel=channel, platform_fields=MAC)
+    assert local.describe()["available"] is True
+
+
+def test_the_privacy_api_says_unavailable_on_a_build_without_a_collector(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from flackey.web import telemetry as telemetry_web
+
+    t = Telemetry(tmp_path, version="0.6.1", url=None, channel="packaged", platform_fields=MAC)
+    telemetry.install(t)
+    try:
+        app = FastAPI()
+        app.include_router(telemetry_web.router())
+        c = TestClient(app)
+        assert c.get("/api/telemetry").json()["available"] is False
+        assert c.put("/api/telemetry", json={"enabled": True}).status_code == 409
+    finally:
+        telemetry.uninstall()
