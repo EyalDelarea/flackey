@@ -22,6 +22,8 @@ class DeezerTrack:
     title_version: str | None
     preview_url: str | None = None
     album_id: int | None = None
+    # A thumbnail of the record's album cover, for the Downloads row before the request has a catalog cover.
+    cover_url: str | None = None
 
 
 def _date(value) -> str | None:
@@ -46,6 +48,7 @@ def parse_track_json(data: dict) -> DeezerTrack:
         title_version=version,
         preview_url=data.get("preview") or None,
         album_id=int((data.get("album") or {}).get("id") or 0) or None,
+        cover_url=_cover((data.get("album") or {}).get("md5_image"), ROW_COVER_PX),
     )
 
 
@@ -53,6 +56,12 @@ def parse_track_json(data: dict) -> DeezerTrack:
 # written at, so a Deezer-tagged file carries the same size of cover as a Beatport-tagged one.
 COVER_PX = 1400
 _COVER_URL = "https://e-cdns-images.dzcdn.net/images/cover/{md5}/{px}x{px}-000000-80-0-0.jpg"
+# What a Downloads row draws its cover at: a thumbnail, not the art a file is tagged with.
+ROW_COVER_PX = 250
+
+
+def _cover(md5: str | None, px: int) -> str | None:
+    return _COVER_URL.format(md5=md5, px=px) if md5 else None
 
 
 @dataclass
@@ -67,8 +76,7 @@ class DeezerAlbum:
 def parse_album_json(data: dict) -> DeezerAlbum:
     if "error" in data:
         raise DeezerError(str(data["error"]))
-    md5 = data.get("md5_image")
-    cover = _COVER_URL.format(md5=md5, px=COVER_PX) if md5 else None
+    cover = _cover(data.get("md5_image"), COVER_PX)
     return DeezerAlbum(
         id=int(data["id"]),
         title=data.get("title") or "",

@@ -138,6 +138,9 @@ class Candidate:
     # The Deezer record's album title, from the same call: where a remaster with no version text of its own
     # says what it is ("The Albums Remastered"), see `version` (issue #172).
     album: str | None = None
+    # The Deezer record's album cover (a thumbnail), from the same call: the Downloads row shows the chosen
+    # record's until the request has a catalog cover, which Beatport no longer gives before filing.
+    cover_url: str | None = None
 
 
 @dataclass

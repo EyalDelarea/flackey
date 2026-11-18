@@ -624,6 +624,14 @@ function samplesFor(b: Bundle): SamplesView | null {
   return found || reference || video ? { found, reference, video, kind: 'compare' } : null
 }
 
+/** The catalog's cover, the one the file is filed with; until there is one, the chosen record's Deezer
+ *  cover -- Beatport no longer answers before filing, so most rows would otherwise sit blank until done.
+ *  Only the chosen record's: the top-ranked one may be another recording, with another cover. */
+const artworkOf = (b: Bundle): string | null =>
+  b.catalog?.artwork_url
+  ?? b.candidates.find(c => c.id === b.request.chosen_candidate_id)?.cover_url
+  ?? null
+
 export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const r = b.request
   const { title, version } = titleOf(b)
@@ -631,7 +639,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   const v: RowView = {
     id: r.id, title, version, status: '', statusTone: 'muted', steps: stepsFor(r),
     tag: null, dimmed: false, washed: false, action: null, candidates: null, rejection: null,
-    artworkUrl: b.catalog?.artwork_url ?? null, rejected: false, retryInSeconds: null,
+    artworkUrl: artworkOf(b), rejected: false, retryInSeconds: null,
     bucket, stage: stageOf(r), removable: bucket === 'done' || bucket === 'failed' || STOPPABLE.includes(r.state), sweepable: sweptByRetryAll(r.state),
     reportable: REPORTABLE.includes(r.state),
     formatLabel: formatLabelOf(b), checks: checksFor(b),

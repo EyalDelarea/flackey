@@ -374,6 +374,25 @@ describe('presentRow', () => {
     for (const status of ['pending', 'none', 'kept', 'unmatched']) expect(offer({ status })).toBeNull()
     expect(offer({ status: 'available', length_s: 400 }, 'duplicate')).toBeNull()
   })
+  it('a row still in progress shows the chosen Deezer record\'s cover until the catalog has one of its own', () => {
+    const cand = (id: number, cover_url: string | null) => ({ id, request_id: 1, source: 'deezer_bot', source_ref: `dz:${id}`,
+      artist: 'A', title: 'T', mix_name: null, duration_s: null, deezer_id: id, isrc: null, rank: id, score: null,
+      catalog_track_id: null, cover_url })
+    const candidates = [cand(1, 'https://dz/one.jpg'), cand(2, 'https://dz/two.jpg')]
+    // the chosen record's cover, not the top-ranked one's: a row never shows another record's art
+    expect(presentRow(bundle({ state: 'fetching', chosen_candidate_id: 2 }, { candidates }), opts).artworkUrl)
+      .toBe('https://dz/two.jpg')
+    // nothing chosen yet: no guess
+    expect(presentRow(bundle({ state: 'identifying' }, { candidates }), opts).artworkUrl).toBeNull()
+    expect(presentRow(bundle({ state: 'fetching', chosen_candidate_id: 1 }, { candidates: [cand(1, null)] }), opts).artworkUrl)
+      .toBeNull()
+    // the catalog's cover (the one the file is filed with) wins once there is one
+    const catalog = { id: 3, isrc: null, artist: 'A', title: 'T', mix_name: 'Original Mix', label: 'L', genre: 'G',
+      sub_genre: null, catalog_number: null, release_name: null, release_date: null, bpm: null, key: null,
+      duration_ms: null, artwork_url: 'https://filed/cover.jpg' }
+    expect(presentRow(bundle({ state: 'done', chosen_candidate_id: 2 }, { candidates, catalog }), opts).artworkUrl)
+      .toBe('https://filed/cover.jpg')
+  })
   it('a copy that is gone leaves the reference playable on its own, rather than hiding the whole block', () => {
     const rejection = { id: 7, request_id: 1, reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null,
       spectrogram_path: null, created_at: '', kind: 'different_recording', audio_path: null }
