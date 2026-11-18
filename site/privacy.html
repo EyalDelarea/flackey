@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>Flackey — Privacy</title>
+    <meta
+      name="description"
+      content="Flackey's usage stats are off unless you turn them on. What they contain, what they never contain, how long they're kept and how to delete them."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flackey" />
+    <meta property="og:title" content="Flackey — Privacy" />
+    <meta property="og:url" content="https://eyaldelarea.github.io/flackey/privacy.html" />
+    <meta property="og:image" content="https://eyaldelarea.github.io/flackey/img/og.jpg" />
+    <link rel="icon" href="img/icon.png" type="image/png" sizes="256x256" />
+    <link rel="icon" href="img/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="img/apple-touch-icon.png" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#privacy">Skip to content</a>
+    <header class="header wrap">
+      <a class="brand" href="index.html" aria-label="Flackey home"
+        ><img src="img/logo.svg" width="56" height="56" alt="" /><span
+          >flackey</span
+        ></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="index.html#overview">Overview</a><a href="index.html#how-it-works">How it works</a
+        ><a href="index.html#verification">Verification</a><a href="index.html#about">About</a
+        ><a href="index.html#help">Help</a
+        ><a href="index.html#release-notes">Release notes</a>
+      </nav>
+      <a class="button compact" href="index.html#download">Download</a>
+    </header>
+    <main>
+      <!-- Every claim here is checked against app PR #212 (head c77d515: UsageStatsAsk.tsx,
+           PrivacySection.tsx, telemetry/client.py, telemetry_schema_v1.json) and the stats server's
+           database migrations and hourly cleanup job. Recheck when either changes. -->
+      <article class="privacy wrap" id="privacy" aria-labelledby="privacy-title">
+        <div class="privacy-head">
+          <p class="eyebrow">Privacy</p>
+          <h1 id="privacy-title">Usage stats, and what they never include.</h1>
+          <p class="section-intro">
+            Flackey can share usage stats that help us find out why downloads
+            fail. They are off unless you turn them on. We can’t see what you
+            download: we only get counts like “a Soulseek search found nothing”,
+            never song names, links or files.
+          </p>
+          <!-- TODO(release): replace vNEXT with the release's version before merging. -->
+          <p class="privacy-updated">Applies from Flackey vNEXT, the first version with usage stats.</p>
+        </div>
+
+        <div class="privacy-body">
+          <section aria-labelledby="p-optin">
+            <h2 id="p-optin">Off unless you say yes</h2>
+            <p>
+              Setup’s Welcome screen asks “Share usage stats?” with two equal
+              answers, and neither is picked for you. If you already use
+              Flackey, it asks once on the main screen. Not now, closing the
+              question or not answering all leave stats off.
+            </p>
+            <p>
+              You can change your mind at any time in
+              <strong>Settings › Privacy</strong>. While stats are off,
+              nothing is collected or sent.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-what">
+            <h2 id="p-what">What is sent</h2>
+            <p>Short, fixed facts about how the app is doing:</p>
+            <ul>
+              <li>
+                <strong>Your setup:</strong> the Flackey version, your
+                operating system and its major version, whether the computer
+                is Apple silicon/ARM or Intel/AMD, and how Flackey was
+                installed.
+              </li>
+              <li>
+                <strong>Setup and settings:</strong> which setup steps you
+                finished or skipped, and broad choices like the file format you
+                save in or how your library folders are laid out.
+              </li>
+              <li>
+                <strong>Downloads:</strong> the kind of request (typed text, or
+                a YouTube or Spotify track or playlist), whether it finished or
+                failed, at which step, and which download route it took.
+              </li>
+              <li>
+                <strong>Quality checks:</strong> the result, the claimed file
+                format, and the sample rate and bit depth in broad groups.
+              </li>
+              <li>
+                <strong>Health:</strong> whether Soulseek and Telegram are
+                connected, how long the app ran, and whether it crashed.
+              </li>
+              <li>
+                <strong>Errors:</strong> the type of error and where in
+                Flackey’s own code it happened. Never the error message.
+              </li>
+              <li>
+                <strong>Updates:</strong> whether an update check, download
+                or install worked.
+              </li>
+            </ul>
+            <p>
+              Times and counts are sent as ranges like “1-5s”, never exact
+              numbers.
+            </p>
+            <p>
+              <strong>Never sent:</strong> song, artist or label names, search
+              text, links, file names or folders, your Soulseek or Telegram
+              account details, error messages or logs.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-see">
+            <h2 id="p-see">See exactly what is sent</h2>
+            <p>
+              In <strong>Settings › Privacy</strong>,
+              <strong>See exactly what’s sent</strong> lists every kind of
+              report and every field it can carry. The list is read from the
+              same rules our stats server checks each report against, so it
+              can’t promise less than is sent.
+            </p>
+            <p>
+              <strong>What’s sent</strong>, just below it, shows the exact
+              reports waiting to go and the most recent ones that went, as
+              they leave your computer.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-id">
+            <h2 id="p-id">Your random ID and secret</h2>
+            <p>
+              When you turn stats on, Flackey makes a random ID on your
+              computer. It isn’t linked to your name, email, computer or any
+              account. It only tells us that two reports came from the same
+              copy of Flackey. Each time the app starts it also makes a random
+              session ID, so reports from one run can be grouped.
+            </p>
+            <p>
+              With the ID, Flackey makes a random secret. It stays on your
+              computer and goes only to our stats server, with each batch of
+              reports and with a delete request. It proves a request comes
+              from your copy of Flackey, so someone who learns your ID can’t
+              delete your stats or send stats in your name. It is never shown
+              on screen, and it’s left out of bug reports. Our server keeps
+              only a one-way fingerprint (a hash) of it.
+            </p>
+            <p>
+              <strong>New ID</strong> in Settings › Privacy replaces both, and
+              deletes what was sent under the old ID.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-ip">
+            <h2 id="p-ip">Your IP address</h2>
+            <p>
+              Flackey’s stats server never stores or logs your IP address. Like
+              most websites, the network in front of it (Cloudflare and our
+              hosting firewall) sees IP addresses to block attacks, keeps them
+              for up to 7 days, and keeps a short list of the busiest addresses
+              for up to 400 days. Your ID is never in the web address or
+              headers those logs keep, and we don’t link those logs to your
+              stats.
+            </p>
+            <p>
+              The stats database has no place to store an IP address, and every
+              report is checked against a fixed list of allowed fields and
+              values before it is stored.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-keep">
+            <h2 id="p-keep">How long we keep it</h2>
+            <ul>
+              <li>
+                The detailed reports are deleted automatically after
+                <strong>180 days</strong>.
+              </li>
+              <li>
+                After that we keep only daily totals for groups of
+                <strong>5 or more</strong> installs, with no ID, for up to
+                <strong>2 years</strong>. We also keep a daily count of how many
+                reports of each kind arrived, with no ID, for up to 2 years.
+              </li>
+              <li>We don’t make backups of the detailed reports.</li>
+            </ul>
+          </section>
+
+          <section aria-labelledby="p-off">
+            <h2 id="p-off">Turning it off and deleting your data</h2>
+            <p>
+              Turn off <strong>Share usage stats</strong> in Settings ›
+              Privacy. Flackey stops sending straight away, clears the reports
+              still waiting on your computer, and asks our server to erase
+              everything sent under your ID.
+            </p>
+            <ul>
+              <li>
+                Our server erases it at its next hourly cleanup, so within about
+                an hour of receiving the request.
+              </li>
+              <li>
+                If Flackey can’t reach the server, it keeps trying, even after a
+                restart, until the server confirms. Settings › Privacy shows
+                where it stands.
+              </li>
+              <li>
+                The server keeps a hash of the deleted ID for 30 days, so it can
+                finish the job and drop any late reports sent under that ID.
+              </li>
+              <li>
+                Daily totals already archived from reports older than 180 days
+                still count your install, as one of at least 5, with no ID.
+                Nothing in them points to you, so they can’t be removed.
+              </li>
+            </ul>
+          </section>
+
+          <section aria-labelledby="p-other">
+            <h2 id="p-other">Not part of usage stats</h2>
+            <p>
+              The update check, which asks GitHub for new releases, and bug
+              reports, which you write and send yourself, work as they always
+              have.
+            </p>
+          </section>
+
+          <section aria-labelledby="p-contact">
+            <h2 id="p-contact">Contact</h2>
+            <p>
+              Questions, or a request about your data:
+              <a href="mailto:eyaldelarea@gmail.com">eyaldelarea@gmail.com</a>.
+              We only know a random ID, so include the start of the ID shown
+              under <strong>Your ID</strong> in Settings › Privacy if you want
+              us to find your data.
+            </p>
+          </section>
+        </div>
+      </article>
+    </main>
+    <footer class="wrap">
+      <a class="footer-brand" href="index.html">flackey</a
+      ><span>Made for the music.</span
+      ><a class="footer-push" href="privacy.html" aria-current="page">Privacy</a
+      ><a href="https://github.com/EyalDelarea/flackey">GitHub ↗</a>
+    </footer>
+  </body>
+</html>

@@ -193,21 +193,6 @@ const platform = visitorPlatform();
 if (platform === "windows") chooseOs(document.querySelector("#os-tab-windows"));
 else if (platform === "other") chooseOs(null);
 
-// The folder-layout tile cycles through the three choices, with the path each gives.
-const layoutTile = document.querySelector("#wn-layout");
-if (layoutTile && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  const segs = [...layoutTile.querySelectorAll(".wn-seg i")];
-  const path = layoutTile.querySelector(".wn-path");
-  const today = new Date().toISOString().slice(0, 7);
-  const paths = ["Bicep/Bicep - Glue.aiff", `${today}/Bicep - Glue.aiff`, "Bicep - Glue.aiff"];
-  let at = 0;
-  setInterval(() => {
-    at = (at + 1) % segs.length;
-    segs.forEach((seg, i) => seg.classList.toggle("on", i === at));
-    if (path) path.textContent = paths[at];
-  }, 2600);
-}
-
 // The product film. It starts muted the first time it is mostly on screen, pauses
 // when scrolled away, and plays through once. Visitors who ask for reduced motion
 // get the poster and the play button only. The browser's own controls are the

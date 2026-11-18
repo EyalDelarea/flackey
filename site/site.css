@@ -415,84 +415,86 @@ p {
   line-height: 1.5;
   margin: 0 4px;
 }
-/* Playlists sidebar */
-.wn-sidebar {
-  width: 150px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 8px;
-  border-radius: 8px;
-  background: #f2f2f4;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-}
-.wn-search {
-  padding: 3px 7px 3px 20px;
-  border-radius: 6px;
+/* Usage stats: the app's question, with its two equal answers and neither picked */
+.wn-stats {
+  width: 176px;
+  padding: 8px 9px 9px;
+  border-radius: 9px;
   background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  color: rgba(0, 0, 0, 0.4);
-  position: relative;
-  margin-bottom: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
+  display: grid;
+  gap: 6px;
 }
-.wn-search::before {
-  content: "";
-  position: absolute;
-  left: 7px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border: 1.5px solid rgba(0, 0, 0, 0.4);
-  border-radius: 50%;
-  transform: translateY(-60%);
+.wn-stats-title {
+  font-weight: 700;
 }
-.wn-pl {
-  padding: 2px 7px;
-  border-radius: 5px;
-}
-.wn-pl:nth-child(2) {
-  background: #007aff;
-  color: #fff;
-}
-.wn-albums {
-  display: flex;
-  justify-content: space-between;
-  color: rgba(0, 0, 0, 0.55);
-  font-weight: 600;
-}
-.wn-albums b {
-  font-weight: 500;
-  color: rgba(0, 0, 0, 0.35);
-}
-/* Folder layout */
-.wn-layout {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-.wn-seg {
-  display: inline-flex;
+.wn-stats-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   padding: 2px;
   border-radius: 7px;
   background: rgba(0, 0, 0, 0.07);
 }
-.wn-seg i {
+.wn-stats-seg i {
   font-style: normal;
-  padding: 3px 7px;
+  text-align: center;
+  padding: 3px 4px;
   border-radius: 5px;
   color: rgba(0, 0, 0, 0.6);
   white-space: nowrap;
-  transition: background 0.25s, color 0.25s, box-shadow 0.25s;
+  font-size: 10.5px;
 }
-.wn-seg i.on {
+.wn-stats-foot {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 10.5px;
+}
+.wn-link {
+  color: var(--blue);
+  white-space: nowrap;
+}
+/* Covers while downloading: a Downloads row with its cover and a part-filled bar */
+.wn-cover-row {
+  width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px;
+  border-radius: 9px;
   background: #fff;
-  color: #1d1d1f;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
 }
-.wn-path {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+.wn-cover {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 5px;
+  background:
+    radial-gradient(circle at 30% 30%, #ffd36b 0 18%, transparent 19%),
+    linear-gradient(135deg, #ff5e7e, #5b3cf5 60%, #1b1d4a);
+}
+.wn-cover-text {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.wn-cover-text span {
   color: rgba(0, 0, 0, 0.55);
+}
+.wn-cover-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
+  margin-top: 3px;
+  overflow: hidden;
+}
+.wn-cover-bar i {
+  display: block;
+  width: 58%;
+  height: 100%;
+  background: #007aff;
 }
 /* Extended mix: the Done row's offer, with the app's two buttons under it */
 .wn-ext {
@@ -2670,7 +2672,8 @@ footer {
   letter-spacing: -1px;
   color: var(--ink);
 }
-footer > a:last-child {
+/* The links after the brand line sit together at the right. */
+footer > .footer-push {
   margin-left: auto;
 }
 @keyframes rise {
@@ -2682,6 +2685,64 @@ footer > a:last-child {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ---- Privacy page ----
+   One readable column, the site's type and colours, sections split by hairlines. */
+.privacy {
+  padding: 70px 0 100px;
+}
+.privacy-head h1 {
+  font-size: clamp(36px, 4.4vw, 64px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+  font-weight: 650;
+}
+.privacy-head .section-intro {
+  max-width: 640px;
+}
+.privacy-body {
+  margin-top: 56px;
+  max-width: 720px;
+}
+.privacy-body section {
+  padding: 34px 0;
+  border-top: 1px solid var(--line);
+}
+.privacy-body h2 {
+  font-size: clamp(22px, 2.2vw, 28px);
+  letter-spacing: -0.03em;
+  margin-bottom: 14px;
+}
+.privacy-body p,
+.privacy-body li {
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.privacy-body p + p,
+.privacy-body p + ul,
+.privacy-body ul + p {
+  margin-top: 14px;
+}
+.privacy-body ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.privacy-body li + li {
+  margin-top: 6px;
+}
+.privacy-body strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.privacy-body a {
+  color: var(--blue);
+}
+.privacy-updated {
+  margin-top: 18px;
+  font-size: 14px;
+  color: var(--muted);
 }
 
 /* ambient sound-wave motifs */
@@ -2987,6 +3048,13 @@ footer > a:last-child {
   footer {
     flex-wrap: wrap;
     gap: 14px;
+  }
+  .privacy {
+    padding: 40px 0 70px;
+  }
+  .privacy-body p,
+  .privacy-body li {
+    font-size: 16px;
   }
   .command {
     align-items: flex-start;
