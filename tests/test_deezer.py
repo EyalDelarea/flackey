@@ -18,6 +18,17 @@ def test_parse_track_json():
     assert t.album == "Into the Void" and t.release_date == "2022-06-03" and t.title_version is None
 
 
+def test_parse_track_json_keeps_the_album_cover():
+    """The record's cover, from the album object the same response carries: the Downloads row shows it
+    before Beatport (or filing) has given the request a catalog cover of its own."""
+    t = parse_track_json({**SAMPLE, "album": {"title": "Into the Void", "md5_image": "abc123"}})
+    assert t.cover_url == "https://e-cdns-images.dzcdn.net/images/cover/abc123/250x250-000000-80-0-0.jpg"
+
+
+def test_parse_track_json_has_no_cover_without_an_image():
+    assert parse_track_json(SAMPLE).cover_url is None
+
+
 def test_parse_track_json_drops_deezers_no_date_placeholder():
     assert parse_track_json({**SAMPLE, "release_date": "0000-00-00"}).release_date is None
 

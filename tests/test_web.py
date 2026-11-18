@@ -1058,6 +1058,15 @@ def test_candidate_json_says_whether_deezer_has_a_sample(client):
         assert cands[2]["has_preview"] is None
 
 
+def test_candidate_json_carries_the_records_cover(client):
+    """The Downloads row falls back to the chosen record's cover until the request has a catalog one."""
+    c, store, _ = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    store.add_candidates(rid, [Candidate(source="s", source_ref="a", artist="A", title="T", rank=1,
+                                         cover_url="https://cdn/cover.jpg")])
+    assert c.get("/api/queue").json()[0]["candidates"][0]["cover_url"] == "https://cdn/cover.jpg"
+
+
 def test_queue_reads_spotify_requests_from_the_persisted_database(client):
     c, store, _ = client
     rid = store.add_request("Astral Projection - Into The Void", RequestKind.SPOTIFY_TRACK,

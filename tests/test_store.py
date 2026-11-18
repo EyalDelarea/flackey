@@ -132,6 +132,13 @@ def test_the_original_date_and_the_deezer_date_are_kept(store: Store):
     assert store.get_candidate(c.id).release_date == "2001-03-07"
 
 
+def test_a_candidates_cover_is_kept(store: Store):
+    rid = store.add_request("q", RequestKind.TEXT)
+    [c] = store.add_candidates(rid, [Candidate(source="deezer_bot", source_ref="dz:1", artist="A", title="T",
+                                               cover_url="https://cdn/cover.jpg")])
+    assert store.get_candidate(c.id).cover_url == "https://cdn/cover.jpg"
+
+
 def _no_pick_attempt(store: Store, rid: int, seen: int) -> None:
     aid = store.add_attempt(rid, "soulseek", "q")
     store.update_attempt(aid, outcome="no_pick", report={"seen": seen, "survivors": [], "summary": "s"})
@@ -345,6 +352,7 @@ def test_a_database_written_before_has_preview_gains_the_column_and_reads_back_u
     assert "has_preview" in {r[1] for r in store.conn.execute("PRAGMA table_info(candidates)")}
     [old] = store.get_candidates(1)
     assert old.has_preview is None
+    assert old.cover_url is None
 
 
 def test_has_preview_round_trips_in_all_three_states(store: Store):

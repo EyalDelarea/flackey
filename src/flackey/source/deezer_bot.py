@@ -139,6 +139,7 @@ class DeezerBotSource:
         # Free for the same reason: what dates the recording when Beatport only sells a later release of it.
         c.release_date = t.release_date
         c.album = t.album                 # what says "remaster" when the title does not (issue #172)
+        c.cover_url = t.cover_url         # the row's cover while the request is still in progress
         if t.artist:
             c.artist = t.artist
         if t.title:
