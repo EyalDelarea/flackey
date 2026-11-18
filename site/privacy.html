@@ -59,8 +59,8 @@
             <p>
               Setup’s Welcome screen asks “Share usage stats?” with two equal
               answers, and neither is picked for you. If you already use
-              Flackey, it asks once on the main screen. Not now, closing the
-              question or not answering all leave stats off.
+              Flackey, it asks on the main screen until you answer. Not now,
+              closing the question or not answering all leave stats off.
             </p>
             <p>
               You can change your mind at any time in
@@ -103,11 +103,17 @@
               </li>
               <li>
                 <strong>Updates:</strong> whether an update check, download
-                or install worked.
+                or install worked, and the Flackey version it was updating to.
+              </li>
+              <li>
+                <strong>Your actions and library:</strong> what you did with a
+                download, such as retry, clear or keep anyway; your library’s
+                size as a range; and whether Soulseek’s port is reachable.
               </li>
             </ul>
             <p>
-              Times and counts are sent as ranges like “1-5s”, never exact
+              Times and sizes are sent as ranges like “1-5s”. Small counts,
+              like how many times a download was retried, are sent as exact
               numbers.
             </p>
             <p>
