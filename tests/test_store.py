@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
 from flackey import store as store_module
+from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
 from flackey.store import Store
 
 
