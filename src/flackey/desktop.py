@@ -22,6 +22,7 @@ from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
 from .config import Settings, save_settings
 from .selfupdate import install as update_install
 from .single_instance import claim_single_instance, focus_running_window
+from .slskd_process import install_exit_guards, stop_owned
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
@@ -557,6 +558,17 @@ def folder_picker(window, dialog_type):
     return pick
 
 
+def stop_slskd(settings: Settings) -> None:
+    """Stop the Soulseek sidecar now, synchronously. Returns None on purpose: it runs as a `closing`
+    handler, and a handler returning False would cancel the quit."""
+    stop_owned(settings.data_dir)
+
+
+def guard_slskd(settings: Settings) -> None:
+    """Stop slskd on exit and on SIGTERM/SIGINT too, not only when the window closes cleanly."""
+    install_exit_guards(settings.data_dir)
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
@@ -572,6 +584,7 @@ def run_in_window(settings: Settings) -> None:
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()
 
+    guard_slskd(settings)
     thread, handle = start_server_thread(settings)
     wait_for_server(handle)
     inset = sys.platform == "darwin"
@@ -600,6 +613,10 @@ def run_in_window(settings: Settings) -> None:
         # `loaded`, not `shown`: see inset_titlebar. `shown` fires while the content view is still
         # pywebview's placeholder NSView, and the call that makes the web view transparent is refused.
         window.events.loaded += lambda: inset_titlebar(window)
+    # The menu's Quit (Cmd+Q) is AppKit's `terminate:`, which asks `closing` and then calls C `exit()`:
+    # `closed`, the `finally` below and Python's `atexit` never run. `closing` is the one hook every way
+    # out passes through, so slskd is stopped there, synchronously, before the process can go.
+    window.events.closing += lambda: stop_slskd(settings)
     window.events.closed += lambda: remember_window_size(settings, (last[0], last[1]))
     window.events.closed += handle.stop
     # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers
@@ -614,6 +631,8 @@ def run_in_window(settings: Settings) -> None:
     finally:
         handle.stop()
         thread.join(timeout=15)
+        # The server stops slskd in its own `finally`; this covers a shutdown slower than the join.
+        stop_slskd(settings)
         # Only after the server and the slskd sidecar are down: the helper is about to replace the
         # bundle they were reading from. `run` never raises -- this is the exit path.
         if update_install.pending.staged is not None:

@@ -26,7 +26,7 @@ from .notify import LogNotifier
 from .sharing import Sharing
 from .slskd_binary import SlskdBinaryError
 from .slskd_config import SlskdConfigError, read_listen_port, write_share
-from .slskd_process import SlskdProcess
+from .slskd_process import SlskdProcess, install_exit_guards
 from .soulseek_link import SoulseekLink
 from .source.deezer_bot import DeezerBotSource
 from .source.lossless import LosslessProvider
@@ -362,6 +362,9 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     slskd_process: SlskdProcess | None = None
     if settings.soulseek_enabled:
         slskd_process = SlskdProcess(settings.data_dir, settings.slskd_url, settings.slskd_api_key or "")
+        # A backstop for exits that skip the `finally` below. No signal handlers from here: in browser
+        # mode uvicorn already turns Ctrl-C/SIGTERM into a clean stop, and the desktop sets its own.
+        install_exit_guards(settings.data_dir, signals=())
     # Sign-out (TelegramLogin.log_out) rebuilds the client and reassigns login.client; the source must
     # dereference it fresh on every call rather than hold the object that was just made unusable.
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
