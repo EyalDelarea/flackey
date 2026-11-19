@@ -120,3 +120,36 @@ def test_prune_raw_removes_old_folders_only(tmp_path: Path):
     assert prune_raw(raw, keep_days=30, now=now) == 2
     assert sorted(p.name for p in raw.iterdir()) == ["1", "stray.txt"]
     assert prune_raw(tmp_path / "missing", keep_days=30, now=now) == 0 and raw_size_bytes(tmp_path / "missing") == 0
+
+
+def test_queue_wait_and_first_byte_are_two_different_waits_on_the_last_pick(store: Store, tmp_path: Path):
+    """Review 2026-11-16: the two were the same span. Now queue_wait is enqueue -> out of the peer's queue,
+    first_byte is out of the queue -> first byte, both on the pick the outcome is about (the last one)."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    clock = Clock()
+    try:
+        rec = AttemptRecorder(store, tmp_path / "raw", 1, "soulseek", "q", clock=clock)
+        rec.event("enqueue", pick=1, peer="first", file="a.flac", size=30_000_000)
+        clock.t += 40
+        rec.event("too_slow")
+        rec.event("enqueue", pick=2, peer="second", file="b.flac", size=30_000_000)
+        rec.event("transfer_state", state="Queued, Remotely")
+        clock.t += 120                                   # two minutes in the second peer's queue
+        rec.event("transfer_state", state="Initializing")
+        clock.t += 3                                     # then three seconds to the first byte
+        rec.event("first_byte", ms=123_000)
+        rec.event("transfer_state", state="InProgress")
+        clock.t += 30
+        rec.event("completed")
+        rec.finish("filed")
+    finally:
+        telemetry.uninstall()
+    (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "lossless_attempt_finished"]
+    assert ev["queue_wait"] == "1-5m" and ev["first_byte"] == "1-5s" and ev["picks_tried"] == 2
+    assert "first" not in str(ev.values()) and "a.flac" not in str(ev)

@@ -74,6 +74,13 @@ it('shows an available app update', async () => {
   expect(screen.getByText('Download update')).toBeInTheDocument()
 })
 
+/* Opening Settings is the owner asking, so its check is counted as a manual one (`update_step`). */
+it('says its update check is a manual one', async () => {
+  const check = vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  await waitFor(() => expect(check).toHaveBeenCalledWith('manual'))
+})
+
 /* The bug this row was rebuilt for: the press went to `window.open`, which does nothing inside the
    webview, so nothing happened and nothing said so. The download is the server's job now. */
 it('hands the download to the server rather than opening a window', async () => {
@@ -1022,4 +1029,18 @@ describe('the simplified layout', () => {
     expect(within(section('Updates')).queryByRole('switch')).not.toBeInTheDocument()
     expect(advanced()).toContainElement(screen.getByText('Check for updates automatically'))
   })
+})
+
+it('shows a Privacy section only when usage stats are available', async () => {
+  vi.spyOn(api, 'telemetry').mockResolvedValue({ available: true, enabled: false, mode: 'local', collector: null, sending: false,
+    id_prefix: null, opted_in: null, pending_delete: false, last_delete_confirmed: null, last_send: null, interval_s: 60 })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  expect(await screen.findByRole('heading', { name: 'Privacy' })).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
+  // On the main view, between Updates and Advanced: a DJ asked "do you send anything?" finds it without
+  // opening the technical fold, and it is not a troubleshooting tool.
+  const order = screen.getAllByRole('heading', { level: 2 }).map(h => h.textContent)
+  expect(order.indexOf('Privacy')).toBe(order.indexOf('Updates') + 1)
+  expect(order.indexOf('Advanced')).toBe(order.indexOf('Privacy') + 1)
+  expect(screen.getByRole('switch', { name: 'Share usage stats' }).closest('#settings-advanced')).toBeNull()
 })

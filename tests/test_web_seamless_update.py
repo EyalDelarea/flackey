@@ -462,3 +462,93 @@ def test_a_stray_copy_points_to_the_app_in_applications_instead_of_opening_the_i
     r = c.post("/api/update/install", headers=FROM_APP)
     assert r.status_code == 409 and "Applications" in r.json()["detail"]
     assert opened == []
+
+
+# -- the `update_step` usage stat on the seamless path ----------------------------------------------------------
+
+@pytest.fixture
+def tel(tmp_path):
+    from flackey import __version__, telemetry
+    from flackey.telemetry.client import Telemetry
+    t = Telemetry(tmp_path / "stats", version=__version__, enabled=True,
+                  install_id="5b0e2c1a-0000-4000-8000-000000000000", mode="local", persist=lambda **_: None,
+                  channel="checkout", platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    telemetry.install(t)
+    yield t
+    telemetry.uninstall()
+
+
+def steps(t) -> list[tuple]:
+    return [(e["stage"], e["result"], e["error_code"]) for e in t._queue if e["event"] == "update_step"]
+
+
+@respx.mock
+def test_a_staged_update_reports_download_signature_and_install(app, archive_bytes, private_key, tel):
+    c, _, _, _ = app
+    serve(archive_bytes, sign(private_key, archive_bytes))
+    press(c)
+    assert steps(tel) == [("download", "ok", ""), ("verify_signature", "ok", ""), ("install", "ok", "")]
+    assert all(e["to_version"] == VERSION and e["trigger"] == "manual" for e in tel._queue)
+
+
+@respx.mock
+def test_a_tampered_archive_reports_signature_invalid(app, archive_bytes, private_key, tel):
+    from flackey.telemetry.client import UPDATE_PENDING
+    c, _, _, _ = app
+    serve(archive_bytes[:-1] + bytes([archive_bytes[-1] ^ 0xFF]), sign(private_key, archive_bytes),
+          archive_size=len(archive_bytes))
+    press(c, "error")
+    assert steps(tel) == [("download", "ok", ""), ("verify_signature", "failed", "signature_invalid")]
+    assert not (tel.data_dir / UPDATE_PENDING).exists()
+
+
+@respx.mock
+def test_an_update_that_cannot_be_staged_reports_install_failed(app, archive_bytes, private_key, tel,
+                                                                monkeypatch):
+    c, _, _, _ = app
+    serve(archive_bytes, sign(private_key, archive_bytes))
+
+    def refuses(*a, **k):
+        raise selfupdate.StagingError("Could not write to the Applications folder to prepare the update.")
+
+    monkeypatch.setattr(selfupdate, "stage", refuses)
+    press(c, "error")
+    assert steps(tel)[-1] == ("install", "failed", "install_failed")
+
+
+@respx.mock
+def test_restart_leaves_a_marker_the_next_start_reports(app, archive_bytes, private_key, tel, tmp_path):
+    import json
+
+    from flackey.telemetry.client import UPDATE_PENDING, Telemetry
+    c, _, _, _ = app
+    serve(archive_bytes, sign(private_key, archive_bytes))
+    press(c)
+    c.post("/api/update/restart", headers=FROM_APP)
+    marker = json.loads((tel.data_dir / UPDATE_PENDING).read_text())
+    assert marker["to"] == VERSION and marker["how"] == "seamless"
+    selfupdate.pending.clear()
+
+    after = Telemetry(tel.data_dir, version=VERSION, enabled=True, install_id="5b0e2c1a-0000-4000-8000-000000000000",
+                      mode="local", persist=lambda **_: None, channel="checkout",
+                      platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    after.start_session()
+    assert steps(after) == [("restart", "ok", "")]
+
+
+@respx.mock
+def test_the_seamless_path_records_nothing_with_stats_off(app, archive_bytes, private_key, tmp_path):
+    from flackey import telemetry
+    from flackey.telemetry.client import Telemetry
+    off = Telemetry(tmp_path / "stats", version="0.6.1", enabled=False, mode="local", persist=lambda **_: None,
+                    channel="checkout", platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    telemetry.install(off)
+    try:
+        c, _, _, _ = app
+        serve(archive_bytes, sign(private_key, archive_bytes))
+        press(c)
+        c.post("/api/update/restart", headers=FROM_APP)
+    finally:
+        telemetry.uninstall()
+        selfupdate.pending.clear()
+    assert list(off._queue) == [] and not (tmp_path / "stats").exists()

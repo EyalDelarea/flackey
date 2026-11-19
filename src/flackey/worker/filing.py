@@ -27,6 +27,7 @@ from ..version import (
     split_version,
     wants_extended,
 )
+from . import usage
 from .extended import OFFER
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
@@ -153,8 +154,11 @@ class FilingMixin:
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
             # (inbox bot, API) free
             async with self._cpu:
+                timer = usage.Timer()
                 verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
                                                   f"req{req.id}-{tmp.stem}", self.settings.verification_rule)
+            usage.quality_check(req.id, verdict, summary(verdict.analysis), route="telegram",
+                                rule=self.settings.verification_rule, run_s=timer.s())
             if not verdict.passed:
                 # A spectral refusal is kept, not deleted, like the different recording below (issue #97). It
                 # used to be thrown away on the theory that "an MP3 wearing a FLAC extension is a fact about
@@ -167,6 +171,7 @@ class FilingMixin:
                 self.store.add_rejection(req.id, verdict.reason, verdict.bitrate_kbps, verdict.cutoff_hz,
                                          verdict.spectrogram_path, audio_path=kept,
                                          analysis=summary(verdict.analysis))
+                usage.failure_reason(req.id, "quality_reject")
                 self._set_state(req, RequestState.REJECTED)
                 log.info("req#%d rejected: %s", req.id, verdict.reason)
                 tail = "\nYou can listen to it in the app and keep it anyway." if kept else ""
@@ -197,6 +202,7 @@ class FilingMixin:
                 self.store.add_rejection(req.id, reason, verdict.bitrate_kbps, None,
                                          verdict.spectrogram_path, kind="different_recording",
                                          audio_path=kept)
+                usage.failure_reason(req.id, "fingerprint_mismatch")
                 self._set_state(req, RequestState.REJECTED)
                 tail = "\nYou can listen to it in the app and keep it anyway." if kept else ""
                 await self.notifier.send(f"Rejected: {cand.artist} – {cand.title}\n{reason}{tail}")
@@ -206,6 +212,7 @@ class FilingMixin:
                 # own: the owner is told what is missing and the row waits for them (spec §6).
                 reason = (f"the recording could not be checked acoustically ({fp.reason}). "
                           "Try again once it can be checked")
+                usage.failure_reason(req.id, "fingerprint_unavailable")
                 self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
                 await self.notifier.send(f"Could not verify: {req.raw_text}\n{reason}")
                 return

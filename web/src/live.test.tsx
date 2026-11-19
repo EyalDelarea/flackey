@@ -119,6 +119,7 @@ describe('the automatic update check', () => {
     render(<Harness liveRef={liveRef} />)
     await waitFor(() => expect(liveRef.current!.update).toEqual(upToDate))
     expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(updateSpy).toHaveBeenCalledWith('auto')
   })
 
   it('never calls /api/update when the owner turned auto-check off', async () => {

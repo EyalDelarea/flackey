@@ -32,6 +32,7 @@ from ..source import LosslessError, LosslessProvider, SlowRule, TooSlow, Transfe
 from ..tag import tags_as_arrived
 from ..verify import Disguised, ToolMissing, VerifyError, probe, summary, verify
 from ..version import EXTENDED, check_version, split_version, wants_extended
+from . import usage
 from .policy import (
     MAX_SLOW_SWITCHES,
     PEER_STUCK_OUTCOMES,
@@ -433,8 +434,11 @@ class LosslessMixin:
                     # The caps in lossless.py judged the peer's word; this is the file that came.
                     rec.event("duration_mismatch", advertised_s=file.length_s, probed_s=round(probed.duration_s, 1))
                     return None, "verify_failed"
+                timer = usage.Timer()
                 verdict = await asyncio.to_thread(verify, tmp, s.spectrogram_dir, f"req{req.id}-lossless-{rec.id}",
                                                   s.verification_rule)
+                usage.quality_check(req.id, verdict, summary(verdict.analysis), route="soulseek",
+                                    rule=s.verification_rule, run_s=timer.s())
         except ToolMissing as e:
             # This computer cannot check anything, so neither can the next pick: end the attempt here rather
             # than download every survivor to fail it the same way.

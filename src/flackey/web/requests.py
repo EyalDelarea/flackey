@@ -6,12 +6,14 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 
+from .. import telemetry
 from ..config import Settings
 from ..deezer import DeezerApi, DeezerError
 from ..inbox import BadLink, Inbox
 from ..models import FAILED_STATES, SWEEPABLE_STATES, TERMINAL_STATES, RequestState
 from ..store import Store
-from ..worker import CANCELLABLE, Worker
+from ..telemetry import buckets
+from ..worker import CANCELLABLE, Worker, usage
 from . import Bundles, to_dict
 
 log = logging.getLogger(__name__)
@@ -78,9 +80,58 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             sub = await inbox.submit((body.get("url") or "").strip())
         except BadLink as e:
             raise HTTPException(400, str(e))
+        request_added(store, sub, "ui")
         return {"summary": sub.summary(), "request_ids": sub.request_ids, "playlist_id": sub.playlist_id,
                 "name": sub.name, "total": sub.total, "already_in_library": sub.already_in_library,
                 "already_queued": sub.already_queued}
+
+    def action(name: str, req=None, count: int | None = None, ok: bool = True) -> None:
+        if not telemetry.enabled():
+            return
+        telemetry.emit("request_action", action=name, from_state=req.state.value if req else None,
+                       failed_stage=(req.failed_stage or "") if req else None,
+                       count=buckets.n(count) if count is not None else None, result="ok" if ok else "refused")
+
+    async def act_logged(rid: int, name: str | None, fn):
+        """`act`, with the owner's action recorded for usage stats; `name` None works it out for retry."""
+        try:
+            before = store.get_request(rid)
+        except KeyError:
+            before = None
+        if name is None and before is not None:
+            name = "try_now" if before.state.value == "queued" and before.retry_after else "retry"
+        try:
+            out = await act(rid, fn)
+        except HTTPException:
+            action(name or "retry", before, ok=False)
+            raise
+        action(name or "retry", before)
+        return out
+
+    def kept(which: str, rejection, result: str) -> None:
+        """`keep_anyway`: which refusal was overruled -- its kind, tier, reason code and the detectors that
+        fired, bucketed as `quality_check` sends them -- so a check that is overruled often shows up."""
+        if not telemetry.enabled():
+            return
+        try:
+            kind = getattr(rejection, "kind", None) if which == "keep_it_anyway" else "quality"
+            telemetry.emit("keep_anyway", which=which, result=result,
+                           rejection_kind=kind if kind in ("quality", "different_recording") else None,
+                           route="soulseek" if which == "keep_lossless" else "telegram",
+                           **usage.refusal_fields(rejection))
+        except Exception:
+            log.debug("usage stats: keep_anyway failed", exc_info=True)
+
+    async def keep(rid: int, which: str, fn):
+        rejection = store.get_rejection_for_request(rid) if which == "keep_it_anyway" else store.held_lossless(rid)
+        try:
+            out = await act(rid, fn)
+        except HTTPException:
+            kept(which, rejection, "failed")
+            raise
+        state = out.get("state") if isinstance(out, dict) else None
+        kept(which, rejection, "filed" if state == "done" else "could_not_check")
+        return out
 
     async def act(rid: int, fn):
         bundle_or_404(rid)
@@ -148,21 +199,21 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
     @r.post("/requests/{rid}/accept")
     async def accept(rid: int) -> dict:
         """"Keep it anyway" on a rejected row: file the copy the recording or quality check refused."""
-        return await act(rid, lambda: worker.accept_rejection(rid))
+        return await keep(rid, "keep_it_anyway", lambda: worker.accept_rejection(rid))
 
     @r.post("/requests/{rid}/keep-held")
     async def keep_held(rid: int) -> dict:
         """"Keep it anyway" on the Soulseek copy the quality check held back: it replaces the lossy copy
         filed in its place, or is filed where nothing was (issue #97)."""
-        return await act(rid, lambda: worker.keep_held_lossless(rid))
+        return await keep(rid, "keep_lossless", lambda: worker.keep_held_lossless(rid))
 
     @r.post("/requests/{rid}/cancel")
     async def cancel(rid: int) -> dict:
-        return await act(rid, lambda: worker.cancel(rid))
+        return await act_logged(rid, "cancel", lambda: worker.cancel(rid))
 
     @r.post("/requests/{rid}/retry")
     async def retry(rid: int) -> dict:
-        return await act(rid, lambda: worker.retry(rid))
+        return await act_logged(rid, None, lambda: worker.retry(rid))
 
     @r.post("/requests/retry-failed")
     async def retry_failed(body: dict) -> dict:
@@ -188,6 +239,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
                 skipped.append(rid)
             else:
                 retried.append(rid)
+        action("retry_all", count=len(retried), ok=bool(retried) or not ids)
         return {"retried": retried, "skipped": skipped}
 
     @r.delete("/requests/{rid}")
@@ -198,6 +250,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             raise HTTPException(404, "request not found")
         if req.state not in TERMINAL_STATES:
             raise HTTPException(409, "That track is still being worked on. Skip it first.")
+        action("remove", req)
         forget(rid)
         return {"ok": True}
 
@@ -228,6 +281,7 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
                 skipped.append(rid)
             else:
                 removed.append(rid)
+        action("remove" if len(ids) == 1 else "remove_many", count=len(removed), ok=bool(removed) or not ids)
         return {"removed": removed, "skipped": skipped}
 
     @r.post("/requests/clear-failed")
@@ -243,6 +297,21 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             unlink_evidence(rejection)
         for attempt in attempts:
             unlink_evidence(attempt)
+        action("clear_failed", count=len(removed))
         return {"removed": removed}
 
     return r
+
+
+def request_added(store: Store, sub, via: str) -> None:
+    """`request_added` per paste: its kind, where it came from, and a playlist's size as a bucket."""
+    if not telemetry.enabled() or not sub.request_ids:
+        return
+    try:
+        kind = store.get_request(sub.request_ids[0]).kind.value
+        if sub.playlist_id is not None:
+            kind = {"yt_track": "yt_playlist", "spotify_track": "spotify_playlist"}.get(kind, kind)
+        telemetry.emit("request_added", kind=kind, via=via,
+                       playlist_tracks=buckets.n(sub.total) if sub.playlist_id is not None else None)
+    except Exception:
+        log.debug("usage stats: request_added failed", exc_info=True)

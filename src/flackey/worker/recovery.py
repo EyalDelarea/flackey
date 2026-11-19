@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from ..models import LosslessAttempt, Request, RequestState, miss_reason
+from . import usage
 from .policy import (
     LONG_RETRY_EVERY_S,
     LONG_RETRY_OUTCOMES,
@@ -84,6 +85,8 @@ class RecoveryMixin:
         neither side can identify lands terminally rather than burning the backoff schedule."""
         _, outcome = self._lossless_outcome(req.id)
         why = self._miss_reason(req.id, outcome)
+        usage.failure_reason(req.id, usage.outcome_reason(
+            outcome, no_results=bool(outcome and self.store.lossless_no_results(req.id, outcome))))
         if why is None:
             # There is no off switch for Soulseek: no provider means no account was ever saved.
             why = ("Soulseek isn't set up" if not (self.providers and self.settings.lossless_enabled)

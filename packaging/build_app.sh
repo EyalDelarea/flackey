@@ -29,15 +29,29 @@ echo "==> build defaults"
 # The Telegram keys a packaged copy carries. From CI these come from repository secrets; locally, export
 # FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before running this script, or leave them unset
 # to build a copy whose setup screen asks for keys.
+# The usage-stats collector likewise: FLACKEY_BUILD_TELEMETRY_URL (https only) and FLACKEY_BUILD_TELEMETRY_KEY,
+# set only by the release workflow from repository secrets. Unset (dev builds, the demo, a plain push), the
+# copy has no collector address and sends nothing. Values are never printed.
 BUILD_JSON="src/flackey/assets/build.json"
-if [[ -n "${FLACKEY_TELEGRAM_API_ID:-}" && -n "${FLACKEY_TELEGRAM_API_HASH:-}" ]]; then
-  printf '{"telegram_api_id": %s, "telegram_api_hash": "%s"}\n' \
-    "$FLACKEY_TELEGRAM_API_ID" "$FLACKEY_TELEGRAM_API_HASH" > "$BUILD_JSON"
-  echo "    Telegram keys: baked in"
-else
-  rm -f "$BUILD_JSON"
-  echo "    Telegram keys: none (setup will ask)"
-fi
+rm -f "$BUILD_JSON"  # a leftover from an earlier keyed build must never ship in a keyless one
+python3 - "$BUILD_JSON" <<'PY'
+import json, os, sys
+out = {}
+api_id, api_hash = os.environ.get("FLACKEY_TELEGRAM_API_ID", ""), os.environ.get("FLACKEY_TELEGRAM_API_HASH", "")
+if api_id and api_hash:
+    out.update(telegram_api_id=int(api_id), telegram_api_hash=api_hash)
+url, key = os.environ.get("FLACKEY_BUILD_TELEMETRY_URL", ""), os.environ.get("FLACKEY_BUILD_TELEMETRY_KEY", "")
+if url or key:
+    if not (url.startswith("https://") and key):
+        sys.exit("FLACKEY_BUILD_TELEMETRY_URL must be https:// and come with FLACKEY_BUILD_TELEMETRY_KEY")
+    out.update(telemetry_url=url, telemetry_key=key)
+if out:
+    with open(sys.argv[1], "w", encoding="utf-8") as f:
+        json.dump(out, f)
+        f.write("\n")
+print("    Telegram keys:", "baked in" if "telegram_api_id" in out else "none (setup will ask)")
+print("    Usage stats collector:", "baked in" if "telemetry_url" in out else "none (sends nothing)")
+PY
 
 echo "==> helpers"
 # ffmpeg, ffprobe and fpcalc ride inside the app so nobody has to install Homebrew first.

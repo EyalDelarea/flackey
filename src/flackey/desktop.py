@@ -13,6 +13,8 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -569,6 +571,51 @@ def guard_slskd(settings: Settings) -> None:
     install_exit_guards(settings.data_dir)
 
 
+def quit_on_signals(on_signal, signals=(signal.SIGINT, signal.SIGTERM)):
+    """Call `on_signal` (from a helper thread) when the process gets Ctrl-C or a TERM, and return a function
+    that undoes this.
+
+    In window mode the main thread sits in the GUI's native run loop, so a Python signal handler never gets
+    to run and a `demo.sh stop` or a `kill` ended Flackey without closing its session: the next launch
+    reported a crash. The C-level handler still writes the signal number to the wakeup socket, and a thread
+    that reads it can close the window the same way the owner's red button does. Main thread only."""
+    reader, writer = socket.socketpair()
+    writer.setblocking(False)
+    previous = {sig: signal.signal(sig, lambda *_: None) for sig in signals}
+    old_fd = signal.set_wakeup_fd(writer.fileno(), warn_on_full_buffer=False)
+
+    def watch() -> None:
+        try:
+            if reader.recv(1):
+                log.info("quit signal: closing the window")
+                on_signal()
+        except OSError:
+            pass  # closed by restore()
+
+    threading.Thread(target=watch, name="quit-on-signal", daemon=True).start()
+
+    def restore() -> None:
+        signal.set_wakeup_fd(old_fd)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        writer.close()
+        reader.close()
+
+    return restore
+
+
+def keep_sigint_from_pywebview() -> None:
+    """pywebview's Cocoa backend hands SIGINT to PyObjC's mach handler inside `webview.start`, which ends
+    the app without the window's `closed` path (no clean session end). Leave Ctrl-C to quit_on_signals."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from PyObjCTools import AppHelper
+    except ImportError:
+        return
+    AppHelper.installMachInterrupt = lambda: None
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
@@ -626,9 +673,12 @@ def run_in_window(settings: Settings) -> None:
         # Off macOS the only folder dialog there is belongs to this window; the Mac keeps AppleScript's,
         # which `web.pick` opens without one.
         handle.pick_folder = folder_picker(window, webview.FileDialog.FOLDER)
+    keep_sigint_from_pywebview()
+    restore_signals = quit_on_signals(window.destroy)
     try:
         webview.start(icon=app_icon())
     finally:
+        restore_signals()
         handle.stop()
         thread.join(timeout=15)
         # The server stops slskd in its own `finally`; this covers a shutdown slower than the join.

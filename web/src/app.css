@@ -800,3 +800,29 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .group-scope { font-size: 11px; color: var(--secondary); margin: 12px 2px 6px; }
 
 .stage-option { display: inline-flex; align-items: center; flex: none; }
+
+/* ---- Usage stats: Welcome opt-in, catalogue sheet, Settings > Privacy ---- */
+.optin-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; text-align: left;
+  background: var(--group); border: .5px solid var(--group-border); border-radius: 10px; }
+.optin-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.optin-title { font-size: 13px; font-weight: 600; }
+.optin-text { font-size: 12px; color: var(--secondary); line-height: 1.45; }
+.optin-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 4px; }
+/* The two answers are the same size and neither is raised until picked: no default, no nudge. */
+.optin-actions .segmented { display: inline-grid; grid-template-columns: 1fr 1fr; }
+.optin-actions .segmented button { height: 26px; padding: 0 16px; }
+.optin-foot { font-size: 11px; color: var(--secondary); }
+/* The one-time prompt for an owner who set up before Welcome asked: a card at the top of the page, above
+   whatever tab is open, pushing it down rather than covering it. */
+.optin-card.usage-prompt { width: auto; max-width: 560px; margin: 12px 20px 14px; flex: none; animation: rise .4s cubic-bezier(.2,.7,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { .optin-card.usage-prompt { animation: none; } }
+.usage-catalog { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.usage-catalog-row { display: grid; grid-template-columns: minmax(140px, 38%) 1fr; gap: 10px; padding-bottom: 8px; border-bottom: .5px solid var(--sep); }
+.usage-catalog-row:last-child { border-bottom: 0; }
+.usage-catalog dt { font-weight: 500; overflow-wrap: anywhere; }
+.usage-catalog dt.mono { font-size: 12px; }
+.usage-catalog dd { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+.usage-log-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.usage-log-head .k { margin-top: 0; }
+.usage-log { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--alt);
+  border: .5px solid var(--sep); white-space: pre; user-select: text; }
