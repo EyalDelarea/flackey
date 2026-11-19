@@ -255,6 +255,9 @@ def test_a_real_copy_of_our_binary_is_stopped(tmp_path):
         deadline = time.monotonic() + 5
         while slskd_process.exe_of(child.pid) is None and time.monotonic() < deadline:
             time.sleep(0.05)
+        if child.poll() is not None:
+            pytest.skip("this machine refused to run the copied stand-in binary")
+        assert slskd_process.is_ours(child.pid, tmp_path), slskd_process.exe_of(child.pid)
         slskd_process.record_pid(tmp_path, child.pid)
         assert slskd_process.stop_owned(tmp_path) is True
         assert child.wait(timeout=5) is not None
