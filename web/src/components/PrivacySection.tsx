@@ -4,7 +4,7 @@ import type { TelemetryLog, TelemetryState } from '../api'
 import CopyButton from './CopyButton'
 import Switch from './Switch'
 import UsageStatsCatalog from './UsageStatsCatalog'
-import { IP_NOTE } from './UsageStatsAsk'
+import { PRIVACY_URL } from './UsageStatsAsk'
 
 const when = (iso: string) => {
   const d = new Date(iso)
@@ -66,12 +66,13 @@ export default function PrivacySection({ onReport }: { onReport?: () => void } =
     <h2>Privacy</h2>
     <div className="group">
       <div className="srow"><div className="srow-body"><div className="k">Share usage stats</div>
-        <div className="v">Which steps work, which fail, and how long they take. No names, links or file names, and
-          nothing about the music you download.{' '}
-          <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>See exactly what's sent</button></div>
-        <div className="v">{IP_NOTE}</div>
-        {t.enabled ? <div className="v">Turning this off also deletes everything that was sent.</div>
-          : t.pending_delete ? <div className="v">Turned off. What was sent is being deleted.</div>
+        <div className="v">Which steps work, which fail, and how long they take. No names, links or files, and nothing
+          about the music you download. Our stats server never stores your IP address. Turning this off deletes
+          everything that was sent.{' '}
+          <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>See exactly what's sent</button>{' '}
+          <a className="btn-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy details</a></div>
+        {t.enabled ? null
+        : t.pending_delete ? <div className="v">Turned off. What was sent is being deleted.</div>
           : t.last_delete_confirmed ? <div className="v">Turned off. The delete was received: what was sent is
             erased within the hour.</div> : null}
         {error && <div className="err">{error}</div>}</div>

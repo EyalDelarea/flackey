@@ -19,7 +19,7 @@ it('is off by default and turning it on calls PUT', async () => {
   fireEvent.click(sw)
   await waitFor(() => expect(put).toHaveBeenCalledWith(true))
   expect(await screen.findByText('abcd1234…')).toBeInTheDocument()
-  expect(screen.getByText(/Turning this off also deletes everything that was sent/)).toBeInTheDocument()
+  expect(screen.getByText(/Turning this off deletes everything that was sent/)).toBeInTheDocument()
 })
 
 it('turning it off calls PUT false and says the data is being deleted', async () => {
@@ -100,9 +100,13 @@ it('says when the server refused a delete for good, and points to a bug report',
   expect(onReport).toHaveBeenCalled()
 })
 
-it('says the stats server never keeps IPs, and what the network in front of it keeps', async () => {
+it('keeps the description short and links to the website privacy page', async () => {
   vi.spyOn(api, 'telemetry').mockResolvedValue(off)
   render(<PrivacySection />)
-  expect(await screen.findByText(/^Flackey’s stats server never stores or logs your IP address\. Like most websites, the network in front of it \(Cloudflare and our hosting firewall\) sees IP addresses to block attacks, keeps them for up to 7 days/)).toBeInTheDocument()
-  expect(screen.queryByText(/never .*your IP\.$/)).not.toBeInTheDocument()
+  expect(await screen.findByText(/Our stats server never stores your IP address\. Turning this off deletes everything that was sent\./)).toBeInTheDocument()
+  expect(screen.queryByText(/Cloudflare/)).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: "See exactly what's sent" })).toBeInTheDocument()
+  const link = screen.getByRole('link', { name: 'Privacy details' })
+  expect(link).toHaveAttribute('href', 'https://eyaldelarea.github.io/flackey/privacy.html')
+  expect(link).toHaveAttribute('target', '_blank')
 })
