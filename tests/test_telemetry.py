@@ -1088,3 +1088,67 @@ def test_the_privacy_api_says_unavailable_on_a_build_without_a_collector(tmp_pat
         assert c.put("/api/telemetry", json={"enabled": True}).status_code == 409
     finally:
         telemetry.uninstall()
+
+
+@pytest.mark.parametrize("switch", ["new_id", "opt_out_then_in"])
+def test_the_old_ids_drop_count_never_rides_on_the_new_ids_first_batch(tmp_path, monkeypatch, switch):
+    monkeypatch.setattr("flackey.telemetry.client.MAX_OUTBOX_EVENTS", 1)
+    collector = Collector()
+    t, _ = make(tmp_path)
+    t.opt_in()
+    for _ in range(4):
+        t.emit("request_action", action="retry", count=buckets.n(1))
+    t._flush()
+    assert t._dropped >= 2                            # the old ID lost events
+    if switch == "new_id":
+        t.reset_id()
+    else:
+        t.opt_out()
+        t.opt_in()
+    new = t.install_id
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(collector))
+    first = next(b for b in collector.batches if b["install_id"] == new)
+    assert first["dropped"] == 0
+
+
+def test_a_delete_queued_while_another_holds_the_files_waits_for_them(tmp_path):
+    import threading
+
+    t, _ = make(tmp_path)
+    th = threading.Thread(target=t._queue_delete, args=("id-b", "secret-b"))
+    with t._io:
+        th.start()
+        th.join(timeout=0.3)
+        assert th.is_alive()                          # it waits rather than write under someone else
+        assert not (tmp_path / PENDING_DELETE).exists()
+    th.join(timeout=5)
+    assert t._pending_deletes() == [("id-b", "secret-b")]
+
+
+def test_a_delete_queued_while_the_owed_ones_are_being_settled_is_never_lost(tmp_path):
+    """Opt-out or New ID landing between _send_deletes re-reading the owed list and writing it back."""
+    import threading
+
+    collector = Collector()
+    t, _ = make(tmp_path)
+    t._queue_delete("id-a", "secret-a")
+    real = t._pending_deletes
+    calls = []
+    late = threading.Thread(target=t._queue_delete, args=("id-b", "secret-b"))
+
+    def pending():
+        result = real()
+        if threading.current_thread() is threading.main_thread():
+            calls.append(1)
+            if len(calls) == 3:                       # the tail's re-read, inside the window
+                late.start()
+                late.join(timeout=0.3)
+        return result
+
+    t._pending_deletes = pending
+    run_tick(t, httpx.MockTransport(collector))
+    late.join(timeout=5)
+    t._pending_deletes = real
+    assert collector.deletes == ["id-a"]
+    assert t._pending_deletes() == [("id-b", "secret-b")]

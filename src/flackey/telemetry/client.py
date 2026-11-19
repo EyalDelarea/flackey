@@ -1,6 +1,6 @@
 """The opt-in usage stats client (spec §6.1). Off unless the owner said yes, and built so it cannot affect a
-download: `emit` never raises, never awaits and never blocks; the sender runs on its own task with its own
-HTTP client; a dead collector costs a bounded local file.
+download: `emit` never raises and never awaits, and at most waits out a local file write, never the network;
+the sender runs on its own task with its own HTTP client; a dead collector costs a bounded local file.
 
 Where the events go, and nowhere else:
 - a release build carries its collector in build.json (packaging writes it from CI secrets): an HTTPS
@@ -262,7 +262,7 @@ class Telemetry:
         self.clock, self.today, self.transport = clock, today, transport
         self.session_id = str(uuid.uuid4())
         self._seq = 0
-        self._lock = threading.Lock()     # the in-memory queue; held only for a moment, so emit never waits
+        self._lock = threading.Lock()     # the in-memory queue; held only for a moment
         # The day's state and the local files. Re-entrant: _bump_state rolls the day, which emits.
         # Order is always _io then _lock.
         self._io = threading.RLock()
@@ -349,6 +349,7 @@ class Telemetry:
             with self._lock:
                 self._queue.clear()
                 self._notes.clear()
+                self._dropped = 0         # with the queue, so an emit can't count the old ID's drop after
             self._state.clear()
             for name in (OUTBOX, SENT, STATE, MARKER, UPDATE_PENDING):
                 (self.data_dir / name).unlink(missing_ok=True)
@@ -375,6 +376,7 @@ class Telemetry:
             self._gen += 1
             with self._lock:
                 self._queue.clear()
+                self._dropped = 0         # the old ID's count, never sent as the new ID's
             (self.data_dir / OUTBOX).unlink(missing_ok=True)
             self.install_id = str(uuid.uuid4())
             self.install_secret = new_secret()
@@ -384,13 +386,15 @@ class Telemetry:
         self._next_send = 0.0
 
     def _queue_delete(self, install_id: str, install_secret: str) -> None:
-        owed = self._pending_deletes()
-        if install_id not in {i for i, _ in owed}:
-            owed.append((install_id, install_secret))
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self._write_pending(owed)
-        # A fresh delete is tried at once, whatever an older one was waiting on.
-        (self.data_dir / DELETE_RETRY).unlink(missing_ok=True)
+        # Under _io, as _send_deletes settles the owed list under it: neither can overwrite the other's write.
+        with self._io:
+            owed = self._pending_deletes()
+            if install_id not in {i for i, _ in owed}:
+                owed.append((install_id, install_secret))
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_pending(owed)
+            # A fresh delete is tried at once, whatever an older one was waiting on.
+            (self.data_dir / DELETE_RETRY).unlink(missing_ok=True)
 
     def _delete_retry(self) -> dict:
         try:
@@ -438,7 +442,9 @@ class Telemetry:
     # -- emitting --------------------------------------------------------------------------------------------
 
     def emit(self, event: str, event_date: str | None = None, **fields) -> None:
-        """Queue one event if the owner opted in. Never raises: a bug here must not cost a download."""
+        """Queue one event if the owner opted in. Never raises: a bug here must not cost a download. Never waits
+        on the network; `request_finished` also counts the day under _io, so it can wait out a local file write
+        (a flush or a send's bookkeeping), never a request in flight."""
         try:
             if not self.enabled:
                 return
@@ -804,12 +810,12 @@ class Telemetry:
             if len(lines) != len(raw):          # a corrupt line: skipped for good, counted, never blocks the rest
                 self._dropped += len(raw) - len(lines)
                 self._write_lines(self.data_dir / OUTBOX, lines)
-            install_id, install_secret = self.install_id, self.install_secret
+            install_id, install_secret, dropped = self.install_id, self.install_secret, self._dropped
         if not lines or not install_id or not install_secret:
             return True, False, None
         batch = lines[:BATCH]
         body = {"schema": SCHEMA_VERSION, "install_id": install_id, "install_secret": install_secret,
-                "dropped": coarse_dropped(self._dropped), "events": events[:BATCH]}
+                "dropped": coarse_dropped(dropped), "events": events[:BATCH]}
         data = gzip.compress(json.dumps(body, separators=(",", ":")).encode())
         try:
             headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
@@ -907,19 +913,21 @@ class Telemetry:
                 left.append((install_id, install_secret))
         path = self.data_dir / PENDING_DELETE
         retry = self.data_dir / DELETE_RETRY
-        # An opt-out or New ID while these were on the wire queued another delete: keep it.
-        tried = {i for i, _ in owed}
-        left += [p for p in self._pending_deletes() if p[0] not in tried]
-        if not left:
-            path.unlink(missing_ok=True)
-            retry.unlink(missing_ok=True)
-            return
-        self._write_pending(left)
-        attempts = int(self._delete_retry().get("attempts", 0) or 0) + 1
-        backoff = min(float(MAX_BACKOFF_S), DELETE_BACKOFF_MIN_S * 2 ** min(attempts - 1, 20))
-        delay = min(float(MAX_BACKOFF_S), max(self._jittered(backoff), wait or 0.0))
-        retry.write_text(json.dumps({"attempts": attempts, "next": self.clock() + delay, "error": error}),
-                         encoding="utf-8")
+        # An opt-out or New ID while these were on the wire queued another delete: keep it. Re-read and
+        # written back under _io, which _queue_delete also takes, so one queued now waits rather than is lost.
+        with self._io:
+            tried = {i for i, _ in owed}
+            left += [p for p in self._pending_deletes() if p[0] not in tried]
+            if not left:
+                path.unlink(missing_ok=True)
+                retry.unlink(missing_ok=True)
+                return
+            self._write_pending(left)
+            attempts = int(self._delete_retry().get("attempts", 0) or 0) + 1
+            backoff = min(float(MAX_BACKOFF_S), DELETE_BACKOFF_MIN_S * 2 ** min(attempts - 1, 20))
+            delay = min(float(MAX_BACKOFF_S), max(self._jittered(backoff), wait or 0.0))
+            retry.write_text(json.dumps({"attempts": attempts, "next": self.clock() + delay, "error": error}),
+                             encoding="utf-8")
         log.info("usage stats: a delete did not go through (%s); retrying in %.0fs", error, delay)
 
     def _stamp(self) -> str:
