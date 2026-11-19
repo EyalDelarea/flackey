@@ -51,7 +51,8 @@ class Clock:
 class FakeProc:
     """A double for asyncio.subprocess.Process: exposes just what stop() touches."""
 
-    def __init__(self):
+    def __init__(self, pid: int = 4242):
+        self.pid = pid
         self.returncode: int | None = None
         self.terminated = 0
         self.killed = 0

@@ -222,7 +222,8 @@ class Hook(list):
 class FakeWindow:
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
-        self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closed=Hook(), resized=Hook())
+        self.events = types.SimpleNamespace(shown=Hook(), loaded=Hook(), closing=Hook(), closed=Hook(),
+                                            resized=Hook())
         self.destroyed = False
 
     def create_file_dialog(self, dialog_type, directory="", **kwargs):
@@ -275,6 +276,9 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
     # Tests that pretend to be Windows would otherwise read a registry the suite does not have.
     monkeypatch.setattr(desktop, "webview2_version", lambda: "154.0.4258.37")
+    # The real ones would read `settings.data_dir` and install process-wide signal handlers.
+    monkeypatch.setattr(desktop, "stop_slskd", lambda settings: None)
+    monkeypatch.setattr(desktop, "guard_slskd", lambda settings: None)
     return windows, started, handle
 
 
@@ -1100,6 +1104,37 @@ def test_run_in_window_insets_the_titlebar_once_the_page_is_loaded(monkeypatch, 
     assert len(window.events.shown) == 0
 
 
+def test_quitting_stops_slskd_on_closing_before_appkit_can_exit(monkeypatch, tmp_path):
+    """Cmd+Q is AppKit's `terminate:`: it asks `closing`, then calls C exit(), so neither `closed`, the
+    `finally` nor `atexit` run. slskd has to be stopped in `closing`, and the handler must not return
+    False, which would cancel the quit."""
+    from flackey import desktop
+
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    stopped, guarded = [], []
+    monkeypatch.setattr(desktop, "stop_owned", lambda data_dir: stopped.append(data_dir) or True)
+    monkeypatch.setattr(desktop, "install_exit_guards", lambda data_dir: guarded.append(data_dir))
+    monkeypatch.setattr(desktop, "stop_slskd", lambda settings: desktop.stop_owned(settings.data_dir) and None)
+    monkeypatch.setattr(desktop, "guard_slskd", lambda settings: desktop.install_exit_guards(settings.data_dir))
+    settings = types.SimpleNamespace(window_size=None, data_dir=tmp_path)
+
+    desktop.run_in_window(settings=settings)
+
+    assert guarded == [tmp_path]
+    assert stopped == [tmp_path]  # the `finally` after the join: the backstop for a slow server stop
+    stopped.clear()
+    results = [fn() for fn in windows["window"].events.closing]
+    assert stopped == [tmp_path]
+    assert False not in results
+
+
+def test_stop_slskd_returns_none_so_it_never_cancels_the_quit(monkeypatch, tmp_path):
+    from flackey import desktop
+
+    monkeypatch.setattr(desktop, "stop_owned", lambda data_dir: False)
+    assert desktop.stop_slskd(types.SimpleNamespace(data_dir=tmp_path)) is None
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM to send to oneself on Windows")
 @pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
 def test_a_quit_signal_closes_the_window_instead_of_killing_the_app(sig):
@@ -1150,3 +1185,27 @@ def test_pywebview_is_kept_from_taking_ctrl_c_on_the_mac(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     desktop.keep_sigint_from_pywebview()
     helper.installMachInterrupt()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM to send to oneself on Windows")
+def test_a_stop_signal_in_window_mode_still_stops_slskd(monkeypatch, tmp_path):
+    """quit_on_signals takes SIGTERM over while the window is up, so slskd's own signal guard does not run:
+    the window closes and the `finally` stops slskd instead."""
+    from flackey import desktop
+
+    windows, _started, _ = _install_fake_webview(monkeypatch, tmp_path)
+    monkeypatch.setattr(desktop, "startup_size", lambda settings: (1000, 700))
+    stopped = []
+    monkeypatch.setattr(desktop, "stop_slskd", lambda settings: stopped.append(settings.data_dir))
+
+    def start(**kw):
+        os.kill(os.getpid(), signal.SIGTERM)
+        for _ in range(500):
+            if windows["window"].destroyed:
+                return
+            threading.Event().wait(0.01)
+
+    sys.modules["webview"].start = start
+    desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
+    assert windows["window"].destroyed
+    assert stopped == [tmp_path]
