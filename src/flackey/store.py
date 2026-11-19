@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
@@ -28,6 +29,15 @@ from .models import (
 from .models import norm as models_norm
 
 log = logging.getLogger(__name__)
+
+
+def _known(cls: type, d: dict) -> dict:
+    """`d` cut down to the fields `cls` declares. A newer build adds columns with `_ensure_column`, and
+    going back to an older build on the same profile leaves them in the file: an older dataclass handed a
+    column it has never heard of fails to construct, and the whole app with it. Unknown columns are
+    dropped; known ones pass through untouched."""
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in d.items() if k in names}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -234,7 +244,7 @@ class Store:
             d.pop(col, None)
         d["kind"] = RequestKind(d["kind"])
         d["state"] = RequestState(d["state"])
-        return Request(**d)
+        return Request(**_known(Request, d))
 
     def get_request(self, request_id: int) -> Request:
         r = self.conn.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
@@ -459,7 +469,7 @@ class Store:
         # SQLite hands back 1/0/NULL; the page branches on all three, and a bare 1 would reach the JSON as
         # `1` rather than `true`. NULL stays None -- "never resolved" is not "no sample".
         d["has_preview"] = None if d["has_preview"] is None else bool(d["has_preview"])
-        return Candidate(**d)
+        return Candidate(**_known(Candidate, d))
 
     def get_candidates(self, request_id: int) -> list[Candidate]:
         rows = self.conn.execute("SELECT * FROM candidates WHERE request_id=? ORDER BY rank", (request_id,))
@@ -500,7 +510,7 @@ class Store:
             return None
         d = dict(r)
         d.pop("fetched_at")
-        return CatalogTrack(**d)
+        return CatalogTrack(**_known(CatalogTrack, d))
 
     # ---- tracks ---------------------------------------------------------
     def add_track(self, *, path: Path, fmt: str, bitrate_kbps: int, cutoff_hz: int, file_size: int,
@@ -530,7 +540,7 @@ class Store:
             d.pop(k)
         d["path"] = Path(d["path"])
         d["spectrogram_path"] = Path(d["spectrogram_path"]) if d.get("spectrogram_path") else None
-        return Track(**d)
+        return Track(**_known(Track, d))
 
     def update_track(self, track_id: int, **fields) -> None:
         """In place, keeping the id. An upgrade re-paths a filed track (the lossy .mp3 becomes a .wav), and
@@ -629,7 +639,7 @@ class Store:
         tracks = self.conn.execute(
             "SELECT track_id, position FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (playlist_id,)
         ).fetchall()
-        return Playlist(**dict(r), track_ids=[row[0] for row in tracks],
+        return Playlist(**_known(Playlist, dict(r)), track_ids=[row[0] for row in tracks],
                         track_positions=[row[1] for row in tracks])
 
     def list_playlists(self) -> list[Playlist]:
@@ -673,7 +683,7 @@ class Store:
         r = self.conn.execute("SELECT * FROM rejections WHERE id=?", (rejection_id,)).fetchone()
         if r is None:
             raise KeyError(rejection_id)
-        return Rejection(**dict(r))
+        return Rejection(**_known(Rejection, dict(r)))
 
     def get_rejection_for_request(self, request_id: int) -> Rejection | None:
         """The refusal of the copy this request's own pass fetched (the Deezer one). A Soulseek copy held
@@ -681,24 +691,24 @@ class Store:
         every reader of this one -- the row, Keep it anyway, Retry -- is about that copy."""
         r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? AND kind != ? ORDER BY id DESC LIMIT 1",
                               (request_id, HELD_LOSSLESS)).fetchone()
-        return None if r is None else Rejection(**dict(r))
+        return None if r is None else Rejection(**_known(Rejection, dict(r)))
 
     def held_lossless(self, request_id: int) -> Rejection | None:
         """The lossless copy a Soulseek attempt fetched and the quality check refused, kept so the owner can
         hear it and keep it anyway (issue #97) -- while it is still on disk to keep."""
         r = self.conn.execute("SELECT * FROM rejections WHERE request_id=? AND kind=? AND audio_path IS NOT NULL "
                               "ORDER BY id DESC LIMIT 1", (request_id, HELD_LOSSLESS)).fetchone()
-        return None if r is None else Rejection(**dict(r))
+        return None if r is None else Rejection(**_known(Rejection, dict(r)))
 
     def rejections_for_request(self, request_id: int) -> list[Rejection]:
         """Every rejection the request has collected, oldest first: a request that was retried can be
         refused more than once, and a failure report wants the whole run of them."""
         rows = self.conn.execute("SELECT * FROM rejections WHERE request_id=? ORDER BY id", (request_id,)).fetchall()
-        return [Rejection(**dict(r)) for r in rows]
+        return [Rejection(**_known(Rejection, dict(r))) for r in rows]
 
     def list_rejections(self, limit: int = 200) -> list[Rejection]:
         rows = self.conn.execute("SELECT * FROM rejections ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        return [Rejection(**dict(r)) for r in rows]
+        return [Rejection(**_known(Rejection, dict(r))) for r in rows]
 
     # ---- lossless attempts and evidence (spec §11, §17, §18) --------------
     _ATTEMPT_JSON: ClassVar[dict[str, str]] = {
