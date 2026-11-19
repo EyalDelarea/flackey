@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import './app.css'
 import { api } from './api'
@@ -18,9 +18,13 @@ import SetupShell from './components/setup/SetupShell'
 import SoulseekStep from './components/setup/SoulseekStep'
 import TelegramStep from './components/setup/TelegramStep'
 import WelcomeStep from './components/setup/WelcomeStep'
+import UsageStatsAsk from './components/UsageStatsAsk'
+import type { UsageStatsChoice } from './components/UsageStatsAsk'
 import { useLive } from './live'
 import type { Live } from './live'
 import { insetTitlebar, PlatformContext } from './platform'
+import { durationBucket, optIn, SETUP_STEPS, track } from './telemetry'
+import type { SetupStepName, StepAction } from './telemetry'
 
 const inset = insetTitlebar()
 
@@ -47,6 +51,10 @@ function AppBody({ live }: { live: Live }) {
   // What the Ready step is allowed to claim, and nothing else: each is set by the step it belongs to.
   const [telegramSkipped, setTelegramSkipped] = useState(false)
   const [soulseekState, setSoulseekState] = useState<'connected' | 'pending' | 'skipped'>('skipped')
+  // The one-time usage-stats question for an owner who finished setup before Welcome asked it. Shown only
+  // while stats can run here, are off, and the question was never answered; any answer, the × included,
+  // is remembered by the server, so it never comes back. Hidden on any error: no prompt beats a broken one.
+  const [askUsage, setAskUsage] = useState(false)
   const h = live.health
   const authorized = h?.telegram_authorized ?? true
   // A source the owner switched off is not signed out, so nothing about it is worth a banner.
@@ -59,6 +67,19 @@ function AppBody({ live }: { live: Live }) {
   // Only on the way out of the wizard, so an ordinary start does not fetch everything twice.
   const refresh = live.refresh
   useEffect(() => { if (authorized && reconnecting) { setReconnecting(false); refresh().catch(() => undefined) } }, [authorized, reconnecting, refresh])
+  const setupDone = !!h?.setup_done
+  useEffect(() => {
+    if (!setupDone) return
+    let on = true
+    api.telemetry().then(t => { if (on) setAskUsage(!!t?.available && !t.enabled && !t.asked) }).catch(() => undefined)
+    return () => { on = false }
+  }, [setupDone])
+  // Gone at once, whatever the answer: the request runs behind it, and a failure leaves stats off.
+  const answerUsage = (c: UsageStatsChoice) => {
+    setAskUsage(false)
+    if (c === 'share') optIn()
+    else api.telemetryAsked().catch(() => undefined)
+  }
   useEffect(() => { if (live.settings && !libraryRoot) setLibraryRoot(live.settings.library_root) }, [live.settings, libraryRoot])
   useEffect(() => { if (live.settings?.lossless_filing_format) setFilingFormat(live.settings.lossless_filing_format) }, [live.settings?.lossless_filing_format])
   // Reconnect only re-runs the Telegram step (see `current` below) -- Soulseek's own step never opens, so
@@ -74,6 +95,25 @@ function AppBody({ live }: { live: Live }) {
   // mid-session on any re-render that flipped `setup_done`. `.setup-content` scrolls, so a step that does
   // not fit scrolls instead -- the window stays the size it was left at, which desktop.py remembers.
 
+  // Usage-stats funnel: which setup step is on screen, and since when. Posted fire-and-forget, and the
+  // server drops it unless the owner opted in. A rerun (Reconnect) is marked so it never reads as a first run.
+  const setupStep: SetupStepName | null = !h || (h.setup_done && !reconnecting) ? null
+    : !reconnecting && !welcomeSeen ? 'welcome' : SETUP_STEPS[reconnecting && step === 1 ? 3 : step]
+  const funnel = useRef<{ step: SetupStepName | null; since: number; started: number }>({ step: null, since: 0, started: 0 })
+  useEffect(() => {
+    const f = funnel.current
+    if (setupStep === f.step) return  // the ref guard keeps StrictMode's second run from posting twice
+    const now = Date.now()
+    if (f.step === null) f.started = now
+    f.step = setupStep; f.since = now
+    if (setupStep) track('setup_step', { step: setupStep, action: 'shown', ...(reconnecting ? { rerun: true } : {}) })
+  }, [setupStep, reconnecting])
+  const leaveStep = (action: StepAction) => {
+    const f = funnel.current
+    if (!f.step) return
+    track('setup_step', { step: f.step, action, time_on_step: durationBucket(Date.now() - f.since), ...(reconnecting ? { rerun: true } : {}) })
+  }
+
   if (!h) {
     return (<div className="app-loading">
       {live.loading ? 'Starting…'
@@ -82,7 +122,7 @@ function AppBody({ live }: { live: Live }) {
     </div>)
   }
   if (!h.setup_done || reconnecting) {
-    if (!reconnecting && !welcomeSeen) return <WelcomeStep onStart={() => setWelcomeSeen(true)} />
+    if (!reconnecting && !welcomeSeen) return <WelcomeStep onStart={() => { leaveStep('completed'); setWelcomeSeen(true) }} />
     const current = reconnecting && step === 1 ? 3 : step
     const startApp = async () => {
       try {
@@ -92,6 +132,12 @@ function AppBody({ live }: { live: Live }) {
         return
       }
       setSetupError(null)
+      leaveStep('completed')
+      if (!reconnecting) {
+        const fmt: Record<string, string> = ['aiff', 'wav', 'flac'].includes(filingFormat) ? { filing_format: filingFormat } : {}
+        track('setup_finished', { total_time: durationBucket(Date.now() - funnel.current.started),
+          telegram_connected: !telegramSkipped, soulseek_connected: soulseekState === 'connected', ...fmt })
+      }
       await live.refresh()
       setReconnecting(false)
       setStep(1)
@@ -103,16 +149,16 @@ function AppBody({ live }: { live: Live }) {
       : current === 2 ? () => setStep(1) : current === 3 ? () => setStep(2) : current === 4 ? () => setStep(3)
       : current === 5 ? () => setStep(4)
       : current === 1 && !reconnecting ? () => setWelcomeSeen(false) : undefined
-    return (<SetupShell step={current} onBack={back} inset={inset} hint={current === 3 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
+    return (<SetupShell step={current} onBack={back && (() => { leaveStep('back'); back() })} inset={inset} hint={current === 3 && telegramConfigured ? 'Waiting for Telegram…' : undefined}
       skipped={{ 3: telegramSkipped, 4: soulseekState === 'skipped' }}>
-      {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { setLibraryRoot(p); setStep(2) }} />}
+      {current === 1 && <FolderStep initial={libraryRoot} onDone={p => { leaveStep('completed'); setLibraryRoot(p); setStep(2) }} />}
       {current === 2 && <FormatStep libraryRoot={libraryRoot} initial={filingFormat}
         formats={live.settings?.filing_formats ?? ['aiff', 'wav', 'flac']}
         defaultFormat={live.settings?.default_filing_format}
-        onDone={f => { setFilingFormat(f); setStep(3) }} />}
-      {current === 3 && <TelegramStep onDone={() => { setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
-      {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { setSoulseekState('skipped'); setStep(5) }} />}
-      {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => setStep(3)} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
+        onDone={f => { leaveStep('completed'); setFilingFormat(f); setStep(3) }} />}
+      {current === 3 && <TelegramStep onDone={() => { leaveStep('completed'); setTelegramSkipped(false); setStep(reconnecting ? 5 : 4) }} onSkip={() => { leaveStep('skipped'); setTelegramSkipped(true); setStep(reconnecting ? 5 : 4) }} />}
+      {current === 4 && <SoulseekStep libraryRoot={libraryRoot} onDone={c => { leaveStep('completed'); setSoulseekState(c ? 'connected' : 'pending'); setStep(5) }} onSkip={() => { leaveStep('skipped'); setSoulseekState('skipped'); setStep(5) }} />}
+      {current === 5 && <ReadyStep libraryRoot={libraryRoot} onStart={startApp} onConnectSource={() => { leaveStep('back'); setStep(3) }} error={setupError} telegram={telegramSkipped ? 'skipped' : 'connected'} soulseek={soulseekState} />}
     </SetupShell>)
   }
   const update = live.update
@@ -146,6 +192,10 @@ function AppBody({ live }: { live: Live }) {
     banners.push(<Banner key="update" tone="amber" text={text}
       action={{ label: dl ? 'Show' : 'Update', onClick: () => { setTab('settings'); setFocusUpdate(n => n + 1) } }}
       onDismiss={() => setUpdateDismissed(true)} />)
+  }
+  if (askUsage) {
+    banners.push(<UsageStatsAsk key="usage" className="usage-prompt" value={null} onChoose={answerUsage}
+      onDismiss={() => answerUsage('not-now')} />)
   }
   const banner = banners.length ? banners : undefined
   return (

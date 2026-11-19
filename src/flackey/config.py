@@ -16,7 +16,9 @@ XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
              "slskd_url", "slskd_api_key", "slskd_downloads_dir", "lossless_filing_format", "library_layout",
-             "source_enabled", "auto_update_check", "window_size", "extended_mixes")
+             "source_enabled", "auto_update_check", "window_size", "extended_mixes",
+             "telemetry_enabled", "telemetry_install_id", "telemetry_install_secret", "telemetry_opted_in",
+             "telemetry_asked")
 PATH_KEYS = ("library_root", "slskd_downloads_dir")
 FILING_FORMATS = ("aiff", "wav", "flac")
 # How new tracks are foldered inside the library (see `library.final_path`): one folder per artist, per
@@ -94,6 +96,19 @@ class Settings(BaseSettings):
     # has, and an extended mix found afterwards is offered on its Done row. "always": the extended mix is
     # looked for first and downloaded instead, the normal one when there is none. "off": neither.
     extended_mixes: str = "ask"
+    # Opt-in usage stats (spec PR #196): off until the owner says yes at the Welcome step or in Settings.
+    # The ID is random, made at opt-in, and wiped at opt-out. No collector address is a setting: a release
+    # build carries one in build.json (`build_telemetry`), and `FLACKEY_TELEMETRY_URL` may override it with a
+    # loopback address only (`telemetry.local_url`), for development and the local demo.
+    telemetry_enabled: bool = False
+    telemetry_install_id: str | None = None
+    # Proves to the collector that this install owns its ID (a copied ID alone can neither delete nor send).
+    # Made with the ID, replaced with it, wiped with it. Never shown, never logged, redacted from bug reports.
+    telemetry_install_secret: str | None = None
+    telemetry_opted_in: str | None = None
+    # Whether the owner has been asked once (Welcome, the one-time prompt, or the Settings switch). Only
+    # ever stops the one-time prompt from coming back; it never turns stats on.
+    telemetry_asked: bool = False
     web_port: int = 8765
     # Loopback by default: the JSON API is unauthenticated and must never bind 0.0.0.0 outside a
     # container. The Dockerfile sets WEB_HOST=0.0.0.0 as an image-level ENV; leave this unset elsewhere.
@@ -290,6 +305,22 @@ def _read_build_defaults(path: Path = BUILD_DEFAULTS_PATH) -> dict:
     if isinstance(data.get("telegram_api_hash"), str) and data["telegram_api_hash"]:
         out["telegram_api_hash"] = data["telegram_api_hash"]
     return out
+
+
+def build_telemetry(path: Path | None = None) -> tuple[str | None, str | None]:
+    """(collector URL, release key) a release build carries, or (None, None) in a checkout, a dev build and
+    the demo. packaging/build_app.sh writes them into build.json from FLACKEY_BUILD_TELEMETRY_URL and
+    FLACKEY_BUILD_TELEMETRY_KEY, which only the release workflow sets, from repository secrets. The key is
+    not secret (it ships in every copy); it lets the collector tell release builds apart and revoke one."""
+    path = path or BUILD_DEFAULTS_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    url, key = data.get("telemetry_url"), data.get("telemetry_key")
+    return (url if isinstance(url, str) and url else None, key if isinstance(key, str) and key else None)
 
 
 def _read_settings_file(path: Path) -> dict:

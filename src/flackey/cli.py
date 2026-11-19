@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
+import sys
 from pathlib import Path
 
 import typer
@@ -25,6 +27,22 @@ def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (defa
     configure_logging(_settings().data_dir, verbose=verbose)
 
 
+class term_as_ctrl_c:
+    """A TERM (`kill`, `demo.sh stop`) ends a windowless Flackey the way Ctrl-C does: asyncio cancels the
+    main task, so shutdown runs and the session closes clean. A TERM's default would kill the process
+    with the session open, and the next launch would report a crash."""
+
+    def __enter__(self):
+        self.previous = None
+        if sys.platform != "win32":
+            self.previous = signal.signal(signal.SIGTERM, lambda *_: os.kill(os.getpid(), signal.SIGINT))
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.previous is not None:
+            signal.signal(signal.SIGTERM, self.previous)
+
+
 @app.command()
 def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve only; open http://localhost:8765 yourself"),
           browser: bool = typer.Option(False, "--browser", help="Open the system browser instead of the app window")) -> None:
@@ -33,7 +51,8 @@ def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve onl
 
     try:
         if no_browser or browser:
-            asyncio.run(run(_settings(), open_browser=browser))
+            with term_as_ctrl_c():
+                asyncio.run(run(_settings(), open_browser=browser))
         else:
             from .desktop import run_in_window
 

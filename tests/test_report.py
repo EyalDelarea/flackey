@@ -484,3 +484,23 @@ def test_the_url_stays_short_even_for_text_that_encodes_large(tmp_path: Path, vi
 def test_passwords_with_spaces_and_url_logins_are_redacted(line, gone):
     out = Redactor([], home=HOME)(line)
     assert gone not in out and "<redacted>" in out
+
+
+def test_the_install_secret_never_reaches_a_bug_report(tmp_path: Path):
+    """The usage-stats install secret proves ownership of the install ID to the collector: a report that
+    carried it would let whoever reads the report delete or impersonate that install's stats."""
+    import zipfile as _zip
+
+    from flackey.telemetry.client import new_secret
+
+    settings = settings_for(tmp_path)
+    settings.telemetry_install_secret = new_secret()
+    secret = settings.telemetry_install_secret
+    seed_logs(settings)
+    with (settings.data_dir / "flackey.log").open("a", encoding="utf-8") as f:
+        f.write(f"2026-09-29 12:00:04.000 DEBUG   flackey.x: body {{\"install_secret\": \"{secret}\"}} raw {secret}\n")
+    rep = build_report(settings, {}, ClientContext(), f"my secret is {secret}", "")
+    assert secret not in "".join(rep.files.values())
+    path = write_zip(rep, tmp_path / "out")
+    with _zip.ZipFile(path) as z:
+        assert all(secret.encode() not in z.read(n) for n in z.namelist())

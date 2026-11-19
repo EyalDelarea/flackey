@@ -13,6 +13,7 @@ from ..notify import Button
 from ..reference import Identification, identify_record
 from ..source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
 from ..version import EXTENDED
+from . import usage
 from .policy import MAX_ATTEMPTS, REVIEW_BUTTONS, bot_paused
 from .records import QUERY_SOURCE, _mmss, query_candidate
 
@@ -78,6 +79,7 @@ class PipelineMixin:
                 source_why = f"the Deezer bot found nothing ({e})"
                 log.info("req#%d not found at source: %s", req.id, e)
             except (SourceTimeout, SourceError) as e:
+                usage.failure_reason(req.id, usage.reason_of(e))
                 # The source may be back in an hour and would offer a lossy fallback the query-only
                 # path does not have; a retry is worth more than a Soulseek-or-nothing pass now. (A
                 # Beatport match used to send this pass to Soulseek instead; there is none any more.)
@@ -163,6 +165,7 @@ class PipelineMixin:
         """No record was chosen. Soulseek is the only network that has this library's music, and the
         fingerprint is what proves the file; the owner's own words are enough to ask with (issue #69)."""
         if not (query.artist and query.title):
+            usage.failure_reason(req.id, "unidentified")
             self._set_state(req, RequestState.NOT_FOUND, error_message=f"could not identify this track: {why}; "
                             f"no artist and title could be read from the request, so there is nothing to search for")
             await self.notifier.send(f"Could not identify: {req.raw_text}")
@@ -284,6 +287,9 @@ class PipelineMixin:
                 raise
             except (SourceTimeout, SourceError) as e:
                 self.store.update_request(req.id, fetch_source=None)
+                # Noted here as the search's failure is above: without it a give-up reads its reason off
+                # the Soulseek attempt, and a bot that timed out was sent as `peer_queue_timeout`.
+                usage.failure_reason(req.id, usage.reason_of(e))
                 await self._retry_or_fail(req, f"source error: {e}")
                 return
         else:

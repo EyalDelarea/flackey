@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './theme.css'
 import { api } from './api'
-import type { AppSettings, Health, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
+import type { AppSettings, Health, TelemetryState, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
 
 /* Every EventSource this harness has handed out. StrictMode mounts twice, so `live` subscribes more than
    once: the 'stages' status frame has to reach all of them, while 'choose' only needs the newest, which is
@@ -342,6 +342,7 @@ function scenarioSetup() {
     return { ok: true }
   })
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
+  usageStats()
 
   switch (scenario) {
     case 'library-narrow':
@@ -462,10 +463,57 @@ function scenarioSetup() {
       // the candidate samples use, so this tab needs the same stand-in clip (issue #92).
       fakeAudio()
       break
+    /* The usage-stats question: on the Welcome step for a new owner, and as the one-time card an owner
+       who finished setup before Welcome asked sees on the main screen. */
+    case 'usage-welcome':
+      vi_spy(api, 'health', async () => health({ setup_done: false, telegram_authorized: false }))
+      break
+    case 'usage-prompt':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      vi_spy(api, 'update', async () => ({ ok: true, current: '0.6.0', newer: false, available: false,
+        latest: '0.6.0', url: null, release_url: null, size: null, size_label: null,
+        published_at: null, published_date: null, prerelease: false }))
+      break
     default:
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
   }
+}
+
+/* Usage stats as the server keeps them, in memory: off and never asked, `asked` flipping on any answer and
+   the switch turning on with a placeholder ID. Mocked for every scenario so no picture ever reaches a real
+   copy's /api/telemetry (the dev proxy points at whatever runs on 8765). */
+function usageStats() {
+  let t: TelemetryState = { available: true, enabled: false, mode: 'on', collector: 'http://127.0.0.1:8790', sending: false,
+    id_prefix: null, opted_in: null, asked: false, pending_delete: false, last_delete_confirmed: null,
+    last_send: null, interval_s: 3600 }
+  vi_spy(api, 'telemetry', async () => t)
+  vi_spy(api, 'telemetryAsked', async () => (t = { ...t, asked: true }))
+  vi_spy(api, 'setTelemetry', async (enabled: boolean) => (t = { ...t, enabled, asked: true,
+    id_prefix: null, opted_in: enabled ? '2026-11-16' : null, last_send: null }))
+  vi_spy(api, 'telemetryUi', async () => ({ ok: true }))
+  vi_spy(api, 'telemetryLog', async () => ({ pending: [], sent: [] }))
+  // Field names only, copied from src/flackey/assets/telemetry_schema_v1.json: the sheet lists nothing else.
+  vi_spy(api, 'telemetryCatalog', async () => ({ schema: 1, buckets: {},
+    common: { event: {}, session_id: {}, seq: {}, event_date: {}, app_version: {}, os: {}, os_major: {}, arch: {}, channel: {} },
+    events: {
+    app_started: { telegram: {}, soulseek: {}, filing_format: {}, library_layout: {}, extended_mixes: {}, auto_update_check: {}, has_ffmpeg: {}, has_fpcalc: {}, library_tracks: {}, port_reachable: {}, days_since_opt_in: {}, previous_exit: {}, updated_from: {} },
+    setup_step: { step: {}, action: {}, method: {}, error_code: {}, time_on_step: {}, rerun: {} },
+    setup_finished: { total_time: {}, telegram_connected: {}, soulseek_connected: {}, folder_default: {}, filing_format: {} },
+    request_added: { kind: {}, via: {}, playlist_tracks: {} },
+    request_finished: { kind: {}, state: {}, failed_stage: {}, route: {}, identified_by: {}, reviewed: {}, passes: {}, lossless_outcome: {}, lossless_no_results: {}, spellings_tried: {}, bot: {}, interpret: {}, verify_tier: {}, filed_format: {}, source_format: {}, bit_depth: {}, tag_source: {}, extended_cut: {}, checks_run: {}, checks_refused: {}, refused_then_passed: {}, retries_by_owner: {}, wait_to_start: {}, total_time: {}, error_class: {}, failure_reason: {}, catalog_reason: {} },
+    review_answered: { answer: {}, picked_rank: {}, candidates: {}, top_score: {}, reason_code: {}, wait: {} },
+    request_action: { action: {}, from_state: {}, failed_stage: {}, count: {}, result: {} },
+    lossless_attempt_finished: { provider: {}, purpose: {}, outcome: {}, spelling_index: {}, results_seen: {}, survivors: {}, picks_tried: {}, slow_switches: {}, slow_fallback: {}, search_time: {}, queue_wait: {}, first_byte: {}, transfer_time: {}, speed: {}, file_size: {}, disk_full: {}, fingerprint_score: {} },
+    quality_check: { route: {}, claimed_format: {}, sample_rate: {}, bit_depth: {}, tier: {}, reason_code: {}, edge_finding: {}, edge: {}, quant_finding: {}, quant_codec: {}, detectors_fired: {}, strength: {}, coverage: {}, integrity_failed: {}, encoder_family: {}, odd_blocksize: {}, duration_mismatch: {}, rule: {}, shadow_tier: {}, detector_version: {}, candidate_index: {}, run_time: {} },
+    keep_anyway: { which: {}, rejection_kind: {}, tier: {}, route: {}, claimed_format: {}, reason_code: {}, detectors_fired: {}, strength: {}, coverage: {}, edge: {}, detector_version: {}, listened: {}, decision_delay: {}, result: {} },
+    extended_offer_found: { status: {}, word: {}, gain: {}, filed_length: {} },
+    extended_offer_answered: { answer: {}, result: {}, offer_age: {} },
+    health_daily: { uptime: {}, soulseek_up: {}, telegram_up: {}, sessions: {}, crashed_sessions: {}, requests_finished: {} },
+    update_step: { stage: {}, result: {}, to_version: {}, trigger: {}, error_code: {}, time: {} },
+    source_status_changed: { source: {}, from: {}, to: {}, reason: {} },
+    error_caught: { where: {}, exc_class: {}, module: {}, function: {}, line: {}, fatal: {} } } }))
 }
 
 const playlist: Playlist = { id: 1, source_url: 'https://open.spotify.com/playlist/x', name: 'Goa Set',

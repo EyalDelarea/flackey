@@ -67,7 +67,7 @@ export function useLive(): Live {
     if (!settings || updateChecked.current) return
     updateChecked.current = true
     if (settings.auto_update_check === false) return
-    api.update().then(setUpdate).catch(() => undefined)
+    api.update('auto').then(setUpdate).catch(() => undefined)
   }, [settings])
   // The event bus drops events rather than blocking when a subscriber falls behind, and the frame it
   // drops could be the last one -- a `ready` or `error` lost that way would leave the button disabled on

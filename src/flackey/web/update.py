@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import errno
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import webbrowser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -16,11 +18,12 @@ from urllib.parse import unquote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
-from .. import __version__
+from .. import __version__, telemetry
 from ..config import Settings
 from ..events import Status
 from ..selfupdate import install as selfupdate
 from ..selfupdate import signature
+from ..telemetry import buckets
 from .guard import from_the_app
 
 log = logging.getLogger(__name__)
@@ -66,6 +69,35 @@ class RefusedHost(httpx.HTTPError):
 
 class Unverified(Exception):
     """The installer on disk is not the one the release signed, or this copy cannot tell."""
+
+
+# Who asked for a check: the launch's own (`auto`) or the owner opening Settings (`manual`). Anything else the
+# query carries is not sent.
+CHECK_TRIGGERS = ("auto", "manual")
+
+
+def report_step(stage: str, result: str, *, to_version: str | None = None, trigger: str | None = "manual",
+                error_code: str = "", started: float | None = None) -> None:
+    """One `update_step` usage stat: fixed categories, a release version and a time range, never a URL, a
+    path or an error's wording. A no-op with stats off."""
+    if not telemetry.enabled():
+        return
+    telemetry.emit("update_step", stage=stage, result=result,
+                   to_version=to_version if parse_version(to_version) else None,
+                   trigger=trigger if trigger in CHECK_TRIGGERS else None,
+                   error_code=error_code if result == "failed" else "",
+                   time=buckets.dur(time.monotonic() - started) if started is not None else None)
+
+
+def download_error(exc: BaseException) -> str:
+    """The `update_step` category for a fetch or save that failed."""
+    if isinstance(exc, ShortDownload | RefusedHost | httpx.HTTPStatusError):
+        return "download_failed"
+    if isinstance(exc, httpx.HTTPError):
+        return "network"
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return "no_space"
+    return "other"
 
 
 def parse_version(v: object) -> tuple[int, int, int] | None:
@@ -155,17 +187,23 @@ def open_url(url: str) -> None:
 async def latest_release() -> dict:
     """The download runs this lookup again for itself: the client never says what to fetch, so a
     stale page cannot talk the app into downloading something else."""
+    return (await check_release())[0]
+
+
+async def check_release() -> tuple[dict, str]:
+    """`latest_release`, and the `update_step` category of a failed lookup ("" when it worked)."""
     try:
         async with github_client(FEED_HOSTS, 5) as client:
             res = await client.get(RELEASES_URL)
             res.raise_for_status()
         releases = res.json()
-    except (httpx.HTTPError, ValueError):
-        return {"ok": False, "current": __version__, "newer": False, "available": False,
-                "error": "Could not check for updates."}
+    except (httpx.HTTPError, ValueError) as exc:
+        return ({"ok": False, "current": __version__, "newer": False, "available": False,
+                 "error": "Could not check for updates."},
+                "network" if isinstance(exc, httpx.TransportError) else "other")
     if not isinstance(releases, list):
-        return {"ok": False, "current": __version__, "newer": False, "available": False,
-                "error": "Release feed did not look right."}
+        return ({"ok": False, "current": __version__, "newer": False, "available": False,
+                 "error": "Release feed did not look right."}, "other")
     # The highest version, not the first listed: the feed is in creation order, and a fix for an older
     # line can be published after a newer release. A tag that is not a plain version is not a release.
     releases_by_version = [(version, item) for item in releases
@@ -220,7 +258,7 @@ async def latest_release() -> dict:
             date = dt.datetime.fromisoformat(published).date().isoformat()
         except ValueError:
             date = published
-    return {"ok": True, "current": __version__, "newer": newer, "available": available,
+    return ({"ok": True, "current": __version__, "newer": newer, "available": available,
             "verifiable": verifiable,
             "elsewhere": str(elsewhere) if elsewhere else None,
             "latest": latest_version or None,
@@ -233,7 +271,7 @@ async def latest_release() -> dict:
             "seamless": seamless,
             "archive_url": archive.get("browser_download_url") if seamless else None,
             "archive_size": archive_size if seamless else None,
-            "signature_url": archive_sig.get("browser_download_url") if seamless else None}
+            "signature_url": archive_sig.get("browser_download_url") if seamless else None}, "")
 
 
 def private_copy(root: Path, name: str, payload: bytes) -> Path:
@@ -321,6 +359,9 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         if not t.cancelled() and t.exception() is not None:
             log.error("update download ended badly", exc_info=t.exception())
         if state["state"] in ("downloading", "verifying"):
+            report_step("verify_signature" if state["state"] == "verifying" else "download",
+                        "cancelled" if t.cancelled() else "failed", to_version=state["version"],
+                        error_code="other")
             publish(state="error", version=state["version"], seamless=state["seamless"],
                     error="The download stopped unexpectedly. Try again.")
 
@@ -364,7 +405,7 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             raise
         return received
 
-    async def fetch_signature(url: str) -> bytes | None:
+    async def fetch_signature(url: str, why: dict | None = None) -> bytes | None:
         """The detached signature, or None for every way this can go wrong -- the caller refuses on
         all of them alike, because a signature that cannot be fetched is missing.
 
@@ -381,33 +422,44 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                         log.warning("the signature asset at %s ran past %d bytes, so it is not a "
                                     "signature", url, MAX_SIGNATURE_BYTES)
                         return None
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             log.warning("could not fetch the update signature from %s", url, exc_info=True)
+            if why is not None:
+                why["code"] = download_error(exc)
             return None
         return signature.decode_signature(bytes(body))
 
     async def fetch(url: str, total: int | None, target: Path, version: str, *, seamless: bool,
                     noun: str, written: str, save_error: str) -> int | None:
         """`stream_to`, with its three expected failures logged and published. None when one of them
-        happened; anything else propagates to the caller."""
+        happened; anything else propagates to the caller. Each ending but a cancel is one `download` stat."""
+        started = time.monotonic()
         try:
-            return await stream_to(url, total, target, version, seamless=seamless)
-        except ShortDownload:
+            received = await stream_to(url, total, target, version, seamless=seamless)
+        except ShortDownload as exc:
             log.warning("%s from %s was incomplete", noun, url, exc_info=True)
             publish(state="error", version=version, seamless=seamless, error=INCOMPLETE)
-        except httpx.HTTPError:
+            failure = exc
+        except httpx.HTTPError as exc:
             log.warning("%s from %s failed", noun, url, exc_info=True)
             publish(state="error", version=version, seamless=seamless,
                     error="The download stopped before it finished. Check your connection and try again.")
-        except OSError:
+            failure = exc
+        except OSError as exc:
             log.warning("could not write %s to %s", written, target, exc_info=True)
             publish(state="error", version=version, seamless=seamless, error=save_error)
+            failure = exc
+        else:
+            report_step("download", "ok", to_version=version, started=started)
+            return received
+        report_step("download", "failed", to_version=version, error_code=download_error(failure), started=started)
         return None
 
-    async def signed(path: Path, version: str, sig_url: str | None) -> bool | None:
+    async def signed(path: Path, version: str, sig_url: str | None, why: dict) -> bool | None:
         """Whether the archive matches its detached signature; None when it cannot be read back. A pass
-        records the bytes' hash, and `selfupdate.stage` unpacks nothing else."""
-        sig = await fetch_signature(sig_url) if sig_url else None
+        records the bytes' hash, and `selfupdate.stage` unpacks nothing else. A signature that could not
+        be fetched puts its category in `why`."""
+        sig = await fetch_signature(sig_url, why) if sig_url else None
         try:
             payload = path.read_bytes()
         except OSError:
@@ -428,7 +480,10 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
 
         publish(state="verifying", percent=100, received=received, total=total, version=version,
                 seamless=True)
-        ok = await signed(archive, version, sig_url)
+        started, why = time.monotonic(), {}
+        ok = await signed(archive, version, sig_url, why)
+        report_step("verify_signature", "ok" if ok else "failed", to_version=version, started=started,
+                    error_code="other" if ok is None else why.get("code", "signature_invalid"))
         if ok is None:
             remove_download(archive)
             publish(state="error", version=version, seamless=True,
@@ -445,26 +500,31 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
                           "Download it from the release page instead.")
             return
 
+        started = time.monotonic()
         try:
             # `stage` reads the archive once more and unpacks only bytes whose hash verified above.
             new = selfupdate.stage(archive, version, relaunch=True)
         except selfupdate.StagingError as exc:
             log.error("could not stage the verified update for %s: %s", version, exc)
+            report_step("install", "failed", to_version=version, started=started,
+                        error_code="no_space" if download_error(exc.__cause__) == "no_space" else "install_failed")
             remove_download(archive)
             publish(state="error", version=version, seamless=True, error=str(exc))
             return
         except Exception:
             log.exception("unexpected failure staging the update for %s", version)
+            report_step("install", "failed", to_version=version, started=started, error_code="other")
             remove_download(archive)
             publish(state="error", version=version, seamless=True,
                     error="The update could not be prepared. The log has the details.")
             return
+        report_step("install", "ok", to_version=version, started=started)
         remove_download(archive)
         staged = new
         publish(state="staged", percent=100, received=received, total=total, version=version,
                 path=str(new.path), seamless=True, busy=in_flight())
 
-    def hand_over_to_installer(path: Path) -> None:
+    def hand_over_to_installer(path: Path, opened=None) -> None:
         """Open the installer, and on Windows get out of its way.
 
         Windows cannot replace a program file that is running, so Flackey quits once Setup.exe is up
@@ -477,6 +537,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         window, stops the server and slskd, and lets the queue resume on the next start. Not reached
         when the installer did not open: the owner then still has a running app and a message."""
         open_installer(path)
+        if opened is not None:
+            opened()
         if sys.platform == "win32" and quit_app is not None:
             log.info("installer opened; quitting so it can replace Flackey")
             try:
@@ -493,28 +555,41 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         except Exception:
             # "downloading" is what blocks the next attempt, so it must never be the last word.
             log.exception("update download from %s failed unexpectedly", url)
+            report_step("download", "failed", to_version=version, error_code="other")
             publish(state="error", version=version,
                     error="The download failed. The log has the details.")
             return
         if received is None:
             return
         sig = None
+        started, why = None, {}
         if must_verify():
             # Installer.app runs the package's scripts as root once the owner types their password, so
             # it is checked like the seamless archive before anything opens it. Setup.exe on Windows is
             # held to the same rule: it is the release job that signs it, alongside the .pkg.
             publish(state="verifying", percent=100, received=received, total=total, version=version)
-            sig = await fetch_signature(sig_url) if sig_url else None
+            started = time.monotonic()
+            sig = await fetch_signature(sig_url, why) if sig_url else None
         checked.update(version=version, sig=sig)
-        await open_checked(target, version, received, total)
+        await open_checked(target, version, received, total, first=(started, why))
 
-    async def open_checked(target: Path, version: str, received: int, total: int | None) -> None:
+    async def open_checked(target: Path, version: str, received: int, total: int | None,
+                           first: tuple[float | None, dict] | None = None) -> None:
         """Check the installer on disk (again) and open a private copy of exactly the bytes checked.
-        Both the first open and every "Open installer" press come through here."""
+        Both the first open and every "Open installer" press come through here; only the first, which
+        carries `first` (when the signature check started, and why its fetch failed), is a usage stat."""
+        verify_started, why = first if first is not None else (None, {})
+
+        def report(stage: str, result: str, error_code: str = "", started: float | None = None) -> None:
+            if first is not None:
+                report_step(stage, result, to_version=version, error_code=error_code, started=started)
+
         try:
             payload = read_checked(target, version, checked["sig"])
         except Unverified:
             log.error("the installer for %s did not match its signature; refusing to open it", version)
+            if verify_started is not None:
+                report("verify_signature", "failed", why.get("code", "signature_invalid"), verify_started)
             remove_download(target)
             publish(state="error", version=version,
                     error="This update could not be verified, so Flackey did not open it. "
@@ -522,9 +597,13 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             return
         except OSError:
             log.exception("could not read back the installer at %s", target)
+            if verify_started is not None:
+                report("verify_signature", "failed", "other", verify_started)
             remove_download(target)
             publish(state="error", version=version, error="Could not read the downloaded update. Try again.")
             return
+        if verify_started is not None:
+            report("verify_signature", "ok", started=verify_started)
         try:
             copy = private_copy(updates_dir(), installer_name(), payload)
         except OSError:
@@ -532,20 +611,36 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
             log.warning("could not write a private copy of the installer", exc_info=True)
         publish(state="ready", percent=100, received=received, total=total, version=version,
                 path=str(target))
+        def opened() -> None:
+            report("install", "ok")
+            if first is not None:
+                telemetry.update_handed_over(version, "installer")
+
         try:
             if copy is None:
                 raise OSError("no private copy to open")
-            hand_over_to_installer(copy)
+            hand_over_to_installer(copy, opened)
         except Exception:
             log.warning("could not open the downloaded installer at %s", target, exc_info=True)
+            report("install", "failed", "install_failed")
             # Still ready: the file is there and correct, only the last step needs a hand.
             publish(state="ready", percent=100, received=received, total=total, version=version,
                     path=str(target), error="The installer downloaded but would not open. "
                                             f"Open {installer_name()} from the app data folder to finish.")
 
     @r.get("/update")
-    async def update() -> dict:
-        return await latest_release()
+    async def update(trigger: str | None = None) -> dict:
+        """The check the page asks for. The page says who asked (`trigger`); the lookups inside install and
+        release are not checks, so only this one is counted."""
+        started = time.monotonic()
+        info, error_code = await check_release()
+        if not info["ok"]:
+            report_step("check", "failed", trigger=trigger, error_code=error_code, started=started)
+        elif info["newer"]:
+            report_step("check", "ok", to_version=info["latest"], trigger=trigger, started=started)
+        else:
+            report_step("check", "none_available", trigger=trigger, started=started)
+        return info
 
     @r.get("/update/progress")
     async def progress() -> dict:
@@ -613,6 +708,8 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         if state["state"] != "staged" or staged is None:
             raise HTTPException(409, "There is no update ready to install.")
         selfupdate.pending.arm(staged)
+        # The swap happens after this process is gone, so whether it took is the next start's to say.
+        telemetry.update_handed_over(staged.version, "seamless")
         publish(state="installing", percent=100, version=state["version"], seamless=True,
                 path=state["path"])
         if quit_app is None:

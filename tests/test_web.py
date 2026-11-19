@@ -2820,3 +2820,87 @@ def test_get_extended_and_keep_this_answer_for_the_offer_on_the_track(client_wit
     assert c.post(f"/api/lossless/extended/{tid}/keep").json() == {"ok": True}
     assert store.evidence_of(tid, "extended_offer")["status"] == "kept"
     assert [e.kind for e in store.list_evidence(tid)] == ["extended_offer"]     # one row, replaced
+
+
+def test_usage_stats_routes(client, tmp_path):
+    """Privacy settings: unavailable without a client; with one, the toggle, New ID, the local log, the
+    catalogue, and the page's own setup events -- which are refused unless they are setup events."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    client = client[0]
+    assert client.get("/api/telemetry").json() == {"available": False, "enabled": False}
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    telemetry.install(t)
+    try:
+        assert client.get("/api/telemetry").json()["asked"] is False
+        on = client.put("/api/telemetry", json={"enabled": True}).json()
+        assert on["enabled"] and len(on["id_prefix"]) == 8 and on["collector"] == "http://127.0.0.1:9"
+        assert on["asked"] is True      # answering with the switch counts as having been asked
+        assert client.post("/api/telemetry/new-id").json()["id_prefix"] != on["id_prefix"]
+        assert client.post("/api/telemetry/ui", json={"event": "setup_step", "fields": {
+            "step": "welcome", "action": "completed", "time_on_step": "5-15s"}}).json() == {"ok": True}
+        assert client.post("/api/telemetry/ui", json={"event": "request_finished", "fields": {}}).status_code == 400
+        pending = client.get("/api/telemetry/log").json()["pending"]
+        assert [e["event"] for e in pending] == ["setup_step"]
+        assert "quality_check" in client.get("/api/telemetry/catalog").json()["events"]
+        off = client.put("/api/telemetry", json={"enabled": False}).json()
+        assert not off["enabled"] and off["pending_delete"] and off["id_prefix"] is None
+        assert client.put("/api/telemetry", json={"enabled": "yes"}).status_code == 400
+    finally:
+        telemetry.uninstall()
+
+
+def test_not_now_marks_the_question_answered_and_leaves_stats_off(client, tmp_path):
+    """The Welcome step left without a choice, "Not now", or the one-time prompt dismissed: all post
+    /asked, which never turns stats on and stops the prompt from being shown again."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    client = client[0]
+    assert client.post("/api/telemetry/asked").status_code == 503      # no client: nothing to remember
+    saved: dict = {}
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"},
+                  persist=lambda **kw: saved.update(kw))
+    telemetry.install(t)
+    try:
+        after = client.post("/api/telemetry/asked").json()
+        assert after["asked"] is True and after["enabled"] is False and after["id_prefix"] is None
+        assert saved == {"telemetry_asked": True}
+        assert client.get("/api/telemetry").json()["asked"] is True
+        assert not (tmp_path / "usage").exists() or not any((tmp_path / "usage").iterdir())
+    finally:
+        telemetry.uninstall()
+
+
+def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client, tmp_path):
+    """`keep_anyway` carries the overruled refusal's tier, reason code and detectors (review 2026-11-16),
+    read from the stored summary, and never its reason sentence or measured numbers. (It used to read
+    the stored analysis as a dict, so a successful keep of an analysed refusal answered 500.)"""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    c, store, _settings = client
+    rid = store.add_request("q", RequestKind.TEXT)
+    summary = {"version": "2.0", "tier": "reject", "reason": "lossless container but cutoff at 16012 Hz",
+               "edge": {"finding": "unambiguous", "edge_hz": 16012, "drop_db": 40.0, "frames_above_edge": 0.0},
+               "quant": {"finding": "none", "codec": None, "z": 0.3},
+               "integrity": {"checked": ["length_header"], "failed": None}, "container": {}}
+    store.add_rejection(rid, summary["reason"], 900, 16012, None, kind="quality", analysis=summary)
+    store.set_state(rid, RequestState.REJECTED)
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        assert c.post(f"/api/requests/{rid}/accept").status_code == 400   # no copy kept: the keep fails
+    finally:
+        telemetry.uninstall()
+    (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "keep_anyway"]
+    assert ev["which"] == "keep_it_anyway" and ev["result"] == "failed" and ev["rejection_kind"] == "quality"
+    assert ev["tier"] == "reject" and ev["reason_code"] == "edge_unambiguous"
+    assert ev["detectors_fired"] == ["spectral"] and ev["edge"] == "16-17"
+    assert ev["detector_version"] == "2.0"          # audit 2026-11-16: the str version was never sent
+    assert "16012" not in str(ev) and "cutoff" not in str(ev)

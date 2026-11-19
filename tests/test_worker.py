@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1624,3 +1625,216 @@ async def test_a_quality_rejection_keeps_the_numbers_it_was_refused_on(env, monk
     kept = json.loads(store.get_rejection_for_request(rid).analysis)
     assert kept["tier"] == "reject" and kept["edge"] == {"finding": "unambiguous", "edge_hz": 16_000,
                                                          "drop_db": 40.0, "frames_above_edge": 0.0}
+
+
+async def test_usage_stats_describe_a_filed_track_in_labels_only(env, tmp_path):
+    """Opted in: a review, a verify and a filed track become events of enums and buckets, and nothing
+    about the track itself (its artist, title or path) reaches any of them."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        _settings, store, _notifier = env
+        other = Candidate(source="deezer_bot", source_ref="dz_track:5:send", artist="Someone", title="Else",
+                          duration_s=100, deezer_id=5, rank=1)
+        w = make_worker(env, FakeSource([other]))
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        await w.process(rid)
+        await w.choose(rid, store.get_candidates(rid)[0].id)
+        r = await w.process(rid)
+        assert r.state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    events = t.snapshot()["pending"]
+    by = {e["event"]: e for e in events}
+    assert by["review_answered"]["answer"] == "picked" and by["review_answered"]["picked_rank"] == "1"
+    assert by["quality_check"]["route"] == "telegram" and by["quality_check"]["claimed_format"] == "mp3"
+    done = by["request_finished"]
+    assert done["state"] == "done" and done["kind"] == "text" and done["route"] == "deezer_mp3"
+    assert done["reviewed"] is True and done["filed_format"] == "mp3" and done["checks_run"] == 1
+    assert done["tag_source"] == "none"       # a stand-in no catalogue filled in
+    blob = json.dumps(events)
+    for leaked in ("Astral", "Into the Void", "Someone", str(_settings.library_root)):
+        assert leaked not in blob
+
+
+async def _tag_source_of(env, tmp_path, stored: bool) -> str:
+    from flackey import telemetry
+
+    settings, store, _notifier = env
+    t = _stats(tmp_path)
+    try:
+        w = Worker(store, FakeSource([good_cand()]), MemoryNotifier(), settings, artwork_fetch=no_art,
+                   tag_lookup=FakeTagLookup())
+        rid = (with_stored_record(store, TEXT, CatalogTrack(**{**CT.__dict__, "duration_ms": 3000}), good_cand())
+               if stored else store.add_request(TEXT, RequestKind.TEXT))
+        assert (await w.process(rid)).state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    (done,) = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert "catalog" not in done and "catalog_reason" not in done
+    return done["tag_source"]
+
+
+async def test_usage_stats_call_a_record_stored_before_beatport_was_removed_stored(env, tmp_path):
+    """Beatport was removed (#215): a request filed from a record stored before then reads `stored`, never
+    "beatport"."""
+    assert await _tag_source_of(env, tmp_path, stored=True) == "stored"
+
+
+async def test_usage_stats_name_deezer_and_discogs_when_they_filled_the_tags(env, tmp_path):
+    assert await _tag_source_of(env, tmp_path, stored=False) == "deezer+discogs"
+
+
+async def test_usage_stats_describe_failures_by_state_and_stage_only(env, tmp_path, monkeypatch):
+    """The failure recipes in the local demo: a not-found, a quality rejection and a cancel each end in a
+    `request_finished` with the state, and the rejection also sends its `quality_check` verdict. No error
+    text, artist, title or path rides along."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        _settings, store, _notifier = env
+        w = make_worker(env, FakeSource(error=SourceNotFound("bot said: Nothing for Astral")))
+        assert (await w.process(store.add_request("q", RequestKind.TEXT))).state == RequestState.NOT_FOUND
+
+        def refusal(path, spectrogram_dir, name=None, rule="tiers"):
+            return replace(_spectral_refusal(path, spectrogram_dir, name), tier="reject")
+
+        w = make_worker(env, FakeSource([good_cand()]))
+        monkeypatch.setattr(filing_mod, "verify", refusal)
+        assert (await w.process(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.REJECTED
+
+        assert (await w.cancel(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.CANCELLED
+    finally:
+        telemetry.uninstall()
+    events = t.snapshot()["pending"]
+    finished = [e["state"] for e in events if e["event"] == "request_finished"]
+    assert finished == ["not_found", "rejected", "cancelled"]
+    reasons = [e.get("failure_reason") for e in events if e["event"] == "request_finished"]
+    assert reasons == ["unidentified", "quality_reject", None]   # a cancel is not a failure
+    (qc,) = [e for e in events if e["event"] == "quality_check"]
+    assert qc["tier"] == "reject"
+    blob = json.dumps(events)
+    for leaked in ("Astral", "Into the Void", "Nothing for", str(_settings.library_root)):
+        assert leaked not in blob
+
+
+def test_quality_check_sends_the_detector_version_verify_really_uses(tmp_path):
+    """Audit 2026-11-16: verify's version is the string "2.0" and the event only sent ints, so
+    `detector_version` was never sent, on `quality_check` or on `keep_anyway`."""
+    from flackey import telemetry, verify
+    from flackey.telemetry import Telemetry
+    from flackey.worker import usage
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        summary = {"version": verify.DETECTOR_VERSION, "tier": "clear", "reason": "clean"}
+        usage.quality_check(1, Verdict(True, "flac", 0, 0, "", None), summary, route="soulseek", rule="tiers",
+                            run_s=2.0)
+        refusal = SimpleNamespace(analysis=json.dumps(summary))
+        assert usage.refusal_fields(refusal)["detector_version"] == verify.DETECTOR_VERSION
+    finally:
+        telemetry.uninstall()
+    (qc,) = [e for e in t.snapshot()["pending"] if e["event"] == "quality_check"]
+    assert qc["detector_version"] == verify.DETECTOR_VERSION == "2.0"
+
+
+def _stats(tmp_path):
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url=None, channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    return t
+
+
+async def test_a_request_that_retries_sends_request_finished_once_with_its_final_state(env, tmp_path):
+    """Owner, 2026-11-18: a request waiting on a peer's queue goes back to `queued` and may still file. Only
+    the end of the road is a finish: two passes that fail and retry send nothing, the third that files
+    sends exactly one `request_finished`, saying done."""
+    from flackey import telemetry
+
+    t = _stats(tmp_path)
+    try:
+        _settings, store, _notifier = env
+        src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
+        w = make_worker(env, src)
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        aid = store.add_attempt(rid, "soulseek", TEXT)
+        store.update_attempt(aid, outcome="queued")
+        for _ in range(2):
+            assert (await w.process(rid)).state == RequestState.QUEUED
+        assert not [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+        src.fetch_error = None
+        assert (await w.process(rid)).state == RequestState.DONE
+    finally:
+        telemetry.uninstall()
+    finished = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert [e["state"] for e in finished] == ["done"]
+
+
+async def test_a_give_up_on_the_bot_fetch_says_the_bot_timed_out_not_the_peer_queue(env, tmp_path):
+    """Owner's test session, 2026-11-18 (req#446, #447): Soulseek's peers kept the file queued, the Deezer
+    bot fallback then timed out on its fetch three passes running, and the request gave up. The finish said
+    `peer_queue_timeout`, read off the Soulseek attempt, because the fetch's own failure was never noted."""
+    from flackey import telemetry
+
+    t = _stats(tmp_path)
+    try:
+        _settings, store, _notifier = env
+        w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file")))
+        rid = store.add_request(TEXT, RequestKind.TEXT)
+        aid = store.add_attempt(rid, "soulseek", TEXT)
+        store.update_attempt(aid, outcome="queued")
+        store.update_request(rid, attempts=2)
+        assert (await w.process(rid)).state == RequestState.ERROR
+    finally:
+        telemetry.uninstall()
+    (done,) = [e for e in t.snapshot()["pending"] if e["event"] == "request_finished"]
+    assert done["state"] == "error" and done["failed_stage"] == "download"
+    assert done["failure_reason"] == "timeout"
+
+
+async def test_extended_offer_found_is_sent_only_when_an_extended_mix_was_found(env, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: one short session sent `extended_offer_found` 15 times, nearly all `status: none`.
+    It is sent for a find only: not for a search that found nothing, nor for one that crashed."""
+    from flackey import telemetry
+
+    settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()]))
+    tid = store.add_track(path=settings.library_root / "a.aiff", fmt="aiff", bitrate_kbps=1411, cutoff_hz=22050,
+                          file_size=1, artist="A", title="B", mix_name="Original Mix", duration_s=300, isrc=None,
+                          catalog_track_id=None, request_id=None)
+    answers = iter([{"status": "none"}, RuntimeError("boom"),
+                    {"status": "available", "length_s": 390, "mix_name": "Extended Mix"}])
+
+    async def find(track_id):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(w, "_find_extended", find)
+    t = _stats(tmp_path)
+    try:
+        for _ in range(3):
+            await w._scan_extended(tid)
+    finally:
+        telemetry.uninstall()
+    offers = [e for e in t.snapshot()["pending"] if e["event"] == "extended_offer_found"]
+    assert len(offers) == 1
+    assert offers[0]["status"] == "available" and offers[0]["word"] == "extended" and offers[0]["gain"] == "1-2m"

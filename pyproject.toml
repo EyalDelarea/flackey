@@ -74,6 +74,7 @@ layers = [
   "evidence",
   "lossless",
   "match : identify : version",
+  "telemetry",
   "notify : config : models : logsetup",
   "tools : audiofile : quant : opus",
   "slskd_process",

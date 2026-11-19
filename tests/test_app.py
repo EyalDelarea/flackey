@@ -670,3 +670,60 @@ async def test_a_telethon_connect_cut_short_leaves_nothing_running(tmp_path, mon
         await client.disconnect()
         server.close()
         await server.wait_closed()
+
+
+async def test_a_sidecar_that_will_not_start_is_reported_as_a_class_only(tmp_path):
+    """With usage stats on, a failed slskd start becomes error_caught: where and class, never the message."""
+    from flackey import telemetry
+
+    t = telemetry.Telemetry(tmp_path, version="0.6.1", url=None, channel="checkout",
+                            platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+    try:
+        await start_sidecar(_Sidecar(SlskdBinaryError("slskd at /Users/me/x did not become healthy")))
+    finally:
+        telemetry.uninstall()
+    (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "error_caught"]
+    assert ev["where"] == "slskd_start" and ev["exc_class"] == "SlskdBinaryError" and "/Users" not in str(ev)
+
+
+def test_usage_stats_that_cannot_start_never_stop_the_launch(tmp_path, monkeypatch):
+    """A broken settings file, a full disk or a read-only data folder costs the stats, never the app."""
+    from types import SimpleNamespace
+
+    from flackey import app, telemetry
+
+    def boom(*_a, **_k):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(telemetry, "from_settings", boom)
+    tel, session = app.start_usage(SimpleNamespace(data_dir=tmp_path))
+    assert not tel.enabled and session == {}
+    telemetry.uninstall()
+
+    good = telemetry.Telemetry(tmp_path, version="0.6.1", url=None, channel="checkout",
+                               platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    good.opt_in()
+    monkeypatch.setattr(telemetry, "from_settings", lambda *_a, **_k: good)
+    monkeypatch.setattr(good, "start_session", boom)
+    tel, session = app.start_usage(SimpleNamespace(data_dir=tmp_path))
+    assert tel is good and session == {}
+    telemetry.uninstall()
+
+
+def test_usage_stats_that_fail_at_quit_never_stop_the_shutdown(tmp_path, monkeypatch):
+    """end_session runs before slskd is stopped and the port released: it must not raise past them."""
+    from flackey import app, telemetry
+
+    t = telemetry.Telemetry(tmp_path, version="0.6.1", url=None, channel="checkout",
+                            platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    t.opt_in()
+    telemetry.install(t)
+
+    def boom():
+        raise RuntimeError("dictionary changed size during iteration")
+
+    monkeypatch.setattr(t, "end_session", boom)
+    app.end_usage(t)                              # no exception
+    assert telemetry.current() is None
