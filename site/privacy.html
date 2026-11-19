@@ -36,8 +36,8 @@
       <a class="button compact" href="index.html#download">Download</a>
     </header>
     <main>
-      <!-- Every claim here is checked against app PR #212 (head c77d515: UsageStatsAsk.tsx,
-           PrivacySection.tsx, telemetry/client.py, telemetry_schema_v1.json) and the stats server's
+      <!-- Every claim here is checked against the Flackey v0.7.0 tag (UsageStatsAsk.tsx,
+           UsageStatsCatalog.tsx, PrivacySection.tsx, telemetry_schema_v1.json) and the stats server's
            database migrations and hourly cleanup job. Recheck when either changes. -->
       <article class="privacy wrap" id="privacy" aria-labelledby="privacy-title">
         <div class="privacy-head">
@@ -49,17 +49,16 @@
             download: we only get counts like “a Soulseek search found nothing”,
             never song names, links or files.
           </p>
-          <!-- TODO(release): replace vNEXT with the release's version before merging. -->
-          <p class="privacy-updated">Applies from Flackey vNEXT, the first version with usage stats.</p>
+          <p class="privacy-updated">Applies from Flackey 0.7.0, the first version with usage stats.</p>
         </div>
 
         <div class="privacy-body">
           <section aria-labelledby="p-optin">
             <h2 id="p-optin">Off unless you say yes</h2>
             <p>
-              Setup’s Welcome screen asks “Share usage stats?” with two equal
-              answers, and neither is picked for you. If you already use
-              Flackey, it asks on the main screen until you answer. Not now,
+              Setup’s Welcome screen shows a note from me, “Hey! Eyal here 👋”,
+              asking you to share usage stats, with two equal answers, and neither is picked for you. If you already use
+              Flackey, it shows the same note on the main screen until you answer. Not now,
               closing the question or not answering all leave stats off.
             </p>
             <p>
@@ -103,7 +102,8 @@
               </li>
               <li>
                 <strong>Updates:</strong> whether an update check, download
-                or install worked, and the Flackey version it was updating to.
+                or install worked, whether it started by itself or by you, how long
+                it took as a range, and the Flackey version it was updating to.
               </li>
               <li>
                 <strong>Your actions and library:</strong> what you did with a
@@ -130,7 +130,8 @@
               <strong>See exactly what’s sent</strong> lists every kind of
               report and every field it can carry. The list is read from the
               same rules our stats server checks each report against, so it
-              can’t promise less than is sent.
+              can’t promise less than is sent. <strong>Privacy details</strong> there
+              opens this page.
             </p>
             <p>
               <strong>What’s sent</strong>, just below it, shows the exact
