@@ -1,8 +1,10 @@
+import dataclasses
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from flackey import store as store_module
 from flackey.models import Candidate, CatalogTrack, Query, RequestKind, RequestState
 from flackey.store import Store
 
@@ -546,3 +548,77 @@ def test_stats_count_the_labels_of_noisy_titles(store: Store):
     store.add_request("plain", RequestKind.YT_TRACK)
     assert store.stats()["interpretations"] == {"confirmed": 2, "agreed": 1, "ambiguous": 1, "skipped": 1,
                                                  "pending": 1, "confirmed_by_other": 1}
+
+
+# ---- a newer build's columns ---------------------------------------------
+# A newer Flackey adds columns with `_ensure_column`; going back to an older build on the same profile
+# leaves them in the file. The older build must read its rows anyway, ignoring what it does not know
+# (0.7.0 added `candidates.cover_url` and 0.6.1 then failed to load at all).
+
+def _add_future_column(store: Store, table: str) -> None:
+    store.conn.execute(f"ALTER TABLE {table} ADD COLUMN future_col TEXT DEFAULT 'from a newer build'")
+    store.conn.commit()
+
+
+def test_candidates_load_with_a_column_from_a_newer_build(store: Store):
+    rid = store.add_request("q", RequestKind.TEXT)
+    [c] = store.add_candidates(rid, [Candidate(source="deezer_bot", source_ref="dz_track:1:send",
+                                               artist="A", title="T", rank=1)])
+    _add_future_column(store, "candidates")
+    assert [x.title for x in store.get_candidates(rid)] == ["T"]
+    got = store.get_candidate(c.id)
+    assert got.source_ref == "dz_track:1:send"
+    assert not hasattr(got, "future_col")
+
+
+def test_a_candidate_from_before_cover_url_loads_a_row_that_has_it(store: Store, monkeypatch):
+    """The bug as it happened: 0.7.0 added `candidates.cover_url`, and 0.6.1 -- whose Candidate has no
+    such field -- then failed to load at all. Stand in the old Candidate and read a row that carries it."""
+    rid = store.add_request("q", RequestKind.TEXT)
+    [c] = store.add_candidates(rid, [Candidate(source="deezer_bot", source_ref="dz_track:1:send",
+                                               artist="A", title="T", rank=1, cover_url="https://x/c.jpg")])
+    old = dataclasses.make_dataclass(
+        "Candidate", [(f.name, f.type, f) for f in dataclasses.fields(Candidate) if f.name != "cover_url"])
+    monkeypatch.setattr(store_module, "Candidate", old)
+    got = store.get_candidate(c.id)
+    assert type(got) is old and got.title == "T" and not hasattr(got, "cover_url")
+    assert [x.id for x in store.get_candidates(rid)] == [c.id]
+
+
+def test_requests_load_with_a_column_from_a_newer_build(store: Store):
+    rid = store.add_request("q", RequestKind.TEXT)
+    _add_future_column(store, "requests")
+    assert store.get_request(rid).state == RequestState.QUEUED
+    assert [r.id for r in store.due_queued()] == [rid]
+
+
+def test_catalog_tracks_load_with_a_column_from_a_newer_build(store: Store):
+    store.upsert_catalog_track(_catalog())
+    _add_future_column(store, "catalog_tracks")
+    assert store.get_catalog_track(16552105).title == "Into the Void"
+
+
+def test_tracks_load_with_a_column_from_a_newer_build(store: Store, tmp_path: Path):
+    tid = store.add_track(path=tmp_path / "a.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800,
+                          file_size=1, artist="A", title="T", mix_name="Original Mix", duration_s=1,
+                          isrc=None, catalog_track_id=None, request_id=None)
+    _add_future_column(store, "tracks")
+    assert store.get_track(tid).path == tmp_path / "a.mp3"
+    assert [t.id for t in store.list_tracks()] == [tid]
+
+
+def test_playlists_load_with_a_column_from_a_newer_build(store: Store):
+    pid = store.upsert_playlist("https://youtube.com/playlist?list=1", "Goa Set")
+    _add_future_column(store, "playlists")
+    assert store.get_playlist(pid).name == "Goa Set"
+    assert [p.id for p in store.list_playlists()] == [pid]
+
+
+def test_rejections_load_with_a_column_from_a_newer_build(store: Store):
+    rid = store.add_request("q", RequestKind.TEXT)
+    rj = store.add_rejection(rid, "cutoff", 320, 16000, None)
+    _add_future_column(store, "rejections")
+    assert store.get_rejection(rj).reason == "cutoff"
+    assert store.get_rejection_for_request(rid).id == rj
+    assert [r.id for r in store.rejections_for_request(rid)] == [rj]
+    assert [r.id for r in store.list_rejections()] == [rj]
