@@ -415,6 +415,44 @@ p {
   line-height: 1.5;
   margin: 0 4px;
 }
+/* Usage stats: the app's question, with its two equal answers and neither picked */
+.wn-stats {
+  width: 176px;
+  padding: 8px 9px 9px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
+  display: grid;
+  gap: 6px;
+}
+.wn-stats-title {
+  font-weight: 700;
+}
+.wn-stats-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.07);
+}
+.wn-stats-seg i {
+  font-style: normal;
+  text-align: center;
+  padding: 3px 4px;
+  border-radius: 5px;
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+.wn-stats-foot {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 10.5px;
+}
+.wn-link {
+  color: var(--blue);
+  white-space: nowrap;
+}
 /* Playlists sidebar */
 .wn-sidebar {
   width: 150px;
@@ -463,36 +501,6 @@ p {
 .wn-albums b {
   font-weight: 500;
   color: rgba(0, 0, 0, 0.35);
-}
-/* Folder layout */
-.wn-layout {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-.wn-seg {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.07);
-}
-.wn-seg i {
-  font-style: normal;
-  padding: 3px 7px;
-  border-radius: 5px;
-  color: rgba(0, 0, 0, 0.6);
-  white-space: nowrap;
-  transition: background 0.25s, color 0.25s, box-shadow 0.25s;
-}
-.wn-seg i.on {
-  background: #fff;
-  color: #1d1d1f;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
-}
-.wn-path {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: rgba(0, 0, 0, 0.55);
 }
 /* Extended mix: the Done row's offer, with the app's two buttons under it */
 .wn-ext {
@@ -2670,7 +2678,8 @@ footer {
   letter-spacing: -1px;
   color: var(--ink);
 }
-footer > a:last-child {
+/* The links after the brand line sit together at the right. */
+footer > .footer-push {
   margin-left: auto;
 }
 @keyframes rise {
@@ -2682,6 +2691,64 @@ footer > a:last-child {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ---- Privacy page ----
+   One readable column, the site's type and colours, sections split by hairlines. */
+.privacy {
+  padding: 70px 0 100px;
+}
+.privacy-head h1 {
+  font-size: clamp(36px, 4.4vw, 64px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+  font-weight: 650;
+}
+.privacy-head .section-intro {
+  max-width: 640px;
+}
+.privacy-body {
+  margin-top: 56px;
+  max-width: 720px;
+}
+.privacy-body section {
+  padding: 34px 0;
+  border-top: 1px solid var(--line);
+}
+.privacy-body h2 {
+  font-size: clamp(22px, 2.2vw, 28px);
+  letter-spacing: -0.03em;
+  margin-bottom: 14px;
+}
+.privacy-body p,
+.privacy-body li {
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.privacy-body p + p,
+.privacy-body p + ul,
+.privacy-body ul + p {
+  margin-top: 14px;
+}
+.privacy-body ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.privacy-body li + li {
+  margin-top: 6px;
+}
+.privacy-body strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.privacy-body a {
+  color: var(--blue);
+}
+.privacy-updated {
+  margin-top: 18px;
+  font-size: 14px;
+  color: var(--muted);
 }
 
 /* ambient sound-wave motifs */
@@ -2987,6 +3054,13 @@ footer > a:last-child {
   footer {
     flex-wrap: wrap;
     gap: 14px;
+  }
+  .privacy {
+    padding: 40px 0 70px;
+  }
+  .privacy-body p,
+  .privacy-body li {
+    font-size: 16px;
   }
   .command {
     align-items: flex-start;
