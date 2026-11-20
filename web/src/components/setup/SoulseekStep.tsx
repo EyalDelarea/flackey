@@ -37,6 +37,9 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
   const [sharing, setSharing] = useState<SharingState | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const connectTimer = useRef<number | undefined>(undefined)
+  // Set when the step stopped hearing about a download rather than hearing that it failed: the server may
+  // still be fetching, and a second install started on top of it would download the same file twice.
+  const lostTrack = useRef(false)
   // The name that was already saved when this step opened, kept because `username` is overwritten the
   // moment the owner asks for a new account -- and that is exactly when they need to be told which
   // account they are about to walk away from.
@@ -68,6 +71,7 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
         .catch(() => {
           if (++failures < POLL_FAILURES) return
           stopPolling()
+          lostTrack.current = true
           setInstall({ state: 'error', done: 0, total: 0, error: null })   // brings up Try again
         })
         .finally(() => { waiting = false })
@@ -106,6 +110,14 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
   }
 
   const startInstall = () => {
+    if (lostTrack.current) {
+      // Ask first: a download still running is picked back up, and only one that ended is started over.
+      lostTrack.current = false
+      api.slskdProgress()
+        .then(p => { if (p.state === 'downloading' || p.state === 'extracting') { setInstall(p); poll() } else startInstall() })
+        .catch(() => startInstall())
+      return
+    }
     setInstall({ state: 'downloading', done: 0, total: 0, error: null })
     api.installSlskd()
       .then(poll)

@@ -78,8 +78,10 @@ export function useLive(): Live {
   const refresh = useCallback(async () => {
     try {
       const ticket = startSnapshot()
-      const [h, q, st] = await Promise.all([api.health(), api.queue(), api.settings()])
-      setHealth(h); applySnapshot(ticket, q); setSettings(st)
+      // The queue lands as soon as it answers: having taken the newest ticket, it must not be lost just
+      // because health or settings failed beside it.
+      const [h, , st] = await Promise.all([api.health(), api.queue().then(q => applySnapshot(ticket, q)), api.settings()])
+      setHealth(h); setSettings(st)
       markAlive()
       await refreshLibrary()
       setLoadError(null)
