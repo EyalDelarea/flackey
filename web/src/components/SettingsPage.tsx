@@ -99,7 +99,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const [releaseBusy, setReleaseBusy] = useState(false)
   const [restartBusy, setRestartBusy] = useState(false)
   useEffect(() => {
-    api.telegramStatus().then(setTg).catch(e => setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")))
+    // An answer about the sign-in state this page has since moved past must not land over the newer one.
+    let current = true
+    api.telegramStatus().then(t => { if (current) setTg(t) })
+      .catch(e => { if (current) setTgError(getErrorMessage(e, "Couldn't check the Telegram connection.")) })
+    return () => { current = false }
   }, [authorized])
   useEffect(() => {
     api.pickFolderAvailable().then(r => setPickerAvailable(r.available)).catch(() => {})
@@ -119,9 +123,14 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
       .finally(() => setUpdateChecking(false))
   }, [s?.version])
   if (!s) return null
+  // After an action has gone through, the refresh is only there to show it sooner: a failed one must not
+  // turn into an error about the action itself (WEB-2).
+  const refreshAfter = async () => { try { await live.refresh() } catch { /* the stream catches up */ } }
   async function save() {
+    setBusy(true)
     try { live.setSettings(await api.saveSettings(path)); setEditing(false); setErr(null) }
     catch (e) { setErr(getErrorMessage(e, 'Could not save that folder.')) }
+    finally { setBusy(false) }
   }
   async function chooseFolderClicked() {
     setBusy(true); setErr(null)
@@ -147,7 +156,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   }
   const resetSetup = () => {
     setResettingSetup(true)
-    api.setupReset().then(() => live.refresh())
+    api.setupReset().then(refreshAfter)
       .then(() => setSetupResetError(null))
       .catch(err => setSetupResetError(getErrorMessage(err, 'Could not restart setup. Try again.')))
       .finally(() => setResettingSetup(false))
@@ -163,7 +172,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const setTelegramSource = (on: boolean) => {
     setSourceBusy(true); setSourceError(null)
     api.telegramSource(on)
-      .then(() => live.refresh())
+      .then(refreshAfter)
       .catch(err => setSourceError(getErrorMessage(err, "Couldn't change the Deezer setting.")))
       .finally(() => setSourceBusy(false))
   }
@@ -172,7 +181,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const reconnectSoulseek = () => {
     setReconnecting(true); setSoulseekError(null)
     api.connectSoulseek()
-      .then(() => live.refresh())
+      .then(refreshAfter)
       .catch(e => setSoulseekError(getErrorMessage(e, "Couldn't reconnect to Soulseek.")))
       .finally(() => setReconnecting(false))
   }

@@ -122,6 +122,18 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   // it is made into a sentence before it heads a banner.
   const failMessage = (err: unknown) => err instanceof ApiError ? asSentence(err.message) : "That didn't work. Try again."
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null)).catch(err => setActionError(failMessage(err)))
+  // The refresh after an action is a courtesy -- the stream would bring the same rows anyway. Its failure
+  // says nothing about the action, which already went through, so it must not head a "didn't work" banner
+  // and send the owner to press it a second time (WEB-2).
+  const refreshAfter = async () => { try { await live.refresh() } catch { /* the stream catches up */ } }
+  // A row action pressed again before its first answer would post twice -- a second Choose or Accept lands
+  // on a row that has already moved and comes back as a 409 for something that worked (WEB-5).
+  const inFlight = useRef(new Set<string>())
+  const once = (key: string, start: () => Promise<unknown>) => {
+    if (inFlight.current.has(key)) return
+    inFlight.current.add(key)
+    run(start().finally(() => inFlight.current.delete(key)))
+  }
   /* Get extended is a search, a download and a fingerprint: long enough that the row has to say it is on it.
      One at a time, so a playlist's worth of them stands in Soulseek's line as one track would. */
   const getExtended = async (ids: number[]) => {
@@ -136,7 +148,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       } catch (err) { setActionError(failMessage(err)) }
       finally { setExtending(s => { const n = new Set(s); n.delete(id); return n }) }
     }
-    await live.refresh()
+    await refreshAfter()
   }
   const retryAll = () => {
     setRetryingAll(true)
@@ -145,7 +157,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
         // A 200 that re-queued nothing is still a press that did nothing: say so rather than leave the
         // owner watching an unchanged list.
         setActionError(retried.length === 0 ? 'Nothing could be retried — this list may be out of date.' : null)
-        await live.refresh()
+        await refreshAfter()
       })
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRetryingAll(false))
@@ -159,7 +171,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
         setActionError(skipped.length === 0 ? null
           : `${skipped.length === 1 ? 'One track was' : `${skipped.length} tracks were`} not removed — a file was being checked or filed. Try again in a moment.`)
         setConfirmRemove(null)
-        await live.refresh()
+        await refreshAfter()
       })
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRemoving(false))
@@ -218,23 +230,23 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   const onAction = (kind: RowAction['kind'], id: number, path?: string) => {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
     else if (kind === 'reveal' && path) run(api.reveal(path))
-    else if (kind === 'retry') run(api.retry(id).then(() => live.refresh()))
+    else if (kind === 'retry') once(`retry:${id}`, () => api.retry(id).then(refreshAfter))
     // Filing moves the very file the block above was playing, so the clip has to stop with it -- the row
     // is about to be redrawn as a finished track with no player on it at all.
-    else if (kind === 'accept') { stop(); run(api.accept(id).then(() => live.refresh())) }
-    else if (kind === 'keepHeld') { stop(); run(api.keepHeld(id).then(() => live.refresh())) }
-    else if (kind === 'cancel') run(api.cancel(id))
+    else if (kind === 'accept') { stop(); once(`accept:${id}`, () => api.accept(id).then(refreshAfter)) }
+    else if (kind === 'keepHeld') { stop(); once(`keepHeld:${id}`, () => api.keepHeld(id).then(refreshAfter)) }
+    else if (kind === 'cancel') once(`cancel:${id}`, () => api.cancel(id))
     else if (kind === 'report') onReport?.(id)
     else if (kind === 'extended') void getExtended([id])
     else if (kind === 'keep') {
       const trackId = live.bundles.get(id)?.track?.id
-      if (trackId != null) run(api.keepThis(trackId).then(() => live.refresh()))
+      if (trackId != null) once(`keep:${id}`, () => api.keepThis(trackId).then(refreshAfter))
     }
     // A finished row goes through DELETE as it always has. A live one -- parked, queued, downloading --
     // has to be stopped first, which only the batch route does, so it goes there as a batch of one.
     else if (kind === 'remove') {
       const b = live.bundles.get(id)
-      if (!b || isFinished(b)) run(api.removeRequest(id).then(() => live.dropBundle(id)))
+      if (!b || isFinished(b)) once(`remove:${id}`, () => api.removeRequest(id).then(() => live.dropBundle(id)))
       else removeThese([id])
     }
   }
@@ -242,7 +254,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
     <>
       <PasteBar onSubmit={async url => {
         const submission = await api.submit(url)
-        await live.refresh()
+        await refreshAfter()
         return submission.summary
       }} />
       {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
@@ -295,7 +307,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
         {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
-        {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); run(api.choose(rid, cid)) }}
+        {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); once(`choose:${rid}`, () => api.choose(rid, cid)) }}
           onGetAllExtended={ids => void getExtended(ids)}
           player={{ playing, clock, slow, failed }} onPlay={onPlay} />)}
       </div>

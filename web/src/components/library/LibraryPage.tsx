@@ -122,7 +122,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     setRefreshing(true); setActionError(null)
     try {
       const result = await api.refreshLibrary()
-      await live.refreshLibrary()
+      // Re-reading is only there to show the result sooner; the refresh itself already went through.
+      await live.refreshLibrary().catch(() => undefined)
       setNote(result.removed ? `Removed ${plural(result.removed, 'missing file')} from the library.` : 'Library is up to date.')
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Couldn't refresh library. Try again.")
@@ -142,7 +143,9 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     try {
       const res = await api.upgradeTrack(t.id)
       setNote(`${t.artist} – ${t.title}: ${res.message}`)
-      if (res.upgraded) setTracks(await api.library(q, selectedPlaylist))
+      // Re-read through the effect rather than here: it knows the search as it is now, and its request
+      // counter keeps an answer for the search as it was when this started from landing over it (WEB-7).
+      if (res.upgraded) await live.refreshLibrary().catch(() => undefined)
     } catch (err) {
       setActionError(err instanceof ApiError ? asSentence(err.message) : "Couldn't search for a lossless copy. Try again.")
     } finally {

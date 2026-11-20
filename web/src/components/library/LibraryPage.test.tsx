@@ -164,3 +164,45 @@ it('reads a queued entry\'s reason as a previous attempt, except the wait for So
   expect(await screen.findByText('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')).toBeInTheDocument()
   expect(screen.getByText('Previous attempt: video audio unavailable, will retry')).toBeInTheDocument()
 })
+
+describe('after a lossless upgrade', () => {
+  const lossy = { id: 1, path: '/lib/A/x.mp3', fmt: 'mp3', bitrate_kbps: 320, cutoff_hz: 19800, file_size: 1, artist: 'Artist A',
+    title: 'Song A', mix_name: 'Original Mix', duration_s: 300, isrc: null, catalog_track_id: null, request_id: null, added_at: '',
+    verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null, catalog: null }
+
+  it('does not put the list for an old search back over the one being typed (WEB-7)', async () => {
+    vi.mocked(api.library).mockImplementation(async (q?: string) => (q ? [] : [lossy]) as any)
+    let finish: () => void = () => {}
+    vi.spyOn(api, 'upgradeTrack').mockImplementation(() => new Promise(r => {
+      finish = () => r({ ok: true, upgraded: true, message: 'Found a lossless copy.' } as any) }))
+    const refreshLibrary = vi.fn().mockResolvedValue(undefined)
+    render(<LibraryPage live={{ ...makeLive(), refreshLibrary }} selectedPlaylist={null} />)
+    fireEvent.click(await screen.findByText('Find lossless'))
+    fireEvent.change(screen.getByLabelText('search library'), { target: { value: 'zzz' } })
+    await waitFor(() => expect(screen.queryByText('Artist A – Song A')).not.toBeInTheDocument())
+    finish()
+    await waitFor(() => expect(refreshLibrary).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText(/Found a lossless copy/)).toBeInTheDocument())
+    expect(screen.queryByText('Artist A – Song A')).not.toBeInTheDocument()
+  })
+
+  it('reports the upgrade, not a failure, when re-reading the library fails', async () => {
+    vi.mocked(api.library).mockResolvedValue([lossy] as any)
+    vi.spyOn(api, 'upgradeTrack').mockResolvedValue({ ok: true, upgraded: true, message: 'Found a lossless copy.' } as any)
+    const refreshLibrary = vi.fn().mockRejectedValue(new Error('stats timed out'))
+    render(<LibraryPage live={{ ...makeLive(), refreshLibrary }} selectedPlaylist={null} />)
+    fireEvent.click(await screen.findByText('Find lossless'))
+    await waitFor(() => expect(screen.getByText(/Found a lossless copy/)).toBeInTheDocument())
+    expect(screen.queryByText("Couldn't search for a lossless copy. Try again.")).not.toBeInTheDocument()
+  })
+
+  it('reports a library refresh that went through even when re-reading it fails (WEB-2)', async () => {
+    vi.mocked(api.library).mockResolvedValue([])
+    vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0 })
+    const refreshLibrary = vi.fn().mockRejectedValue(new Error('stats timed out'))
+    render(<LibraryPage live={{ ...makeLive(), refreshLibrary }} selectedPlaylist={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+    await waitFor(() => expect(screen.getByText('Library is up to date.')).toBeInTheDocument())
+    expect(screen.queryByText("Couldn't refresh library. Try again.")).not.toBeInTheDocument()
+  })
+})

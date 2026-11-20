@@ -1,8 +1,8 @@
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { useLive } from './live'
 import type { Live } from './live'
-import { api } from './api'
-import type { AppSettings, Health, Stats } from './api'
+import { api, ApiError } from './api'
+import type { AppSettings, Bundle, Health, Stats } from './api'
 
 class FakeEventSource {
   static last: FakeEventSource | null = null
@@ -176,5 +176,71 @@ describe('the update download', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('the first load failing on a server that is up (WEB-1)', () => {
+  it('shows what the server said instead of claiming it cannot be reached', async () => {
+    vi.spyOn(api, 'health').mockRejectedValueOnce(new ApiError(500, 'database is locked'))
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByText('database is locked')).toBeInTheDocument())
+    expect(screen.queryByText(/Can't reach Flackey/)).not.toBeInTheDocument()
+  })
+
+  it('still says something when the error carried no message', async () => {
+    vi.spyOn(api, 'health').mockRejectedValueOnce(new ApiError(503, ''))
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByText(/Flackey hit an error \(503\)/)).toBeInTheDocument())
+    expect(screen.queryByText(/Can't reach Flackey/)).not.toBeInTheDocument()
+  })
+})
+
+describe('queue snapshots that land out of order (WEB-3)', () => {
+  const liveRef: { current: Live | null } = { current: null }
+  const bundle = (id: number, state: string): Bundle => ({
+    request: { id, state } as Bundle['request'], candidates: [], catalog: null, track: null, rejection: null })
+  const start = async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    render(<Harness liveRef={liveRef} />)
+    await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+    return FakeEventSource.last!
+  }
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>(r => { resolve = r })
+    return { promise, resolve }
+  }
+
+  it('drops an older /api/queue answer that arrives after a newer one', async () => {
+    const es = await start()
+    const first = deferred<Bundle[]>(); const second = deferred<Bundle[]>()
+    vi.spyOn(api, 'queue').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    act(() => { es.emit('queue', {}); es.emit('queue', {}) })
+    await act(async () => { second.resolve([bundle(1, 'filing')]) })
+    await act(async () => { first.resolve([bundle(1, 'fetching')]) })
+    expect(liveRef.current!.bundles.get(1)?.request.state).toBe('filing')
+  })
+
+  it('keeps a row event that arrived while the snapshot was in flight', async () => {
+    const es = await start()
+    const snap = deferred<Bundle[]>()
+    vi.spyOn(api, 'queue').mockReturnValueOnce(snap.promise)
+    act(() => es.emit('queue', {}))
+    act(() => es.emit('request', bundle(1, 'filing')))
+    await act(async () => { snap.resolve([bundle(1, 'fetching'), bundle(2, 'queued')]) })
+    expect(liveRef.current!.bundles.get(1)?.request.state).toBe('filing')
+    expect(liveRef.current!.bundles.get(2)?.request.state).toBe('queued')
+  })
+})
+
+describe('a malformed stream frame (WEB-16)', () => {
+  it('is ignored rather than thrown out of the handler', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+    const es = FakeEventSource.last!
+    expect(() => act(() => es.handlers.request({ data: '{not json' }))).not.toThrow()
+    expect(() => act(() => es.handlers.status({ data: '{not json' }))).not.toThrow()
+    expect(screen.getByText('has-health')).toBeInTheDocument()
   })
 })

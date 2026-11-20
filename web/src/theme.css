@@ -46,6 +46,9 @@
      table row and the setup step's current disc put white text directly on this, so those three get a
      value that clears the bar; --accent itself is untouched everywhere it is used as text/border/focus. */
   --accent-fill: #0060DF;
+  /* Link buttons are 12 px text straight on white, where --accent is ~4.0:1 (WEB-10). The fill value
+     clears 4.5:1, so light mode borrows it; dark mode keeps the house blue below. */
+  --link-text: #0060DF;
   --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, monospace;
 }
@@ -58,6 +61,7 @@
     --text: rgba(255,255,255,.87); --secondary: rgba(255,255,255,.55); --tertiary: rgba(255,255,255,.28);
     --sep: rgba(255,255,255,.09);
     --accent: #0A84FF;
+    --link-text: var(--accent);
     --selection: rgba(255,255,255,.09); --alt: rgba(255,255,255,.03); --chip: rgba(255,255,255,.12);
     --button: rgba(255,255,255,.11); --button-border: rgba(255,255,255,.10); --button-shadow: 0 .5px 1px rgba(0,0,0,.3);
     --tip-bg: rgba(58,58,60,.92);
@@ -100,13 +104,13 @@ button, input { font: inherit; color: inherit; }
 button { cursor: default; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .muted { color: var(--secondary); } .faint { color: var(--tertiary); }
-.err { color: var(--red); font-size: 12px; }
+.err { color: var(--red-text); font-size: 12px; }
 .btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--accent-fill); color: var(--accent-text); font-size: 13px; font-weight: 500; box-shadow: var(--button-shadow); white-space: nowrap; }
 .btn-primary.lg { height: 30px; padding: 0 22px; border-radius: 7px; font-size: 14px; }
 .btn-secondary { display: inline-flex; align-items: center; justify-content: center; height: 22px; padding: 0 10px; border: .5px solid var(--button-border); border-radius: 5px; background: var(--button); color: var(--text); font-size: 12px; box-shadow: var(--button-shadow); white-space: nowrap; }
 .btn-primary:active { filter: brightness(.92); } .btn-secondary:active { background: var(--selection); }
 .btn-primary:disabled, .btn-secondary:disabled { opacity: .45; }
-.btn-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--link-text); font-size: 12px; }
 .btn-link.muted { color: var(--secondary); }
 .input { height: 28px; width: 100%; padding: 0 8px; border: .5px solid var(--well-border); border-radius: 7px; background: var(--well); color: var(--text); font-size: 13px; outline: none; }
 .input::placeholder { color: var(--tertiary); }
