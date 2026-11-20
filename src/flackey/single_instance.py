@@ -1,4 +1,5 @@
-"""One Flackey per Windows user: a second launch hands over to the first instead of starting again.
+"""One Flackey per Windows user, and one per data folder everywhere: a second launch hands over to the
+first instead of starting again.
 
 Kept apart from `desktop` and free of flackey imports so the packaged app can check before it loads
 anything heavy -- on an Arm PC emulating x64 those imports take minutes, and a second double-click
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+from typing import IO
 
 WINDOW_TITLE = "Flackey"  # the main window's title, which `desktop.APP_NAME` also is
 
@@ -17,6 +20,11 @@ _ERROR_ALREADY_EXISTS = 183
 _SW_RESTORE = 9
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _held: dict[str, int] = {}  # name -> mutex handle, held for the life of the process; Windows lets go at exit
+LOCK_FILE_NAME = "flackey.lock"
+# data dir -> the open lock file. Module scope so the lock lives as long as the process: a file object
+# that was garbage-collected would close and quietly let go of it.
+_dir_locks: dict[str, IO[bytes]] = {}
+_NS_ACTIVATE_IGNORING_OTHER_APPS = 1 << 1
 
 
 def claim_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> bool:
@@ -96,3 +104,96 @@ def focus_running_window(title: str = WINDOW_TITLE) -> bool:
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, _SW_RESTORE)  # only when minimized: on a maximized one it would un-maximize
     return bool(user32.SetForegroundWindow(hwnd))
+
+
+class DataDirInUse(RuntimeError):
+    """Another Flackey process already runs on this data folder."""
+
+
+def claim_data_dir(data_dir: Path) -> bool:
+    """True when no other Flackey process is using `data_dir`, and from now on this one is.
+
+    The named mutex above is Windows only and per user; nothing stopped a second Mac copy -- a stray
+    local build opened by Spotlight beside the installed app, or `flackey start` in a terminal -- from
+    starting on the same folder. That copy then failed to bind the port and, on its way out, its exit
+    guard stopped the slskd it found by pid file: the *first* copy's, which kept running with Soulseek
+    dead. An exclusive lock on a file in the data folder is what tells the two apart: the first process
+    takes it, later ones find it held. The kernel lets go when the holder exits, crash or not, so there is
+    no stale lock to clean up.
+
+    Idempotent within a process: the packaged app claims in `launch.py` and `run_in_window` claims again.
+    True as well when the lock file cannot be made at all (a read-only folder), since starting is better
+    than refusing to start. The holder writes its pid into the file so a second copy can bring it forward
+    (`holder_pid`)."""
+    key = os.path.abspath(data_dir)
+    if key in _dir_locks:
+        return True
+    try:
+        Path(key).mkdir(parents=True, exist_ok=True)
+        f = open(os.path.join(key, LOCK_FILE_NAME), "a+b")  # noqa: SIM115 -- held for the life of the process
+    except OSError:
+        return True
+    try:
+        _lock_file(f)
+    except OSError:
+        f.close()
+        return False
+    if sys.platform != "win32":  # a locked byte cannot be read by anyone else on Windows; nobody needs it there
+        try:
+            f.seek(0)
+            f.truncate()
+            f.write(str(os.getpid()).encode())
+            f.flush()
+        except OSError:
+            pass
+    _dir_locks[key] = f
+    return True
+
+
+def release_data_dir(data_dir: Path) -> None:
+    """Let go of the lock taken by `claim_data_dir`. For tests; the app keeps it until it exits."""
+    f = _dir_locks.pop(os.path.abspath(data_dir), None)
+    if f is not None:
+        f.close()
+
+
+def _lock_file(f: IO[bytes]) -> None:
+    """Non-blocking exclusive lock on `f`; OSError when another open file holds it."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def holder_pid(data_dir: Path) -> int | None:
+    """The pid the lock holder wrote, or None when there is none to read."""
+    try:
+        text = (Path(data_dir) / LOCK_FILE_NAME).read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return int(text) if text.isdigit() and int(text) > 1 else None
+
+
+def focus_process(pid: int | None) -> bool:
+    """Bring the app running as `pid` to the front on macOS. False when there is no such app (it is still
+    starting, or it is a headless `flackey start`), off macOS, or without AppKit."""
+    if pid is None or sys.platform != "darwin":
+        return False
+    try:
+        import AppKit
+    except ImportError:
+        return False
+    app = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    if app is None:
+        return False
+    return bool(app.activateWithOptions_(_NS_ACTIVATE_IGNORING_OTHER_APPS))
+
+
+def hand_over(data_dir: Path) -> bool:
+    """A second launch's way out: bring the copy that is running forward. True when a window came forward."""
+    return focus_running_window() or focus_process(holder_pid(data_dir))

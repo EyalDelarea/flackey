@@ -26,6 +26,7 @@ from .inbox import Inbox
 from .logsetup import log_startup_banner
 from .notify import LogNotifier
 from .sharing import Sharing
+from .single_instance import DataDirInUse, claim_data_dir
 from .slskd_binary import SlskdBinaryError
 from .slskd_config import SlskdConfigError, read_listen_port, write_share
 from .slskd_process import SlskdProcess, install_exit_guards
@@ -435,6 +436,11 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.rejected_dir,
               settings.library_root, settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)
+    # Before anything that touches the database or the sidecar. The window claims this already; this is
+    # for `flackey start` in a terminal, which would otherwise fail on the port beside a running app and
+    # stop that app's slskd on its way out (the exit guard below finds it by pid file).
+    if not claim_data_dir(settings.data_dir):
+        raise DataDirInUse(f"Flackey is already running on {settings.data_dir}")
     repair_share(settings)
     log_startup_banner(settings, __version__)
     store = Store(settings.db_path)
@@ -541,6 +547,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
             serve(server, url, handle),
             start_sidecar(slskd_process),
             supervise_worker(worker, status),
+            link.supervise(),
             close_streams_on_exit(server, bus),
             watch_telegram_session(login, status),
             sharing.run_forever(),

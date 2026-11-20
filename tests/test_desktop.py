@@ -274,6 +274,7 @@ def _install_fake_webview(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "window_origin", lambda size: None)
     # The real one would take the app's own mutex on a Windows test runner.
     monkeypatch.setattr(desktop, "claim_single_instance", lambda: True)
+    monkeypatch.setattr(desktop, "claim_data_folder", lambda settings: True)
     # Tests that pretend to be Windows would otherwise read a registry the suite does not have.
     monkeypatch.setattr(desktop, "webview2_version", lambda: "154.0.4258.37")
     # The real ones would read `settings.data_dir` and install process-wide signal handlers.

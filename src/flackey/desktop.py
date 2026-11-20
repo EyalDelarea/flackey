@@ -20,11 +20,13 @@ import sys
 import threading
 from pathlib import Path
 
-from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
+from .app import UI_DIR, ServerHandle, run
 from .config import Settings, save_settings
+from .logsetup import LOG_FILE
 from .selfupdate import install as update_install
-from .single_instance import claim_single_instance, focus_running_window
+from .single_instance import claim_data_dir, claim_single_instance, focus_running_window, hand_over
 from .slskd_process import install_exit_guards, stop_owned
+from .startup_alert import port_in_use, show_alert, startup_failure_text
 
 log = logging.getLogger(__name__)
 MAIN_SIZE = (1100, 720)  # a first launch only: after that the window opens where `window_size` left it
@@ -346,7 +348,15 @@ def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHan
     return thread, handle
 
 
-def wait_for_server(handle: ServerHandle, timeout_s: float = WEB_SERVER_START_TIMEOUT_S + 5) -> str:
+# How long the window waits for the server thread before giving up on it. The thread sets `started` the
+# moment it either listens or fails, so this bounds only a start that hangs -- and it covers the whole of
+# `_run`'s prelude (database, migrations, a Telegram connect of up to 15 s) as well as `serve`'s own
+# 30 s, which on a slow PC emulating x64 can run well past the old 35 s. A start that would have come up
+# a moment later must not be thrown away with a "took too long" box.
+SERVER_WAIT_S = 120.0
+
+
+def wait_for_server(handle: ServerHandle, timeout_s: float = SERVER_WAIT_S) -> str:
     handle.started.wait(timeout_s)
     if handle.error is not None:
         raise handle.error
@@ -656,6 +666,30 @@ def keep_sigint_from_pywebview() -> None:
     AppHelper.installMachInterrupt = lambda: None
 
 
+def claim_data_folder(settings: Settings) -> bool:
+    """Take this data folder for this process; False, having brought the running copy forward, when
+    another Flackey already has it. See `single_instance.claim_data_dir`."""
+    if claim_data_dir(settings.data_dir):
+        return True
+    shown = hand_over(settings.data_dir)
+    log.info("Flackey is already running on %s: %s", settings.data_dir,
+             "brought its window forward" if shown else "left it as it was")
+    return False
+
+
+def explain_startup_failure(settings: Settings, handle: ServerHandle) -> None:
+    """Say why the app is closing when the server never came up, instead of vanishing. `handle.error` is
+    no help in telling the causes apart -- uvicorn answers a taken port with `sys.exit`, which arrives
+    here as a CancelledError -- so the port is asked directly, now that our own server is not on it."""
+    timed_out = handle.error is None and handle.url is None
+    port_busy = port_in_use(settings.web_host, settings.web_port)
+    if port_busy:
+        log.error("could not start: port %s on %s is in use by another program", settings.web_port,
+                  settings.web_host)
+    show_alert(*startup_failure_text(port_busy=port_busy, timed_out=timed_out, port=settings.web_port,
+                                     log_path=settings.data_dir / LOG_FILE))
+
+
 def run_in_window(settings: Settings) -> None:
     if not UI_DIR.exists():
         raise SystemExit(f"UI not built: run `npm --prefix web run build` (expected {UI_DIR})")
@@ -668,13 +702,24 @@ def run_in_window(settings: Settings) -> None:
         explain_missing_webview2()
         return
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
+    # After the re-exec, which closes the lock file, and before anything that could touch the data
+    # folder or its slskd: a second copy's exit guard would otherwise stop the first copy's sidecar.
+    if not claim_data_folder(settings):
+        return
     sweep_leftover_updates()
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()
 
     guard_slskd(settings)
     thread, handle = start_server_thread(settings)
-    wait_for_server(handle)
+    try:
+        wait_for_server(handle)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        log.error("the app could not start: %r", exc)
+        explain_startup_failure(settings, handle)
+        return
     inset = sys.platform == "darwin"
     size = startup_size(settings)
     x, y = window_origin(size) or (None, None)
