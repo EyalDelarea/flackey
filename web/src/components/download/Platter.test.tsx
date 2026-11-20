@@ -11,12 +11,25 @@ it('always draws the track, so the arc is never a stroke with nothing behind it'
   }
 })
 
-it('leaves the ring empty at nought rather than drawing a cap with no length', () => {
+it('draws nought the way it draws a queue wait: a sweep and no number', () => {
   // A round linecap on a zero-length dash renders as a dot at twelve o'clock, which claims progress that
-  // has not happened.
-  const { container } = render(<Platter pct={0} label="x" />)
-  expect(container.querySelector('.arc')).toBeNull()
-  expect(container.querySelector('text')).toHaveTextContent('0')
+  // has not happened -- and a big `0` beside a row queued at the peer drew two pictures of the same thing:
+  // no bytes yet. Under a whole percent is that state too, so it never rounds to a `0` either.
+  for (const pct of [0, 0.4]) {
+    const { container } = render(<Platter pct={pct} label="0.0 MB of 58.9 MB from peer" />)
+    expect(container.querySelector('.platter')).toHaveClass('waiting')
+    expect(container.querySelector('text')).toBeNull()
+    expect(container.querySelector('.platter')).toHaveAttribute('aria-label', '0.0 MB of 58.9 MB from peer')
+  }
+  const { container: queued } = render(<Platter pct={null} label="Waiting in peer's queue" />)
+  const { container: nought } = render(<Platter pct={0} label="Waiting in peer's queue" />)
+  expect(nought.innerHTML).toBe(queued.innerHTML)
+})
+
+it('shows the number from the first whole percent', () => {
+  const { container } = render(<Platter pct={1} label="x" />)
+  expect(container.querySelector('.platter')).not.toHaveClass('waiting')
+  expect(container.querySelector('text')).toHaveTextContent('1')
 })
 
 it('holds still while it has a number, and moves only when it has none', () => {
