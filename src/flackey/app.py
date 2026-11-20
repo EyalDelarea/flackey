@@ -575,6 +575,7 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
             serve(server, url, handle),
             start_sidecar(slskd_process),
             supervise_worker(worker, status),
+            link.supervise(),
             close_streams_on_exit(server, bus),
             watch_telegram_session(login, status),
             sharing.run_forever(),

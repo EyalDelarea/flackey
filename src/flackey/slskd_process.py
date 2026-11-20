@@ -350,6 +350,18 @@ class SlskdProcess:
         another instance — `stop()` only ever signals a process this instance spawned."""
         return self._proc is not None and self._proc.returncode is None
 
+    @property
+    def died(self) -> bool:
+        """True when the slskd this instance runs is gone without anybody stopping it. Every stop --
+        `stop()`, or `stop_owned` from the window's quit path -- clears the pid file, and a crash or a
+        kill from outside does not, so a sidecar stopped on purpose is never taken for a crashed one."""
+        pid = getattr(self._proc, "pid", None) if self._proc is not None else self.owned_pid
+        if pid is None or read_pid(self._data_dir) != pid:
+            return False
+        if self._proc is not None:
+            return self._proc.returncode is not None
+        return not is_ours(pid, self._data_dir)
+
     async def start(self, *, timeout_s: float = SLSKD_START_TIMEOUT_S) -> None:
         """Launch slskd and wait for it to become healthy.
 
