@@ -181,6 +181,39 @@ const stageProgress = (requestId: number) => ({
   speed_bps: 1_200_000, pick: 1, state: 'InProgress',
 })
 
+/* One row per state the Downloads list draws, for the row-layout screenshots: the action rail and the
+   progress slot have to line up down the whole list, so every kind of row has to be on it at once. Built
+   with the stage rows' helper so ids count down and the list keeps this order. The transfers below are fed
+   in through the same SSE `status` frame the `stages` scenario uses. */
+const layoutRows = (): Bundle[] => {
+  const done = stageRow('Afgin', 'Flames Of Desire', 'done', { track_id: 1 })
+  done.track = track({ id: 1, artist: 'Afgin', title: 'Flames Of Desire', fmt: 'aiff', source: 'soulseek' })
+  return [
+    stageRow('Afgin', 'Internal Gravity', 'identifying'),
+    stageRow('Afgin', 'Moon Disco', 'fetching', { fetch_source: 'soulseek' }),
+    stageRow('Afgin', 'Birth Of Light', 'fetching', { fetch_source: 'soulseek' }),
+    stageRow('Afgin', 'Ancient Path', 'fetching', { fetch_source: 'soulseek' }),
+    stageRow('Afgin', 'Sun Of The Sun', 'fetching', { fetch_source: 'soulseek' }),
+    stageRow('Afgin', 'Echoes', 'queued'),
+    stageRow('Afgin', 'Spirit Valley', 'verifying'),
+    stageRow('Afgin', 'Lost In Time', 'queued', { attempts: 2, retry_after: inSeconds(870), flag_reason: NO_MATCH }),
+    done,
+    stageRow('Afgin', 'Deep Space', 'error', { attempts: 5, failed_stage: 'download',
+      error_message: 'gave up after 5 tries — every peer refused the transfer' }),
+  ]
+}
+/* Moon Disco at nought, Birth Of Light at 40%, Ancient Path queued at the peer; Sun Of The Sun gets no
+   frame at all, which is a fetching row the worker has not reported a transfer for yet. */
+const layoutProgress = () => {
+  const id = (title: string) => layout.find(b => b.request.query_title === title)!.request.id
+  const base = { peer: 'https://rawzik.com', pick: 1, speed_bps: 0 }
+  return [
+    { ...base, request_id: id('Moon Disco'), bytes: 0, size: 58_900_000, pct: 0, state: 'InProgress' },
+    { ...base, request_id: id('Birth Of Light'), bytes: 23_600_000, size: 58_900_000, pct: 40, speed_bps: 1_100_000, state: 'InProgress' },
+    { ...base, request_id: id('Ancient Path'), bytes: 0, size: 51_200_000, pct: 0, state: 'Queued, Remotely' },
+  ]
+}
+
 /* The Choose window in the only shape that makes it necessary: candidates that share a title and differ
    only in the version. No amount of text picks between an Original and an Extended Mix, which is exactly
    what the sample buttons are for. Two rows, because the page holds one player for all of them and
@@ -324,6 +357,7 @@ function scenarioSetup() {
   vi_spy(api, 'stats', async () => stats)
   vi_spy(api, 'queue', async () => scenario === 'failed' ? failures
     : scenario === 'stages' ? staged
+    : scenario === 'row-layout' ? layout
     : scenario === 'choose' ? choices
     : scenario === 'telegram-revoked' ? pausedOnLogin
     : scenario === 'telegram-revoked-before' ? burnedOnRevoke
@@ -437,6 +471,19 @@ function scenarioSetup() {
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
       break
+    /* The update check is mocked too: it is the one call the other list scenarios still send down the dev
+       proxy, and these pictures should not depend on (or reach) whatever copy is running on 8765. */
+    case 'row-layout':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      vi_spy(api, 'update', async () => ({ ok: true, current: '0.7.0', newer: false, available: false,
+        latest: '0.7.0', url: null, release_url: null, size: null, size_label: null,
+        published_at: null, published_date: null, prerelease: false }))
+      // Already answered, so the usage-stats card does not push the list below the fold.
+      vi_spy(api, 'telemetry', async () => ({ available: true, enabled: false, mode: 'on', collector: 'http://127.0.0.1:8790',
+        sending: false, id_prefix: null, opted_in: null, asked: true, pending_delete: false, last_delete_confirmed: null,
+        last_send: null, interval_s: 3600 }))
+      break
     case 'choose':
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
@@ -535,6 +582,7 @@ function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K])
 }
 
 const staged = scenario === 'stages' ? stageBundles() : []
+const layout = scenario === 'row-layout' ? layoutRows() : []
 
 /* Nothing is serving audio here, so every press would take a 404 and the element would fire `error` -- a
    screenshot of the playing card showing none of the playing card. So the whole clip is faked: `src` goes
@@ -570,6 +618,10 @@ if (scenario === 'stages') {
   const fetching = staged.find(b => b.request.state === 'fetching')!
   setTimeout(() => sources.forEach(es =>
     es.handlers['status']?.({ data: JSON.stringify({ fetch_progress: [stageProgress(fetching.request.id)] }) })), 200)
+}
+if (scenario === 'row-layout') {
+  setTimeout(() => sources.forEach(es =>
+    es.handlers['status']?.({ data: JSON.stringify({ fetch_progress: layoutProgress() }) })), 200)
 }
 
 /* Done rows live in History: open it, so a plain headless screenshot of `unverified` shows them */

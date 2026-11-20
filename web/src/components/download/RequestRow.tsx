@@ -89,18 +89,29 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           <Checks checks={v.checks} />
         </div>
         {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}
-        <div className="row-right">
+        {/* The right rail is two fixed cells, drawn on every row whether or not they have anything in them,
+            because each row is its own grid: a cell that came and went, or sized itself to its content,
+            moved the buttons from one row to the next. The status cell holds the platter or the one standing
+            fact a row has instead (a wait, a tag, the filed format); the actions cell has a slot for the
+            row's button and one for Remove, so Remove sits at the same x on every row that has it. */}
+        <div className="row-status">
           {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className={`verified${vouched ? '' : ' plain'}`}>
                 {vouched && <Icon name="check" size={13} stroke={2.2} />}{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
+        </div>
+        <div className="row-actions">
           {/* A cancel sits under the choices when there are choices to skip past, and on the right of the
               row when there are not -- which is where a track that is downloading right now needs it. */}
-          {v.action && (v.action.kind !== 'cancel' || !v.candidates) && (
-            <button className="btn-secondary" onClick={() => onAction(v.action!.kind, v.id, v.action!.path)}>{v.action.label}</button>)}
-          {v.removable && <button className="btn-link muted" onClick={() => onAction('remove', v.id, undefined)}>Remove</button>}
+          <span className="row-action">
+            {v.action && (v.action.kind !== 'cancel' || !v.candidates) && (
+              <button className="btn-secondary" onClick={() => onAction(v.action!.kind, v.id, v.action!.path)}>{v.action.label}</button>)}
+          </span>
+          <span className="row-remove">
+            {v.removable && <button className="btn-link muted" onClick={() => onAction('remove', v.id, undefined)}>Remove</button>}
+          </span>
         </div>
       </div>
       {/* Above the spectrogram, not below it: the picture explains the verdict, and this is what to do

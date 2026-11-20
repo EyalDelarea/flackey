@@ -268,7 +268,7 @@ it('reads a parked row as waiting -- a pill on the rail and a wash, not four gre
   const pill = screen.getByText('Waiting · 14m 30s')
   expect(pill).toHaveClass('waiting-pill')
   // On the right rail, where the row's other standing facts are -- not on a line of its own under the status.
-  expect(pill.closest('.row-right')).not.toBeNull()
+  expect(pill.closest('.row-status')).not.toBeNull()
 })
 
 it('tags a failed row with where it stopped, and leaves a running row untagged', () => {
@@ -376,4 +376,32 @@ it('the held lossless copy plays and is kept from its own strip (issue #97)', ()
   expect(onPlay).toHaveBeenCalledWith('held-5', '/api/rejections/5/audio')
   fireEvent.click(screen.getByRole('button', { name: 'Keep lossless' }))
   expect(onAction).toHaveBeenCalledWith('keepHeld', 1, undefined)
+})
+
+/* Every `.row-main` is its own grid, so the buttons only line up down the list if each row draws the same
+   right-hand cells in the same order, whether or not it has anything to put in them. The rows below are the
+   ones the owner's list mixed: Stop beside a platter, Stop with none, Stop and Remove, and Remove alone. */
+it('draws the same status and action cells on every row, so Stop and Remove line up down the list', () => {
+  const stop = { label: 'Stop', kind: 'cancel' as const }
+  const rows: RowView[] = [
+    { ...base, action: stop, removable: true, progress: { pct: 0, label: '0.0 MB of 58.9 MB' } },
+    { ...base, action: stop, removable: true, progress: { pct: 40, label: '23.6 MB of 58.9 MB' } },
+    { ...base, action: stop, removable: true, tag: null },
+    { ...base, action: stop, removable: false },
+    { ...base, action: null, removable: false, tag: null },
+    { ...base, bucket: 'failed', steps: null, action: null, removable: true },
+  ]
+  for (const view of rows) {
+    const { container, unmount } = render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
+    const cells = [...container.querySelector('.row-main')!.children].map(c => c.className)
+    expect(cells.slice(-2)).toEqual(['row-status', 'row-actions'])
+    const slots = [...container.querySelector('.row-actions')!.children].map(c => c.className)
+    expect(slots).toEqual(['row-action', 'row-remove'])
+    // Stop always in the first slot, Remove always in the second: neither moves when the other is absent.
+    if (view.action) expect(container.querySelector('.row-action')).toHaveTextContent('Stop')
+    if (view.removable) expect(container.querySelector('.row-remove')).toHaveTextContent('Remove')
+    // The platter lives in the status cell and nowhere else, and only when there is a transfer to draw.
+    expect(container.querySelectorAll('.row-status .platter')).toHaveLength(view.progress ? 1 : 0)
+    unmount()
+  }
 })

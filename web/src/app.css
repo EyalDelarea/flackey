@@ -1,5 +1,8 @@
 /* ---- Transfer progress and the lossy-fallback notice ---- */
-.xfer-label { margin-top: 3px; font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+/* One line, cut like the status above it: a peer's name and a speed wrapping onto a second line made two
+   downloads in the same state two different heights. */
+.xfer-label { margin-top: 3px; font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The record that carries the percentage, in the right rail beside Stop. The disc and its rim are one
    object: the track's inner edge sits under the disc's edge, so the arc reads as the record filling up
    rather than as a stroke hovering near it. */
@@ -183,7 +186,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row.washed { background: var(--orange-wash); } .row.dimmed { opacity: .6; }
 /* After `.washed` on purpose: a row cannot be both, and if the rules ever overlap the louder wash wins. */
 .row.parked { background: var(--orange-wash-soft); }
-.row-main { display: grid; grid-template-columns: 36px minmax(260px, 1fr) minmax(240px, 340px) 128px;
+/* art | title, status, detail | ladder | status cell | actions. The two right-hand cells are fixed widths and
+   every row draws both, so Stop, Try again and Remove sit at the same x on every row of the list. The
+   status cell is as wide as the widest thing it holds (the waiting pill); the actions cell is Try again
+   plus Remove. The ladder's column is its own width, so the room left over goes to the title. */
+.row-main { --row-status-w: 132px; --row-action-w: 74px; --row-remove-w: 46px;
+  display: grid; grid-template-columns: 36px minmax(200px, 1fr) 256px var(--row-status-w)
+    calc(var(--row-action-w) + 10px + var(--row-remove-w));
   align-items: center; gap: 12px; min-height: 54px; padding: 8px 12px; }
 .row-text { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .row-steps { grid-column: 3; min-width: 0; display: flex; justify-content: center; }
@@ -228,11 +237,19 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* Starts where the note above it starts. `.row-text` is a column flexbox, which stretches a button to the
    full width, and a button centres its label -- so the link sat on its own in the middle of the row. */
 .row .report-failure { align-self: flex-start; text-align: left; font-size: 11px; }
-.row-right { grid-column: 4; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-/* A live row can carry a pill or tag, Stop and Remove at once, which is more than the rail holds; on a row
-   with a ladder the overflow would land on top of it, so those rows wrap the buttons onto a second line.
-   Rows without a ladder have an empty column to spill into and keep their single line. */
-.row-main:has(.row-steps) .row-right { flex-wrap: wrap; row-gap: 6px; }
+/* Right-aligned, so the platter sits against the buttons whether or not a pill would have been wider. A row
+   with no ladder (done, failed) has the ladder's column free and puts its filed format there, the one thing
+   here that can be longer than the cell; that leaves its own status cell empty for Show in Finder to grow
+   into (see `.row-action`). */
+.row-status { grid-column: 4; grid-row: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.row-main:not(:has(.row-steps)) .row-status { grid-column: 3; }
+.row-status .verified { white-space: normal; text-align: right; }
+.row-actions { grid-column: 5; grid-row: 1; display: grid; grid-template-columns: var(--row-action-w) var(--row-remove-w);
+  align-items: center; column-gap: 10px; }
+/* flex-end, so a label longer than its slot (Show in Finder or File Explorer, on a finished row) grows to
+   the left, into the status cell that row leaves empty, rather than under Remove. */
+.row-action { display: flex; justify-content: flex-end; min-width: 0; }
+.row-remove { display: flex; justify-content: flex-end; }
 .verified { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green-text); white-space: nowrap; }
 .tag { font-size: 11px; color: var(--tertiary); }
 /* One ladder: name and state together, so nothing has to be paired up by counting. */
@@ -312,10 +329,29 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .group-seg.tone-stopped, .legend-dot.tone-stopped { background: var(--tertiary); }
 .group-seg.tone-unknown, .legend-dot.tone-unknown { background: color-mix(in srgb, var(--tertiary) 60%, var(--content)); }
 
-@media (max-width: 980px) {
-  .row-main { grid-template-columns: 36px minmax(0, 1fr) 128px; }
-  .row-steps { grid-column: 2 / 4; justify-content: flex-start; margin-top: 2px; }
-  .row-right { grid-column: 3; }
+/* Too narrow for the ladder beside the text: it moves under the text, and the two right-hand cells keep
+   their widths and their places. A finished row has no ladder, so its filed format takes that line. */
+@media (max-width: 1087px) {
+  .row-main { grid-template-columns: 36px minmax(0, 1fr) var(--row-status-w) calc(var(--row-action-w) + 10px + var(--row-remove-w)); }
+  .row-steps { grid-column: 2; grid-row: 2; justify-content: flex-start; margin-top: 2px; }
+  .row-status { grid-column: 3; }
+  .row-actions { grid-column: 4; }
+  .row-main:not(:has(.row-steps)) .row-status { grid-column: 2; grid-row: 2; justify-content: flex-start; }
+  .row-main:not(:has(.row-steps)) .row-status .verified { text-align: left; }
+  .row-main:not(:has(.row-steps)) .row-status:empty { display: none; }
+}
+/* At the smallest windows the status cell goes to the second line too, under the buttons, so the title
+   keeps a usable width; the buttons shrink the way the library table's do at the same width, and the
+   button slot widens to hold Show in File Explorer, since there is no empty cell beside it to grow into here. */
+@media (max-width: 900px) {
+  .row-main { --row-action-w: 110px; grid-template-columns: 36px minmax(0, 1fr) calc(var(--row-action-w) + 10px + var(--row-remove-w)); }
+  .row-status { grid-column: 3; grid-row: 2; }
+  .row-status:empty { display: none; }
+  .row-actions { grid-column: 3; }
+  .row-actions .btn-secondary { padding: 0 7px; font-size: 11px; }
+  /* On the ladder's line, so it may only be a little taller than the ladder is. */
+  .row-status .platter svg { width: 30px; height: 30px; }
+  .row-steps { margin-top: 0; }
 }
 
 /* ---- Uploads ---- */

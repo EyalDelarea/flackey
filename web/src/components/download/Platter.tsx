@@ -34,9 +34,14 @@ const VINYL = 17.8
     say how far along this is, and a measured transfer holds still and shows you the number instead. The
     disc used to turn on a 4.2s loop, which was motion that could not be seen -- every shape in the group
     was a circle concentric with the centre of rotation, so the animation was the identity transform. All
-    it bought was a widget re-rasterised at sub-pixel offsets forever, which is what made it look soft. */
+    it bought was a widget re-rasterised at sub-pixel offsets forever, which is what made it look soft.
+
+    A transfer that has not moved a whole percent yet is drawn the same way. Nothing has arrived, which is
+    exactly what the sweep says, and the list used to show a big `0` on one row beside a sweep on the next
+    for two downloads in the same position -- one queued at the peer, one accepted but not yet sending.
+    The row's own label still says which; the platter only says "no bytes yet" or how many. */
 export default function Platter({ pct, label }: { pct: number | null; label: string }) {
-  const waiting = pct === null
+  const waiting = pct === null || Math.round(pct) < 1
   const swept = waiting ? CIRC * 0.22 : (CIRC * Math.min(100, Math.max(0, pct))) / 100
   return (
     <div className={`platter${waiting ? ' waiting' : ''}`} role="img"
