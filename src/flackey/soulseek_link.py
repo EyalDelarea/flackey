@@ -27,12 +27,6 @@ from .source.lossless import LosslessError
 log = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 45.0
 POLL_S = 1.0
-# How often `supervise` looks for a sidecar that died, and the most it backs off to between restarts that
-# keep failing. A second look after `SUPERVISE_CONFIRM_S` before restarting, so a slskd caught between
-# exiting and its stopper clearing the pid file is not brought back on the way out.
-SUPERVISE_POLL_S = 10.0
-SUPERVISE_MAX_BACKOFF_S = 300.0
-SUPERVISE_CONFIRM_S = 2.0
 # The Soulseek server does not tell a client *why* a login failed, so this never claims to know. It names
 # the likeliest cause and leaves the owner a next step; a wrong guess stated as fact would be worse.
 TAKEN_HINT = ("Couldn't sign in to Soulseek. If somebody already uses that name, pick a different one — "
@@ -54,9 +48,6 @@ class SoulseekLink:
         self._on_connected = on_connected
         self.process: SlskdProcess | None = None
         self._task: asyncio.Task | None = None
-        # Held while the sidecar is being replaced or restarted, so the wizard and `supervise` never
-        # start or stop the same slskd at once.
-        self._sidecar_lock = asyncio.Lock()
         self.state: dict = {"state": "idle", "username": None, "error": None}
 
     def adopt(self, process: SlskdProcess | None) -> None:
@@ -94,10 +85,6 @@ class SoulseekLink:
             self._fail("Something went wrong signing in to Soulseek. Try again.")
 
     async def _restart_sidecar(self) -> None:
-        async with self._sidecar_lock:
-            await self._replace_sidecar()
-
-    async def _replace_sidecar(self) -> None:
         if self.process is not None:
             await self.process.stop()
             self.process = None
@@ -107,43 +94,6 @@ class SoulseekLink:
         self.process = self._process_factory(self._settings.data_dir, self._settings.slskd_url,
                                              self._settings.slskd_api_key or "")
         await self.process.start()
-
-    async def supervise(self, *, poll_s: float = SUPERVISE_POLL_S,
-                        max_backoff_s: float = SUPERVISE_MAX_BACKOFF_S,
-                        confirm_s: float = SUPERVISE_CONFIRM_S) -> None:
-        """Start the sidecar again when it dies mid-session (a crash, antivirus, Activity Monitor).
-        Without this Soulseek read as unreachable until the owner quit and reopened the app, and queued
-        Soulseek downloads failed meanwhile. Only a slskd that died on its own (`SlskdProcess.died`) is
-        restarted, never one that was stopped; a restart that fails is retried with a doubling wait up
-        to `max_backoff_s`. Runs until cancelled."""
-        retry: SlskdProcess | None = None
-        delay = poll_s
-        while True:
-            await self._sleep(delay)
-            process = self.process
-            if process is None or not self._settings.soulseek_enabled:
-                retry, delay = None, poll_s
-                continue
-            if retry is not process:  # a new handle from the wizard starts with a clean slate
-                retry = None
-                if process.died:
-                    await self._sleep(confirm_s)
-                    retry = process if process.died and self.process is process else None
-            if retry is None:
-                delay = poll_s
-                continue
-            async with self._sidecar_lock:
-                if self.process is not retry:
-                    continue
-                log.warning("slskd stopped while Flackey was running; starting it again")
-                try:
-                    await retry.start()
-                except Exception as exc:  # noqa: BLE001 -- a restart that fails must not end the supervisor
-                    delay = min(max(delay, poll_s) * 2, max_backoff_s)
-                    log.warning("could not restart slskd (%s); trying again in %.0f s", exc, delay)
-                    continue
-            log.info("slskd is running again")
-            retry, delay = None, poll_s
 
     async def _wait_for_login(self) -> None:
         provider = next(iter(self._worker.providers), None)
