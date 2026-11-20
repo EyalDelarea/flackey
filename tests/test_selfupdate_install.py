@@ -260,7 +260,7 @@ def test_the_helper_is_copied_out_of_the_bundle_before_it_is_run(tmp_path, monke
     # 0700, and a name `mkdtemp` chose -- not a fixed path something could have been left at.
     assert runner.parent.stat().st_mode & 0o777 == 0o700
     assert argv[1:] == [str(os.getpid()), str(staged.path.parent), staged.path.name, "1",
-                        str(tmp_path / "helper.log")]
+                        install.manifest(staged.path).hex(), str(tmp_path / "helper.log")]
     # Detached, or it would be killed along with the app it is waiting for.
     assert kwargs["start_new_session"] is True
 
@@ -277,6 +277,25 @@ def test_install_on_quit_tells_the_helper_not_to_reopen_the_app(tmp_path, monkey
         path=tmp_path / f"{install.STAGING_PREFIX}abc123.app", version="9.9.9", relaunch=False))
 
     assert spawned[0][4] == "0"
+
+
+def test_the_helper_is_given_the_manifest_staging_recorded(tmp_path, monkeypatch):
+    """SEC-5 (audit 2026-11-20): the helper re-hashes the staged bundle just before the swap, against the
+    digest staging produced, so a change made after the app quit is refused too."""
+    source = tmp_path / "flackey-update-helper"
+    source.write_text("#!/bin/sh\nexit 0\n")
+    source.chmod(0o755)
+    monkeypatch.setattr(install, "helper_path", lambda: source)
+    spawned: list = []
+    monkeypatch.setattr(install.subprocess, "Popen", lambda argv, **kw: spawned.append(argv))
+    staged_path = tmp_path / f"{install.STAGING_PREFIX}abc123.app"
+    (staged_path / "Contents").mkdir(parents=True)
+    (staged_path / "Contents" / "Info.plist").write_text("x")
+
+    install.launch_helper(install.StagedUpdate(path=staged_path, version="9.9.9",
+                                               manifest=install.manifest(staged_path)))
+
+    assert spawned[0][5] == install.manifest(staged_path).hex() and len(spawned[0]) == 6
 
 
 def test_a_build_with_no_helper_cannot_start_an_update(tmp_path, monkeypatch):

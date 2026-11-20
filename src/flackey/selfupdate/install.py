@@ -291,17 +291,16 @@ def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None
         raise StagingError("This copy of Flackey cannot install updates by itself.")
     # The staged bundle has sat in /Applications since it was unpacked, possibly for a whole session:
     # it is swapped in only if it is still exactly what staging produced.
-    if staged.manifest is not None:
-        try:
-            unchanged = manifest(staged.path) == staged.manifest
-        except OSError:
-            log.exception("could not re-read the staged update at %s", staged.path)
-            unchanged = False
-        if not unchanged:
-            log.error("the staged update at %s changed after it was unpacked; discarding it", staged.path)
-            discard(staged)
-            raise StagingError("The prepared update changed before it could be installed, so Flackey "
-                               "did not install it.")
+    try:
+        current = manifest(staged.path)
+    except OSError:
+        log.exception("could not re-read the staged update at %s", staged.path)
+        current = None
+    if current is None or (staged.manifest is not None and current != staged.manifest):
+        log.error("the staged update at %s changed after it was unpacked; discarding it", staged.path)
+        discard(staged)
+        raise StagingError("The prepared update changed before it could be installed, so Flackey "
+                           "did not install it.")
     try:
         workdir = Path(tempfile.mkdtemp(prefix="flackey-update-"))
         os.chmod(workdir, 0o700)
@@ -312,8 +311,9 @@ def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None
         log.exception("could not copy the update helper out of the bundle")
         raise StagingError("The update could not be started. Flackey is unchanged.") from exc
 
+    # The helper hashes the bundle again right before the swap, and refuses one that no longer matches.
     argv = [str(runner), str(os.getpid()), str(staged.directory), staged.path.name,
-            "1" if staged.relaunch else "0"]
+            "1" if staged.relaunch else "0", current.hex()]
     if log_path is not None:
         argv.append(str(log_path))
     try:
