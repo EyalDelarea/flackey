@@ -7,8 +7,9 @@ import logging
 import os
 import re
 import secrets
+import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import yaml
 
@@ -160,6 +161,11 @@ def write_credentials(data_dir: Path, username: str, password: str,
 
     path = config_path(data_dir)
     config = _load_config(path)
+    # Re-entering credentials does not change what is shared: a folder already in the share is held to
+    # the rules it was saved under, so a grandfathered one is not refused here (see `_set_share`).
+    shares = config.get("shares")
+    already_shared = library_root is not None and isinstance(shares, dict) and \
+        isinstance(shares.get("directories"), list) and str(library_root) in shares["directories"]
 
     web = _submapping(config, "web", path)
     web.setdefault("port", WEB_PORT)
@@ -183,7 +189,7 @@ def write_credentials(data_dir: Path, username: str, password: str,
     directories.setdefault("incomplete", str(data_dir / "slskd" / "incomplete"))
 
     if library_root is not None:
-        _set_share(config, path, library_root, data_dir)
+        _set_share(config, path, library_root, data_dir, saved=already_shared)
 
     _atomic_write(path, config)
     log.info("wrote slskd config: %s", path)
@@ -290,11 +296,65 @@ def _inside_temp(root: Path, base: Path) -> bool:
     return _parts_under(temp, base) is not None and _parts_under(root, temp) is not None
 
 
-def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
+# Top-level folders that belong to the system, refused with everything inside them. Spelled as the system
+# spells them, for Linux, where case counts: the Docker image keeps the library in `/library`, which is not
+# the Mac's `/Library`. On a Mac `/etc`, `/var` and `/tmp` resolve into `/private`, so that is listed too.
+_POSIX_SYSTEM = frozenset({"Applications", "Library", "System", "bin", "boot", "cores", "dev", "etc", "lib",
+                           "lib64", "opt", "private", "proc", "run", "sbin", "sys", "tmp", "usr", "var"})
+# The same at the top of any Windows drive.
+_WINDOWS_SYSTEM = frozenset({"windows", "program files", "program files (x86)", "programdata",
+                             "$recycle.bin", "system volume information", "recovery", "perflogs"})
+# Folders every account on the machine can write to. A music folder inside one is fine; the folder itself
+# holds whatever anyone left there.
+_POSIX_PUBLIC = ("Users", "Shared")
+_WINDOWS_PUBLIC = ("users", "public")
+WHOLE_DRIVE = "That is a whole drive. Make a folder for your music on it, and choose that folder."
+SYSTEM_FOLDER = "That is a system folder. Choose a folder just for your music."
+PUBLIC_FOLDER = "That folder holds more than music. Choose a folder just for your music, or make one inside it."
+
+
+def system_folder_reason(root: PurePath, *, windows: bool, case_sensitive: bool) -> str | None:
+    """Why `root` (absolute, already resolved) is a whole drive or a system folder, or None. Read off the
+    path's parts alone, so either platform's rules can be checked on any machine."""
+    parts = root.parts[1:]
+    if not parts:
+        return WHOLE_DRIVE  # `/`, `C:\\`
+    if windows or not case_sensitive:
+        parts = tuple(p.casefold() for p in parts)
+    if windows:
+        if parts[0] in _WINDOWS_SYSTEM:
+            return SYSTEM_FOLDER
+        return PUBLIC_FOLDER if parts == _WINDOWS_PUBLIC else None
+
+    def named(part: str, name: str) -> bool:
+        return part == name if case_sensitive else part == name.casefold()
+
+    if named(parts[0], "Volumes") and len(parts) <= 2:  # the list of drives, or the top of one
+        return WHOLE_DRIVE
+    if any(named(parts[0], name) for name in _POSIX_SYSTEM):
+        return SYSTEM_FOLDER
+    if len(parts) == 2 and all(named(p, n) for p, n in zip(parts, _POSIX_PUBLIC, strict=True)):
+        return PUBLIC_FOLDER
+    return None
+
+
+def drive_or_system_reason(library_root: Path) -> str | None:
+    """`system_folder_reason` for this machine, on the resolved folder. The temp folder sits under a
+    system folder on a Mac (/private/var/folders) and on Linux (/tmp), and nothing in it is anyone's
+    documents or keys, so it is let through."""
+    root = library_root.expanduser().resolve()
+    if _parts_under(root, Path(tempfile.gettempdir()).resolve()) is not None:
+        return None
+    return system_folder_reason(root, windows=os.name == "nt",
+                                case_sensitive=sys.platform not in ("darwin", "win32"))
+
+
+def unsafe_share_reason(library_root: Path, data_dir: Path, *, drive_rules: bool = True) -> str | None:
     """Why this folder must never be the library, or None. The library is shared with the whole Soulseek
     network, so a folder that holds the home directory, Flackey's own data, or any app's keys and sign-ins
     would hand strangers the Telegram session and every saved password. Resolved first, so a symlink to ~
-    is caught too."""
+    is caught too. `drive_rules=False` leaves out the whole-drive and system-folder rules (audit
+    2026-11-20), for a folder the owner saved before they existed."""
     if is_network_path(str(library_root)):
         return "That folder is on another computer. Choose a folder on this computer or a drive plugged into it."
     # Only the path as given: a folder on a mapped drive (Z:\) resolves to its UNC path, and an owner
@@ -305,6 +365,10 @@ def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
         return "That folder holds your whole home folder. Choose a folder just for your music."
     if data_dir.expanduser().resolve().is_relative_to(root):
         return "That folder holds Flackey's own settings and sign-ins. Choose a folder just for your music."
+    if drive_rules:
+        reason = drive_or_system_reason(root)
+        if reason:
+            return reason
     below = _parts_under(root, home)
     if below and any(part.startswith(".") for part in below):  # ~/.ssh, ~/.config, ~/Music/.secret
         return "That is a hidden folder, where apps keep keys and settings. Choose a folder just for your music."
@@ -318,15 +382,20 @@ def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
 
 
 def _set_share(config: dict, path: Path, library_root: Path, data_dir: Path,
-               previous: Path | None = None) -> None:
+               previous: Path | None = None, *, saved: bool = False) -> None:
     """Make the library folder one of slskd's shared directories. Sharing is what keeps a Soulseek
     user in good standing -- many peers refuse anyone who offers nothing -- and the spec
     (2026-09-07 §2) says the whole DJ Library is shared. Other entries are the owner's and stay; a
     previous library folder goes, because it is the same share moved, not a second one. Raises
     SlskdConfigError for a folder `unsafe_share_reason` refuses."""
-    reason = unsafe_share_reason(library_root, data_dir)
+    reason = unsafe_share_reason(library_root, data_dir, drive_rules=not saved)
     if reason:
         raise SlskdConfigError(reason)
+    if saved and (late := drive_or_system_reason(library_root)):
+        # Saved before the whole-drive and system-folder rules existed: still shared, as it was, so an
+        # update never quietly stops it. The rules apply when the owner next chooses a folder.
+        log.warning("the Soulseek share %s would not be accepted if chosen today (%s); still sharing it",
+                    library_root, late)
     shares = _submapping(config, "shares", path)
     dirs = shares.get("directories")
     if not isinstance(dirs, list):
@@ -343,16 +412,18 @@ def _set_share(config: dict, path: Path, library_root: Path, data_dir: Path,
     shares["filters"] = filters
 
 
-def write_share(data_dir: Path, library_root: Path, previous: Path | None = None) -> bool:
+def write_share(data_dir: Path, library_root: Path, previous: Path | None = None, *,
+                saved: bool = False) -> bool:
     """Point the share at the library folder, on a config that already exists. False when Soulseek
     was never set up (no file), so a folder change on a Telegram-only install writes nothing. Raises
-    SlskdConfigError when the file is present but unreadable or invalid."""
+    SlskdConfigError when the file is present but unreadable or invalid. `saved` is the startup repair of
+    the folder already in settings, which the whole-drive and system-folder rules only warn about."""
     path = config_path(data_dir)
     if not path.exists():
         return False
     config = _load_config(path)
     try:
-        _set_share(config, path, library_root, data_dir, previous)
+        _set_share(config, path, library_root, data_dir, previous, saved=saved)
     except SlskdConfigError:
         # A refused folder leaves the share as it was, but the listener and key are still pinned: the
         # startup repair is often the only write a config gets.

@@ -454,3 +454,145 @@ def test_the_filters_are_forced_on_every_write_and_follow_the_library(tmp_path: 
     filters = yaml.safe_load(path.read_text())["shares"]["filters"]
     assert len(filters) == len(set(filters)) == 4
     assert _hidden(filters, new / "Playlists") and not _hidden(filters, old / "Playlists")
+
+
+# SEC-1 (audit 2026-11-20): a whole drive, the folder that lists the drives, or a system folder is never
+# the library. The rules are read off the path's parts, so both platforms' rules run on every OS.
+@pytest.mark.parametrize("raw", ["/", "/Volumes", "/volumes", "/Volumes/Backup", "/Volumes/My Passport",
+                                 "/etc", "/etc/ssh", "/System", "/System/Library", "/Library",
+                                 "/Library/Keychains", "/usr", "/usr/local", "/usr/local/music", "/bin",
+                                 "/sbin", "/private", "/private/etc", "/private/var/db", "/Applications",
+                                 "/Applications/Flackey.app", "/opt", "/opt/homebrew", "/dev", "/cores",
+                                 "/var", "/var/root", "/Users/Shared", "/tmp"])
+def test_mac_system_folders_and_whole_drives_are_never_shared(raw):
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32",
+                                 "C:\\windows\\temp\\x", "C:\\Program Files", "C:\\Program Files\\Flackey",
+                                 "C:\\Program Files (x86)", "C:\\ProgramData", "C:\\ProgramData\\Microsoft",
+                                 "D:\\$Recycle.Bin", "D:\\System Volume Information", "C:\\Users\\Public",
+                                 "C:\\Recovery"])
+def test_windows_system_folders_and_drive_roots_are_never_shared(raw):
+    from pathlib import PureWindowsPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PureWindowsPath(raw), windows=True, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["/Volumes/Backup/Music", "/Volumes/X/DJ Library/House", "/Users/a/Music",
+                                 "/Users/Shared/Music", "/library", "/music", "/data/music", "/srv/music",
+                                 "/mnt/usb/Music", "/home/dj/Music", "/Systemish", "/Volumes2/x"])
+def test_ordinary_posix_music_folders_stay_allowed(raw):
+    """`/library` is where the Docker image mounts the library; an external drive is fine one folder down."""
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=True) is None
+    if raw != "/library":   # on Linux `/library` and `/Library` are two different folders
+        assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=False) is None
+
+
+def test_linux_tells_library_and_Library_apart():
+    """Docker mounts the library at `/library`. On a Mac, whose disk ignores case, that is `/Library`."""
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath("/library"), windows=False, case_sensitive=True) is None
+    assert system_folder_reason(PurePosixPath("/Library"), windows=False, case_sensitive=True)
+    assert system_folder_reason(PurePosixPath("/library"), windows=False, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["D:\\Music", "E:\\DJ\\Library", "C:\\Users\\dj\\Music",
+                                 "C:\\Users\\Public\\Music", "D:\\Windowsish\\x", "C:\\Programs\\Music"])
+def test_ordinary_windows_music_folders_stay_allowed(raw):
+    from pathlib import PureWindowsPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PureWindowsPath(raw), windows=True, case_sensitive=False) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+@pytest.mark.parametrize("raw", ["/", "/Volumes", "/Volumes/Backup", "/etc", "/usr/local", "/System",
+                                 "/Library", "/private", "/Applications", "/bin"])
+def test_unsafe_share_reason_refuses_whole_drives_and_system_folders(fake_home: Path, raw):
+    assert unsafe_share_reason(Path(raw), Path("/nowhere/data"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="/Volumes is a Mac folder")
+def test_unsafe_share_reason_allows_a_folder_on_an_external_drive(fake_home: Path):
+    assert unsafe_share_reason(Path("/Volumes/Backup/Music"), Path("/nowhere/data")) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows paths")
+@pytest.mark.parametrize("raw", ["C:\\", "D:\\", "C:\\Windows", "C:\\Program Files", "C:\\ProgramData"])
+def test_unsafe_share_reason_refuses_windows_drive_roots_and_system_folders(fake_home: Path, raw):
+    assert unsafe_share_reason(Path(raw), Path("C:\\nowhere\\data"))
+
+
+def test_the_home_folder_itself_is_never_shared(tmp_path: Path, fake_home: Path):
+    assert unsafe_share_reason(fake_home, tmp_path / "data")
+    assert unsafe_share_reason(fake_home / "Music", tmp_path / "data") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_choosing_a_whole_drive_is_refused_and_leaves_the_share_as_it_was(tmp_path: Path, fake_home: Path):
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
+
+    with pytest.raises(SlskdConfigError):
+        write_share(data, Path("/Volumes/MyDrive"), previous=fake_home / "Music")
+
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(fake_home / "Music")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+@pytest.mark.parametrize("saved_folder", ["/Volumes/MyDrive", "/Users/Shared"])
+def test_a_saved_whole_drive_keeps_being_shared_with_a_warning(tmp_path: Path, fake_home: Path, caplog,
+                                                              saved_folder):
+    """A folder saved before the whole-drive and system-folder rules existed is not quietly dropped from
+    the share by an update: the startup repair keeps sharing it and logs why it would be refused now."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw")
+    caplog.set_level("WARNING")
+
+    assert write_share(data, Path(saved_folder), saved=True) is True
+
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [saved_folder]
+    assert "would not be accepted" in caplog.text
+
+
+def test_a_saved_folder_is_still_held_to_the_older_rules(tmp_path: Path, fake_home: Path):
+    """Only the new rules are relaxed for a saved folder: the home folder and hidden folders never are."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
+    for folder in (fake_home, fake_home / ".ssh"):
+        with pytest.raises(SlskdConfigError):
+            write_share(data, folder, saved=True)
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(fake_home / "Music")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_re_entering_credentials_keeps_a_grandfathered_share(tmp_path: Path, fake_home: Path, caplog):
+    """The share folder does not change when the owner signs in to Soulseek again, so a whole drive that
+    was already shared is not refused (which would 400 the setup) -- only warned about."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw")
+    write_share(data, Path("/Volumes/MyDrive"), saved=True)     # shared before the new rules
+    caplog.set_level("WARNING")
+
+    write_credentials(data, "dj2", "pw2", library_root=Path("/Volumes/MyDrive"))
+
+    after = yaml.safe_load(config_path(data).read_text())
+    assert after["shares"]["directories"] == ["/Volumes/MyDrive"] and after["soulseek"]["username"] == "dj2"
+    assert "would not be accepted" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_first_soulseek_setup_on_a_whole_drive_is_refused(tmp_path: Path, fake_home: Path):
+    """Setting Soulseek up is when the folder first gets shared, so the new rules apply."""
+    with pytest.raises(SlskdConfigError):
+        write_credentials(tmp_path / "data", "dj", "pw", library_root=Path("/Volumes/MyDrive"))

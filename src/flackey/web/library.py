@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -115,6 +116,20 @@ def _host_port(url: str) -> tuple[str, int]:
     if not host:
         host, tail = rest, ""
     return (host or "127.0.0.1"), (int(tail) if tail.isdigit() else (443 if url.startswith("https") else 80))
+
+
+def slskd_url_problem(url: str) -> str | None:
+    """Why the slskd address must not be saved, or None. Every request to it carries the slskd API key,
+    so plain http is allowed only to this machine; another machine must be reached over https."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # an unclosed `[` in the host
+        parts = None
+    if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
+        return "Enter the slskd address in full, for example http://127.0.0.1:5030."
+    if parts.scheme == "http" and parts.hostname not in LOOPBACK:
+        return "slskd on another computer must be reached over https, so its key is not sent in the clear."
+    return None
 
 
 def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
@@ -287,7 +302,14 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 raise HTTPException(400, f"Extended mixes must be one of {', '.join(EXTENDED_MIXES)}.")
             extra["extended_mixes"] = body["extended_mixes"]
         if body.get("slskd_url"):
-            extra["slskd_url"] = str(body["slskd_url"]).rstrip("/")
+            slskd_url = str(body["slskd_url"]).strip().rstrip("/")
+            # Checked only when it changes, like the library folder: an address set before this rule (or
+            # in the environment) is sent back with every save and must not block the others.
+            if slskd_url != settings.slskd_url:
+                problem = slskd_url_problem(slskd_url)
+                if problem:
+                    raise HTTPException(400, problem)
+            extra["slskd_url"] = slskd_url
         if body.get("slskd_api_key"):
             extra["slskd_api_key"] = str(body["slskd_api_key"]).strip()
         previous = settings.library_root
