@@ -7,8 +7,9 @@ import logging
 import os
 import re
 import secrets
+import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import yaml
 
@@ -290,6 +291,48 @@ def _inside_temp(root: Path, base: Path) -> bool:
     return _parts_under(temp, base) is not None and _parts_under(root, temp) is not None
 
 
+# Top-level folders that belong to the system, refused with everything inside them. Spelled as the system
+# spells them, for Linux, where case counts: the Docker image keeps the library in `/library`, which is not
+# the Mac's `/Library`. On a Mac `/etc`, `/var` and `/tmp` resolve into `/private`, so that is listed too.
+_POSIX_SYSTEM = frozenset({"Applications", "Library", "System", "bin", "boot", "cores", "dev", "etc", "lib",
+                           "lib64", "opt", "private", "proc", "run", "sbin", "sys", "tmp", "usr", "var"})
+# The same at the top of any Windows drive.
+_WINDOWS_SYSTEM = frozenset({"windows", "program files", "program files (x86)", "programdata",
+                             "$recycle.bin", "system volume information", "recovery", "perflogs"})
+# Folders every account on the machine can write to. A music folder inside one is fine; the folder itself
+# holds whatever anyone left there.
+_POSIX_PUBLIC = ("Users", "Shared")
+_WINDOWS_PUBLIC = ("users", "public")
+WHOLE_DRIVE = "That is a whole drive. Make a folder for your music on it, and choose that folder."
+SYSTEM_FOLDER = "That is a system folder. Choose a folder just for your music."
+PUBLIC_FOLDER = "That folder holds more than music. Choose a folder just for your music, or make one inside it."
+
+
+def system_folder_reason(root: PurePath, *, windows: bool, case_sensitive: bool) -> str | None:
+    """Why `root` (absolute, already resolved) is a whole drive or a system folder, or None. Read off the
+    path's parts alone, so either platform's rules can be checked on any machine."""
+    parts = root.parts[1:]
+    if not parts:
+        return WHOLE_DRIVE  # `/`, `C:\\`
+    if windows or not case_sensitive:
+        parts = tuple(p.casefold() for p in parts)
+    if windows:
+        if parts[0] in _WINDOWS_SYSTEM:
+            return SYSTEM_FOLDER
+        return PUBLIC_FOLDER if parts == _WINDOWS_PUBLIC else None
+
+    def named(part: str, name: str) -> bool:
+        return part == name if case_sensitive else part == name.casefold()
+
+    if named(parts[0], "Volumes") and len(parts) <= 2:  # the list of drives, or the top of one
+        return WHOLE_DRIVE
+    if any(named(parts[0], name) for name in _POSIX_SYSTEM):
+        return SYSTEM_FOLDER
+    if len(parts) == 2 and all(named(p, n) for p, n in zip(parts, _POSIX_PUBLIC, strict=True)):
+        return PUBLIC_FOLDER
+    return None
+
+
 def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
     """Why this folder must never be the library, or None. The library is shared with the whole Soulseek
     network, so a folder that holds the home directory, Flackey's own data, or any app's keys and sign-ins
@@ -305,6 +348,13 @@ def unsafe_share_reason(library_root: Path, data_dir: Path) -> str | None:
         return "That folder holds your whole home folder. Choose a folder just for your music."
     if data_dir.expanduser().resolve().is_relative_to(root):
         return "That folder holds Flackey's own settings and sign-ins. Choose a folder just for your music."
+    # The temp folder sits under a system folder on a Mac (/private/var/folders) and on Linux (/tmp), and
+    # nothing in it is anyone's documents or keys.
+    if _parts_under(root, Path(tempfile.gettempdir()).resolve()) is None:
+        reason = system_folder_reason(root, windows=os.name == "nt",
+                                      case_sensitive=sys.platform not in ("darwin", "win32"))
+        if reason:
+            return reason
     below = _parts_under(root, home)
     if below and any(part.startswith(".") for part in below):  # ~/.ssh, ~/.config, ~/Music/.secret
         return "That is a hidden folder, where apps keep keys and settings. Choose a folder just for your music."
@@ -354,8 +404,12 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
     try:
         _set_share(config, path, library_root, data_dir, previous)
     except SlskdConfigError:
-        # A refused folder leaves the share as it was, but the listener and key are still pinned: the
-        # startup repair is often the only write a config gets.
+        # A refused folder is taken out of the share -- one chosen before a rule existed must stop being
+        # offered on the next start -- and the owner's other shares stay. The listener and key are still
+        # pinned: the startup repair is often the only write a config gets.
+        shares = config.get("shares")
+        if isinstance(shares, dict) and isinstance(shares.get("directories"), list):
+            shares["directories"] = [d for d in shares["directories"] if d != str(library_root)]
         _pin_to_this_machine(config, path)
         _atomic_write(path, config)
         raise

@@ -1,5 +1,10 @@
 import asyncio
+import sys
+import time
+from pathlib import Path
 from typing import ClassVar
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pytest
 
@@ -461,18 +466,43 @@ def test_the_address_with_the_token_puts_it_in_the_fragment():
     assert ServerHandle(url="http://h", token="ab+cd/ef=").app_url() == "http://h/#t=ab%2Bcd%2Fef%3D"
 
 
-def test_browser_mode_prints_and_opens_the_address_with_the_token(capsys, monkeypatch):
+def test_browser_mode_prints_the_address_and_opens_it_without_the_token_on_the_command_line(capsys, monkeypatch):
+    """SEC-6 (audit 2026-11-20): `webbrowser.open(url)` runs `open <url>`, which every account on the Mac
+    can read in `ps`. The browser is sent to a private file that forwards to the address instead, so only
+    the file's path is on a command line; the terminal still gets the full address."""
+    import stat
+
     from flackey import app as app_module
 
     opened = []
     monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
-    handle = app_module.ServerHandle(url="http://localhost:8765", token="tok")
+    handle = app_module.ServerHandle(url="http://localhost:8765", token="tok-secret")
     app_module.announce(handle, open_browser=True)
-    assert opened == ["http://localhost:8765/#t=tok"]
-    assert "http://localhost:8765/#t=tok" in capsys.readouterr().out
+    assert "http://localhost:8765/#t=tok-secret" in capsys.readouterr().out
+    assert len(opened) == 1 and "tok-secret" not in opened[0] and opened[0].startswith("file:")
+    launch = Path(url2pathname(urlsplit(opened[0]).path))
+    assert "http://localhost:8765/#t=tok-secret" in launch.read_text()
+    if sys.platform != "win32":
+        assert stat.S_IMODE(launch.stat().st_mode) == 0o600
+        assert stat.S_IMODE(launch.parent.stat().st_mode) == 0o700
+
     app_module.announce(handle, open_browser=False)
-    assert opened == ["http://localhost:8765/#t=tok"]
-    assert "http://localhost:8765/#t=tok" in capsys.readouterr().out
+    assert len(opened) == 1
+    assert "http://localhost:8765/#t=tok-secret" in capsys.readouterr().out
+
+
+def test_the_browser_launch_file_is_removed_once_the_browser_had_time_to_read_it(monkeypatch):
+    from flackey import app as app_module
+
+    opened = []
+    monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
+    monkeypatch.setattr(app_module, "LAUNCH_FILE_TTL_S", 0.05)
+    app_module.announce(app_module.ServerHandle(url="http://localhost:8765", token="tok"), open_browser=True)
+    launch = Path(url2pathname(urlsplit(opened[0]).path))
+    deadline = time.monotonic() + 5
+    while launch.parent.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not launch.parent.exists()
 
 
 async def test_the_running_server_asks_for_the_token_it_was_started_with(tmp_path, caplog, monkeypatch):

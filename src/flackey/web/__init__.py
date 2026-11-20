@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -157,7 +158,11 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
 
     store.listeners.append(on_change)
 
-    app = FastAPI(title="flackey", version=__version__)
+    # The API map is for a developer running from source. The packaged app has no use for it, and a server
+    # listening beyond this machine (Docker) would hand it to the network without the token.
+    docs = not getattr(sys, "frozen", False) and settings.web_host in library.LOOPBACK
+    app = FastAPI(title="flackey", version=__version__, **({} if docs else
+                  {"docs_url": None, "redoc_url": None, "openapi_url": None}))
     token = api_token or new_token()
     app.state.api_token = token
     # No CORS middleware on purpose: the UI is served from this origin, and the Vite dev server proxies

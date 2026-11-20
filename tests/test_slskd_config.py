@@ -454,3 +454,102 @@ def test_the_filters_are_forced_on_every_write_and_follow_the_library(tmp_path: 
     filters = yaml.safe_load(path.read_text())["shares"]["filters"]
     assert len(filters) == len(set(filters)) == 4
     assert _hidden(filters, new / "Playlists") and not _hidden(filters, old / "Playlists")
+
+
+# SEC-1 (audit 2026-11-20): a whole drive, the folder that lists the drives, or a system folder is never
+# the library. The rules are read off the path's parts, so both platforms' rules run on every OS.
+@pytest.mark.parametrize("raw", ["/", "/Volumes", "/volumes", "/Volumes/Backup", "/Volumes/My Passport",
+                                 "/etc", "/etc/ssh", "/System", "/System/Library", "/Library",
+                                 "/Library/Keychains", "/usr", "/usr/local", "/usr/local/music", "/bin",
+                                 "/sbin", "/private", "/private/etc", "/private/var/db", "/Applications",
+                                 "/Applications/Flackey.app", "/opt", "/opt/homebrew", "/dev", "/cores",
+                                 "/var", "/var/root", "/Users/Shared", "/tmp"])
+def test_mac_system_folders_and_whole_drives_are_never_shared(raw):
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32",
+                                 "C:\\windows\\temp\\x", "C:\\Program Files", "C:\\Program Files\\Flackey",
+                                 "C:\\Program Files (x86)", "C:\\ProgramData", "C:\\ProgramData\\Microsoft",
+                                 "D:\\$Recycle.Bin", "D:\\System Volume Information", "C:\\Users\\Public",
+                                 "C:\\Recovery"])
+def test_windows_system_folders_and_drive_roots_are_never_shared(raw):
+    from pathlib import PureWindowsPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PureWindowsPath(raw), windows=True, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["/Volumes/Backup/Music", "/Volumes/X/DJ Library/House", "/Users/a/Music",
+                                 "/Users/Shared/Music", "/library", "/music", "/data/music", "/srv/music",
+                                 "/mnt/usb/Music", "/home/dj/Music", "/Systemish", "/Volumes2/x"])
+def test_ordinary_posix_music_folders_stay_allowed(raw):
+    """`/library` is where the Docker image mounts the library; an external drive is fine one folder down."""
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=True) is None
+    if raw != "/library":   # on Linux `/library` and `/Library` are two different folders
+        assert system_folder_reason(PurePosixPath(raw), windows=False, case_sensitive=False) is None
+
+
+def test_linux_tells_library_and_Library_apart():
+    """Docker mounts the library at `/library`. On a Mac, whose disk ignores case, that is `/Library`."""
+    from pathlib import PurePosixPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PurePosixPath("/library"), windows=False, case_sensitive=True) is None
+    assert system_folder_reason(PurePosixPath("/Library"), windows=False, case_sensitive=True)
+    assert system_folder_reason(PurePosixPath("/library"), windows=False, case_sensitive=False)
+
+
+@pytest.mark.parametrize("raw", ["D:\\Music", "E:\\DJ\\Library", "C:\\Users\\dj\\Music",
+                                 "C:\\Users\\Public\\Music", "D:\\Windowsish\\x", "C:\\Programs\\Music"])
+def test_ordinary_windows_music_folders_stay_allowed(raw):
+    from pathlib import PureWindowsPath
+
+    from flackey.slskd_config import system_folder_reason
+    assert system_folder_reason(PureWindowsPath(raw), windows=True, case_sensitive=False) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+@pytest.mark.parametrize("raw", ["/", "/Volumes", "/Volumes/Backup", "/etc", "/usr/local", "/System",
+                                 "/Library", "/private", "/Applications", "/bin"])
+def test_unsafe_share_reason_refuses_whole_drives_and_system_folders(fake_home: Path, raw):
+    assert unsafe_share_reason(Path(raw), Path("/nowhere/data"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="/Volumes is a Mac folder")
+def test_unsafe_share_reason_allows_a_folder_on_an_external_drive(fake_home: Path):
+    assert unsafe_share_reason(Path("/Volumes/Backup/Music"), Path("/nowhere/data")) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows paths")
+@pytest.mark.parametrize("raw", ["C:\\", "D:\\", "C:\\Windows", "C:\\Program Files", "C:\\ProgramData"])
+def test_unsafe_share_reason_refuses_windows_drive_roots_and_system_folders(fake_home: Path, raw):
+    assert unsafe_share_reason(Path(raw), Path("C:\\nowhere\\data"))
+
+
+def test_the_home_folder_itself_is_never_shared(tmp_path: Path, fake_home: Path):
+    assert unsafe_share_reason(fake_home, tmp_path / "data")
+    assert unsafe_share_reason(fake_home / "Music", tmp_path / "data") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_a_refused_library_folder_is_taken_out_of_the_share(tmp_path: Path, fake_home: Path):
+    """An owner who chose a whole drive before this rule existed must stop sharing it on the next start,
+    not keep offering it: the startup repair drops the refused folder and keeps the owner's other shares."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
+    path = config_path(data)
+    config = yaml.safe_load(path.read_text())
+    config["shares"]["directories"] = ["/Volumes/Backup", str(fake_home / "Music")]
+    path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(SlskdConfigError):
+        write_share(data, Path("/Volumes/Backup"))
+
+    assert yaml.safe_load(path.read_text())["shares"]["directories"] == [str(fake_home / "Music")]

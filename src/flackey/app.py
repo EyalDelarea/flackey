@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import re
+import shutil
 import sqlite3
+import tempfile
 import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
@@ -150,13 +153,38 @@ async def serve(server: uvicorn.Server, url: str, handle: ServerHandle,
     await task
 
 
+# How long the browser has to read the launch file before it is deleted.
+LAUNCH_FILE_TTL_S = 60.0
+
+
+def _launch_file(address: str) -> Path:
+    """A page, readable by this account only, that forwards the browser to `address`. Opening it puts only
+    its path on the `open` command line, where any account on the machine can read it in `ps`; the token
+    stays in the file. It is deleted after LAUNCH_FILE_TTL_S, by which time the browser has read it."""
+    folder = Path(tempfile.mkdtemp(prefix="flackey-open-"))  # 0700
+    page = folder / "open.html"
+    target = html.escape(address, quote=True)
+    fd = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={target}">'
+                f'<title>Flackey</title><a href="{target}">Open Flackey</a>')
+    timer = threading.Timer(LAUNCH_FILE_TTL_S, shutil.rmtree, args=(folder,), kwargs={"ignore_errors": True})
+    timer.daemon = True
+    timer.start()
+    return page
+
+
 def announce(handle: ServerHandle, open_browser: bool) -> None:
     """Browser mode's way in: there is no window to hand the token to, so whoever started the server gets
-    the address on stdout -- never through the log -- and, when asked, in their browser."""
+    the address on stdout -- never through the log -- and, when asked, in their browser, through a private
+    launch file rather than on a command line."""
     address = handle.app_url()
     print(f"Flackey is running. Open it at:\n  {address}", flush=True)
     if open_browser:
-        webbrowser.open(address)
+        try:
+            webbrowser.open(_launch_file(address).as_uri())
+        except OSError:
+            log.exception("could not write the browser launch file; open the printed address instead")
 
 
 async def supervise_worker(worker, status: dict, poll_s: float = 1.0) -> None:

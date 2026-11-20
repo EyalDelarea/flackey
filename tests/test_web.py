@@ -2904,3 +2904,62 @@ def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client
     assert ev["detectors_fired"] == ["spectral"] and ev["edge"] == "16-17"
     assert ev["detector_version"] == "2.0"          # audit 2026-11-16: the str version was never sent
     assert "16012" not in str(ev) and "cutoff" not in str(ev)
+
+
+# SEC-2 (audit 2026-11-20): the API map is served only where nobody else can reach it.
+DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+def test_api_docs_are_served_when_running_from_source_on_this_machine(tmp_path: Path):
+    app, _, _ = make(tmp_path)
+    c = AppClient(app)
+    for path in DOCS_PATHS:
+        assert c.get(path).status_code == 200, path
+
+
+def test_api_docs_are_not_served_by_the_packaged_app(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    app, _, _ = make(tmp_path)
+    c = AppClient(app)
+    for path in DOCS_PATHS:
+        assert c.get(path).status_code == 404, path
+    assert c.get("/api/health").status_code == 200
+
+
+def test_api_docs_are_not_served_when_listening_on_the_network(tmp_path: Path):
+    """Docker publishes the port with `WEB_HOST=0.0.0.0`: the LAN would get the map with no token."""
+    settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", web_host="0.0.0.0",
+                        library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    store = Store(settings.db_path)
+    worker = Worker(store, DummySource(), MemoryNotifier(), settings)
+    c = AppClient(create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, api_token="t" * 40))
+    for path in DOCS_PATHS:
+        assert c.get(path).status_code == 404, path
+
+
+# SEC-10 (audit 2026-11-20): the slskd key goes wherever slskd_url points.
+@pytest.mark.parametrize("url", ["http://evil.example:5030", "http://192.168.1.9:5030", "ftp://127.0.0.1:5030",
+                                 "file:///etc/passwd", "127.0.0.1:5030", "http://", "javascript:alert(1)"])
+def test_settings_refuse_an_slskd_address_that_would_send_the_key_in_the_clear(tmp_path: Path, url):
+    app, _, settings = make(tmp_path)
+    r = AppClient(app).put("/api/settings", json={"library_root": str(tmp_path / "lib"), "slskd_url": url})
+    assert r.status_code == 400
+    assert settings.slskd_url == "http://127.0.0.1:5030"
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:5031", "http://localhost:5030", "http://[::1]:5030",
+                                 "https://127.0.0.1:5031", "https://slskd.lan:5030", "https://10.0.0.4:5030/"])
+def test_settings_accept_a_local_or_https_slskd_address(tmp_path: Path, url):
+    app, _, settings = make(tmp_path)
+    r = AppClient(app).put("/api/settings", json={"library_root": str(tmp_path / "lib"), "slskd_url": url})
+    assert r.status_code == 200, r.text
+    assert settings.slskd_url == url.rstrip("/")
+
+
+def test_settings_still_save_when_an_older_slskd_address_is_sent_back_unchanged(tmp_path: Path):
+    """An address set by hand (or in the environment) before this rule must not block every later save."""
+    app, _, settings = make(tmp_path)
+    settings.slskd_url = "http://192.168.1.9:5030"
+    r = AppClient(app).put("/api/settings", json={"library_root": str(tmp_path / "lib"),
+                                                  "slskd_url": "http://192.168.1.9:5030", "auto_update_check": False})
+    assert r.status_code == 200, r.text
