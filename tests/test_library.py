@@ -176,7 +176,7 @@ def test_find_duplicate_drops_rows_whose_file_is_gone(tmp_path: Path):
     store = Store(tmp_path / "s.sqlite")
     tid = _add(store, tmp_path / "deleted-by-hand.mp3")
     cand = Candidate(source="deezer_bot", source_ref="r", artist="Hallucinogen", title="Into the Void", duration_s=443)
-    assert find_duplicate(store, None, cand) is None
+    assert find_duplicate(store, None, cand, library_root=tmp_path) is None
     assert store.list_tracks() == [] and tid not in [t.id for t in store.list_tracks()]
 
 
@@ -186,7 +186,7 @@ def test_prune_missing_tracks_removes_rows_and_playlist_membership(tmp_path: Pat
     kept = tmp_path / "kept.mp3"; kept.write_bytes(b"x")
     a = _add(store, kept); b = _add(store, tmp_path / "gone.mp3", title="Other")
     pid = store.upsert_playlist("u", "P"); store.add_playlist_track(pid, a, 1); store.add_playlist_track(pid, b, 2)
-    assert prune_missing_tracks(store) == [tmp_path / "gone.mp3"]
+    assert prune_missing_tracks(store, tmp_path) == [tmp_path / "gone.mp3"]
     assert [t.id for t in store.list_tracks()] == [a]
     assert store.get_playlist(pid).track_ids == [a]
 

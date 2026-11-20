@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from .export import write_playlist
 from .identify import classify, interpretations, parse_version
 from .library import find_extended
 from .models import Query, RequestKind, RequestState
@@ -57,8 +59,11 @@ class Inbox:
                  youtube: Callable[[str], Awaitable[tuple[str, list[YouTubeEntry]]]] = fetch_youtube,
                  spotify_track: Callable[[str], Awaitable[SpotifyTrack]] = fetch_spotify_track,
                  spotify_playlist: Callable[[str], Awaitable[SpotifyPlaylist]] = fetch_spotify_playlist,
-                 prefer_extended: Callable[[], bool] = lambda: False):
+                 prefer_extended: Callable[[], bool] = lambda: False,
+                 library_root: Callable[[], Path | None] = lambda: None):
         self.store = store
+        # Read at each paste too, since the owner can move the library. None: no exports, as in the CLI
+        self.library_root = library_root
         # The setting, read at each paste: owning the radio edit is not owning the track while it is on
         self.prefer_extended = prefer_extended
         self.youtube = youtube
@@ -85,8 +90,21 @@ class Inbox:
         if not (q.artist and q.title):
             return None
         if self._seeks_extended(q):
-            return find_extended(self.store, q.artist, q.title, q.version or "Original Mix")
+            return find_extended(self.store, q.artist, q.title, q.version or "Original Mix",
+                                 library_root=self.library_root())
         return self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix", q.duration_s)
+
+    def _export(self, sub: Submission) -> None:
+        """Write the playlist's M3U8 when tracks already in the library joined it at paste time (ENG-2).
+        Nothing else would: the worker only exports after filing, so a playlist made only of owned tracks
+        never got a file. Best effort -- the paste itself has worked whatever the export does."""
+        root = self.library_root()
+        if root is None or sub.playlist_id is None or not sub.already_in_library:
+            return
+        try:
+            write_playlist(self.store, sub.playlist_id, root)
+        except OSError as e:
+            log.warning("could not write the playlist file for %s: %s", sub.name, e)
 
     def _add_existing_playlist_track(self, playlist_id: int, source_url: str, position: int,
                                      q: Query | None = None) -> bool:
@@ -172,6 +190,7 @@ class Inbox:
                 sub.request_ids.append(self.store.add_request(
                     self._spotify_name(track), RequestKind.SPOTIFY_TRACK, source_url=track.source_url, playlist_id=pid,
                     playlist_position=pos, query=q))
+            self._export(sub)
             return sub
         try:
             name, entries = await self.youtube(url)
@@ -206,4 +225,5 @@ class Inbox:
             sub.request_ids.append(self.store.add_request(
                 e.title, RequestKind.YT_TRACK, source_url=e.url, playlist_id=pid, playlist_position=pos, query=q,
                 interpretations=readings))
+        self._export(sub)
         return sub

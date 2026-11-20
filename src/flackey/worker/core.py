@@ -13,7 +13,7 @@ import httpx
 from ..attempts import prune_raw
 from ..config import Settings
 from ..deezer import DeezerTrack
-from ..library import prune_missing_tracks
+from ..library import prune_missing_tracks, sweep_tmp
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
 from ..source import (
@@ -117,7 +117,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # empty, and not before `_scan_after` once Soulseek was unreachable.
         self._scan: asyncio.Task | None = None
         self._scan_after = 0.0
-        self._extending: set[int] = set()   # tracks with a Get extended under way
+        self._extending: set[int] = set()   # tracks with a Get extended or Find lossless under way
 
 
     def _bot_ready(self) -> bool:
@@ -157,7 +157,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         n = self.store.reset_inflight()
         if n:
             log.info("re-queued %d in-flight requests", n)
-        gone = prune_missing_tracks(self.store)
+        swept = sweep_tmp(self.settings.tmp_dir, time.time())
+        if swept:
+            log.info("deleted %d leftover downloads from tmp", swept)
+        gone = prune_missing_tracks(self.store, self.settings.library_root)
         if gone:
             log.info("forgot %d library rows whose files were removed", len(gone))
         n = self.store.mark_open_attempts_interrupted()

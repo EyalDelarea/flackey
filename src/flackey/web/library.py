@@ -191,7 +191,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
     @r.post("/library/refresh")
     async def refresh_library() -> dict:
         """Reconcile files removed in Finder and rewrite affected playlist exports."""
-        removed = prune_missing_tracks(store)
+        removed = prune_missing_tracks(store, settings.library_root)
         if removed:
             write_playlists(store, settings.library_root)
         return {"removed": len(removed)}

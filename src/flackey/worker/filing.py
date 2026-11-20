@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
 import shutil
 import time
 from datetime import UTC, datetime
@@ -18,7 +19,7 @@ from ..library import file_track, final_path, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
-from ..verify import summary, verify
+from ..verify import ToolMissing, VerifyError, summary, verify
 from ..version import (
     EXTENDED,
     VersionCheck,
@@ -153,10 +154,24 @@ class FilingMixin:
             self._set_state(req, RequestState.VERIFYING)
             # ffprobe plus two ffmpeg passes take seconds on a 7-minute file: keep the event loop
             # (inbox bot, API) free
+            damaged = None
             async with self._cpu:
                 timer = usage.Timer()
-                verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
-                                                  f"req{req.id}-{tmp.stem}", self.settings.verification_rule)
+                try:
+                    verdict = await asyncio.to_thread(verify, tmp, self.settings.spectrogram_dir,
+                                                      f"req{req.id}-{tmp.stem}", self.settings.verification_rule)
+                except ToolMissing:
+                    raise
+                except VerifyError as e:
+                    damaged = e
+            if damaged is not None:
+                # A transfer cut short, or a file that is not audio at all (ENG-8): another download may well
+                # arrive whole, so this goes up the retry ladder like a bot timeout does, instead of ending in
+                # `error` with ffmpeg's own words for the owner to read.
+                log.warning("req#%d: the file the bot sent could not be read: %s", req.id, damaged)
+                usage.failure_reason(req.id, "damaged")
+                await self._retry_or_fail(req, "the file the bot sent was damaged")
+                return
             usage.quality_check(req.id, verdict, summary(verdict.analysis), route="telegram",
                                 rule=self.settings.verification_rule, run_s=timer.s())
             if not verdict.passed:
@@ -399,7 +414,7 @@ class FilingMixin:
                 "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz})
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
-            write_playlist(self.store, req.playlist_id, self.settings.library_root)
+            self._export_playlist(req.playlist_id)
         self._set_state(req, RequestState.DONE, track_id=track_id)
         conf = self.store.get_request(req.id).confidence
         parts = [f"Done: {catalog.artist} – {catalog.title} ({catalog.mix_name})", _mmss(catalog.duration_s or cand.duration_s),
@@ -441,6 +456,17 @@ class FilingMixin:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
+        # The same guard Get extended has, and the same set (ENG-9): a double click or a second window would
+        # otherwise run two searches into one tmp file name and swap the track's file twice.
+        if track_id in self._extending:
+            raise ValueError("a copy of this track is already being fetched")
+        self._extending.add(track_id)
+        try:
+            return await self._upgrade(t)
+        finally:
+            self._extending.discard(track_id)
+
+    async def _upgrade(self, t: Track) -> str:
         req, cand, catalog = self._filed_request(t)
 
         acoustic = await self._acoustic_reference(req, cand)
@@ -496,7 +522,14 @@ class FilingMixin:
             raise ValueError(f"another track is already filed at {dest.name}")
 
         old, old_spectrogram = t.path, t.spectrogram_path
-        file_track(hit.path, dest)
+        if dest == old:
+            # Same name and format as the filed copy -- a FLAC the bot sent, upgraded with the filing format
+            # set to FLAC (ENG-5). `file_track` rightly refuses an occupied name, so the new copy goes in
+            # beside the old one first (same folder, so the swap is one rename on one drive) and then over it.
+            staged = file_track(hit.path, dest.with_name(f".{dest.name}.upgrade"))
+            os.replace(staged, dest)
+        else:
+            file_track(hit.path, dest)
         self.store.update_track(
             t.id, path=dest, fmt=hit.verdict.fmt, bitrate_kbps=hit.verdict.bitrate_kbps,
             cutoff_hz=hit.verdict.cutoff_hz, file_size=dest.stat().st_size,

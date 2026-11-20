@@ -1127,6 +1127,8 @@ async def test_unauthorized_session_pauses_the_bot_and_the_request_goes_on_witho
 
 async def test_on_start_forgets_tracks_whose_files_are_gone(env):
     settings, store, _notifier = env
+    settings.library_root.mkdir(parents=True, exist_ok=True)
+    (settings.library_root / "kept.mp3").write_bytes(b"x")   # an empty library folder is an unplugged drive
     store.add_track(path=settings.library_root / "gone.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=19800,
                     file_size=1, artist="A", title="T", mix_name="Original Mix", duration_s=1, isrc=None,
                     catalog_track_id=None, request_id=None)

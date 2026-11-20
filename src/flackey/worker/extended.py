@@ -130,7 +130,7 @@ class ExtendedMixin:
             raise ValueError("Soulseek isn't set up, so there is nothing to download it from")
         # Two windows, or a second press that went straight to the API, must not swap the same file twice
         if track_id in self._extending:
-            raise ValueError("the extended mix of this track is already being fetched")
+            raise ValueError("a copy of this track is already being fetched")
         self._extending.add(track_id)
         result = "failed"
         try:

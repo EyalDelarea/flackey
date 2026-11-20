@@ -5,8 +5,9 @@ import logging
 import shutil
 from pathlib import Path
 
+from ..export import write_playlist
 from ..identify import parse_text
-from ..library import find_duplicate, find_extended
+from ..library import clear_request_tmp, find_duplicate, find_extended
 from ..match import candidate_query, candidate_version, decide, identification_order, same_version
 from ..models import Candidate, CatalogTrack, Query, Request, RequestState, Track
 from ..notify import Button
@@ -181,18 +182,28 @@ class PipelineMixin:
         preferring extended mixes, the radio edit already filed is not the track: only an extended copy is
         a duplicate, and the normal one comes back second, so the pass looks for the extended mix alone
         and stops at what is already there when there is none (issue #187)."""
-        dup = find_duplicate(self.store, catalog, cand, req.query_version)
+        dup = find_duplicate(self.store, catalog, cand, req.query_version, library_root=self.settings.library_root)
         mix = catalog.mix_name if catalog else candidate_version(cand)
         if not self._prefers_extended(req, mix):
             return dup, None
         artist, title = (catalog.artist, catalog.title) if catalog else (cand.artist, candidate_query(cand).title)
-        extended = find_extended(self.store, artist, title, mix)
+        extended = find_extended(self.store, artist, title, mix, library_root=self.settings.library_root)
         return (extended, None) if extended else (None, dup)
+
+    def _export_playlist(self, playlist_id: int) -> None:
+        """Rewrite a playlist's M3U8 after its membership changed. Best effort: by now the track is in the
+        library and in the playlist, and a file another app holds open (Rekordbox on Windows) must not turn
+        that into a failed request (ENG-4). The next change to the playlist writes it again."""
+        try:
+            write_playlist(self.store, playlist_id, self.settings.library_root)
+        except OSError as e:
+            log.warning("could not write the file for playlist #%d: %s", playlist_id, e)
 
     async def _mark_duplicate(self, req: Request, track_id: int | None, path: Path) -> None:
         self._set_state(req, RequestState.DUPLICATE, track_id=track_id)
         if req.playlist_id is not None and track_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
+            self._export_playlist(req.playlist_id)   # ENG-2: a duplicate joins the M3U8 like a filed track
         await self.notifier.send(f"Already in library: {path}")
 
 
@@ -212,6 +223,15 @@ class PipelineMixin:
 
 
     async def _fetch_verify_file(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> None:
+        try:
+            await self._fetch_verify_file_once(req, cand, catalog)
+        finally:
+            # Whatever ended the pass -- a Stop mid-verify, a bot timeout, a provider error -- nothing this
+            # request downloaded stays in tmp_dir (spec §13, ENG-6). The finally further in only covers the
+            # verify-and-file step; the downloads before it used to be left behind.
+            clear_request_tmp(self.settings.tmp_dir, req.id)
+
+    async def _fetch_verify_file_once(self, req: Request, cand: Candidate, catalog: CatalogTrack | None) -> None:
         dup, owned = self._owned(req, catalog, cand)  # again: a reviewed request may have waited for hours
         if dup:
             await self._mark_duplicate(req, dup.id, dup.path)
