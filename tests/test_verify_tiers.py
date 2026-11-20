@@ -2,8 +2,15 @@
 synthetic -- pink noise is the closest stand-in for music that ffmpeg can make on its own.
 
 Every FLAC made from a decoded lossy file is written with `-frame_size 4096`. ffmpeg's encoder otherwise
-picks a tiny block size for such audio, which a check could learn to read instead of the audio itself."""
+picks a tiny block size for such audio, which a check could learn to read instead of the audio itself.
+
+Every test runs twice when FLACKEY_SLIM_FFMPEG names the slim ffmpeg/ffprobe the app ships
+(packaging/build_ffmpeg.sh): once on the full build, once with the slim one first on the PATH, so the
+check is held to its answers on the decoder users actually run. The fixtures are always made with the
+full build, which has the lavfi sources and lossy encoders the slim one leaves out."""
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,14 +18,30 @@ import pytest
 from mutagen.flac import FLAC
 
 from flackey import verify_report
+from flackey.tools import tool_path
 from flackey.verify import QUANT_Z_STRONG, VerifyError, analyze, summary, verify
 from tests.conftest import requires_ffmpeg
 
 pytestmark = requires_ffmpeg
 
+SLIM = os.environ.get("FLACKEY_SLIM_FFMPEG")
+FULL_FFMPEG = shutil.which("ffmpeg")  # resolved before any test puts the slim build on the PATH
+
+
+@pytest.fixture(autouse=True, params=["full", "slim"])
+def build(request, monkeypatch) -> str:
+    """Which ffmpeg/ffprobe the check under test runs. The PATH, not a patched lookup, so the report's
+    worker processes inherit it too."""
+    if request.param == "slim":
+        if not SLIM:
+            pytest.skip("FLACKEY_SLIM_FFMPEG not set")
+        monkeypatch.setenv("PATH", SLIM + os.pathsep + os.environ["PATH"])
+        assert all(os.path.samefile(Path(tool_path(t)).parent, SLIM) for t in ("ffmpeg", "ffprobe"))
+    return request.param
+
 
 def _ffmpeg(*args: str) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
+    subprocess.run([FULL_FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
 
 
 def _flac(src: Path, out: Path, *filters: str, sample_fmt: str = "s16") -> Path:
@@ -81,7 +104,7 @@ def test_an_mp3_320_in_a_flac_is_not_cleared(pink: Path, d: Path):
 
 
 def _has_encoder(name: str) -> bool:
-    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=False).stdout
+    out = subprocess.run([FULL_FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, check=False).stdout
     return f" {name} " in out
 
 
