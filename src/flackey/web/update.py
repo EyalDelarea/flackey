@@ -460,12 +460,14 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
         records the bytes' hash, and `selfupdate.stage` unpacks nothing else. A signature that could not
         be fetched puts its category in `why`."""
         sig = await fetch_signature(sig_url, why) if sig_url else None
+        # Off the loop, like `stage` below: reading and hashing a 100-200 MB archive on it would stall
+        # every request and the event stream until it finished.
         try:
-            payload = path.read_bytes()
+            payload = await asyncio.to_thread(path.read_bytes)
         except OSError:
             log.exception("could not read back the download at %s", path)
             return None
-        return sig is not None and signature.verify_archive(version, payload, sig)
+        return sig is not None and await asyncio.to_thread(signature.verify_archive, version, payload, sig)
 
     async def download_archive(url: str, total: int | None, sig_url: str, version: str) -> None:
         """Fetch the bundle, prove it, stage it, and stop -- nothing is swapped until the owner
@@ -502,8 +504,10 @@ def router(status: Status | dict | None = None, settings: Settings | None = None
 
         started = time.monotonic()
         try:
-            # `stage` reads the archive once more and unpacks only bytes whose hash verified above.
-            new = selfupdate.stage(archive, version, relaunch=True)
+            # `stage` reads the archive once more and unpacks only bytes whose hash verified above. On a
+            # thread: ditto, xattr, chmod and hashing the bundle take tens of seconds, and on the loop
+            # they froze the whole server -- health checks, the event stream, the progress bar.
+            new = await asyncio.to_thread(selfupdate.stage, archive, version, relaunch=True)
         except selfupdate.StagingError as exc:
             log.error("could not stage the verified update for %s: %s", version, exc)
             report_step("install", "failed", to_version=version, started=started,

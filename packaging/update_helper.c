@@ -36,6 +36,11 @@
  * does not leave this program resident for the rest of the session. */
 #define WAIT_TIMEOUT_MS 60000
 #define WAIT_POLL_MS 50
+/* What reopens the app. Compiled in, never an argument; the tests build a copy with a stub here so they
+ * can watch the relaunch without opening anything. */
+#ifndef FLACKEY_OPEN_PATH
+#define FLACKEY_OPEN_PATH "/usr/bin/open"
+#endif
 
 static FILE *logfile = NULL;
 
@@ -276,12 +281,36 @@ static int wait_for_exit(pid_t pid) {
 static void relaunch(const char *dir) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", dir, TARGET_NAME);
-    char *argv[] = {"/usr/bin/open", path, NULL};
+    char *argv[] = {FLACKEY_OPEN_PATH, path, NULL};
     pid_t pid;
     extern char **environ;
-    if (posix_spawn(&pid, "/usr/bin/open", NULL, NULL, argv, environ) != 0) {
-        logline("the swap succeeded but the relaunch did not: %s", strerror(errno));
+    int err = posix_spawn(&pid, FLACKEY_OPEN_PATH, NULL, NULL, argv, environ);
+    if (err != 0) {
+        logline("could not reopen %s: %s", path, strerror(err));
     }
+}
+
+/* Every way out after the app has quit. A refused or failed swap leaves the installed bundle exactly as
+ * it was, so it is reopened: the owner pressed Restart, and an app that quit and never came back is
+ * worse than an update that did not happen. */
+static int finish(const char *dir, int want_relaunch, int code) {
+    if (!want_relaunch) return code;
+    if (code != EXIT_OK) {
+        /* Some of the refusals that land here are about this very path -- a symlink where the app
+         * should be -- and `open` follows links. Reopen only a real directory, checked without
+         * following anything, so a refused update never launches whatever a link points to. */
+        struct stat st;
+        int fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        int real = fd >= 0 && is_real_directory(fd, TARGET_NAME, &st);
+        if (fd >= 0) close(fd);
+        if (!real) {
+            logline("the update was not installed, and %s/%s is not a bundle to reopen", dir, TARGET_NAME);
+            return code;
+        }
+        logline("the update was not installed; reopening the version already installed");
+    }
+    relaunch(dir);
+    return code;
 }
 
 int main(int argc, char **argv) {
@@ -316,38 +345,43 @@ int main(int argc, char **argv) {
         logline("refusing: %s is not a parent pid", argv[1]);
         return EXIT_USAGE;
     }
+    /* First, so every refusal below can reopen the app it is not replacing. Never reopened when the app
+     * is still running: that would be two Flackeys on one database. */
+    if (!wait_for_exit((pid_t)parent)) {
+        logline("refusing: pid %ld was still running after %d ms", parent, WAIT_TIMEOUT_MS);
+        return EXIT_PARENT_ALIVE;
+    }
     if (!staging_name_ok(staging)) {
         logline("refusing: %s is not a staging name this app produces", staging);
-        return EXIT_REFUSED;
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
 
     /* Opened once: after this the kernel never resolves `dir` again. */
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
         logline("refusing: cannot open %s as a directory: %s", dir, strerror(errno));
-        return EXIT_REFUSED;
-    }
-
-    if (!wait_for_exit((pid_t)parent)) {
-        logline("refusing: pid %ld was still running after %d ms", parent, WAIT_TIMEOUT_MS);
-        return EXIT_PARENT_ALIVE;
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
 
     struct stat staged_st, target_st;
-    if (!is_real_directory(dirfd, staging, &staged_st)) return EXIT_REFUSED;
-    if (!is_real_directory(dirfd, TARGET_NAME, &target_st)) return EXIT_REFUSED;
+    if (!is_real_directory(dirfd, staging, &staged_st) || !is_real_directory(dirfd, TARGET_NAME, &target_st)) {
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
+    }
 
     /* Against the real uid: this is never setuid and must not become useful to anyone who makes
      * it so. */
     if (staged_st.st_uid != getuid()) {
         logline("refusing: %s is owned by uid %u, not %u", staging, staged_st.st_uid, getuid());
-        return EXIT_REFUSED;
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
 
     int stagefd = openat(dirfd, staging, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (stagefd < 0) {
         logline("refusing: cannot open %s: %s", staging, strerror(errno));
-        return EXIT_REFUSED;
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
     /* The directory just opened must be the one checked above, not one renamed into its place since. */
     struct stat opened_st;
@@ -355,19 +389,22 @@ int main(int argc, char **argv) {
         opened_st.st_ino != staged_st.st_ino) {
         logline("refusing: %s changed while it was being checked", staging);
         close(stagefd);
-        return EXIT_REFUSED;
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
     /* The app strips this after unpacking; still being here means an assumption broke upstream, and
      * Gatekeeper refuses a quarantined ad-hoc bundle outright. */
     if (has_quarantine(stagefd)) {
         logline("refusing: %s still carries com.apple.quarantine", staging);
         close(stagefd);
-        return EXIT_REFUSED;
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
     if (!declares_flackey_bundle_id(stagefd) || !has_runnable_executable(stagefd) ||
         !manifest_matches(stagefd, expected)) {
         close(stagefd);
-        return EXIT_REFUSED;
+        close(dirfd);
+        return finish(dir, want_relaunch, EXIT_REFUSED);
     }
     close(stagefd);
 
@@ -378,11 +415,11 @@ int main(int argc, char **argv) {
             logline("macOS blocked the update: grant Flackey permission under System Settings -> "
                     "Privacy & Security -> App Management (%s)", strerror(err));
             close(dirfd);
-            return EXIT_SWAP_BLOCKED;
+            return finish(dir, want_relaunch, EXIT_SWAP_BLOCKED);
         }
         logline("the swap failed, both bundles left as they were: %s", strerror(err));
         close(dirfd);
-        return EXIT_SWAP_FAILED;
+        return finish(dir, want_relaunch, EXIT_SWAP_FAILED);
     }
     close(dirfd);
     logline("swapped %s into %s/%s", staging, dir, TARGET_NAME);
@@ -394,6 +431,5 @@ int main(int argc, char **argv) {
         logline("could not remove the old bundle at %s: %s", old, strerror(errno));
     }
 
-    if (want_relaunch) relaunch(dir);
-    return EXIT_OK;
+    return finish(dir, want_relaunch, EXIT_OK);
 }
