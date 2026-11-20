@@ -216,22 +216,69 @@ def discard(staged: StagedUpdate | None) -> None:
     shutil.rmtree(staged.path, ignore_errors=True)
 
 
+def _ours(name: str) -> bool:
+    """A name `stage` makes, held to what `staging_name_ok` in update_helper.c accepts: the prefix, then
+    letters and digits only (then `.app` for the staged bundle). Anything else in /Applications is not
+    ours to remove, however close its name."""
+    for prefix, suffix in ((STAGING_PREFIX, ".app"), (UNPACK_PREFIX, "")):
+        if name.startswith(prefix) and name.endswith(suffix):
+            middle = name[len(prefix):len(name) - len(suffix)]
+            return middle.isascii() and middle.isalnum()
+    return False
+
+
+def _remove(entry: Path) -> None:
+    """`rmtree`, except that a folder left read-only (a swapped-out bundle can be) is made writable for its
+    owner and the removal retried. Only the folder whose entry could not be removed is touched, never
+    through a symlink, and only when it is ours."""
+    uid = os.getuid()
+
+    def retry(func, path, exc) -> None:
+        parent = os.path.dirname(path)
+        if not isinstance(exc, PermissionError):
+            raise exc
+        st = os.lstat(parent)
+        if st.st_uid != uid or stat.S_ISLNK(st.st_mode):
+            raise exc
+        os.chmod(parent, stat.S_IMODE(st.st_mode) | stat.S_IRWXU, follow_symlinks=False)
+        func(path)
+
+    shutil.rmtree(entry, onexc=retry)
+
+
+_unremovable: set[str] = set()  # leftovers already reported, so a sweep per launch does not repeat itself
+
+
 def sweep(applications: Path) -> None:
-    """Remove ~200MB staging directories abandoned by earlier attempts."""
+    """Remove ~200MB staging directories abandoned by earlier attempts, and the old bundle a swap leaves
+    under the staging name. Run before staging and again at startup.
+
+    A leftover owned by someone else is left alone: the first swap after a `.pkg` install leaves the
+    installer's root-owned bundle behind, and only an administrator can delete that."""
     try:
         entries = list(applications.iterdir())
     except OSError:
         return
     for entry in entries:
-        if not entry.name.startswith((STAGING_PREFIX, UNPACK_PREFIX)):
+        if not _ours(entry.name):
             continue
         try:
-            if entry.is_symlink() or entry.lstat().st_uid != os.getuid():
-                continue
+            st = entry.lstat()
         except OSError:
             continue
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            continue
+        if st.st_uid != os.getuid():
+            if entry.name not in _unremovable:
+                _unremovable.add(entry.name)
+                log.info("cannot remove %s: it belongs to another user (uid %d), most likely the installer's "
+                         "copy an update replaced; an administrator can delete it", entry, st.st_uid)
+            continue
         log.info("removing a staged update left over from an earlier attempt: %s", entry)
-        shutil.rmtree(entry, ignore_errors=True)
+        try:
+            _remove(entry)
+        except OSError as exc:
+            log.warning("could not remove %s: %s", entry, exc)
 
 
 def launch_helper(staged: StagedUpdate, *, log_path: Path | None = None) -> None:

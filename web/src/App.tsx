@@ -100,15 +100,20 @@ function AppBody({ live }: { live: Live }) {
   const setupStep: SetupStepName | null = !h || (h.setup_done && !reconnecting) ? null
     : !reconnecting && !welcomeSeen ? 'welcome' : SETUP_STEPS[reconnecting && step === 1 ? 3 : step]
   const funnel = useRef<{ step: SetupStepName | null; since: number; started: number }>({ step: null, since: 0, started: 0 })
-  useEffect(() => {
+  // Brings the funnel up to the step this render shows. The effect does it after paint, but a click can
+  // land before that effect runs (a fast "Get started"), so leaving a step catches the funnel up first --
+  // otherwise it would see no step on screen and the step's `completed` would be lost.
+  const enterStep = () => {
     const f = funnel.current
     if (setupStep === f.step) return  // the ref guard keeps StrictMode's second run from posting twice
     const now = Date.now()
     if (f.step === null) f.started = now
     f.step = setupStep; f.since = now
     if (setupStep) track('setup_step', { step: setupStep, action: 'shown', ...(reconnecting ? { rerun: true } : {}) })
-  }, [setupStep, reconnecting])
+  }
+  useEffect(enterStep, [setupStep, reconnecting])
   const leaveStep = (action: StepAction) => {
+    enterStep()
     const f = funnel.current
     if (!f.step) return
     track('setup_step', { step: f.step, action, time_on_step: durationBucket(Date.now() - f.since), ...(reconnecting ? { rerun: true } : {}) })

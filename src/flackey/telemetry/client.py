@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from ipaddress import ip_address
 from pathlib import Path
@@ -271,6 +271,7 @@ class Telemetry:
         self._gen = 0
         self._queue: deque[dict] = deque(maxlen=MAX_QUEUE)
         self._dropped = 0                 # events lost to a full queue or outbox, sent as `dropped`
+        self._outbox_write_failed = False  # said once in the log, not on every flush while the disk stays full
         self._fields_dropped = 0          # fields that failed the schema (never sent, only counted)
         self._notes: dict[int, dict] = {}
         # source -> {"sent": the state the collector last heard, "before": the state that change left,
@@ -689,19 +690,28 @@ class Telemetry:
                 return
             items = list(self._queue)
             self._queue.clear()
-        self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self.data_dir / OUTBOX
         raw = self._outbox_lines()
         good, _ = _parse_lines(raw)
-        self._dropped += len(raw) - len(good)
         lines = good + [json.dumps(e, separators=(",", ":")) for e in items]
         over = max(0, len(lines) - MAX_OUTBOX_EVENTS)
         while sum(len(ln) + 1 for ln in lines[over:]) > MAX_OUTBOX_BYTES and over < len(lines):
             over += 1
-        if over:
-            self._dropped += over
-            lines = lines[over:]
-        self._write_lines(path, lines)
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_lines(path, lines[over:])
+        except OSError as e:
+            # A full or read-only disk: the queued events are gone (the old outbox is still as it was, so its
+            # corrupt lines and the cap are counted on a later flush that works). Counted, so the collector
+            # hears about the loss, and logged once rather than every tick the disk stays full.
+            self._dropped += len(items)
+            if not self._outbox_write_failed:
+                self._outbox_write_failed = True
+                log.warning("usage stats: could not write the outbox (%s); %d events dropped", type(e).__name__,
+                            len(items))
+            return
+        self._outbox_write_failed = False
+        self._dropped += len(raw) - len(good) + over
 
     def _outbox_lines(self) -> list[str]:
         try:
@@ -839,9 +849,23 @@ class Telemetry:
                 # Opt-out or New ID landed while this was on the wire: the outbox and sent log it read are
                 # gone with that ID, and must not be written back (nor go later under a new ID).
                 return True, False, None, None
-            return (*self._after_batch(r, lines, batch), None)
+            return (*self._after_batch(r, batch, dropped), None)
 
-    def _after_batch(self, r: httpx.Response, lines: list[str], batch: list[str]) -> tuple[bool, bool, float | None]:
+    def _without(self, batch: list[str]) -> list[str]:
+        """The outbox as it is now, less the lines of `batch`. Read again rather than taken from before the send:
+        a flush can land while the batch is on the wire (the quit's `end_session` runs on the main thread), and
+        writing back the pre-send copy would erase what it added. Each line carries its session and `seq`, so a
+        sent line is matched exactly; one occurrence is removed per line sent."""
+        left = Counter(batch)
+        rest = []
+        for ln in self._outbox_lines():
+            if left[ln] > 0:
+                left[ln] -= 1
+            else:
+                rest.append(ln)
+        return rest
+
+    def _after_batch(self, r: httpx.Response, batch: list[str], dropped: int) -> tuple[bool, bool, float | None]:
         code = r.status_code
         refused = _refusal(r, BATCH_REFUSALS)
         # What Settings > Privacy shows: "ok", or "failed" with why (kept and retried, or refused and dropped)
@@ -858,7 +882,7 @@ class Telemetry:
                               "error": f"Couldn't reach the stats server (HTTP {code}), will retry"}
         if not (200 <= code < 300 or refused):
             return False, True, retry_after_s(r, self.clock())
-        rest = lines[len(batch):]
+        rest = self._without(batch)
         stop = False
         if 200 <= r.status_code < 300:
             with contextlib.suppress(ValueError, AttributeError):
@@ -873,7 +897,7 @@ class Telemetry:
             log.warning("usage stats: the collector said stop; %d events dropped", len(batch))
         elif 200 <= r.status_code < 300:
             self._record_sent(batch)
-            self._dropped = 0
+            self._dropped = max(0, self._dropped - dropped)   # what was reported; a drop during the send stays
         else:
             # The collector's own refusal (invalid, not_owner, schema_retired): it would be refused forever (spec §6.1)
             field = ""
