@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import plistlib
 import subprocess
 import sys
@@ -121,7 +122,11 @@ def app(tmp_path, applications, private_key, monkeypatch):
     quits = Quit()
     api = create_app(store, worker, Inbox(store, youtube=fake_youtube), settings, status=status,
                      quit_app=quits)
-    return AppClient(api), settings, status, quits
+    # Entered, so one event loop lives for the whole test: staging runs on a worker thread
+    # (`asyncio.to_thread`), and without a loop that outlasts each request the task waiting on that
+    # thread would be cancelled when the request that happened to be running finished.
+    with AppClient(api) as client:
+        yield client, settings, status, quits
 
 
 def feed(*, archive: int | None = 1024, sig: bool = True, installer: int | None = 8,
@@ -552,3 +557,37 @@ def test_the_seamless_path_records_nothing_with_stats_off(app, archive_bytes, pr
         telemetry.uninstall()
         selfupdate.pending.clear()
     assert list(off._queue) == [] and not (tmp_path / "stats").exists()
+
+
+def _loop_or_thread() -> str:
+    """Where the caller runs. `stage` and the signature check used to run on the server's event loop,
+    which froze /api/health and the event stream for as long as ditto and the hashing took (SHL-4)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return "thread"
+    return "loop"
+
+
+@respx.mock
+def test_staging_and_verifying_never_run_on_the_event_loop(app, archive_bytes, private_key, monkeypatch):
+    c, _, _, _ = app
+    calls: list[tuple[str, str]] = []
+    real_stage, real_verify = selfupdate.stage, signature.verify_archive
+
+    def stage(archive, version, **kw):
+        calls.append(("stage", _loop_or_thread()))
+        return real_stage(archive, version, **kw)
+
+    def verify(version, payload, sig):
+        calls.append(("verify", _loop_or_thread()))
+        return real_verify(version, payload, sig)
+
+    monkeypatch.setattr(selfupdate, "stage", stage)
+    monkeypatch.setattr(signature, "verify_archive", verify)
+    serve(archive_bytes, sign(private_key, archive_bytes))
+
+    state = press(c)
+
+    assert state["state"] == "staged"
+    assert calls == [("verify", "thread"), ("stage", "thread")]
