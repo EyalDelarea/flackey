@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the slim ffmpeg and ffprobe a packaged Flackey carries (issue #137): FFmpeg 6.1.2 from its
+# Build the slim ffmpeg and ffprobe a packaged Flackey carries (issue #137): FFmpeg 6.1.6 from its
 # release tarball, pinned by SHA-256, configured with --disable-everything and then only the pieces
 # Flackey's own command lines use. The full static builds this replaces were 43 MB each; most of an
 # update download was codecs, filters and network protocols nothing here ever calls.
@@ -25,8 +25,8 @@
 # library asked for by name, and it is linked statically everywhere but macOS, where it is the system's.
 set -euo pipefail
 
-FFMPEG_VERSION=6.1.2
-FFMPEG_SHA256=3b624649725ecdc565c903ca6643d41f33bd49239922e45c9b1442c63dca4e38
+FFMPEG_VERSION=6.1.6
+FFMPEG_SHA256=d4fcb164028dd3beee5d92c0ac72e46aac6973c75ea12dc14de07bf8f407370a
 MACOS_MIN=12.0   # LSMinimumSystemVersion in Flackey.spec
 
 OUT="${1:?usage: build_ffmpeg.sh OUT_DIR}"
