@@ -200,6 +200,25 @@ def test_boot_points_the_soulseek_share_at_the_library_folder(tmp_path):
     assert data["shares"]["directories"] == [str(settings.library_root)]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_boot_keeps_sharing_a_saved_whole_drive_and_warns(tmp_path, caplog):
+    """An update must not quietly stop sharing a library folder that the newer rules would refuse."""
+    import yaml
+
+    from flackey.app import repair_share
+    from flackey.config import Settings
+    from flackey.slskd_config import config_path, write_credentials
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=Path("/Volumes/MyDrive"),
+                        slskd_api_key="k")
+    write_credentials(settings.data_dir, "digger", "not-a-real-password")
+    caplog.set_level("WARNING")
+    repair_share(settings)
+    assert yaml.safe_load(config_path(settings.data_dir).read_text())["shares"]["directories"] == [
+        "/Volumes/MyDrive"]
+    assert "would not be accepted" in caplog.text
+
+
 def test_boot_writes_no_config_when_soulseek_was_never_set_up(tmp_path, caplog):
     """Neither an install without Soulseek nor one whose slskd.yml cannot be parsed may stop a boot."""
     from flackey.app import repair_share

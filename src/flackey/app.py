@@ -320,7 +320,7 @@ def repair_share(settings: Settings) -> None:
     if not settings.soulseek_enabled:
         return
     try:
-        write_share(settings.data_dir, settings.library_root)
+        write_share(settings.data_dir, settings.library_root, saved=True)
     except SlskdConfigError as e:
         log.warning("could not point the Soulseek share at the library folder: %s", e)
 

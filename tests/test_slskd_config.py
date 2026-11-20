@@ -539,17 +539,37 @@ def test_the_home_folder_itself_is_never_shared(tmp_path: Path, fake_home: Path)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
-def test_a_refused_library_folder_is_taken_out_of_the_share(tmp_path: Path, fake_home: Path):
-    """An owner who chose a whole drive before this rule existed must stop sharing it on the next start,
-    not keep offering it: the startup repair drops the refused folder and keeps the owner's other shares."""
+def test_choosing_a_whole_drive_is_refused_and_leaves_the_share_as_it_was(tmp_path: Path, fake_home: Path):
     data = tmp_path / "data"
     write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
-    path = config_path(data)
-    config = yaml.safe_load(path.read_text())
-    config["shares"]["directories"] = ["/Volumes/Backup", str(fake_home / "Music")]
-    path.write_text(yaml.safe_dump(config))
 
     with pytest.raises(SlskdConfigError):
-        write_share(data, Path("/Volumes/Backup"))
+        write_share(data, Path("/Volumes/MyDrive"), previous=fake_home / "Music")
 
-    assert yaml.safe_load(path.read_text())["shares"]["directories"] == [str(fake_home / "Music")]
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(fake_home / "Music")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+@pytest.mark.parametrize("saved_folder", ["/Volumes/MyDrive", "/Users/Shared"])
+def test_a_saved_whole_drive_keeps_being_shared_with_a_warning(tmp_path: Path, fake_home: Path, caplog,
+                                                              saved_folder):
+    """A folder saved before the whole-drive and system-folder rules existed is not quietly dropped from
+    the share by an update: the startup repair keeps sharing it and logs why it would be refused now."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw")
+    caplog.set_level("WARNING")
+
+    assert write_share(data, Path(saved_folder), saved=True) is True
+
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [saved_folder]
+    assert "would not be accepted" in caplog.text
+
+
+def test_a_saved_folder_is_still_held_to_the_older_rules(tmp_path: Path, fake_home: Path):
+    """Only the new rules are relaxed for a saved folder: the home folder and hidden folders never are."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw", library_root=fake_home / "Music")
+    for folder in (fake_home, fake_home / ".ssh"):
+        with pytest.raises(SlskdConfigError):
+            write_share(data, folder, saved=True)
+    assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(fake_home / "Music")]
