@@ -566,6 +566,46 @@ def stop_slskd(settings: Settings) -> None:
     stop_owned(settings.data_dir)
 
 
+def end_usage_session() -> None:
+    """Close the usage-stats session now, so the next launch reads this quit as clean. Never raises and
+    returns None, for the same reason as `stop_slskd`: it runs as a `closing` handler. The server's own
+    `finally` closes it again on the paths that reach it; closing twice is harmless."""
+    from . import telemetry as usage
+
+    tel = usage.current()
+    if tel is None:
+        return
+    try:
+        tel.end_session()
+    except Exception:
+        log.debug("usage stats: could not close the session at quit", exc_info=True)
+
+
+def on_closing(settings: Settings) -> None:
+    """Everything that has to happen before Cmd+Q's C `exit()`: see `run_in_window`."""
+    try:
+        stop_slskd(settings)
+    finally:
+        end_usage_session()
+
+
+def sweep_leftover_updates() -> None:
+    """Remove what an earlier update left in /Applications (the swapped-out bundle, when the helper could
+    not delete it). Only from a packaged app, and only names `stage` makes. Off the main thread: it can be
+    a few hundred MB of files."""
+    bundle = update_install.running_bundle()
+    if bundle is None:
+        return
+
+    def sweep() -> None:
+        try:
+            update_install.sweep(bundle.parent)
+        except Exception:
+            log.debug("could not sweep leftover updates", exc_info=True)
+
+    threading.Thread(target=sweep, name="sweep-updates", daemon=True).start()
+
+
 def guard_slskd(settings: Settings) -> None:
     """Stop slskd on exit and on SIGTERM/SIGINT too, not only when the window closes cleanly."""
     install_exit_guards(settings.data_dir)
@@ -628,6 +668,7 @@ def run_in_window(settings: Settings) -> None:
         explain_missing_webview2()
         return
     relaunch_bundled(settings)  # before AppKit loads: the Dock name is fixed at process start
+    sweep_leftover_updates()
     import webview  # lazy: `flackey start --no-browser` must work without pywebview installed
     set_app_name()
 
@@ -662,8 +703,9 @@ def run_in_window(settings: Settings) -> None:
         window.events.loaded += lambda: inset_titlebar(window)
     # The menu's Quit (Cmd+Q) is AppKit's `terminate:`, which asks `closing` and then calls C `exit()`:
     # `closed`, the `finally` below and Python's `atexit` never run. `closing` is the one hook every way
-    # out passes through, so slskd is stopped there, synchronously, before the process can go.
-    window.events.closing += lambda: stop_slskd(settings)
+    # out passes through, so slskd is stopped and the usage-stats session closed there, synchronously,
+    # before the process can go -- otherwise the next launch counts this quit as a crash.
+    window.events.closing += lambda: on_closing(settings)
     window.events.closed += lambda: remember_window_size(settings, (last[0], last[1]))
     window.events.closed += handle.stop
     # How `POST /api/update/restart` ends the program: closing the window runs the `closed` handlers

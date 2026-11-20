@@ -274,6 +274,26 @@ describe('the usage-stats setup funnel', () => {
     expect(calls).toEqual(['welcome:shown', 'welcome:completed', 'folder:shown', 'folder:completed', 'format:shown'])
     for (const [, f] of ui.mock.calls) expect(Object.keys(f).every(k => ['step', 'action', 'time_on_step'].includes(k))).toBe(true)
   })
+
+  it('still posts welcome completed when Get started is clicked before the step effect has run', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ setup_done: false }))
+    vi.spyOn(api, 'telemetry').mockResolvedValue({ available: false, enabled: false })
+    vi.spyOn(api, 'pickFolderAvailable').mockResolvedValue({ available: false })
+    const ui = vi.spyOn(api, 'telemetryUi').mockResolvedValue({ ok: true })
+    // Click from a MutationObserver: it fires in the microtask right after React commits the welcome
+    // screen, before React's passive effects (the funnel's step tracking) get their turn.
+    let clicked = false
+    const mo = new MutationObserver(() => {
+      const b = !clicked && screen.queryByText('Get started')
+      if (b) { clicked = true; fireEvent.click(b) }
+    })
+    mo.observe(document.body, { childList: true, subtree: true })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Continue' })
+    mo.disconnect()
+    await waitFor(() => expect(ui.mock.calls.map(([, f]) => `${f.step}:${f.action}`))
+      .toEqual(['welcome:shown', 'welcome:completed', 'folder:shown']))
+  })
 })
 
 describe('the one-time usage-stats question for an owner who set up before Welcome asked', () => {

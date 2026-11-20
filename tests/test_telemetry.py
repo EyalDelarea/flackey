@@ -1244,3 +1244,69 @@ def test_a_delete_queued_while_the_owed_ones_are_being_settled_is_never_lost(tmp
     t._pending_deletes = real
     assert collector.deletes == ["id-a"]
     assert t._pending_deletes() == [("id-b", "secret-b")]
+
+
+def test_events_lost_to_a_failed_outbox_write_are_counted_as_dropped_and_logged_once(tmp_path, monkeypatch, caplog):
+    t, _ = make(tmp_path, url=None)
+    t.opt_in()
+    t._flush()
+    before = t._dropped
+    real = Telemetry._write_lines
+
+    def full(path, lines):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Telemetry, "_write_lines", staticmethod(full))
+    with caplog.at_level(logging.DEBUG, logger="flackey.telemetry.client"):
+        t.emit("app_started", filing_format="aiff")
+        t.emit("app_started", filing_format="flac")
+        t._flush()                                    # disk full: two events gone
+        t.emit("app_started", filing_format="wav")
+        t._flush()                                    # still full: one more
+    assert t._dropped == before + 3
+    assert not t._queue
+    assert sum("could not write the outbox" in r.getMessage() for r in caplog.records) == 1
+    monkeypatch.setattr(Telemetry, "_write_lines", staticmethod(real))
+    t.emit("app_started", filing_format="aiff")
+    t._flush()                                        # the disk has room again
+    assert [e.get("filing_format") for e in t.snapshot()["pending"]][-1] == "aiff"
+    assert t._dropped == before + 3                   # a working write does not reset what was lost
+
+
+def test_an_event_flushed_while_a_batch_is_on_the_wire_is_not_overwritten(tmp_path):
+    """The sender reads the outbox, posts without holding the lock, then writes back what is left. A flush
+    in between (the quit's `end_session`, on the main thread) must not be undone by that write."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    t._flush()
+    collector = Collector()
+
+    def answer(request):
+        t.emit("app_started", filing_format="flac")   # lands during the POST
+        t._dropped += 2                               # and so does a drop, which must reach the next batch
+        t._flush()
+        return collector(request)
+
+    run_tick(t, httpx.MockTransport(answer))
+    (batch,) = collector.batches
+    assert [e.get("filing_format") for e in batch["events"] if e["event"] == "app_started"] == ["aiff"]
+    pending = [e.get("filing_format") for e in t.snapshot()["pending"] if e["event"] == "app_started"]
+    assert pending == ["flac"]
+    assert t._dropped == 2
+
+
+def test_a_refused_batch_does_not_take_events_flushed_during_the_send_with_it(tmp_path):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    t._flush()
+
+    def answer(request):
+        t.emit("app_started", filing_format="flac")
+        t._flush()
+        return httpx.Response(400, json={"error": "invalid", "field": "x"})
+
+    run_tick(t, httpx.MockTransport(answer))
+    pending = [e.get("filing_format") for e in t.snapshot()["pending"] if e["event"] == "app_started"]
+    assert pending == ["flac"]

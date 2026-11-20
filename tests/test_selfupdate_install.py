@@ -463,3 +463,66 @@ def test_a_copy_with_nothing_in_applications_is_not_a_stray(tmp_path, monkeypatc
     monkeypatch.setattr(install.sys, "platform", "darwin")
     monkeypatch.setattr(install, "running_bundle", lambda: elsewhere)
     assert install.stray_copy(applications=tmp_path / "Applications") is None
+
+
+# -- the sweep on its own: what an earlier update left behind ------------------------------------------------
+
+def _old_bundle(applications: Path, name: str) -> Path:
+    """A swapped-out bundle the way the helper can leave one: read-only folders all the way down."""
+    old = applications / name
+    (old / "Contents" / "Resources" / "deep").mkdir(parents=True)
+    (old / "Contents" / "Resources" / "deep" / "f").write_text("x")
+    for d in (old / "Contents" / "Resources" / "deep", old / "Contents" / "Resources", old / "Contents", old):
+        d.chmod(0o555)
+    return old
+
+
+def test_the_sweep_removes_a_leftover_whose_folders_are_read_only(applications):
+    old = _old_bundle(applications, f"{install.STAGING_PREFIX}dd2aa55e96.app")
+    unpack = _old_bundle(applications, f"{install.UNPACK_PREFIX}dd2aa55e96")
+
+    install.sweep(applications)
+
+    assert not old.exists() and not unpack.exists()
+
+
+def test_the_sweep_only_takes_names_the_helper_could_have_made(applications):
+    keep = [applications / n for n in ("Flackey.app", "Flackey-0.1.6-release-backup.app",
+                                       f"{install.STAGING_PREFIX}x.bak", f"{install.STAGING_PREFIX}a-b.app",
+                                       f"{install.STAGING_PREFIX}.app", f"{install.UNPACK_PREFIX}a.b")]
+    for k in keep:
+        k.mkdir()
+
+    install.sweep(applications)
+
+    assert all(k.is_dir() for k in keep)
+
+
+def test_the_sweep_never_follows_a_symlink_inside_a_leftover(tmp_path, applications):
+    elsewhere = tmp_path / "precious"
+    elsewhere.mkdir()
+    (elsewhere / "file").write_text("keep me")
+    elsewhere.chmod(0o555)
+    old = applications / f"{install.STAGING_PREFIX}abc123.app"
+    (old / "Contents").mkdir(parents=True)
+    (old / "Contents" / "link").symlink_to(elsewhere)
+    (old / "Contents").chmod(0o555)
+
+    install.sweep(applications)
+
+    assert not old.exists()
+    assert (elsewhere / "file").read_text() == "keep me"
+    assert elsewhere.stat().st_mode & 0o777 == 0o555        # its permissions were not touched either
+
+
+def test_the_sweep_skips_a_leftover_someone_else_owns_and_says_so_once(applications, monkeypatch, caplog):
+    old = applications / f"{install.STAGING_PREFIX}dd2aa55e96.app"
+    old.mkdir()
+    monkeypatch.setattr(install.os, "getuid", lambda: os.stat(old).st_uid + 1)
+
+    with caplog.at_level("INFO", logger=install.log.name):
+        install.sweep(applications)
+        install.sweep(applications)
+
+    assert old.is_dir()
+    assert sum("cannot remove" in r.getMessage() for r in caplog.records) == 1
