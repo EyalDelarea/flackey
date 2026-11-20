@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api } from '../../api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ApiError, api } from '../../api'
 import type { SharingState, UploadFeed } from '../../api'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
@@ -17,18 +17,29 @@ export default function UploadsPage() {
   const [feed, setFeed] = useState<UploadFeed | null>(null)
   const [sharing, setSharing] = useState<SharingState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Every poll takes a ticket, and an answer older than one already shown is dropped: a slow poll landing
+  // after a newer one would put old numbers back. Nothing writes once the page is gone (WEB-8).
+  const issued = useRef(0)
+  const shown = useRef({ feed: 0, sharing: 0 })
   const load = useCallback(async () => {
+    const ticket = ++issued.current
+    const fresh = (k: 'feed' | 'sharing') => { if (ticket <= shown.current[k]) return false; shown.current[k] = ticket; return true }
     // An empty page here reads as "nobody wants my files" when the real answer is often "nobody can
     // reach you", so the port answer is fetched alongside the feed -- started first and awaited last,
     // because the feed is what the page is for and must not queue behind it.
     const shared = api.sharing().catch(() => null)
-    try { setFeed(await api.uploads()); setError(null) } catch { setError("Can't reach Flackey.") }
-    setSharing(await shared)
+    try { const f = await api.uploads(); if (fresh('feed')) { setFeed(f); setError(null) } }
+    // Only a request nothing answered means Flackey is unreachable; an answer says what went wrong.
+    catch (e) { if (fresh('feed')) setError(e instanceof ApiError && e.message ? e.message : "Can't reach Flackey.") }
+    const sh = await shared
+    if (fresh('sharing')) setSharing(sh)
   }, [])
   useEffect(() => {
+    // A remount (StrictMode does one) writes again, but nothing asked for before it does.
+    shown.current = { feed: issued.current, sharing: issued.current }
     load().catch(() => undefined)
     const t = setInterval(() => { load().catch(() => undefined) }, POLL_MS)
-    return () => clearInterval(t)
+    return () => { clearInterval(t); shown.current = { feed: Infinity, sharing: Infinity } }
   }, [load])
 
   const s = feed?.summary

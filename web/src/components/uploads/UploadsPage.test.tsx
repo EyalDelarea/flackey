@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { vi, afterEach } from 'vitest'
 import UploadsPage from './UploadsPage'
 import { api } from '../../api'
@@ -67,4 +67,36 @@ it('renders a peer name as text, never as markup', async () => {
   const { container } = render(<UploadsPage />)
   await waitFor(() => expect(screen.getByText(nasty)).toBeInTheDocument())
   expect(container.querySelector('img')).toBeNull()
+})
+
+it('says what the server said rather than claiming it cannot be reached (WEB-8)', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'The sidecar is restarting.' }), { status: 503 })))
+  render(<UploadsPage />)
+  await waitFor(() => expect(screen.getByText('The sidecar is restarting.')).toBeInTheDocument())
+  expect(screen.queryByText("Can't reach Flackey.")).not.toBeInTheDocument()
+})
+
+it('still says it cannot reach Flackey when nothing answered', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+  render(<UploadsPage />)
+  await waitFor(() => expect(screen.getByText("Can't reach Flackey.")).toBeInTheDocument())
+})
+
+it('does not let a slow, older answer replace a newer one, or land after the page is gone (WEB-8)', async () => {
+  vi.useFakeTimers()
+  try {
+    const answers: ((f: UploadFeed) => void)[] = []
+    vi.spyOn(api, 'sharing').mockResolvedValue(null as never)
+    vi.spyOn(api, 'uploads').mockImplementation(() => new Promise(r => { answers.push(r) }))
+    const { unmount } = render(<UploadsPage />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(answers).toHaveLength(2)
+    const peer = (name: string) => feed({ uploads: [{ id: name, peer: name, file: 'f.aiff', folder: 'd', size: 1, bytes: 1, pct: 100,
+      state: 'Completed', speed_bps: 0, started_at: null, ended_at: null }], summary: { total: 1, active: 0, completed: 1, peers: 1, bytes: 1 } })
+    await act(async () => { answers[1](peer('newer-peer')) })
+    await act(async () => { answers[0](peer('older-peer')) })
+    expect(screen.getByText('newer-peer')).toBeInTheDocument()
+    expect(screen.queryByText('older-peer')).not.toBeInTheDocument()
+    unmount()
+  } finally { vi.useRealTimers() }
 })

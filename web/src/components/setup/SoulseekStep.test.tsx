@@ -388,3 +388,88 @@ describe('signing in, which on Soulseek is also how the account gets created', (
     expect(status.mock.calls.length).toBe(after)
   })
 })
+
+describe('a poll that fails (WEB-4)', () => {
+  const settle = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+
+  it('rides out one failed progress check instead of freezing the install', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'slskdSetup').mockResolvedValue({ installed: false, running: false, version: '0.26.0' })
+    vi.spyOn(api, 'installSlskd').mockResolvedValue({ state: 'downloading' })
+    const prog = vi.spyOn(api, 'slskdProgress')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue(progress({ state: 'done', done: 1, total: 1 }))
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await settle()
+    await settle(2 * POLL_MS)
+    expect(prog.mock.calls.length).toBeGreaterThan(1)
+    expect(screen.getByText('Create account')).not.toBeDisabled()
+  })
+
+  it('gives up on a progress check that keeps failing and offers Try again, not a dead button', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'slskdSetup').mockResolvedValue({ installed: false, running: false, version: '0.26.0' })
+    vi.spyOn(api, 'installSlskd').mockResolvedValue({ state: 'downloading' })
+    const prog = vi.spyOn(api, 'slskdProgress').mockRejectedValue(new TypeError('Failed to fetch'))
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await settle()
+    await settle(10 * POLL_MS)
+    expect(screen.getByText(/Couldn't finish getting Soulseek ready/)).toBeInTheDocument()
+    expect(screen.getByText('Create account')).not.toBeDisabled()
+    const after = prog.mock.calls.length
+    await settle(10 * POLL_MS)
+    expect(prog.mock.calls.length).toBe(after)   // and it stopped asking
+  })
+
+  it('does not stack a second progress check on one still waiting for an answer', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'slskdSetup').mockResolvedValue({ installed: false, running: false, version: '0.26.0' })
+    vi.spyOn(api, 'installSlskd').mockResolvedValue({ state: 'downloading' })
+    const prog = vi.spyOn(api, 'slskdProgress').mockReturnValue(new Promise(() => {}))
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await settle()
+    await settle(5 * POLL_MS)
+    expect(prog).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands the sign-in back with a reason when its status check keeps failing', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'saveSoulseek').mockResolvedValue({ ok: true, restart_required: false, connecting: true })
+    vi.spyOn(api, 'soulseekConnectStatus')
+      .mockResolvedValueOnce(connect({ state: 'connecting' }))
+      .mockRejectedValue(new TypeError('Failed to fetch'))
+    render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+    await settle()
+    fireEvent.change(screen.getByLabelText('Soulseek username'), { target: { value: 'digger' } })
+    fireEvent.change(screen.getByLabelText('Soulseek password'), { target: { value: 'not-a-real-password' } })
+    fireEvent.click(screen.getByText('Create account'))
+    await settle()
+    await settle(POLL_MS)
+    // One blip is not the end of it: still signing in.
+    expect(screen.getByText('Signing in to Soulseek…')).toBeInTheDocument()
+    expect(screen.getByText('Signing in…')).toBeDisabled()
+    await settle(10 * POLL_MS)
+    expect(screen.queryByText('Signing in to Soulseek…')).not.toBeInTheDocument()
+    expect(screen.getByText("Couldn't check the Soulseek sign-in. Try again.")).toBeInTheDocument()
+    // Out of the busy state: the fields are editable again, so another attempt can be made.
+    expect(screen.getByText('Create account')).toBeInTheDocument()
+    expect(screen.getByLabelText('Soulseek password')).not.toBeDisabled()
+  })
+})
+
+it('Try again after losing track of a download that is still running picks it back up rather than starting a second one (WEB-4)', async () => {
+  vi.useFakeTimers()
+  const settle = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  vi.spyOn(api, 'slskdSetup').mockResolvedValue({ installed: false, running: false, version: '0.26.0' })
+  const install = vi.spyOn(api, 'installSlskd').mockResolvedValue({ state: 'downloading' })
+  const prog = vi.spyOn(api, 'slskdProgress').mockRejectedValue(new TypeError('Failed to fetch'))
+  render(<SoulseekStep onDone={vi.fn()} onSkip={vi.fn()} />)
+  await settle()
+  await settle(10 * POLL_MS)
+  expect(screen.getByText(/Couldn't finish getting Soulseek ready/)).toBeInTheDocument()
+  prog.mockResolvedValue(progress({ done: 60, total: 100 }))
+  fireEvent.click(screen.getByText('Try again'))
+  await settle()
+  expect(screen.getByText('Getting things ready… 60%')).toBeInTheDocument()
+  expect(install).toHaveBeenCalledTimes(1)
+})

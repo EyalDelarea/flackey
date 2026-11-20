@@ -879,3 +879,72 @@ it('offers no Get all extended for a single track or a lone offer', () => {
   fireEvent.click(screen.getByRole('tab', { name: 'History' }))
   expect(screen.queryByRole('button', { name: /Get all extended/ })).toBeNull()
 })
+
+describe('an action that worked, followed by a refresh that did not (WEB-2)', () => {
+  const failingRefresh = () => vi.fn(async () => { throw new Error('stats timed out') })
+
+  it('does not report a retry that went through as failed', async () => {
+    vi.mocked(api.retry).mockResolvedValueOnce({ ...baseRequest, state: 'queued' } as any)
+    const refresh = failingRefresh()
+    render(<DownloadPage live={makeLive([mk(4, 'error')], { refresh })} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    fireEvent.click(screen.getByText('Try again'))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    await act(async () => undefined)
+    expect(screen.queryByText("That didn't work. Try again.")).not.toBeInTheDocument()
+  })
+
+  it('does not report Retry all as failed', async () => {
+    vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [1], skipped: [] })
+    const refresh = failingRefresh()
+    render(<DownloadPage live={makeLive([mk(1, 'error')], { refresh })} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    await act(async () => undefined)
+    expect(screen.queryByText("That didn't work. Try again.")).not.toBeInTheDocument()
+  })
+
+  it('shows a pasted link as added even when the refresh after it fails', async () => {
+    vi.mocked(api.submit).mockResolvedValueOnce({ summary: 'Queued 1 of 1', request_ids: [1], playlist_id: null,
+      name: null, total: 1, already_in_library: 0, already_queued: 0 } as any)
+    render(<DownloadPage live={makeLive([], { refresh: failingRefresh() })} />)
+    fireEvent.change(screen.getByLabelText('Track or playlist link'), { target: { value: 'https://youtu.be/x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(await screen.findByText('Queued 1 of 1')).toBeInTheDocument()
+    expect(screen.queryByText('Something went wrong. Try again.')).not.toBeInTheDocument()
+  })
+
+  it('lets Get extended finish quietly when the refresh after it fails', async () => {
+    const track = { id: 101, path: '/l/1.aiff', fmt: 'aiff', bitrate_kbps: 1411, cutoff_hz: 22050, file_size: 1, artist: 'A',
+      title: 'Track 1', mix_name: 'Radio Edit', duration_s: 200, isrc: null, catalog_track_id: null, request_id: 1, added_at: '',
+      verified_at: null, spectrogram_path: null, source: 'soulseek', source_fmt: 'flac', bit_depth: 16, sample_rate: 44100,
+      catalog: null, evidence: [{ kind: 'extended_offer', value: { status: 'available', length_s: 400, mix_name: 'Extended Mix' } }] }
+    const done: Bundle = { request: { ...baseRequest, id: 1, state: 'done', error_message: null, track_id: 101 },
+      candidates: [], catalog: null, track: track as never, rejection: null }
+    vi.spyOn(api, 'getExtended').mockResolvedValueOnce({ ok: true, message: 'Swapped.', swapped: true })
+    const refresh = failingRefresh()
+    render(<DownloadPage live={makeLive([done], { refresh })} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Get extended' }))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    await act(async () => undefined)
+    expect(screen.queryByText("That didn't work. Try again.")).not.toBeInTheDocument()
+  })
+})
+
+it('sends a row action once when it is pressed twice before the first answer (WEB-5)', async () => {
+  let release: () => void = () => {}
+  const pending = () => new Promise<any>(r => { release = () => r({ ...baseRequest, state: 'queued' }) })
+  vi.mocked(api.retry).mockImplementationOnce(pending).mockImplementationOnce(pending)
+  render(<DownloadPage live={makeLive([mk(4, 'error')])} />)
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  fireEvent.click(screen.getByText('Try again'))
+  fireEvent.click(screen.getByText('Try again'))
+  expect(api.retry).toHaveBeenCalledTimes(1)
+  await act(async () => release())
+  // Once the first has answered, a later press is a new request rather than a repeat.
+  fireEvent.click(screen.getByText('Try again'))
+  expect(api.retry).toHaveBeenCalledTimes(2)
+  await act(async () => release())
+})

@@ -4,6 +4,18 @@ import type { AppSettings, Bundle, FetchProgress, Health, Playlist, ProviderHeal
 
 const UNREACHABLE = "Can't reach Flackey. Is `flackey start` running?"
 
+/** Only a request that never got an answer means Flackey is unreachable. An ApiError is the server
+ *  answering -- a 500, a 403 -- so it says what the server said (WEB-1). */
+function loadErrorOf(e: unknown): string {
+  if (!(e instanceof ApiError)) return UNREACHABLE
+  return e.message || `Flackey hit an error (${e.status}). Try again.`
+}
+
+/** One malformed frame must not throw out of the handler and take the rest of the event with it. */
+function parse<T>(data: string): T | null {
+  try { return JSON.parse(data) as T } catch { return null }
+}
+
 export interface Live {
   health: Health | null; bundles: Map<number, Bundle>; playlists: Playlist[]; stats: Stats | null; settings: AppSettings | null
   fetchProgress: FetchProgress[]
@@ -37,30 +49,50 @@ export function useLive(): Live {
   const updateChecked = useRef(false)
   const firstOpen = useRef(true)
   const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Every write of a whole queue snapshot takes a ticket when its fetch starts, and only the newest ticket
+  // may land: an older /api/queue answer arriving last would otherwise put rows back to a stage they have
+  // already left. Row events that arrive while a snapshot is in flight are newer than it, so they are kept
+  // and laid back over it when it lands (WEB-3).
+  const queueTicket = useRef(0)
+  const rowsSinceSnapshot = useRef(new Map<number, Bundle>())
+  const libraryTicket = useRef(0)
+  const startSnapshot = () => { rowsSinceSnapshot.current.clear(); return ++queueTicket.current }
+  const applySnapshot = useCallback((ticket: number, q: Bundle[]) => {
+    if (ticket !== queueTicket.current) return
+    const next = new Map(q.map(b => [b.request.id, b]))
+    rowsSinceSnapshot.current.forEach((b, id) => next.set(id, b))
+    rowsSinceSnapshot.current.clear()
+    setBundles(next)
+  }, [])
   const markAlive = useCallback(() => {
     if (staleTimer.current) { clearTimeout(staleTimer.current); staleTimer.current = null }
     setConnected(true); setLastSeen(new Date())
   }, [])
 
   const refreshLibrary = useCallback(async () => {
+    const ticket = ++libraryTicket.current
     const [p, s] = await Promise.all([api.playlists(), api.stats()])
+    if (ticket !== libraryTicket.current) return
     setPlaylists(p); setStats(s); setLibraryVersion(v => v + 1)
   }, [])
   const refresh = useCallback(async () => {
     try {
-      const [h, q, st] = await Promise.all([api.health(), api.queue(), api.settings()])
-      setHealth(h); setBundles(new Map(q.map(b => [b.request.id, b]))); setSettings(st)
+      const ticket = startSnapshot()
+      // The queue lands as soon as it answers: having taken the newest ticket, it must not be lost just
+      // because health or settings failed beside it.
+      const [h, , st] = await Promise.all([api.health(), api.queue().then(q => applySnapshot(ticket, q)), api.settings()])
+      setHealth(h); setSettings(st)
       markAlive()
       await refreshLibrary()
       setLoadError(null)
     } catch (e) {
       // A 401 is a page opened without the launch token, not a server that is down: say how to get in.
-      setLoadError(e instanceof ApiError && e.status === 401 ? e.message : UNREACHABLE)
+      setLoadError(loadErrorOf(e))
       throw e
     } finally {
       setLoading(false)
     }
-  }, [refreshLibrary])
+  }, [refreshLibrary, applySnapshot])
   const retry = useCallback(async () => { setLoadError(null); await refresh() }, [refresh])
 
   useEffect(() => {
@@ -80,6 +112,7 @@ export function useLive(): Live {
     return () => clearInterval(id)
   }, [downloadState])
   const dropBundle = useCallback((id: number) => {
+    rowsSinceSnapshot.current.delete(id)
     setBundles(prev => { const next = new Map(prev); next.delete(id); return next })
   }, [])
 
@@ -87,21 +120,24 @@ export function useLive(): Live {
     refresh().catch(() => undefined)
     const es = new EventSource('/api/events')
     es.addEventListener('request', e => {
-      const b = JSON.parse((e as MessageEvent).data) as Bundle
+      const b = parse<Bundle>((e as MessageEvent).data)
       markAlive()
+      if (!b) return
+      rowsSinceSnapshot.current.set(b.request.id, b)
       setBundles(prev => { const next = new Map(prev); next.set(b.request.id, b); return next })
     })
     es.addEventListener('track', () => { markAlive(); refreshLibrary().catch(() => undefined) })
-    es.addEventListener('queue', () => { markAlive(); api.queue().then(q => setBundles(new Map(q.map(b => [b.request.id, b])))).catch(() => undefined); refreshLibrary().catch(() => undefined) })
+    es.addEventListener('queue', () => { markAlive(); const ticket = startSnapshot(); api.queue().then(q => applySnapshot(ticket, q)).catch(() => undefined); refreshLibrary().catch(() => undefined) })
     es.addEventListener('status', e => {
       // The server's status dict is flat and /api/health is nested, so `lossless_provider` has to be
       // folded into `lossless.provider` by hand. Spreading it straight in put a stray top-level key on
       // the object and left health.lossless.provider frozen at whatever the last full refresh saw --
       // which is why the Soulseek line could sit on "Signing in…" long after the worker had signed in.
-      const { lossless_provider: provider, fetch_progress: fetching, update_download: downloading, ...flags } =
-        JSON.parse((e as MessageEvent).data) as Partial<Health> &
+      const status = parse<Partial<Health> &
           { lossless_provider?: ProviderHealth | null; fetch_progress?: FetchProgress[] | null
-            update_download?: UpdateDownload | null }
+            update_download?: UpdateDownload | null }>((e as MessageEvent).data)
+      if (!status) { markAlive(); return }
+      const { lossless_provider: provider, fetch_progress: fetching, update_download: downloading, ...flags } = status
       if (fetching !== undefined) setFetchProgress(fetching ?? [])
       if (downloading !== undefined) setUpdateDownload(downloading ?? null)
       markAlive()
@@ -120,7 +156,7 @@ export function useLive(): Live {
       staleTimer.current = setTimeout(() => { setConnected(false); staleTimer.current = null }, 5000)
     }
     return () => { if (staleTimer.current) clearTimeout(staleTimer.current); es.close() }
-  }, [refresh, refreshLibrary])
+  }, [refresh, refreshLibrary, applySnapshot])
 
   return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, update, updateDownload, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
 }

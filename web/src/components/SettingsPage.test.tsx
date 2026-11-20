@@ -1044,3 +1044,68 @@ it('shows a Privacy section only when usage stats are available', async () => {
   expect(order.indexOf('Advanced')).toBe(order.indexOf('Privacy') + 1)
   expect(screen.getByRole('switch', { name: 'Share usage stats' }).closest('#settings-advanced')).toBeNull()
 })
+
+describe('an action that worked, followed by a refresh that did not (WEB-2)', () => {
+  beforeEach(() => { mockRefresh.mockRejectedValue(new Error('stats timed out')) })
+
+  it('does not say setup could not restart when it did', async () => {
+    vi.spyOn(api, 'setupReset').mockResolvedValue({ setup_done: false })
+    render(<SettingsPage live={live} onReconnect={() => {}} />)
+    fireEvent.click(screen.getByText('Run setup again…'))
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('Run setup again…')).not.toBeDisabled())
+    expect(screen.queryByText('Could not restart setup. Try again.')).not.toBeInTheDocument()
+  })
+
+  it('does not say the Deezer switch failed when it saved', async () => {
+    const current = live as unknown as { settings: AppSettings; health: Health }
+    vi.spyOn(api, 'telegramSource').mockResolvedValue({ source_enabled: true })
+    render(<SettingsPage live={makeLive({ ...current, health: { ...current.health, source_enabled: false } })} onReconnect={() => {}} />)
+    const toggle = within(connRow('Deezer')).getByRole('switch', { name: 'Deezer (through Telegram)' })
+    fireEvent.click(toggle)
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled())
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(screen.queryByText("Couldn't change the Deezer setting.")).not.toBeInTheDocument()
+  })
+
+  it('does not say Soulseek could not reconnect when the reconnect started', async () => {
+    vi.spyOn(api, 'connectSoulseek').mockResolvedValue({ state: 'connecting', username: null, error: null })
+    const current = live as unknown as { settings: AppSettings; health: Health }
+    render(<SettingsPage live={makeLive({ settings: { ...current.settings, soulseek_enabled: true }, health: { ...current.health,
+      lossless: { enabled: true, provider: { name: 'soulseek', status: 'ok', username: 'digger' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 } } })}
+      onReconnect={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reconnect' })).not.toBeDisabled())
+    expect(screen.queryByText("Couldn't reconnect to Soulseek.")).not.toBeInTheDocument()
+  })
+})
+
+it('holds the folder Save while the first save is still running (WEB-14)', async () => {
+  let finish: () => void = () => {}
+  vi.spyOn(api, 'saveSettings').mockImplementation(() => new Promise(r => {
+    finish = () => r({ library_root: '/tmp/new', data_dir: '/d', version: '0.1.0', telegram_configured: true, log_path: '/d/flackey.log' }) }))
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  fireEvent.click(screen.getByText('Change'))
+  fireEvent.change(screen.getByDisplayValue('/Users/me/Music/DJ Library'), { target: { value: '/tmp/new' } })
+  fireEvent.click(screen.getByText('Save'))
+  await waitFor(() => expect(screen.getByText('Save')).toBeDisabled())
+  fireEvent.click(screen.getByText('Save'))
+  expect(api.saveSettings).toHaveBeenCalledTimes(1)
+  finish()
+  await waitFor(() => expect(screen.getByText('Change')).toBeInTheDocument())
+})
+
+it('ignores a Telegram status answer that a newer sign-in state has replaced (WEB-16)', async () => {
+  let failOld: () => void = () => {}
+  vi.spyOn(api, 'telegramStatus')
+    .mockImplementationOnce(() => new Promise((_, reject) => { failOld = () => reject(new ApiError(500, 'stale telegram answer')) }))
+    .mockResolvedValueOnce({ authorized: false, configured: true, phone_masked: null })
+  const current = live as unknown as { settings: AppSettings; health: Health }
+  const { rerender } = render(<SettingsPage live={live} onReconnect={() => {}} />)
+  rerender(<SettingsPage live={makeLive({ ...current, health: { ...current.health, telegram_authorized: false } })} onReconnect={() => {}} />)
+  await waitFor(() => expect(api.telegramStatus).toHaveBeenCalledTimes(2))
+  failOld()
+  await new Promise(r => setTimeout(r, 0))
+  expect(screen.queryByText('stale telegram answer')).not.toBeInTheDocument()
+})

@@ -6,6 +6,10 @@ import CopyButton from '../CopyButton'
 import SharingPanel from '../SharingPanel'
 
 const POLL_MS = 1000
+// How many polls in a row may fail before the step stops waiting. One blip -- the sidecar restarting, a
+// dropped connection -- must not end a download or a sign-in that is still running on the server, but a
+// poll that keeps failing has to hand the step back rather than leave its button disabled for good (WEB-4).
+const POLL_FAILURES = 3
 // Soulseek releases a name that goes a month without signing in (slsknet.org/news/node/748), and flackey
 // signs in every time it starts -- so this is a real condition on keeping the account, not a footnote.
 const RECYCLE_NOTE = 'Open Flackey at least once a month: Soulseek releases a name that goes 30 days without a sign-in.'
@@ -33,6 +37,9 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
   const [sharing, setSharing] = useState<SharingState | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const connectTimer = useRef<number | undefined>(undefined)
+  // Set when the step stopped hearing about a download rather than hearing that it failed: the server may
+  // still be fetching, and a second install started on top of it would download the same file twice.
+  const lostTrack = useRef(false)
   // The name that was already saved when this step opened, kept because `username` is overwritten the
   // moment the owner asks for a new account -- and that is exactly when they need to be told which
   // account they are about to walk away from.
@@ -54,17 +61,35 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
 
   const poll = () => {
     stopPolling()   // never leave a second interval running behind this one
-    const tick = () => api.slskdProgress()
-      .then(p => { setInstall(p); if (p.state === 'done' || p.state === 'error') stopPolling() })
-      .catch(() => stopPolling())
+    let failures = 0
+    let waiting = false   // a slow answer is not a reason to send another question behind it
+    const tick = () => {
+      if (waiting) return
+      waiting = true
+      api.slskdProgress()
+        .then(p => { failures = 0; setInstall(p); if (p.state === 'done' || p.state === 'error') stopPolling() })
+        .catch(() => {
+          if (++failures < POLL_FAILURES) return
+          stopPolling()
+          lostTrack.current = true
+          setInstall({ state: 'error', done: 0, total: 0, error: null })   // brings up Try again
+        })
+        .finally(() => { waiting = false })
+    }
     timer.current = window.setInterval(tick, POLL_MS)
     tick()          // after the interval exists, so a first tick that already reads "done" can clear it
   }
 
   const pollConnect = () => {
     stopConnectPolling()
-    const tick = () => api.soulseekConnectStatus()
+    let failures = 0
+    let waiting = false
+    const tick = () => {
+      if (waiting) return
+      waiting = true
+      api.soulseekConnectStatus()
       .then(s => {
+        failures = 0
         setConnect(s)
         if (s.state === 'connected' || s.state === 'failed') { stopConnectPolling(); setBusy(false) }
         // A name flackey dealt is not one the owner has any attachment to, so a rejection deals another
@@ -73,12 +98,26 @@ export default function SoulseekStep({ libraryRoot, onDone, onSkip }: { libraryR
         // that never came up says so, since a new name would not fix it and would hide why it failed.
         if (s.state === 'failed' && generated && s.taken) deal()
       })
-      .catch(() => { stopConnectPolling(); setBusy(false) })
+      .catch(() => {
+        if (++failures < POLL_FAILURES) return
+        stopConnectPolling(); setBusy(false); setConnect(null)
+        setErr("Couldn't check the Soulseek sign-in. Try again.")
+      })
+      .finally(() => { waiting = false })
+    }
     connectTimer.current = window.setInterval(tick, POLL_MS)
     tick()
   }
 
   const startInstall = () => {
+    if (lostTrack.current) {
+      // Ask first: a download still running is picked back up, and only one that ended is started over.
+      lostTrack.current = false
+      api.slskdProgress()
+        .then(p => { if (p.state === 'downloading' || p.state === 'extracting') { setInstall(p); poll() } else startInstall() })
+        .catch(() => startInstall())
+      return
+    }
     setInstall({ state: 'downloading', done: 0, total: 0, error: null })
     api.installSlskd()
       .then(poll)
