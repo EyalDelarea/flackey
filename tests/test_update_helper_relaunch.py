@@ -92,6 +92,17 @@ def test_a_staging_name_refused_before_anything_is_opened_still_reopens_the_app(
     assert read() == [str(tree / TARGET)]
 
 
+def test_a_symlink_where_the_app_should_be_is_never_opened(opened, tree, tmp_path):
+    """`open` follows links: reopening after this refusal would launch whatever the link points to."""
+    helper, read = opened
+    elsewhere = make_bundle(tmp_path / "Elsewhere.app", marker="elsewhere")
+    subprocess.run(["rm", "-rf", str(tree / TARGET)], check=True)
+    (tree / TARGET).symlink_to(elsewhere)
+
+    assert run(helper, tree, relaunch="1").returncode == REFUSED
+    assert read(wait_s=0.5) == []
+
+
 def test_a_successful_swap_opens_the_new_version(opened, tree):
     helper, read = opened
     assert run(helper, tree, relaunch="1").returncode == 0

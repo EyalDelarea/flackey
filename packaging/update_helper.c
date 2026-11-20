@@ -169,10 +169,22 @@ static void relaunch(const char *dir) {
  * it was, so it is reopened: the owner pressed Restart, and an app that quit and never came back is
  * worse than an update that did not happen. */
 static int finish(const char *dir, int want_relaunch, int code) {
-    if (want_relaunch) {
-        if (code != EXIT_OK) logline("the update was not installed; reopening the version already installed");
-        relaunch(dir);
+    if (!want_relaunch) return code;
+    if (code != EXIT_OK) {
+        /* Some of the refusals that land here are about this very path -- a symlink where the app
+         * should be -- and `open` follows links. Reopen only a real directory, checked without
+         * following anything, so a refused update never launches whatever a link points to. */
+        struct stat st;
+        int fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        int real = fd >= 0 && is_real_directory(fd, TARGET_NAME, &st);
+        if (fd >= 0) close(fd);
+        if (!real) {
+            logline("the update was not installed, and %s/%s is not a bundle to reopen", dir, TARGET_NAME);
+            return code;
+        }
+        logline("the update was not installed; reopening the version already installed");
     }
+    relaunch(dir);
     return code;
 }
 
