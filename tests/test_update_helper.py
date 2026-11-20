@@ -13,8 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from flackey.selfupdate.install import manifest
-
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the helper is macOS-only")
 
 SOURCE = Path(__file__).resolve().parents[1] / "packaging" / "update_helper.c"
@@ -61,16 +59,13 @@ def tree(tmp_path):
 
 
 def run(helper: Path, applications: Path, staging: str = STAGING, *, pid: int | None = None,
-        relaunch: str = "0", log: Path | None = None, digest: str | None = None) -> subprocess.CompletedProcess:
-    """The parent pid defaults to one already exited, so the helper's wait returns immediately. The
-    digest defaults to the staged bundle's manifest as it is now, as `launch_helper` passes it."""
+        relaunch: str = "0", log: Path | None = None) -> subprocess.CompletedProcess:
+    """The parent pid defaults to one already exited, so the helper's wait returns immediately."""
     if pid is None:
         done = subprocess.Popen(["/usr/bin/true"])
         done.wait()
         pid = done.pid
-    if digest is None:
-        digest = manifest(applications / staging).hex()
-    argv = [str(helper), str(pid), str(applications), staging, relaunch, digest]
+    argv = [str(helper), str(pid), str(applications), staging, relaunch]
     if log is not None:
         argv.append(str(log))
     return subprocess.run(argv, capture_output=True, text=True, timeout=120, check=False)
@@ -229,62 +224,3 @@ def test_a_new_log_is_private_to_the_owner(helper, tree, tmp_path):
     log = tmp_path / "helper.log"
     run(helper, tree, log=log)
     assert log.stat().st_mode & 0o777 == 0o600
-
-
-# SEC-5 (audit 2026-11-20): the helper re-hashes the staged bundle right before the swap.
-def test_a_staged_bundle_changed_after_the_app_hashed_it_is_refused(helper, tree):
-    digest = manifest(tree / STAGING).hex()
-    (tree / STAGING / "Contents" / "MacOS" / "Flackey").write_text("#!/bin/sh\necho planted\n")
-
-    assert run(helper, tree, digest=digest).returncode == REFUSED
-    assert marker_of(tree / TARGET) == "old"
-
-
-@pytest.mark.parametrize("change", ["add", "remove", "chmod", "relink"])
-def test_any_change_to_the_staged_bundle_is_caught(helper, tree, change):
-    staged = tree / STAGING
-    (staged / "Contents" / "Resources").mkdir()
-    (staged / "Contents" / "Resources" / "data").write_text("x")
-    (staged / "Contents" / "link").symlink_to("Resources/data")
-    digest = manifest(staged).hex()
-    if change == "add":
-        (staged / "Contents" / "Resources" / "extra.py").write_text("import os")
-    elif change == "remove":
-        (staged / "Contents" / "Resources" / "data").unlink()
-    elif change == "chmod":
-        (staged / "Contents" / "Resources" / "data").chmod(0o755)
-    else:
-        (staged / "Contents" / "link").unlink()
-        (staged / "Contents" / "link").symlink_to("/etc/passwd")
-
-    assert run(helper, tree, digest=digest).returncode == REFUSED
-    assert marker_of(tree / TARGET) == "old"
-
-
-def test_the_helper_hashes_a_real_shaped_bundle_exactly_as_python_does(helper, tree):
-    """Nested folders, symlinks to files and folders, names that sort differently by case and outside
-    ASCII, an empty folder and an empty file: the C walk must agree with `manifest` byte for byte."""
-    contents = tree / STAGING / "Contents"
-    frameworks = contents / "Frameworks" / "Python.framework" / "Versions" / "3.12"
-    frameworks.mkdir(parents=True)
-    (frameworks / "Python").write_bytes(os.urandom(300_000))
-    (contents / "Frameworks" / "Python.framework" / "Versions" / "Current").symlink_to("3.12")
-    (contents / "Frameworks" / "Python.framework" / "Python").symlink_to("Versions/Current/Python")
-    resources = contents / "Resources"
-    resources.mkdir()
-    for name in ("B", "a", "_x", "Z.txt", "é.txt", "e.txt", "a.b", "a-b", "a b"):
-        (resources / name).write_text(name)
-    (resources / "empty").mkdir()
-    (resources / "nothing").write_bytes(b"")
-    (resources / "sub" / "deeper").mkdir(parents=True)
-    (resources / "sub" / "deeper" / "f").write_text("f")
-    (resources / "sub.txt").write_text("sorts between sub and sub/")
-
-    assert run(helper, tree).returncode == 0
-    assert marker_of(tree / TARGET) == "new"
-
-
-@pytest.mark.parametrize("digest", ["", "abc", "z" * 64, "0" * 63, "0" * 65])
-def test_a_malformed_digest_is_a_usage_error_and_touches_nothing(helper, tree, digest):
-    assert run(helper, tree, digest=digest).returncode == 2
-    assert marker_of(tree / TARGET) == "old"

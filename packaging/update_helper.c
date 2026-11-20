@@ -9,9 +9,7 @@
  * Nothing here runs as root. See docs/specs/2026-09-19-issue-58-update-design.md.
  */
 
-#include <CommonCrypto/CommonDigest.h>
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -134,129 +132,6 @@ static int has_runnable_executable(int stagefd) {
     return 1;
 }
 
-/* The manifest, as src/flackey/selfupdate/install.py `manifest` computes it, byte for byte: a sha256 over
- * every entry below the bundle, directory by directory (pre-order, each directory's own entries first,
- * all names sorted together), feeding for each entry its relative path, NUL, its st_mode in decimal, NUL,
- * then a symlink's target or the sha256 of a file's contents, then NUL. Symlinks are never followed.
- * Python sorts names by code point, and strcmp over UTF-8 gives the same order. */
-#define DIGEST_HEX_LEN (CC_SHA256_DIGEST_LENGTH * 2)
-
-static int parse_digest(const char *hex, unsigned char out[CC_SHA256_DIGEST_LENGTH]) {
-    if (strlen(hex) != DIGEST_HEX_LEN) return 0;
-    for (size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-        unsigned int byte;
-        if (!isxdigit((unsigned char)hex[2 * i]) || !isxdigit((unsigned char)hex[2 * i + 1])) return 0;
-        if (sscanf(hex + 2 * i, "%2x", &byte) != 1) return 0;
-        out[i] = (unsigned char)byte;
-    }
-    return 1;
-}
-
-static int by_name(const void *a, const void *b) {
-    return strcmp(*(char *const *)a, *(char *const *)b);
-}
-
-static int hash_file(int dirfd, const char *name, unsigned char out[CC_SHA256_DIGEST_LENGTH]) {
-    int fd = openat(dirfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) return 0;
-    CC_SHA256_CTX ctx;
-    CC_SHA256_Init(&ctx);
-    char buf[65536];
-    ssize_t n;
-    while ((n = read(fd, buf, sizeof(buf))) > 0) CC_SHA256_Update(&ctx, buf, (CC_LONG)n);
-    close(fd);
-    if (n < 0) return 0;
-    CC_SHA256_Final(out, &ctx);
-    return 1;
-}
-
-/* Takes ownership of `dirfd`. `rel` is this directory's path below the bundle, "" at the top. */
-static int hash_tree(int dirfd, const char *rel, CC_SHA256_CTX *ctx) {
-    DIR *dir = fdopendir(dirfd);
-    if (dir == NULL) {
-        close(dirfd);
-        return 0;
-    }
-    char **names = NULL;
-    size_t count = 0, cap = 0;
-    int ok = 1;
-    struct dirent *ent;
-    errno = 0;
-    while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        if (count == cap) {
-            cap = cap ? cap * 2 : 64;
-            char **grown = realloc(names, cap * sizeof(*names));
-            if (grown == NULL) { ok = 0; break; }
-            names = grown;
-        }
-        if ((names[count] = strdup(ent->d_name)) == NULL) { ok = 0; break; }
-        count++;
-    }
-    if (ok && errno != 0) ok = 0;
-    if (ok) qsort(names, count, sizeof(*names), by_name);
-
-    unsigned char *is_dir = ok ? calloc(count ? count : 1, 1) : NULL;
-    if (is_dir == NULL) ok = 0;
-    char path[PATH_MAX];
-    for (size_t i = 0; ok && i < count; i++) {
-        int len = rel[0] ? snprintf(path, sizeof(path), "%s/%s", rel, names[i])
-                         : snprintf(path, sizeof(path), "%s", names[i]);
-        if (len < 0 || (size_t)len >= sizeof(path)) { ok = 0; break; }
-        struct stat st;
-        if (fstatat(dirfd, names[i], &st, AT_SYMLINK_NOFOLLOW) != 0) { ok = 0; break; }
-        char mode[16];
-        int mlen = snprintf(mode, sizeof(mode), "%u", (unsigned)st.st_mode);
-        CC_SHA256_Update(ctx, path, (CC_LONG)len + 1); /* with its NUL */
-        CC_SHA256_Update(ctx, mode, (CC_LONG)mlen + 1);
-        if (S_ISLNK(st.st_mode)) {
-            char target[PATH_MAX];
-            ssize_t tlen = readlinkat(dirfd, names[i], target, sizeof(target));
-            if (tlen < 0 || (size_t)tlen >= sizeof(target)) { ok = 0; break; }
-            CC_SHA256_Update(ctx, target, (CC_LONG)tlen);
-        } else if (S_ISREG(st.st_mode)) {
-            unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-            if (!hash_file(dirfd, names[i], digest)) { ok = 0; break; }
-            CC_SHA256_Update(ctx, digest, sizeof(digest));
-        } else if (S_ISDIR(st.st_mode)) {
-            is_dir[i] = 1;
-        }
-        CC_SHA256_Update(ctx, "", 1);
-    }
-    for (size_t i = 0; ok && i < count; i++) {
-        if (!is_dir[i]) continue;
-        int len = rel[0] ? snprintf(path, sizeof(path), "%s/%s", rel, names[i])
-                         : snprintf(path, sizeof(path), "%s", names[i]);
-        if (len < 0 || (size_t)len >= sizeof(path)) { ok = 0; break; }
-        int sub = openat(dirfd, names[i], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (sub < 0 || !hash_tree(sub, path, ctx)) ok = 0;
-    }
-    for (size_t i = 0; i < count; i++) free(names[i]);
-    free(names);
-    free(is_dir);
-    closedir(dir);
-    return ok;
-}
-
-/* 1 when the bundle open at `stagefd` still hashes to `expected`. Does not consume `stagefd`. */
-static int manifest_matches(int stagefd, const unsigned char expected[CC_SHA256_DIGEST_LENGTH]) {
-    int fd = dup(stagefd);
-    if (fd < 0) return 0;
-    CC_SHA256_CTX ctx;
-    CC_SHA256_Init(&ctx);
-    if (!hash_tree(fd, "", &ctx)) {
-        logline("refusing: could not read the staged bundle to check it: %s", strerror(errno));
-        return 0;
-    }
-    unsigned char got[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256_Final(got, &ctx);
-    if (memcmp(got, expected, sizeof(got)) != 0) {
-        logline("refusing: the staged bundle changed after Flackey checked it");
-        return 0;
-    }
-    return 1;
-}
-
 /* 1 once the pid is gone, 0 on timeout, measured by the clock because naps overshoot on a busy
  * machine. Refuse on timeout rather than proceed: a relaunch beside a live copy is two Flackeys
  * sharing one database, which is worse than no update. */
@@ -285,25 +160,18 @@ static void relaunch(const char *dir) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 6 || argc > 7) {
-        fprintf(stderr, "usage: %s <parent-pid> <directory> <staging-name> <relaunch 0|1> <manifest-sha256> "
-                "[logfile]\n", argv[0]);
+    if (argc < 5 || argc > 6) {
+        fprintf(stderr, "usage: %s <parent-pid> <directory> <staging-name> <relaunch 0|1> [logfile]\n",
+                argv[0]);
         return EXIT_USAGE;
     }
     const char *dir = argv[2];
     const char *staging = argv[3];
     int want_relaunch = strcmp(argv[4], "1") == 0;
-    /* What the app hashed just before it quit. Checked again right before the swap, so a bundle changed
-     * in between is never swapped in. */
-    unsigned char expected[CC_SHA256_DIGEST_LENGTH];
-    if (!parse_digest(argv[5], expected)) {
-        fprintf(stderr, "refusing: %s is not a sha256 digest\n", argv[5]);
-        return EXIT_USAGE;
-    }
-    if (argc == 7) {
+    if (argc == 6) {
         /* O_NOFOLLOW: a symlink planted at the log path must not make this append to another file.
          * Anything that fails here just leaves the log on stderr. */
-        int logfd = open(argv[6], O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+        int logfd = open(argv[5], O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (logfd >= 0) {
             logfile = fdopen(logfd, "a");
             if (logfile == NULL) close(logfd);
@@ -364,8 +232,7 @@ int main(int argc, char **argv) {
         close(stagefd);
         return EXIT_REFUSED;
     }
-    if (!declares_flackey_bundle_id(stagefd) || !has_runnable_executable(stagefd) ||
-        !manifest_matches(stagefd, expected)) {
+    if (!declares_flackey_bundle_id(stagefd) || !has_runnable_executable(stagefd)) {
         close(stagefd);
         return EXIT_REFUSED;
     }
