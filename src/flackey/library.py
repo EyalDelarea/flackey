@@ -68,6 +68,41 @@ def sanitize(segment: str) -> str:
     return _windows_segment(s) if s else "Unknown"
 
 
+# macOS (APFS) and Linux allow 255 bytes of UTF-8 in one file or folder name
+NAME_MAX_BYTES = 255
+# The most of a cut file name the artist may take, leaving the rest for the title
+_ARTIST_MAX_BYTES = 100
+
+
+def _cut_utf8(s: str, limit: int) -> str:
+    """`s` cut to at most `limit` bytes of UTF-8, never in the middle of a character."""
+    return s.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
+
+def _fit_folder_bytes(name: str) -> str:
+    """An artist folder name cut to NAME_MAX_BYTES: 120 characters of Japanese is 360 bytes, past what
+    macOS and Linux allow (ENG-7). Only a name that could never have been created is cut, so every existing
+    folder keeps its name. Windows counts the whole path instead (`_fit_windows_path`)."""
+    if sys.platform == "win32" or len(name.encode("utf-8")) <= NAME_MAX_BYTES:
+        return name
+    return _cut_utf8(name, NAME_MAX_BYTES).rstrip(" .") or "Unknown"
+
+
+def _fit_name_bytes(artist: str, title: str, ext: str) -> str:
+    """The file name, with the title (and a very long artist) cut so the name fits NAME_MAX_BYTES. A name
+    that fits is returned as it always was; a cut title ends in " ~" and six hex digits of the full
+    title's hash, as on Windows, so two long titles that differ only at the end stay two files."""
+    name = f"{artist} - {title}.{ext}"
+    if len(name.encode("utf-8")) <= NAME_MAX_BYTES:
+        return name
+    artist = _cut_utf8(artist, _ARTIST_MAX_BYTES).rstrip(" .")
+    tag = " ~" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:6]
+    budget = NAME_MAX_BYTES - len(f"{artist} - .{ext}{tag}".encode())
+    cut = _cut_utf8(title, budget).rstrip(" .")
+    log.info("title cut to fit the file name limit: %r -> %r", title, cut + tag)
+    return f"{artist} - {cut}{tag}.{ext}"
+
+
 def _utf16_units(s: str) -> int:
     """Windows counts path length in UTF-16 units, in which an emoji is two."""
     return len(s.encode("utf-16-le")) // 2
@@ -115,7 +150,7 @@ def final_path(root: Path, catalog: CatalogTrack, ext: str, layout: str = "artis
     On Windows the title is shortened when it has to be, so the whole path stays under MAX_PATH; see
     `_fit_windows_path`."""
     if layout == "artist":
-        folder = root / sanitize(catalog.artist.split(",")[0])
+        folder = root / _fit_folder_bytes(sanitize(catalog.artist.split(",")[0]))
     elif layout in _DATE_FOLDER:
         folder = root / (when or datetime.now().astimezone().date()).strftime(_DATE_FOLDER[layout])
     elif layout == "flat":
@@ -132,7 +167,7 @@ def refile_path(folder: Path, catalog: CatalogTrack, ext: str) -> Path:
     artist, title, ext = sanitize(catalog.artist), sanitize(catalog.display_title), ext.lstrip(".")
     if sys.platform == "win32":
         return folder / _fit_windows_path(folder, artist, title, ext)
-    return folder / f"{artist} - {title}.{ext}"
+    return folder / _fit_name_bytes(artist, title, ext)
 
 
 def file_track(tmp_path: Path, dest: Path) -> Path:
@@ -146,26 +181,118 @@ def file_track(tmp_path: Path, dest: Path) -> Path:
     return dest
 
 
-def prune_missing_tracks(store: Store) -> list[Path]:
+def clear_request_tmp(tmp_dir: Path, request_id: int) -> None:
+    """Delete what a pass of this request downloaded into `tmp_dir`: its fetch folder and its lossless
+    copy (`req<id>-lossless.<ext>`, and the converted file beside it). Not `-held` or `-accepted`, which
+    belong to other steps."""
+    shutil.rmtree(tmp_dir / f"req{request_id}", ignore_errors=True)
+    try:
+        leftovers = list(tmp_dir.glob(f"req{request_id}-lossless*"))
+    except OSError:
+        return
+    for p in leftovers:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("could not delete %s: %s", p, e)
+
+
+# Older than this, a file in tmp_dir at startup belongs to no pass still running: a Stop that landed while
+# ffmpeg was writing, or a quit or crash mid-download.
+TMP_SWEEP_AGE_S = 24 * 3600
+
+
+def sweep_tmp(tmp_dir: Path, now: float, max_age_s: float = TMP_SWEEP_AGE_S) -> int:
+    """Delete what is left in `tmp_dir` from earlier runs. Returns how many entries went."""
+    n = 0
+    try:
+        entries = list(tmp_dir.iterdir())
+    except OSError:
+        return 0
+    for p in entries:
+        try:
+            if now - p.stat().st_mtime < max_age_s:
+                continue
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            n += 1
+        except OSError as e:
+            log.warning("could not delete leftover %s: %s", p, e)
+    return n
+
+
+# A refresh that would forget more than half the library at once, once at least this many rows would go,
+# is a drive that is not there rather than files the owner deleted (ENG-1). Below the floor a small library
+# still prunes normally: one track deleted out of two is just a deleted track.
+PRUNE_FLOOR = 10
+PRUNE_MAX_SHARE = 0.5
+# export.PLAYLIST_DIR; export imports this module, so the name is repeated rather than imported
+_PLAYLIST_DIR = "Playlists"
+
+
+def library_reachable(library_root: Path) -> bool:
+    """Whether the library folder is there to be looked in. A drive that is unplugged or a share that is
+    offline has no folder at all, or -- when something recreated the mount point on the boot disk -- an
+    empty one, holding at most a `Playlists` folder an export put there. Either way a missing file then
+    says nothing about whether the owner deleted it."""
+    try:
+        if not library_root.is_dir():
+            return False
+        return any(not e.name.startswith(".") and e.name != _PLAYLIST_DIR for e in library_root.iterdir())
+    except OSError:
+        return False
+
+
+def _gone(t: Track, library_root: Path, reachable: bool) -> bool:
+    """The file was removed, as opposed to sitting somewhere that cannot be looked at right now."""
+    if t.path.exists():
+        return False
+    if t.path.is_relative_to(library_root):
+        return reachable
+    # Filed under an earlier library folder: only a file whose own folder is still there counts as removed
+    return t.path.parent.is_dir()
+
+
+def prune_missing_tracks(store: Store, library_root: Path) -> list[Path]:
     """Drop library rows whose file was removed by hand, so they neither count as duplicates nor
-    linger in playlists. Returns the paths that were forgotten."""
-    gone = [t for t in store.list_tracks(limit=1_000_000) if not t.path.exists()]
+    linger in playlists. Returns the paths that were forgotten.
+
+    Forgetting a row also drops its playlist memberships and evidence, and nothing brings those back, so
+    an unreachable library is never taken for an empty one: with the library folder missing or empty, or
+    with most of the library missing at once, nothing is forgotten and the log says why."""
+    reachable = library_reachable(library_root)
+    tracks = store.list_tracks(limit=1_000_000)
+    gone = [t for t in tracks if _gone(t, library_root, reachable)]
+    if not reachable and any(not t.path.exists() for t in tracks):
+        log.warning("library folder %s is missing or empty (drive unplugged?); not forgetting any tracks",
+                    library_root)
+    if len(gone) >= PRUNE_FLOOR and len(gone) > PRUNE_MAX_SHARE * len(tracks):
+        log.warning("%d of %d library files are missing at once; assuming the drive is not there and "
+                    "forgetting none of them", len(gone), len(tracks))
+        return []
     for t in gone:
         log.warning("library file missing, forgetting it: %s", t.path)
         store.delete_track(t.id)
     return [t.path for t in gone]
 
 
-def _present(store: Store, t: Track | None) -> Track | None:
-    if t is not None and not t.path.exists():
-        log.warning("library file missing, forgetting it: %s", t.path)
-        store.delete_track(t.id)
-        return None
-    return t
+def _present(store: Store, t: Track | None, library_root: Path | None) -> Track | None:
+    """`t`, unless its file was removed, in which case the row is forgotten. Without a library folder to
+    check against, or with that folder unreachable, a missing file is not proof of anything: the track
+    still counts as owned rather than being downloaded again into a folder that is not there."""
+    if t is None or t.path.exists():
+        return t
+    if library_root is None or not _gone(t, library_root, library_reachable(library_root)):
+        return t
+    log.warning("library file missing, forgetting it: %s", t.path)
+    store.delete_track(t.id)
+    return None
 
 
 def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
-                   asked: str | None = None) -> Track | None:
+                   asked: str | None = None, *, library_root: Path | None = None) -> Track | None:
     """The library track this download would duplicate. `asked` is the request's version text: a release
     or album that says remaster only counts when it asks for the remaster, so a classic track on a
     "Remastered" album still finds the copy already filed as "Original Mix" (issue #172)."""
@@ -176,7 +303,7 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
         # A label can reissue a remaster under the original's ISRC (Hallucinogen's "LSD (Remastered
         # 2024)", 2026-10-20), so the ISRC is only the same track when the version agrees too.
         for t in store.find_tracks_by_isrc(isrc):
-            if _same_version(t, version) and _present(store, t):
+            if _same_version(t, version) and _present(store, t, library_root):
                 return t
     if catalog:
         t = store.find_track_by_meta(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s)
@@ -184,16 +311,17 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
         t = store.find_track_by_meta(cand.artist, cand.title, candidate_version(cand), cand.duration_s)
     # Beatport files some remasters as "Original Mix" on a remastered release, so the mix name alone
     # matches the original already filed; the version has to agree here too.
-    return _present(store, t) if t is not None and _same_version(t, version) else None
+    return _present(store, t, library_root) if t is not None and _same_version(t, version) else None
 
 
-def find_extended(store: Store, artist: str, title: str, mix_name: str | None) -> Track | None:
+def find_extended(store: Store, artist: str, title: str, mix_name: str | None, *,
+                  library_root: Path | None = None) -> Track | None:
     """An extended copy of the `mix_name` version of this song already in the library, at any length: the
     request's length is the radio edit's, so it says nothing about the extended mix's (issue #187)."""
     target = extended_target(mix_name)
     for t in store.find_tracks_by_title(artist, title):
         v = split_version(t.mix_name)
-        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and _present(store, t):
+        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and _present(store, t, library_root):
             return t
     return None
 

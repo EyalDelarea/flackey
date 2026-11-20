@@ -333,12 +333,12 @@ class Store:
         which is exactly what `request_references` did until issue #61."""
         if self.conn.execute("SELECT 1 FROM requests WHERE id=?", (request_id,)).fetchone() is None:
             raise KeyError(request_id)
-        self.conn.execute("DELETE FROM candidates WHERE request_id=?", (request_id,))
-        self.conn.execute("DELETE FROM rejections WHERE request_id=?", (request_id,))
-        self.conn.execute("DELETE FROM lossless_attempts WHERE request_id=?", (request_id,))
-        self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
-        self.conn.execute("DELETE FROM requests WHERE id=?", (request_id,))
-        self.conn.commit()
+        with self.conn:   # all of it or none: a failure part-way must not be committed by the next write
+            self.conn.execute("DELETE FROM candidates WHERE request_id=?", (request_id,))
+            self.conn.execute("DELETE FROM rejections WHERE request_id=?", (request_id,))
+            self.conn.execute("DELETE FROM lossless_attempts WHERE request_id=?", (request_id,))
+            self.conn.execute("DELETE FROM request_references WHERE request_id=?", (request_id,))
+            self.conn.execute("DELETE FROM requests WHERE id=?", (request_id,))
         self._emit("queue", 0)
 
     def delete_requests(self, states: set[RequestState]) -> list[int]:
@@ -355,12 +355,12 @@ class Store:
         sub = f"SELECT id FROM requests WHERE state IN ({marks})"
         ids = [r[0] for r in self.conn.execute(sub, params)]
         if ids:
-            self.conn.execute(f"DELETE FROM candidates WHERE request_id IN ({sub})", params)
-            self.conn.execute(f"DELETE FROM rejections WHERE request_id IN ({sub})", params)
-            self.conn.execute(f"DELETE FROM lossless_attempts WHERE request_id IN ({sub})", params)
-            self.conn.execute(f"DELETE FROM request_references WHERE request_id IN ({sub})", params)
-            self.conn.execute(f"DELETE FROM requests WHERE state IN ({marks})", params)
-            self.conn.commit()
+            with self.conn:
+                self.conn.execute(f"DELETE FROM candidates WHERE request_id IN ({sub})", params)
+                self.conn.execute(f"DELETE FROM rejections WHERE request_id IN ({sub})", params)
+                self.conn.execute(f"DELETE FROM lossless_attempts WHERE request_id IN ({sub})", params)
+                self.conn.execute(f"DELETE FROM request_references WHERE request_id IN ({sub})", params)
+                self.conn.execute(f"DELETE FROM requests WHERE state IN ({marks})", params)
             self._emit("queue", 0)
         return sorted(ids)
 
@@ -447,21 +447,24 @@ class Store:
         whatever happens. In practice the caller only reaches here when it is NULL -- `_process` resumes
         from the chosen candidate instead of searching -- but stranding it would turn a retry into a
         KeyError deep in `upgrade()` or the sweep, which is too sharp an edge to leave to the caller.
-        `IS NOT` is SQLite's null-safe comparison: with no choice recorded it keeps nothing."""
-        self.conn.execute(
-            "DELETE FROM candidates WHERE request_id=? "
-            "AND id IS NOT (SELECT chosen_candidate_id FROM requests WHERE id=?)", (request_id, request_id))
+        `IS NOT` is SQLite's null-safe comparison: with no choice recorded it keeps nothing.
+
+        One transaction: an INSERT that fails rolls the DELETE back with it, rather than leaving it pending
+        for the next unrelated commit to make permanent."""
         out = []
-        for c in candidates:
-            cur = self.conn.execute(
-                "INSERT INTO candidates (request_id, rank, source, source_ref, artist, title, mix_name, "
-                "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview, release_date, album, cover_url) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (request_id, c.rank, c.source, c.source_ref, c.artist, c.title, c.mix_name,
-                 c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview, c.release_date,
-                 c.album, c.cover_url))
-            out.append(Candidate(**{**c.__dict__, "id": int(cur.lastrowid), "request_id": request_id}))
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM candidates WHERE request_id=? "
+                "AND id IS NOT (SELECT chosen_candidate_id FROM requests WHERE id=?)", (request_id, request_id))
+            for c in candidates:
+                cur = self.conn.execute(
+                    "INSERT INTO candidates (request_id, rank, source, source_ref, artist, title, mix_name, "
+                    "duration_s, deezer_id, isrc, score, catalog_track_id, has_preview, release_date, album, "
+                    "cover_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (request_id, c.rank, c.source, c.source_ref, c.artist, c.title, c.mix_name,
+                     c.duration_s, c.deezer_id, c.isrc, c.score, c.catalog_track_id, c.has_preview,
+                     c.release_date, c.album, c.cover_url))
+                out.append(Candidate(**{**c.__dict__, "id": int(cur.lastrowid), "request_id": request_id}))
         return out
 
     def _row_to_candidate(self, r: sqlite3.Row) -> Candidate:
@@ -612,9 +615,9 @@ class Store:
 
     def delete_track(self, track_id: int) -> None:
         """Forget a track whose file is gone: its row and its playlist memberships."""
-        self.conn.execute("DELETE FROM playlist_tracks WHERE track_id=?", (track_id,))
-        self.conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute("DELETE FROM playlist_tracks WHERE track_id=?", (track_id,))
+            self.conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
         self._emit("queue", 0)
 
     def find_track_by_path(self, path: Path) -> Track | None:
