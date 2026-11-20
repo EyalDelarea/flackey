@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
 import sys
-import tempfile
-import threading
 from pathlib import Path
 
 from pydantic import Field, ValidationError, field_validator
@@ -15,7 +12,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .slskd_config import read_api_key
 
 log = logging.getLogger(__name__)
-_save_lock = threading.Lock()  # see save_settings
 XDG_DATA_DIR = Path("~/.config/flackey")
 FILE_PREFIX = "flackey"
 FILE_KEYS = ("library_root", "telegram_api_id", "telegram_api_hash",
@@ -426,29 +422,19 @@ def save_settings(settings: Settings, **updates) -> Settings:
     """Persist only the keys given, merged into whatever settings.json already holds. Mutates `settings`
     in place so every holder of the object (the worker, the API) sees the change without a restart.
     Never writes a file-managed key that was only ever set via the environment or `.env`."""
-    for k in updates:
+    for k, v in updates.items():
         if k not in FILE_KEYS:
             raise ValueError(f"{k} is not a settings-file key")
-    # One writer at a time for the whole read-modify-write: the window's `closed` handler saves the window
-    # size on the GUI thread while the server thread may be saving something else, and with a shared
-    # temp name one could delete the other's file between its create and its replace, or the later
-    # write could drop the earlier one's key.
-    with _save_lock:
-        for k, v in updates.items():
-            setattr(settings, k, Path(v).expanduser() if k in PATH_KEYS and v is not None else v)
-        data = _read_settings_file(settings.settings_path)
-        for k in updates:
-            val = getattr(settings, k)
-            data[k] = str(val) if k in PATH_KEYS and val is not None else val
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
-        # mkstemp: a name of its own, created 0600 and exclusive, in the same folder so the replace is atomic.
-        fd, tmp = tempfile.mkstemp(dir=settings.data_dir, prefix=".settings-", suffix=".json.tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(json.dumps(data, indent=2))
-            os.replace(tmp, settings.settings_path)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
+        setattr(settings, k, Path(v).expanduser() if k in PATH_KEYS and v is not None else v)
+    data = _read_settings_file(settings.settings_path)
+    for k in updates:
+        val = getattr(settings, k)
+        data[k] = str(val) if k in PATH_KEYS and val is not None else val
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    tmp = settings.settings_path.with_suffix(".json.tmp")
+    tmp.unlink(missing_ok=True)  # a stale tmp from a previous crashed write must not block O_EXCL forever
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, indent=2))
+    os.replace(tmp, settings.settings_path)
     return settings

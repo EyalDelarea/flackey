@@ -41,11 +41,6 @@ log = logging.getLogger(__name__)
 class SlskdStartTimeout(SlskdBinaryError):
     """slskd is installed and was launched but never answered in time: slow, not missing."""
 
-
-class SlskdExited(SlskdBinaryError):
-    """slskd was launched and quit before it ever answered -- most often because a port it needs is taken."""
-
-
 _POLL_INTERVAL_S = 0.2
 _WAIT_REQUEST_TIMEOUT_S = 5.0
 # How long a freshly spawned slskd gets to answer. A warm start on a Mac takes a few seconds, but a slow PC
@@ -59,11 +54,6 @@ _SIGKILL_GRACE_S = 5.0
 TERM_GRACE_S = 4.0
 _EXIT_KILL_GRACE_S = 2.0
 PID_FILE_NAME = "flackey-slskd.pid"
-LOG_FILE_NAME = "slskd.log"
-# slskd's console output is appended on every start; past this it is moved aside to `slskd.log.1` (one
-# generation, replaced each time) so months of use cannot fill the disk or bloat a bug report.
-LOG_ROTATE_BYTES = 2 * 1024 * 1024
-_LOG_TAIL_LINES = 20
 _CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW, which only a Windows build defines
 
 
@@ -328,29 +318,6 @@ def install_exit_guards(data_dir: Path, signals: tuple[int, ...] = (signal.SIGTE
             log.debug("could not guard signal %s", signum, exc_info=True)
 
 
-def rotate_log(path: Path, max_bytes: int = LOG_ROTATE_BYTES) -> None:
-    """Move `path` to `<path>.1` when it has grown past `max_bytes`. Best effort: a log that cannot be
-    rotated is still a log slskd can append to."""
-    try:
-        if path.stat().st_size > max_bytes:
-            os.replace(path, path.with_name(path.name + ".1"))
-    except OSError:
-        pass
-
-
-def log_tail(path: Path, lines: int = _LOG_TAIL_LINES) -> str:
-    """The last few lines of slskd's own log, for our log when it dies on start: slskd.log is where it
-    says why, and the owner never looks there."""
-    try:
-        with path.open("rb") as f:
-            f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - 16384))
-            text = f.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-    return "\n".join(text.splitlines()[-lines:])
-
-
 class SlskdProcess:
     """Starts, health-checks, and stops the slskd sidecar.
 
@@ -418,8 +385,7 @@ class SlskdProcess:
 
         app_dir = self._data_dir / "slskd"
         app_dir.mkdir(parents=True, exist_ok=True)
-        log_path = self._data_dir / LOG_FILE_NAME
-        rotate_log(log_path)
+        log_path = self._data_dir / "slskd.log"
         log_file = log_path.open("ab")
         try:
             self._proc = await asyncio.create_subprocess_exec(
@@ -438,15 +404,8 @@ class SlskdProcess:
 
         healthy = await self.wait_healthy(timeout_s=timeout_s)
         if not healthy:
-            exit_code = self._proc.returncode if self._proc is not None else None
             # Never leave an orphan behind: if it didn't come up healthy, tear it down before raising.
             await self.stop()
-            if exit_code is not None:
-                tail = log_tail(log_path)
-                log.warning("slskd quit on start with exit code %s; the end of %s:\n%s", exit_code,
-                            log_path.name, tail or "(empty)")
-                raise SlskdExited(f"slskd quit on start (exit code {exit_code}); another program may be "
-                                  f"using its port ({self._url}) or its Soulseek listen port")
             raise SlskdStartTimeout("slskd did not become healthy within the timeout")
 
     async def probe(self, client: httpx.AsyncClient | None = None) -> bool:
@@ -486,8 +445,7 @@ class SlskdProcess:
 
     async def wait_healthy(self, *, timeout_s: float = 30) -> bool:
         """Poll `GET <url>/api/v0/application` until it answers or the timeout expires. Returns a
-        bool; never raises on an unhealthy or unreachable sidecar. False at once when the slskd it
-        spawned has already exited.
+        bool; never raises on an unhealthy or unreachable sidecar.
 
         One client serves every poll: building an httpx client sets up TLS, which cost 130 ms a probe on
         a Windows CI runner and far more on a slow PC busy starting slskd itself. Each request gets
@@ -500,12 +458,6 @@ class SlskdProcess:
                 if failure is None:
                     return True
                 last = failure
-                if self._proc is not None and self._proc.returncode is not None:
-                    # Nothing will ever answer: waiting out the whole timeout only to report "too slow"
-                    # sent the owner after the wrong cause.
-                    log.warning("slskd exited (code %s) before it answered; last try: %s",
-                                self._proc.returncode, last)
-                    return False
                 if self._clock() >= deadline:
                     log.warning("slskd gave no healthy answer in %.0f s; last try: %s", timeout_s, last)
                     return False

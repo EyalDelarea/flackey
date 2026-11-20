@@ -1,4 +1,4 @@
-"""Startup failures and second copies (audit SHL-1, SHL-2, SHL-11).
+"""Startup failures and second copies (audit SHL-1, SHL-2).
 
 No real window, no real server and no real dialog: the window, the server thread and the message box
 are all fakes. The data-folder lock is real, held by a second Python process where a test needs
@@ -197,17 +197,6 @@ def test_a_start_that_never_answers_is_told_as_too_slow(monkeypatch, tmp_path):
 
     [(headline, _)] = seen["alerts"]
     assert "too long" in headline
-
-
-def test_the_window_waits_long_enough_for_a_slow_prelude():
-    """SHL-11: the thread signals the moment it listens or fails, so the outer wait only bounds a hang,
-    and it must cover the prelude plus `serve`'s own 30 s rather than give up at 35."""
-    import inspect
-
-    from flackey import app, desktop
-
-    default = inspect.signature(desktop.wait_for_server).parameters["timeout_s"].default
-    assert default >= app.WEB_SERVER_START_TIMEOUT_S + 60
 
 
 def test_a_second_copy_on_the_same_data_folder_never_reaches_the_sidecar_guard(monkeypatch, tmp_path):

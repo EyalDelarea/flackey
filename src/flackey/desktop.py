@@ -20,7 +20,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .app import UI_DIR, ServerHandle, run
+from .app import UI_DIR, WEB_SERVER_START_TIMEOUT_S, ServerHandle, run
 from .config import Settings, save_settings
 from .logsetup import LOG_FILE
 from .selfupdate import install as update_install
@@ -348,15 +348,7 @@ def start_server_thread(settings: Settings) -> tuple[threading.Thread, ServerHan
     return thread, handle
 
 
-# How long the window waits for the server thread before giving up on it. The thread sets `started` the
-# moment it either listens or fails, so this bounds only a start that hangs -- and it covers the whole of
-# `_run`'s prelude (database, migrations, a Telegram connect of up to 15 s) as well as `serve`'s own
-# 30 s, which on a slow PC emulating x64 can run well past the old 35 s. A start that would have come up
-# a moment later must not be thrown away with a "took too long" box.
-SERVER_WAIT_S = 120.0
-
-
-def wait_for_server(handle: ServerHandle, timeout_s: float = SERVER_WAIT_S) -> str:
+def wait_for_server(handle: ServerHandle, timeout_s: float = WEB_SERVER_START_TIMEOUT_S + 5) -> str:
     handle.started.wait(timeout_s)
     if handle.error is not None:
         raise handle.error

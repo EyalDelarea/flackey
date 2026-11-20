@@ -21,7 +21,7 @@ import httpx
 
 from .config import Settings
 from .slskd_binary import SlskdBinaryError, is_installed
-from .slskd_process import SlskdExited, SlskdProcess, SlskdStartTimeout
+from .slskd_process import SlskdProcess, SlskdStartTimeout
 from .source.lossless import LosslessError
 
 log = logging.getLogger(__name__)
@@ -69,10 +69,6 @@ class SoulseekLink:
             await self._restart_sidecar()
             self._worker.replace_providers(self._build_providers(self._settings, self._http))
             await self._wait_for_login()
-        except SlskdExited as e:
-            log.warning("soulseek connect: sidecar quit on start: %s", e)
-            self._fail("Soulseek stopped as soon as it started. Another program may be using its port: "
-                       "quit it, or restart your computer, then try again.")
         except SlskdStartTimeout as e:
             log.warning("soulseek connect: sidecar was too slow to start: %s", e)
             self._fail("Soulseek took too long to start. Try again: the first start on a new computer "
