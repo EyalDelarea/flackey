@@ -53,20 +53,36 @@ def main() -> None:
     log = logging.getLogger("flackey.launch")
     # Before `flackey.desktop`, whose imports take minutes on an Arm PC emulating x64: a second
     # double-click hands over to the running copy now rather than after all of them.
-    from flackey.single_instance import claim_single_instance, focus_running_window
+    from flackey.single_instance import (
+        claim_data_dir,
+        claim_single_instance,
+        focus_running_window,
+        hand_over,
+    )
 
     if not claim_single_instance():
         shown = focus_running_window()
         log.info("Flackey is already running: %s", "brought its window forward" if shown else "it is still starting")
         return
+    if not claim_data_dir(settings.data_dir):
+        shown = hand_over(settings.data_dir)
+        log.info("Flackey is already running on this data folder: %s",
+                 "brought its window forward" if shown else "left it as it was")
+        return
     try:
         from flackey.desktop import run_in_window
 
         run_in_window(settings)
-    except Exception:
+    except (Exception, SystemExit):
         # Nothing above this catches, and nothing below prints: without this the app would close on
-        # startup with no window, no message and an empty log.
+        # startup with no window, no message and an empty log. `run_in_window` explains the failures it
+        # knows about itself; this is for the rest, down to an import that broke in the bundle.
         log.exception("the app failed to start")
+        from flackey.logsetup import LOG_FILE
+        from flackey.startup_alert import show_alert, startup_failure_text
+
+        show_alert(*startup_failure_text(port_busy=False, timed_out=False, port=settings.web_port,
+                                         log_path=settings.data_dir / LOG_FILE))
         raise
 
 

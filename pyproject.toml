@@ -80,6 +80,6 @@ layers = [
   "slskd_process",
   "slskd_binary",
   "slskd_config",
-  "portmap : portcheck : single_instance",
+  "portmap : portcheck : single_instance : startup_alert",
 ]
 exhaustive = true

@@ -48,6 +48,7 @@ def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve onl
           browser: bool = typer.Option(False, "--browser", help="Open the system browser instead of the app window")) -> None:
     """Run the worker and open the Flackey window; stops when the window closes or on Ctrl-C."""
     from .app import run
+    from .single_instance import DataDirInUse
 
     try:
         if no_browser or browser:
@@ -59,6 +60,9 @@ def start(no_browser: bool = typer.Option(False, "--no-browser", help="Serve onl
             run_in_window(_settings())
     except KeyboardInterrupt:
         pass
+    except DataDirInUse as e:
+        typer.echo(f"{e}. Quit that copy first.", err=True)
+        raise typer.Exit(1) from None
     typer.echo("stopped")
 
 
