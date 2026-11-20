@@ -656,14 +656,106 @@ def test_a_down_collector_backs_off_and_honours_retry_after(tmp_path):
     assert t._next_send == clock.now + 7200 and (tmp_path / OUTBOX).read_text().strip()
     clock.now = t._next_send
 
-    def unreachable(request):
-        raise httpx.ConnectError("down")
-    run_tick(t, httpx.MockTransport(unreachable))
+    def down(request):
+        return httpx.Response(503)
+    run_tick(t, httpx.MockTransport(down))
     assert t._next_send == clock.now + 120                 # doubled, kept
     for _ in range(20):
         clock.now = t._next_send
-        run_tick(t, httpx.MockTransport(unreachable))
+        run_tick(t, httpx.MockTransport(down))
     assert t._next_send - clock.now == MAX_BACKOFF_S and (tmp_path / OUTBOX).read_text().strip()
+
+
+def _unreachable(error: type[httpx.TransportError]):
+    def handler(request):
+        raise error("down", request=request)
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                                   httpx.NetworkError, httpx.RemoteProtocolError])
+def test_a_network_error_retries_at_the_normal_interval_and_says_so_once(tmp_path, caplog, error):
+    """The Mac slept or the VPN dropped: that is not the collector struggling, so it never escalates the wait
+    (it used to double to hours, silently)."""
+    clock = Clock()
+    t, _ = make(tmp_path, clock=clock, interval_s=900)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    for _ in range(6):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="flackey.telemetry.client"):
+            run_tick(t, _unreachable(error))
+        assert t._next_send == clock.now + 900 and t._backoff == 0
+        lines = [r.getMessage() for r in caplog.records if "send failed" in r.getMessage()]
+        assert lines == [f"usage stats: send failed ({error.__name__}), retrying in 15 min"]
+        assert caplog.records[-1].levelno == logging.INFO
+        clock.now = t._next_send
+    assert (tmp_path / OUTBOX).read_text().strip() and t.last_send["error"] == error.__name__
+
+
+def test_a_network_error_keeps_the_jittered_normal_interval_by_default(tmp_path):
+    clock = Clock()
+    t, _ = make(tmp_path, clock=clock)                     # default 15 min, jittered by 5 min
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    for _ in range(10):
+        run_tick(t, _unreachable(httpx.ConnectError))
+        assert 10 * 60 <= t._next_send - clock.now <= 20 * 60
+        clock.now = t._next_send
+
+
+@pytest.mark.parametrize("code", [429, 500, 503])
+def test_5xx_and_429_still_double_between_network_errors(tmp_path, code):
+    clock = Clock()
+    t, _ = make(tmp_path, clock=clock, interval_s=60)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    waits = []
+    for answer in ("server", "server", "network", "server"):
+        transport = (_unreachable(httpx.ConnectError) if answer == "network"
+                     else httpx.MockTransport(lambda r: httpx.Response(code)))
+        run_tick(t, transport)
+        waits.append(t._next_send - clock.now)
+        clock.now = t._next_send
+    # a network error neither escalates nor forgets the server's backoff
+    assert waits == [60, 120, 60, 240]
+
+
+def test_a_success_after_network_errors_resets(tmp_path):
+    clock = Clock()
+    collector = Collector()
+    t, _ = make(tmp_path, clock=clock, interval_s=60)
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(503)))
+    clock.now = t._next_send
+    run_tick(t, httpx.MockTransport(lambda r: httpx.Response(503)))
+    assert t._backoff == 120
+    for _ in range(3):
+        clock.now = t._next_send
+        run_tick(t, _unreachable(httpx.ConnectError))
+    clock.now = t._next_send
+    run_tick(t, httpx.MockTransport(collector))
+    assert len(collector.batches) == 1 and t._backoff == 0 and t._next_send == clock.now + 60
+    assert t.last_send["status"] == "ok" and (tmp_path / OUTBOX).read_text() == ""
+
+
+def test_the_network_error_log_names_no_key_url_or_payload(tmp_path, caplog):
+    secret_url = "http://127.0.0.1:9/collect?token=QUERYSECRET"
+    t, _ = make(tmp_path, url=secret_url, key="KEYSECRET")
+    t.opt_in()
+    t.emit("app_started", filing_format="aiff")
+
+    def handler(request):
+        raise httpx.ConnectError(f"cannot reach {request.url} with {request.headers.get('X-Flackey-Key')}",
+                                 request=request)
+    with caplog.at_level(logging.DEBUG, logger="flackey.telemetry"):
+        run_tick(t, httpx.MockTransport(handler))
+    text = caplog.text
+    assert "send failed (ConnectError)" in text
+    for leaked in ("KEYSECRET", "QUERYSECRET", "127.0.0.1", "/v1/batch", "collect", t.install_id,
+                   t.install_secret, "app_started"):
+        assert leaked not in text
 
 
 # --- the install secret (owner proof, collector migration 012) ---------------------------------------------
