@@ -791,18 +791,27 @@ class Telemetry:
             return
         # One batch per turn. A backlog drains DRAIN_GAP_S apart; a failure backs off (jittered, and never
         # sooner than the collector's Retry-After), so a down collector costs one request per wait.
-        ok, more, wait = await self._send_batch(http)
+        ok, more, wait, network_error = await self._send_batch(http)
         if ok:
             self._backoff = 0.0
-            self._next_send = self.clock() + (DRAIN_GAP_S if more else
-                                              self.interval_s + random.uniform(-self._jitter, self._jitter))
+            self._next_send = self.clock() + (DRAIN_GAP_S if more else self._normal_wait())
+        elif network_error:
+            # No connection, DNS or a timeout (the Mac slept, the VPN dropped): the collector never answered,
+            # so this says nothing about its load. Try again at the usual interval, neither escalating nor
+            # forgetting a backoff the collector asked for. The error's class only: no URL, key or payload.
+            delay = self._normal_wait()
+            self._next_send = self.clock() + delay
+            log.info("usage stats: send failed (%s), retrying in %.0f min", network_error, delay / 60)
         else:
             self._backoff = min(MAX_BACKOFF_S, max(self.interval_s, self._backoff * 2))
             self._next_send = self.clock() + min(MAX_BACKOFF_S, max(self._jittered(self._backoff), wait or 0.0))
 
-    async def _send_batch(self, http: httpx.AsyncClient) -> tuple[bool, bool, float | None]:
+    def _normal_wait(self) -> float:
+        return self.interval_s + random.uniform(-self._jitter, self._jitter)
+
+    async def _send_batch(self, http: httpx.AsyncClient) -> tuple[bool, bool, float | None, str | None]:
         """(the send worked or the batch was dropped as refused, there is more to send, the collector's
-        Retry-After in seconds when it gave one)."""
+        Retry-After in seconds when it gave one, the error class when the network failed before any answer)."""
         with self._io:
             gen = self._gen
             raw = self._outbox_lines()
@@ -812,7 +821,7 @@ class Telemetry:
                 self._write_lines(self.data_dir / OUTBOX, lines)
             install_id, install_secret, dropped = self.install_id, self.install_secret, self._dropped
         if not lines or not install_id or not install_secret:
-            return True, False, None
+            return True, False, None, None
         batch = lines[:BATCH]
         body = {"schema": SCHEMA_VERSION, "install_id": install_id, "install_secret": install_secret,
                 "dropped": coarse_dropped(dropped), "events": events[:BATCH]}
@@ -824,13 +833,13 @@ class Telemetry:
             r = await http.post(f"{self.url}/v1/batch", content=data, headers=headers)
         except httpx.HTTPError as e:
             self.last_send = {"status": "failed", "error": type(e).__name__, "at": self._stamp()}
-            return False, True, None
+            return False, True, None, type(e).__name__ if isinstance(e, httpx.TransportError) else None
         with self._io:
             if self._gen != gen:
                 # Opt-out or New ID landed while this was on the wire: the outbox and sent log it read are
                 # gone with that ID, and must not be written back (nor go later under a new ID).
-                return True, False, None
-            return self._after_batch(r, lines, batch)
+                return True, False, None, None
+            return (*self._after_batch(r, lines, batch), None)
 
     def _after_batch(self, r: httpx.Response, lines: list[str], batch: list[str]) -> tuple[bool, bool, float | None]:
         code = r.status_code
