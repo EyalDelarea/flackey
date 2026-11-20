@@ -90,6 +90,7 @@ def test_a_duplicate_check_with_the_drive_unplugged_keeps_the_track(tmp_path):
 
 # ---- ENG-2: a duplicate joins the playlist file too -------------------------------------------------
 
+@requires_ffmpeg
 async def test_duplicate_in_playlist_writes_the_m3u8(env):  # noqa: F811
     settings, store, _ = env
     w = make_worker(env, FakeSource([good_cand()]))
