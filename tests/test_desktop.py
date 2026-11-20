@@ -1220,7 +1220,11 @@ def test_cmd_q_closes_the_usage_session_so_the_next_launch_is_not_counted_as_a_c
 
     windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
     data = tmp_path / "data"
-    tel = Telemetry(data, version="0.7.0", url="http://127.0.0.1:9", persist=lambda **u: None)
+    # Pinned to a Mac checkout: on a Linux runner the real platform is outside the schema and stats are
+    # unavailable, which is the kill switch doing its job, not what this test is about.
+    pinned = {"channel": "checkout", "platform_fields": {"os": "macos", "os_major": "26", "arch": "arm64"}}
+    monkeypatch.delenv("FLACKEY_TELEMETRY", raising=False)
+    tel = Telemetry(data, version="0.7.0", url="http://127.0.0.1:9", persist=lambda **u: None, **pinned)
     tel.opt_in()                                       # starts the session: the marker is down
     assert (data / "telemetry-session").exists()
     telemetry.install(tel)
@@ -1234,7 +1238,8 @@ def test_cmd_q_closes_the_usage_session_so_the_next_launch_is_not_counted_as_a_c
     assert not (data / "telemetry-session").exists()
     tel.end_session()                                  # the server's own `finally`, on a clean close: harmless
     after = Telemetry(data, version="0.7.0", enabled=True, install_id=tel.install_id,
-                      install_secret=tel.install_secret, url="http://127.0.0.1:9", persist=lambda **u: None)
+                      install_secret=tel.install_secret, url="http://127.0.0.1:9", persist=lambda **u: None,
+                      **pinned)
     assert after.start_session()["previous_exit"] == "clean"
 
 
@@ -1274,3 +1279,20 @@ def test_a_checkout_launch_sweeps_nothing(monkeypatch):
     monkeypatch.setattr(desktop.update_install, "running_bundle", lambda: None)
     monkeypatch.setattr(desktop.update_install, "sweep", lambda d: pytest.fail("swept from a checkout"))
     desktop.sweep_leftover_updates()
+
+
+def test_closing_with_usage_stats_switched_off_quits_quietly(monkeypatch, tmp_path):
+    """FLACKEY_TELEMETRY=off (or a platform outside the schema): the session was never started, and the
+    quit must neither raise nor leave anything behind."""
+    from flackey import desktop, telemetry
+    from flackey.telemetry import Telemetry
+
+    windows, _, _ = _install_fake_webview(monkeypatch, tmp_path)
+    data = tmp_path / "data"
+    telemetry.install(Telemetry(data, version="0.7.0", mode="off", persist=lambda **u: None))
+    try:
+        desktop.run_in_window(settings=types.SimpleNamespace(window_size=None, data_dir=tmp_path))
+        assert [fn() for fn in windows["window"].events.closing] == [None]
+    finally:
+        telemetry.uninstall()
+    assert not (data / "telemetry-session").exists()
