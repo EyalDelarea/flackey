@@ -2963,3 +2963,16 @@ def test_settings_still_save_when_an_older_slskd_address_is_sent_back_unchanged(
     r = AppClient(app).put("/api/settings", json={"library_root": str(tmp_path / "lib"),
                                                   "slskd_url": "http://192.168.1.9:5030", "auto_update_check": False})
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_soulseek_setup_again_with_a_grandfathered_whole_drive_share_succeeds(tmp_path: Path):
+    """POST /setup/soulseek re-enters credentials; the share folder is unchanged, so no 400."""
+    from flackey.slskd_config import write_credentials, write_share
+    app, _, settings = make(tmp_path)
+    settings.library_root = Path("/Volumes/MyDrive")
+    write_credentials(settings.data_dir, "dj", "pw")
+    write_share(settings.data_dir, settings.library_root, saved=True)
+
+    r = AppClient(app).post("/api/setup/soulseek", json={"username": "dj2", "password": "pw2"})
+    assert r.status_code == 200, r.text

@@ -573,3 +573,26 @@ def test_a_saved_folder_is_still_held_to_the_older_rules(tmp_path: Path, fake_ho
         with pytest.raises(SlskdConfigError):
             write_share(data, folder, saved=True)
     assert yaml.safe_load(config_path(data).read_text())["shares"]["directories"] == [str(fake_home / "Music")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_re_entering_credentials_keeps_a_grandfathered_share(tmp_path: Path, fake_home: Path, caplog):
+    """The share folder does not change when the owner signs in to Soulseek again, so a whole drive that
+    was already shared is not refused (which would 400 the setup) -- only warned about."""
+    data = tmp_path / "data"
+    write_credentials(data, "dj", "pw")
+    write_share(data, Path("/Volumes/MyDrive"), saved=True)     # shared before the new rules
+    caplog.set_level("WARNING")
+
+    write_credentials(data, "dj2", "pw2", library_root=Path("/Volumes/MyDrive"))
+
+    after = yaml.safe_load(config_path(data).read_text())
+    assert after["shares"]["directories"] == ["/Volumes/MyDrive"] and after["soulseek"]["username"] == "dj2"
+    assert "would not be accepted" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_first_soulseek_setup_on_a_whole_drive_is_refused(tmp_path: Path, fake_home: Path):
+    """Setting Soulseek up is when the folder first gets shared, so the new rules apply."""
+    with pytest.raises(SlskdConfigError):
+        write_credentials(tmp_path / "data", "dj", "pw", library_root=Path("/Volumes/MyDrive"))

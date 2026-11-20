@@ -161,6 +161,11 @@ def write_credentials(data_dir: Path, username: str, password: str,
 
     path = config_path(data_dir)
     config = _load_config(path)
+    # Re-entering credentials does not change what is shared: a folder already in the share is held to
+    # the rules it was saved under, so a grandfathered one is not refused here (see `_set_share`).
+    shares = config.get("shares")
+    already_shared = library_root is not None and isinstance(shares, dict) and \
+        isinstance(shares.get("directories"), list) and str(library_root) in shares["directories"]
 
     web = _submapping(config, "web", path)
     web.setdefault("port", WEB_PORT)
@@ -184,7 +189,7 @@ def write_credentials(data_dir: Path, username: str, password: str,
     directories.setdefault("incomplete", str(data_dir / "slskd" / "incomplete"))
 
     if library_root is not None:
-        _set_share(config, path, library_root, data_dir)
+        _set_share(config, path, library_root, data_dir, saved=already_shared)
 
     _atomic_write(path, config)
     log.info("wrote slskd config: %s", path)
