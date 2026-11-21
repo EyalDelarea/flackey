@@ -594,6 +594,16 @@ class Store:
         rows = self.conn.execute(sql, params + [limit]).fetchall()
         return [self._row_to_track(r) for r in rows]
 
+    # When a track's current file landed in the library: when it was filed, or when an upgrade or extended
+    # swap put a new file in its place (`verified_at` is set at both, and by nothing else).
+    _FILED_AT = "max(added_at, COALESCE(verified_at, added_at))"
+
+    def tracks_filed_since(self, since: str | None) -> list[Track]:
+        """Tracks whose current file landed after `since` (every track when None), oldest first."""
+        where, params = ("", []) if since is None else (f"WHERE {self._FILED_AT} > ?", [since])
+        rows = self.conn.execute(f"SELECT * FROM tracks {where} ORDER BY {self._FILED_AT}, id", params).fetchall()
+        return [self._row_to_track(r) for r in rows]
+
     def find_tracks_by_isrc(self, isrc: str) -> list[Track]:
         return [self._row_to_track(r) for r in self.conn.execute("SELECT * FROM tracks WHERE isrc=?", (isrc,))]
 

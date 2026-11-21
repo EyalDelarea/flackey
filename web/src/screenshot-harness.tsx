@@ -377,6 +377,10 @@ function scenarioSetup() {
   })
   vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
   usageStats()
+  // The "Flackey - New" playlist: three tracks waiting, until "I've imported these" empties it
+  let fresh = { count: 3, file: '/lib/Playlists/Flackey - New.m3u8', through: '2026-11-20T10:00:00+00:00' as string | null }
+  vi_spy(api, 'newSinceImport', async () => fresh)
+  vi_spy(api, 'markImported', async () => (fresh = { ...fresh, count: 0, through: null }))
 
   switch (scenario) {
     case 'library-narrow':

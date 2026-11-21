@@ -7,6 +7,7 @@ import { revealLabel, usePlatform } from '../../platform'
 import Icon from '../Icon'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
+import NewSinceImportCard from './NewSinceImportCard'
 import PlaylistCard from './PlaylistCard'
 import TrackTable from './TrackTable'
 
@@ -168,6 +169,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))
       }} />}
+      {!pl && s && s.tracks > 0 && <NewSinceImportCard version={live.libraryVersion} onShowFile={reveal} onError={setActionError} />}
       {!pl && s && s.tracks > 0 && showRekordboxGuide && (
         <div className="group pl-card">
           <span className="pl-icon"><Icon name="folder" size={22} /></span>

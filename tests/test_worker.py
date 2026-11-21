@@ -1083,6 +1083,9 @@ async def test_playlist_membership(env):
     assert store.get_track(r.track_id).path == settings.library_root / "Astral Projection" / "Astral Projection - Into the Void.mp3"
     m3u = settings.library_root / "Playlists" / "Goa Set.m3u8"
     assert m3u.exists() and str(store.get_track(r.track_id).path) in m3u.read_text(encoding="utf-8")
+    # and the New playlist, which collects every filed track until the owner says they imported it
+    new = settings.library_root / "Playlists" / "Flackey - New.m3u8"
+    assert str(store.get_track(r.track_id).path) in new.read_text(encoding="utf-8")
 
 
 async def test_cancel(env):

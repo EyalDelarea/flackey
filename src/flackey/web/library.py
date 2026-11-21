@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,8 +22,17 @@ from ..config import (
     default_filing_format,
     save_settings,
 )
-from ..export import PLAYLIST_DIR, playlist_names, write_playlists
-from ..library import prune_missing_tracks
+from ..export import (
+    PLAYLIST_DIR,
+    filed_at,
+    mark_imported,
+    new_playlist_path,
+    new_tracks,
+    playlist_names,
+    write_new_playlist,
+    write_playlists,
+)
+from ..library import library_reachable, prune_missing_tracks
 from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
@@ -87,6 +97,7 @@ def _revealable(settings: Settings, store: Store) -> Iterator[Path]:
     yield settings.library_root
     yield settings.data_dir
     yield settings.data_dir / LOG_FILE
+    yield new_playlist_path(settings.library_root)
     playlists = store.list_playlists()
     names = playlist_names(playlists)
     for pl in playlists:
@@ -210,6 +221,33 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         if removed:
             write_playlists(store, settings.library_root)
         return {"removed": len(removed)}
+
+    def new_out() -> dict:
+        tracks = new_tracks(store)
+        return {"count": len(tracks), "file": str(new_playlist_path(settings.library_root)),
+                "through": filed_at(tracks[-1]) if tracks else None}
+
+    @r.get("/library/new")
+    async def library_new() -> dict:
+        """The "Flackey - New" playlist: how many tracks it holds and where its file is. `through` is the
+        newest of them, which the page sends back when the owner says they imported these."""
+        return new_out()
+
+    @r.post("/library/new/imported")
+    async def library_new_imported(body: dict) -> dict:
+        through = body.get("through")
+        try:
+            datetime.fromisoformat(through)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Nothing to mark as imported.") from None
+        mark_imported(store, through)
+        if library_reachable(settings.library_root):
+            try:
+                write_new_playlist(store, settings.library_root)
+            except OSError as e:
+                # The marker is saved, which is what the owner asked for; the file follows on the next filing.
+                log.warning("could not rewrite the New playlist: %s", e)
+        return new_out()
 
     @r.get("/playlists")
     async def playlists() -> list:

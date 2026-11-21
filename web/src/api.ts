@@ -65,6 +65,9 @@ export interface Bundle { request:Request; candidates:Candidate[]; catalog:Catal
   /** A Soulseek copy the quality check refused, held beside whatever was filed instead (issue #97) */
   held?:Rejection|null }
 export interface Playlist { id:number; source_url:string; name:string; created_at:string; updated_at:string; track_ids:number[]; track_positions?:number[]; file:string }
+/** The "Flackey - New" playlist: what was filed since the owner last said they imported into Rekordbox.
+    `through` is the newest of those tracks, sent back with "I've imported these". */
+export interface NewSinceImport { count:number; file:string; through:string|null }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
 export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
@@ -221,6 +224,8 @@ export const api = {
     return call<Track[]>(`/api/library${qs ? '?' + qs : ''}`)
   },
   refreshLibrary: () => post<{ removed: number }>('/api/library/refresh'),
+  newSinceImport: () => call<NewSinceImport>('/api/library/new'),
+  markImported: (through: string) => post<NewSinceImport>('/api/library/new/imported', { through }),
   /** Get extended: download the extended mix on offer and swap it in for the filed track (issue #187). */
   getExtended: (trackId: number) =>
     post<{ ok: boolean; message: string; swapped: boolean }>(`/api/lossless/extended/${trackId}`),
