@@ -8,9 +8,14 @@ on:
         required: true
 
 # Read-only on purpose: every write (pushing the bump branch and the tag, opening and auto-merging the
-# PR) goes through RELEASE_PAT, never GITHUB_TOKEN. See the checkout step for why.
+# PR) goes through RELEASE_PAT, never GITHUB_TOKEN: pushes and PRs made with GITHUB_TOKEN don't trigger
+# other workflows, so the checks + build this release depends on would never run and the auto-merge
+# would wait forever. The PAT is handed only to the two steps that write, and only for their own git
+# and gh commands: it is never written into the checkout's git config, so nothing else in the job
+# (sed, check_version.sh) can pick it up.
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -23,12 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # The repo is public: later fetches need no credentials, and pushes pass the PAT per command.
+          persist-credentials: false
           ref: main
           fetch-depth: 0
-          # A PAT, not the default GITHUB_TOKEN: pushes/PRs made with GITHUB_TOKEN don't
-          # trigger other workflows, so the checks + build this release depends on would
-          # never run and the auto-merge below would wait forever.
-          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Validate requested version
         id: version
@@ -91,12 +94,16 @@ jobs:
 
           tag="${{ steps.version.outputs.tag }}"
           branch="release/$tag"
+          # The PAT as an HTTP header for this one push, the way actions/checkout passes a token, rather
+          # than in the remote URL or the git config.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git commit -am "release: $tag"
-          git push origin "$branch"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" push origin "$branch"
 
           gh pr create --base main --head "$branch" --title "release: $tag" \
             --body "Automated version bump for $tag." --label ignore-for-release
@@ -105,7 +112,8 @@ jobs:
       - name: Wait for the version bump to land on main
         if: steps.bump.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          # Only reads the PR's state: the workflow's own read-only token is enough.
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -124,11 +132,17 @@ jobs:
           exit 1
 
       - name: Tag the released commit
+        env:
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         shell: bash
         run: |
           set -euo pipefail
 
           tag="${{ steps.version.outputs.tag }}"
+          # Kept in an unexported shell variable, so check_version.sh below never sees the PAT.
+          auth="$(printf 'x-access-token:%s' "$RELEASE_PAT" | base64 -w0)"
+          echo "::add-mask::$auth"
+          unset RELEASE_PAT
           git fetch origin main
           git checkout -B main origin/main
           packaging/check_version.sh "$tag"
@@ -136,4 +150,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "$tag"
-          git push origin "$tag"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" push origin "$tag"
