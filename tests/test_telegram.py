@@ -687,3 +687,76 @@ async def test_a_connect_cut_short_after_the_socket_opened_is_closed(monkeypatch
     after_sign_out = ConnectedEarly()
     await TelegramLogin(FakeClient(authorized=True), True, make_client=lambda: after_sign_out).log_out()
     assert after_sign_out.disconnects == 1 and after_sign_out.connected is False
+
+
+class _DroppingClient:
+    """Just enough of Telethon's client: `disconnected` is a shield over the future Telethon resolves when
+    the connection ends -- with a ConnectionError once its own reconnect gives up."""
+
+    def __init__(self):
+        self.ended = asyncio.get_running_loop().create_future()
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+    @property
+    def disconnected(self):
+        return asyncio.shield(self.ended)
+
+
+async def _settle():
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
+async def test_a_connection_telegram_gives_up_on_is_logged_by_flackey_not_by_asyncio(caplog):
+    """Nov 17 and Sep 8: Telethon's reconnect gave up, failed the `disconnected` future nobody awaited,
+    and asyncio logged "Future exception was never retrieved" as an ERROR once the future was collected.
+    Connecting now reads that future, so the drop is one plain warning and asyncio has nothing to say."""
+    import gc
+
+    from flackey.telegram import connect_or_close
+
+    loop = asyncio.get_running_loop()
+    errors = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+    try:
+        client = _DroppingClient()
+        await connect_or_close(client)
+        client.ended.set_exception(ConnectionError("Connection to Telegram failed 5 time(s)"))
+        await _settle()
+        del client
+        gc.collect()
+        await _settle()
+    finally:
+        loop.set_exception_handler(previous)
+    assert errors == []
+    assert "Telegram connection lost (Connection to Telegram failed 5 time(s))" in caplog.text
+
+
+async def test_signing_out_on_purpose_is_not_reported_as_a_lost_connection(caplog):
+    from flackey.telegram import connect_or_close
+
+    client = _DroppingClient()
+    await connect_or_close(client)
+    client.ended.set_result(None)              # what Telethon does on a disconnect() we asked for
+    await _settle()
+    assert "connection lost" not in caplog.text
+
+
+async def test_connecting_at_startup_also_reads_how_the_connection_ends(caplog):
+    from flackey.app import connect_telegram
+
+    class Client(_DroppingClient):
+        async def is_user_authorized(self):
+            return True
+
+    client = Client()
+    assert await connect_telegram(client) is True
+    client.ended.set_exception(ConnectionError("gone"))
+    await _settle()
+    assert "Telegram connection lost (gone)" in caplog.text
