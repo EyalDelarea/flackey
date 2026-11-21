@@ -753,6 +753,15 @@ describe('the Soulseek panel', () => {
     expect(mockSetSettings).toHaveBeenCalledWith(expect.objectContaining({ lossless_filing_format: 'wav' }))
   })
 
+  it('warns a WAV library about cover art and moves it to AIFF in one press', async () => {
+    const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ lossless_filing_format: 'aiff' }))
+    show(lossless(), settings({ lossless_filing_format: 'wav' }))
+    openMoreLibrary()
+    expect(screen.getByText("Rekordbox won't show cover art for WAV files.")).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Use AIFF instead'))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/lib', { lossless_filing_format: 'aiff' }))
+  })
+
   it('lets the owner choose how new tracks are foldered, and says old ones stay put', async () => {
     const save = vi.spyOn(api, 'saveSettings').mockResolvedValue(settings({ library_layout: 'flat' }))
     show(lossless())
