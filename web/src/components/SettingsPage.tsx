@@ -64,6 +64,9 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const [pickerAvailable, setPickerAvailable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [resettingSetup, setResettingSetup] = useState(false)
+  // "Run setup again…" asks first (WEB-11): one stray click used to drop the owner out of Settings and into
+  // the wizard. Inline in the row rather than window.confirm, which the packaged WKWebView does not draw.
+  const [confirmingReset, setConfirmingReset] = useState(false)
   const [setupResetError, setSetupResetError] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [soulseekError, setSoulseekError] = useState<string | null>(null)
@@ -159,7 +162,7 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
     api.setupReset().then(refreshAfter)
       .then(() => setSetupResetError(null))
       .catch(err => setSetupResetError(getErrorMessage(err, 'Could not restart setup. Try again.')))
-      .finally(() => setResettingSetup(false))
+      .finally(() => { setResettingSetup(false); setConfirmingReset(false) })
   }
   const unreachable = live.health?.telegram_unreachable ?? false
   // No API keys means no account was ever made here: "Signed out" and Reconnect named one that does not
@@ -537,9 +540,15 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
                   up to {s.ranking.max_picks} of them, and keeps a copy only if its fingerprint matches the original
                   at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
             </details></div></div>}
-          <div className="srow"><div className="srow-body"><div className="k">Run setup again</div>
-            <div className="v">Keeps your library folder and Telegram sign-in.</div></div>
-            <div className="actions"><button className="btn-secondary destructive" onClick={resetSetup} disabled={resettingSetup}>Run setup again…</button></div></div>
+          {confirmingReset
+            ? <div className="srow" role="group" aria-label="Confirm running setup again"><div className="srow-body"><div className="k">Run setup again?</div>
+                <div className="v">Setup opens now. Nothing is deleted or signed out.</div></div>
+                <div className="actions"><button className="btn-secondary" onClick={() => setConfirmingReset(false)} disabled={resettingSetup}>Cancel</button>
+                  <button className="btn-secondary destructive" onClick={resetSetup} disabled={resettingSetup} autoFocus>
+                    {resettingSetup ? 'Opening setup…' : 'Run setup'}</button></div></div>
+            : <div className="srow"><div className="srow-body"><div className="k">Run setup again</div>
+                <div className="v">Keeps your library folder and Telegram sign-in.</div></div>
+                <div className="actions"><button className="btn-secondary destructive" onClick={() => setConfirmingReset(true)}>Run setup again…</button></div></div>}
         </div>
       </div>
     </div>
