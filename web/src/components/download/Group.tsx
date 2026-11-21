@@ -66,17 +66,24 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onGetAllEx
           <button className="btn-secondary group-extended" disabled={waiting.length === 0}
                   onClick={() => onGetAllExtended(waiting.map(r => r.id))}>
             {waiting.length === 0 ? 'Getting extended…' : `Get all extended (${waiting.length})`}</button>)}
-        <span className="summary">{failedView ? `Whole batch · ${s.failed} of ${s.total} stopped` : `Whole batch · ${plural(s.total, 'track')}`}</span></div>
+        {/* The batch's size and how much of it is filed, in the words the owner would say it (UI proposal 4).
+            "Whole batch" went: the bar under it already says the counts are about the whole playlist. */}
+        <span className="summary">{failedView ? `${s.failed} of ${plural(s.total, 'track')} stopped` : `${plural(s.total, 'track')} · ${s.pct}% filed`}</span></div>
       {failedView
         ? <div className="group-bar" role="img" aria-label={`${g.name}: ${segments.map(x => `${x.n} ${x.label}`).join(', ')}`}>{bar}</div>
         : <div className="group-bar" role="progressbar" aria-valuenow={s.pct} aria-valuemin={0} aria-valuemax={100}
                aria-label={`${g.name}: ${s.filed} of ${s.total} filed`}>{bar}</div>}
-      <ul className="group-legend">
-        {segments.map(x => (
-          <li key={x.key} className="legend-item"><span className={`legend-dot tone-${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
-        ))}
-      </ul>
-      <p className="group-scope">Showing {view === 'active' ? plural(g.rows.length, 'download') : plural(g.rows.length, view === 'failed' ? 'failed track' : 'history track')} matching this filter</p>
+      {/* The legend and, at its far end, how many rows the tab shows under it. The full sentence stays for
+          screen readers: "49 shown" on its own does not say that the bar counts more than the list does. */}
+      <div className="group-legend-row">
+        <ul className="group-legend">
+          {segments.map(x => (
+            <li key={x.key} className="legend-item"><span className={`legend-dot tone-${x.key}`} aria-hidden="true" />{x.n} {x.label}</li>
+          ))}
+        </ul>
+        <span className="group-shown" aria-hidden="true">{g.rows.length.toLocaleString()} shown</span>
+      </div>
+      <p className="group-scope visually-hidden">Showing {view === 'active' ? plural(g.rows.length, 'download') : plural(g.rows.length, view === 'failed' ? 'failed track' : 'history track')} matching this filter</p>
       <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
         player={player} onPlay={onPlay} />)}</div>
     </section>
