@@ -1014,3 +1014,17 @@ it('exports the missing list from the Failed tab, and says so if that fails', as
   fireEvent.click(screen.getByRole('button', { name: 'Export missing list' }))
   expect(await screen.findByText('Could not write the list')).toBeInTheDocument()
 })
+
+it('puts the tracks still being looked for on a folded Waiting shelf (idea 1)', () => {
+  const parked: Bundle = { request: { ...baseRequest, id: 9, state: 'queued', query_artist: 'Afgin', query_title: 'Echoes',
+    retry_after: new Date(Date.now() + 3 * 3600_000).toISOString(),
+    flag_reason: 'waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h' },
+    candidates: [], catalog: null, track: null, rejection: null }
+  render(<DownloadPage live={makeLive([parked, mk(2, 'fetching')])} />)
+  const shelf = screen.getByRole('region', { name: 'Waiting for a copy' })
+  expect(shelf).toHaveTextContent('Waiting for a copy · 1')
+  expect(shelf).not.toHaveTextContent('Nobody sharing it came online')
+  fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+  expect(shelf).toHaveTextContent('Nobody sharing it came online')
+  expect(shelf).toHaveTextContent('next look in 3 h')
+})

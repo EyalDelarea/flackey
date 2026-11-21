@@ -166,6 +166,40 @@ async def test_happy_path_files_tags_exports(env):
 
 
 
+async def test_a_track_that_waited_for_soulseek_announces_itself_when_filed(env):
+    """Idea 1: a track parked on the long wait is the one the owner was told would come, so its filing is
+    handed to `on_found` (a system notification in the app). One filed on its first pass says nothing."""
+    _, store, _ = env
+    w = make_worker(env, FakeSource([good_cand()]))
+    found: list[str] = []
+    w.on_found = found.append
+    fresh = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(fresh)).state == RequestState.DONE and found == []
+    store.delete_request(fresh)
+    for path in w.settings.library_root.rglob("*.mp3"):
+        path.unlink()
+    waited = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(waited, attempts=5, flag_reason="waiting for Soulseek: nobody sharing it came online")
+    assert (await w.process(waited)).state == RequestState.DONE
+    assert found == ["Astral Projection – Into the Void"]
+
+
+def test_desktop_notify_hands_the_text_over_as_arguments_and_never_raises(monkeypatch):
+    """The text is a track title from the internet: it goes in as argv, never into the script."""
+    from flackey import notify
+    calls: list[list[str]] = []
+    monkeypatch.setattr(notify.sys, "platform", "darwin")
+    monkeypatch.setattr(notify.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    notify.desktop_notify("Flackey", 'A "quoted" & title')
+    assert calls[0][0] == "osascript" and calls[0][-2:] == ["Flackey", 'A "quoted" & title']
+    assert all('quoted' not in part for part in calls[0][:-2])
+
+    def boom(cmd, **kw):
+        raise FileNotFoundError("no osascript")
+    monkeypatch.setattr(notify.subprocess, "Popen", boom)
+    notify.desktop_notify("Flackey", "x")     # swallowed
+
+
 @pytest.mark.parametrize("layout", ["month", "day", "flat"])
 async def test_a_new_track_is_filed_by_the_library_layout(env, layout):
     settings, store, _ = env

@@ -942,3 +942,15 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .row-links .btn-link { font-size: 11px; }
 /* Sits beside Retry all at the right, not straight after the capped-width summary. */
 .filterbar-row .export-missing + .btn-secondary { margin-left: 0; }
+
+/* Tracks not found yet and still being looked for (idea 1): one folded shelf above the batches. */
+.waiting-shelf { margin: 0 0 16px; padding: 10px 14px; border: .5px solid var(--group-border); border-radius: 10px; background: var(--group); }
+.waiting-shelf-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.waiting-shelf-head h2 { font-size: 13px; font-weight: 600; }
+.waiting-shelf-head .summary { flex: 1; min-width: 200px; font-size: 12px; color: var(--secondary); }
+.waiting-list { margin: 8px 0 0 22px; padding: 0; list-style: none; font-size: 12px; }
+.waiting-list li { display: grid; grid-template-columns: minmax(0, 2fr) auto minmax(0, 2fr); gap: 12px; padding: 3px 0; align-items: baseline; }
+.waiting-title, .waiting-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waiting-when { color: var(--secondary); font-variant-numeric: tabular-nums; }
+.waiting-why { color: var(--tertiary); }
+.waiting-shelf-head .waiting-ring { color: var(--orange); }
