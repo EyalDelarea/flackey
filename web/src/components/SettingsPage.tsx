@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { AppSettings, ExtendedMixes, LosslessHealth, Platform, SharingState, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
@@ -136,13 +136,22 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   // press always drives the state through it and back out, and that round trip is what clears this.
   const downloadState = live.updateDownload?.state
   useEffect(() => { if (downloadState && downloadState !== 'downloading') setInstallStarting(false) }, [downloadState])
-  useEffect(() => {
+  const checkForUpdate = useCallback(() => {
     setUpdateChecking(true)
     api.update('manual').then(setUpdate).catch(() => setUpdate({ ok: false, current: s?.version ?? '', newer: false,
       available: false, latest: null, url: null, release_url: null, size: null, size_label: null,
       published_at: null, published_date: null, prerelease: false, error: 'Could not check for updates.' }))
       .finally(() => setUpdateChecking(false))
   }, [s?.version])
+  // Opening Settings checks on its own only when the owner has left automatic checks on (WEB-15): with
+  // them off, contacting the release server unasked is exactly what the switch promised not to do. Waits
+  // for the settings to load, so an off switch is never mistaken for an on one in the meantime.
+  const autoCheck = s ? s.auto_update_check !== false : null
+  useEffect(() => {
+    if (autoCheck === null) return
+    if (autoCheck) checkForUpdate()
+    else setUpdateChecking(false)
+  }, [autoCheck, checkForUpdate])
   if (!s) return null
   // After an action has gone through, the refresh is only there to show it sooner: a failed one must not
   // turn into an error about the action itself (WEB-2).
@@ -423,6 +432,9 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
         <div className="srow"><div className="srow-body"><div className="k">App version</div>
           <div className="v">Flackey {s.version}</div>
           {updateChecking && <div className="v">Checking for updates…</div>}
+          {!updateChecking && !update && s.auto_update_check === false && <div className="v">
+            Automatic update checks are off.
+            <button className="btn-secondary" onClick={checkForUpdate}>Check now</button></div>}
           {!updateChecking && update?.ok && !update.newer && <div className="v">Up to date.</div>}
           {!updateChecking && installable && <div className="v">
             Version {update.latest} is available{update.size_label ? ` · ${update.size_label}` : ''}{update.published_date ? ` · ${update.published_date}` : ''}.
@@ -491,8 +503,8 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
         <p className="disclosure-note">Update checks, passwords, sharing, problem reports and starting over. Only needed when something isn't working.</p>
       </div>
       <div className="advanced" id="settings-advanced" hidden={!advancedOpen}>
-        {/* Set once and left alone: on by default, and the update row on the main page still says when a
-            new version is out whenever Settings is opened. */}
+        {/* Set once and left alone: on by default. Off, the update row on the main page checks only when
+            its Check now button is pressed. */}
         <h3>General</h3>
         <div className="group">
           <div className="srow"><div className="srow-body"><div className="k">Check for updates automatically</div>
