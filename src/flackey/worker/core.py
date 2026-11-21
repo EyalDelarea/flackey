@@ -61,6 +61,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                  tag_lookup: TagLookup | None = None):
         self.store, self.source, self.notifier, self.settings = store, source, notifier, settings
         self.artwork_fetch = artwork_fetch
+        # Told "artist – title" when a track that had been parked waiting for Soulseek is finally filed
+        # (idea 1): the app shows a system notification. None (tests, the CLI) tells no one.
+        self.on_found: Callable[[str], None] | None = None
         # Deezer + Discogs, for a track's tags at filing (issue #146). None files a track with the
         # candidate's own tags.
         self.tag_lookup = tag_lookup

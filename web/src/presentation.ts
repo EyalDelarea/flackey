@@ -957,3 +957,32 @@ export function batchFinishText(f: BatchFinishView): string {
   const missing = f.missing.length === 0 ? ' · nothing missing' : ` · ${f.missing.length} missing`
   return `${f.filed} of ${plural(f.total, 'track')} filed${took}${missing}`
 }
+
+/** One track on the "Waiting for a copy" shelf (idea 1): parked on the long wait for Soulseek, when it was
+ *  last looked for, when it will be next, and why it is waiting. */
+export interface WaitingItem { id: number; title: string; why: string; lastLook: string; nextLook: string }
+
+/** Seconds as the shelf says them: rough on purpose, because the looks are hours apart. */
+const roughly = (secs: number): string => secs < 60 ? 'under a minute'
+  : secs < 3600 ? `${Math.round(secs / 60)} min` : secs < 172800 ? `${Math.round(secs / 3600)} h` : `${Math.round(secs / 86400)} days`
+
+/** The tracks Flackey has not found yet and is still looking for: the rows on the long wait for Soulseek
+ *  (`soulseekWait`), oldest look first. The quick ladder's minutes-long backoff is not here -- those rows
+ *  are between two tries of one pass, not waiting for someone to come online. */
+export function waitingShelfOf(all: Bundle[], now: Date): WaitingItem[] {
+  return all.filter(b => b.request.state === 'queued' && b.request.retry_after && soulseekWait(b.request.flag_reason))
+    .sort((a, c) => a.request.updated_at.localeCompare(c.request.updated_at) || a.request.id - c.request.id)
+    .map(b => {
+      const r = b.request
+      const since = Math.max(0, (now.getTime() - new Date(r.updated_at).getTime()) / 1000)
+      const until = Math.max(0, (new Date(r.retry_after!).getTime() - now.getTime()) / 1000)
+      // "waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h" -> the middle.
+      const why = (r.flag_reason ?? '').replace(/^waiting for Soulseek\s*[:—–-]?\s*/i, '').split(';')[0].trim()
+      return {
+        id: r.id, title: titleOf(b).title,
+        why: why ? why[0].toUpperCase() + why.slice(1) : 'Nobody sharing it is online yet',
+        lastLook: r.updated_at ? `looked ${roughly(since)} ago` : 'looked before',
+        nextLook: until <= 0 ? 'looking again now' : `next look in ${roughly(until)}`,
+      }
+    })
+}

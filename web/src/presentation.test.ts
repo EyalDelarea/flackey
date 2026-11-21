@@ -1,4 +1,4 @@
-import { STEP_TIPS, asSentence, batchFinishOf, batchFinishText, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { STEP_TIPS, asSentence, batchFinishOf, waitingShelfOf, batchFinishText, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -1053,5 +1053,20 @@ describe('store links for a track Flackey gave up on (idea 8)', () => {
       expect(presentRow(bundle({ state, query_artist: 'A', query_title: 'B' }), opts).storeLinks ?? null).toBeNull()
     }
     expect(presentRow(bundle({ state: 'error', query_artist: null, query_title: null }), opts).storeLinks).toBeNull()
+  })
+})
+
+describe('waitingShelfOf (idea 1)', () => {
+  const now = new Date('2026-11-20T12:00:00Z')
+  it('lists the tracks parked waiting for Soulseek, with the last look, the next one and why', () => {
+    const items = waitingShelfOf([
+      bundle({ id: 1, state: 'queued', query_artist: 'Afgin', query_title: 'Echoes', updated_at: '2026-11-20T10:00:00Z',
+        retry_after: '2026-11-20T16:00:00Z', flag_reason: 'waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h' }),
+      // The quick ladder's backoff is between two tries, not waiting for anyone: not on the shelf.
+      bundle({ id: 2, state: 'queued', retry_after: '2026-11-20T12:15:00Z', flag_reason: 'no way to fetch this track: x, will retry' }),
+      bundle({ id: 3, state: 'fetching' }),
+    ], now)
+    expect(items).toEqual([{ id: 1, title: 'Afgin – Echoes', why: 'Nobody sharing it came online',
+      lastLook: 'looked 2 h ago', nextLook: 'next look in 4 h' }])
   })
 })

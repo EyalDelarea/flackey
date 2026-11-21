@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { asSentence, batchFinishOf, bucketCounts, bucketOf, bulkRemoveOf, clearConfirmText, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
+import { asSentence, batchFinishOf, waitingShelfOf, bucketCounts, bucketOf, bulkRemoveOf, clearConfirmText, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
 import Banner from '../Banner'
 import BatchFinished from './BatchFinished'
+import WaitingShelf from './WaitingShelf'
 import EmptyDownloads from './EmptyDownloads'
 import FilterBar from './FilterBar'
 import { selectionKeys } from './selectionKeys'
@@ -114,6 +115,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   const finished = live.playlists.filter(p => watched.has(p.id))
     .map(p => batchFinishOf(bundles, p)).filter(f => f != null)
   const [retryingBatch, setRetryingBatch] = useState<number | null>(null)
+  const shelf = waitingShelfOf(bundles, now)
   const dismissBatch = (id: number) => setWatched(w => { const n = new Set(w); n.delete(id); return n })
   const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
@@ -369,6 +371,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       )}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
+        {view === 'active' && shelf.length > 0 && <WaitingShelf items={shelf} />}
         {view === 'active' && finished.map(f => <BatchFinished key={f.playlistId} f={f} busy={retryingBatch === f.playlistId}
           onRetry={ids => retryMissing(f.playlistId, ids)} onDismiss={() => dismissBatch(f.playlistId)} />)}
         {groups.length === 0 && bundles.length === 0 && <EmptyDownloads />}

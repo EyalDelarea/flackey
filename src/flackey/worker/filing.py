@@ -30,6 +30,7 @@ from ..version import (
 )
 from . import usage
 from .extended import OFFER
+from .policy import MAX_ATTEMPTS
 from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_line, query_candidate
 
 log = logging.getLogger(__name__)
@@ -379,6 +380,10 @@ class FilingMixin:
         file_track(tmp, dest)
         log.info("req#%d filed %s -> %s", req.id, f"{catalog.artist} – {catalog.title}",
                 dest.relative_to(self.settings.library_root))
+        if req.attempts >= MAX_ATTEMPTS and self.on_found is not None:
+            # Only a request that ran out the quick ladder reaches the long wait for Soulseek, so this is the
+            # track the owner was told "it will come" about (idea 1) -- and now it has.
+            self.on_found(f"{catalog.artist} – {catalog.title}")
         track_id = self.store.add_track(
             path=dest, fmt=verdict.fmt, bitrate_kbps=verdict.bitrate_kbps, cutoff_hz=verdict.cutoff_hz,
             file_size=dest.stat().st_size, artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,

@@ -27,7 +27,7 @@ from .deezer import DeezerApi
 from .events import EventBus, Status
 from .inbox import Inbox
 from .logsetup import log_startup_banner
-from .notify import LogNotifier
+from .notify import LogNotifier, desktop_notify
 from .sharing import Sharing
 from .single_instance import DataDirInUse, claim_data_dir
 from .slskd_binary import SlskdBinaryError
@@ -535,6 +535,8 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
     source = DeezerBotSource(client, settings.source_bot_username, DeezerApi(http), get_client=lambda: login.client)
     worker = Worker(store, source, LogNotifier(), settings, status=status,
                     providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
+    worker.on_found = lambda track: desktop_notify("Flackey found a track you were waiting for",
+                                                   f"{track} is in your library now.")
     inbox = Inbox(store, prefer_extended=lambda: settings.prefer_extended,
                   library_root=lambda: settings.library_root)
 
