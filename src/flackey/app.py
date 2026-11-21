@@ -6,11 +6,13 @@ import logging
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import tempfile
 import threading
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -461,7 +463,36 @@ async def run_usage_sender(tel: usage.Telemetry, retry_s: float = 30.0) -> None:
         await asyncio.sleep(retry_s)
 
 
+# Threads only for name lookups. asyncio resolves host names on the loop's default executor, which is
+# also where every `asyncio.to_thread` runs -- yt-dlp downloads, fingerprinting, verifying, converting. With
+# a playlist's worth of those going, a lookup waited behind them until its connect timeout ran out: every
+# call to Deezer, Discogs and the update check failed with an empty `ConnectTimeout`, while slskd, reached
+# by IP address with no lookup, kept answering (0.8 QA bug 8: 10 of 14 tracks filed with no genre or label).
+DNS_THREADS = 4
+
+
+def resolve_names_on_own_threads(loop: asyncio.AbstractEventLoop,
+                                 pool: ThreadPoolExecutor | None = None) -> ThreadPoolExecutor:
+    """Make `loop` look host names up on a small pool of its own instead of the default executor. Returns
+    the pool, which the caller shuts down with the loop."""
+    pool = pool or ThreadPoolExecutor(max_workers=DNS_THREADS, thread_name_prefix="dns")
+
+    async def getaddrinfo(host, port, *, family=0, type=0, proto=0, flags=0):
+        return await loop.run_in_executor(pool, socket.getaddrinfo, host, port, family, type, proto, flags)
+
+    loop.getaddrinfo = getaddrinfo   # type: ignore[method-assign]
+    return pool
+
+
 async def _run(settings: Settings, handle: ServerHandle) -> None:
+    dns = resolve_names_on_own_threads(asyncio.get_running_loop())
+    try:
+        await _run_app(settings, handle)
+    finally:
+        dns.shutdown(wait=False)
+
+
+async def _run_app(settings: Settings, handle: ServerHandle) -> None:
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.rejected_dir,
               settings.library_root, settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)

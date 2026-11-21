@@ -109,6 +109,9 @@ async def test_health_reports_login_state_and_unreachable(provider, fixtures: Pa
     assert (await p.health())["status"] == "not_logged_in"
     respx.get(f"{BASE}/application").mock(side_effect=httpx.ConnectError("refused"))
     assert (await p.health())["status"] == "unreachable"
+    # 0.8 QA bug 9: which way it failed, so "not reachable" while slskd runs can be told apart
+    respx.get(f"{BASE}/application").mock(side_effect=httpx.ReadTimeout(""))
+    assert await p.health() == {"status": "unreachable", "username": None, "error": "slskd unreachable: ReadTimeout"}
 
 
 @respx.mock

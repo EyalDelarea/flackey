@@ -234,7 +234,8 @@ class LosslessMixin:
         health = await provider.health()
         self.status["lossless_provider"] = {"name": provider.name, **health}
         if health.get("status") != "ok":
-            rec.event("unavailable", status=health.get("status"))
+            rec.event("unavailable", status=health.get("status"),
+                      **({"error": health["error"]} if health.get("error") else {}))
             rec.finish("unavailable")
             return None
         rec.event("search_started", query=rec.query)

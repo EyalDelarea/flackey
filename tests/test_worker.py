@@ -1980,3 +1980,18 @@ async def test_extended_offer_found_is_sent_only_when_an_extended_mix_was_found(
     offers = [e for e in t.snapshot()["pending"] if e["event"] == "extended_offer_found"]
     assert len(offers) == 1
     assert offers[0]["status"] == "available" and offers[0]["word"] == "extended" and offers[0]["gain"] == "1-2m"
+
+
+async def test_a_tag_lookup_that_failed_is_logged_as_a_failure_not_as_nothing_found(env, caplog):
+    """0.8 QA bug 8: ten tracks went out tagged Unknown while the log said Deezer and Discogs "had none"."""
+    settings, store, _ = env
+    lookup = FakeTagLookup(FoundTags(notes=["discogs: ConnectTimeout"], failed=["Discogs"]))
+    w = Worker(store, FakeSource([good_cand()]), MemoryNotifier(), settings, artwork_fetch=no_art,
+               tag_lookup=lookup)
+    with caplog.at_level(logging.INFO, logger="flackey.worker.filing"):
+        r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+    assert r.state == RequestState.DONE
+    lines = [rec for rec in caplog.records if "tag" in rec.getMessage()]
+    assert any(rec.levelno == logging.WARNING and "tag lookup failed (discogs: ConnectTimeout)" in rec.getMessage()
+               for rec in lines)
+    assert not any("had none" in rec.getMessage() for rec in lines)

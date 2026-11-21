@@ -419,3 +419,24 @@ def test_fill_missing_dates_the_recording_by_the_earliest_release_found():
 def test_fill_missing_with_nothing_found_changes_nothing():
     stand_in = _stand_in("A", "T", 300)
     assert fill_missing(stand_in, FoundTags()) is stand_in
+
+
+async def test_a_lookup_that_times_out_says_so_rather_than_finding_nothing():
+    """0.8 QA bug 8: a timeout's message is empty, so the notes read "discogs: discogs: " and the log said
+    Deezer and Discogs "had none". The class names the failure, and the lookup is marked failed."""
+    with respx.mock as router:
+        router.get(url__startswith="https://api.deezer.com/").mock(side_effect=httpx.ConnectTimeout(""))
+        router.get(url__startswith="https://api.discogs.com/").mock(side_effect=httpx.ConnectTimeout(""))
+        async with httpx.AsyncClient() as http:
+            found = await TagLookup(DeezerApi(http), discogs(http)).lookup(
+                _stand_in("Astral Projection", "Into the Void", 442), 1754956977)
+    assert not found.any and found.failed == ["Deezer", "Discogs"]
+    assert found.notes == ["deezer: ConnectTimeout", "discogs: ConnectTimeout"]
+
+
+async def test_a_lookup_that_answers_with_nothing_is_not_a_failure():
+    with respx.mock as router:
+        serve_discogs(router)
+        async with httpx.AsyncClient() as http:
+            found = await TagLookup(None, discogs(http)).lookup(_stand_in("Nobody", "Nothing", 300))
+    assert not found.any and found.failed == []

@@ -97,7 +97,8 @@ class DeezerApi:
         try:
             r = await client.get(f"{self.BASE}/{path}")
         except httpx.HTTPError as e:
-            raise DeezerError(str(e)) from e
+            # A timeout's message is often empty: the class is then all that says what went wrong
+            raise DeezerError(str(e) or type(e).__name__) from e
         finally:
             if self._client is None:
                 await client.aclose()

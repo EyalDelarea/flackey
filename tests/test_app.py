@@ -776,3 +776,29 @@ def test_usage_stats_that_fail_at_quit_never_stop_the_shutdown(tmp_path, monkeyp
     monkeypatch.setattr(t, "end_session", boom)
     app.end_usage(t)                              # no exception
     assert telemetry.current() is None
+
+
+async def test_host_names_resolve_while_the_default_threads_are_all_busy():
+    """0.8 QA bug 8: asyncio looks host names up on the default executor, which `asyncio.to_thread` work
+    can fill for minutes. Every Deezer and Discogs call then timed out before connecting."""
+    import concurrent.futures
+    import threading
+    import time
+
+    from flackey.app import resolve_names_on_own_threads
+
+    loop = asyncio.get_running_loop()
+    release = threading.Event()
+    busy_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(busy_pool)
+    blockers = [loop.run_in_executor(None, release.wait) for _ in range(2)]
+    dns = resolve_names_on_own_threads(loop)
+    try:
+        t0 = time.monotonic()
+        addrs = await asyncio.wait_for(loop.getaddrinfo("localhost", 80), timeout=5)
+        assert addrs and time.monotonic() - t0 < 5
+    finally:
+        release.set()
+        await asyncio.gather(*blockers)
+        dns.shutdown(wait=False)
+        del loop.getaddrinfo
