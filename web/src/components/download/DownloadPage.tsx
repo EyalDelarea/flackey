@@ -6,6 +6,7 @@ import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
 import Banner from '../Banner'
+import EmptyDownloads from './EmptyDownloads'
 import FilterBar from './FilterBar'
 import { selectionKeys } from './selectionKeys'
 import Group from './Group'
@@ -331,7 +332,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       )}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
-        {groups.length === 0 && bundles.length === 0 && <div className="empty">Paste a link above to start digging.</div>}
+        {groups.length === 0 && bundles.length === 0 && <EmptyDownloads />}
         {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}

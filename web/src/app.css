@@ -132,6 +132,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   min-height:auto and will not shrink below its content, so without this the pane grows past the
   window and .content's overflow:hidden clips it instead of this rule scrolling it */ padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 22px; }
 .empty { padding: 40px 0; text-align: center; color: var(--secondary); }
+/* The Download page before its first link (UI proposal 5). */
+.empty-downloads { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 72px 24px; }
+.empty-downloads .empty-icon { color: var(--tertiary); margin-bottom: 6px; }
+.empty-downloads h2 { font-size: 15px; font-weight: 600; color: var(--text); }
+.empty-downloads p { max-width: 380px; font-size: 12.5px; line-height: 1.45; }
+.empty-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.empty-chips li { padding: 3px 10px; border-radius: 11px; background: var(--chip); font-size: 11.5px; color: var(--secondary); }
 .banner { display: flex; align-items: center; gap: 12px; padding: 8px 20px; font-size: 12px; border-bottom: .5px solid var(--sep); }
 .banner.amber { background: var(--orange-wash); }
 .banner.red { border: .5px solid color-mix(in srgb, var(--red) 40%, transparent); border-radius: 8px; padding: 8px 12px; background: var(--red-wash); }

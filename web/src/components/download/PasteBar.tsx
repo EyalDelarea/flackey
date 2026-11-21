@@ -1,10 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api'
+import { usePlatform } from '../../platform'
 import Toolbar from '../Toolbar'
+
+/** Typing into a field, so a paste there is that field's own. */
+const editing = (el: Element | null) =>
+  el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable)
 
 export default function PasteBar({ onSubmit }: { onSubmit: (url: string) => Promise<string> }) {
   const [url, setUrl] = useState(''); const [pending, setPending] = useState(false)
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
+  const field = useRef<HTMLInputElement>(null)
+  const platform = usePlatform()
+  // ⌘V (Ctrl+V off the Mac) anywhere on the page pastes into the link field, as the empty page promises:
+  // moving focus on the keydown makes the paste that follows it land in the field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = platform === 'mac' ? e.metaKey : e.ctrlKey
+      if (!mod || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'v' || editing(document.activeElement)) return
+      field.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [platform])
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) {
@@ -25,7 +43,7 @@ export default function PasteBar({ onSubmit }: { onSubmit: (url: string) => Prom
       <form className="pastebar" onSubmit={submit} aria-label="add link" role="form">
         <label className="paste-label" htmlFor="download-link">Track or playlist link</label>
         <div className="paste-controls">
-          <input id="download-link" className="input" placeholder="YouTube, YouTube Music, or Spotify" value={url} onChange={e => setUrl(e.target.value)} />
+          <input id="download-link" ref={field} className="input" placeholder="YouTube, YouTube Music, or Spotify" value={url} onChange={e => setUrl(e.target.value)} />
           <button className="btn-primary" type="submit" disabled={pending}>{pending ? 'Adding…' : 'Add'}</button>
         </div>
       </form>

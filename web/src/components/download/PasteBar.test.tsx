@@ -40,3 +40,16 @@ it('leaves the toolbar free of drag layers, and still submits normally', async (
   fireEvent.click(screen.getByText('Add'))
   await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('https://youtu.be/x'))
 })
+
+it('takes ⌘V from anywhere on the page into the link field, but leaves other fields their own paste', () => {
+  render(<><input aria-label="other" /><PasteBar onSubmit={vi.fn()} /></>)
+  const field = screen.getByLabelText(LABEL)
+  fireEvent.keyDown(window, { key: 'v', ctrlKey: true })   // the Mac default wants ⌘, not Ctrl
+  expect(field).not.toHaveFocus()
+  fireEvent.keyDown(window, { key: 'v', metaKey: true })
+  expect(field).toHaveFocus()
+  const other = screen.getByLabelText('other')
+  other.focus()
+  fireEvent.keyDown(other, { key: 'v', metaKey: true })
+  expect(other).toHaveFocus()
+})
