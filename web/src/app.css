@@ -700,6 +700,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .format-name { font-size: 13px; font-weight: 650; }
 .format-badge { align-self: flex-start; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green-text); font-size: 10px; font-weight: 600; }
 .format-note { color: var(--secondary); font-size: 11px; line-height: 1.35; }
+/* One plain line, amber like every other "this works, with a catch" note, and the fix beside it. */
+.format-warn { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px 10px;
+  margin-top: 10px; font-size: 12px; color: var(--orange-text); }
+.srow .format-warn { justify-content: flex-start; margin-top: 4px; }
 /* A Mac segmented control: a recessed track, the chosen segment raised on a button-coloured thumb. */
 .segmented { display: inline-flex; padding: 2px; gap: 2px; border-radius: 7px; background: var(--chip); }
 .segmented button { height: 24px; padding: 0 12px; border: 0; border-radius: 5px; background: none; color: var(--text); font-size: 12px; }

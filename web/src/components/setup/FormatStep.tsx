@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, ApiError } from '../../api'
-import FormatOptions from '../FormatOptions'
+import FormatOptions, { WavCoverWarning } from '../FormatOptions'
 
 export default function FormatStep({ libraryRoot, initial, formats, onDone, defaultFormat = 'aiff' }: {
   libraryRoot: string; initial: string; formats: string[]; onDone: (format: string) => void; defaultFormat?: string
@@ -23,6 +23,7 @@ export default function FormatStep({ libraryRoot, initial, formats, onDone, defa
     <h1>Choose a file format</h1>
     <p className="lead">This applies to new lossless tracks from now on. Files already in your library stay as they are.</p>
     <FormatOptions formats={formats} value={format} onChange={setFormat} disabled={busy} defaultFormat={defaultFormat} />
+    <WavCoverWarning format={format} defaultFormat={defaultFormat} onSwitch={setFormat} disabled={busy} />
     <button className="btn-primary lg" onClick={go} disabled={busy}>Continue</button>
     {err && <div className="err">{err}</div>}
   </>)

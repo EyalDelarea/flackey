@@ -21,6 +21,22 @@ export function shortFormatNote(format: string, defaultFormat = 'aiff'): string 
   return format === defaultFormat ? `${note}. Recommended.` : `${note}.`
 }
 
+/** The one-line warning a WAV choice gets (idea 13, issue #17): Rekordbox shows no cover art for a WAV file,
+ *  whatever the file carries -- six ways of embedding it were tried and none showed. The way out is one
+ *  press. It offers the system's default rather than AIFF everywhere: on Windows the default is FLAC
+ *  because the app's own player (WebView2) cannot play AIFF, and FLAC keeps artwork in Rekordbox too. */
+export function WavCoverWarning({ format, defaultFormat = 'aiff', onSwitch, disabled = false }: {
+  format: string; defaultFormat?: string; onSwitch: (format: string) => void; disabled?: boolean
+}) {
+  if (format !== 'wav') return null
+  const instead = defaultFormat === 'wav' ? 'aiff' : defaultFormat
+  return (<div className="format-warn" role="note">
+    <span>Rekordbox won't show cover art for WAV files.</span>
+    <button type="button" className="btn-secondary" onClick={() => onSwitch(instead)} disabled={disabled}>
+      Use {FORMAT_LABELS[instead] ?? instead.toUpperCase()} instead</button>
+  </div>)
+}
+
 export default function FormatOptions({ formats, value, onChange, disabled = false, legend = 'File format', defaultFormat = 'aiff' }: {
   formats: string[]; value: string; onChange: (format: string) => void; disabled?: boolean; legend?: string; defaultFormat?: string
 }) {
