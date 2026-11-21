@@ -611,10 +611,22 @@ it('shows error banner when Show logs fails', async () => {
   await waitFor(() => expect(screen.getByText(errorMsg)).toBeInTheDocument())
 })
 
-it('resets setup on click', async () => {
+it('asks before running setup again, and does nothing on Cancel (WEB-11)', async () => {
   vi.spyOn(api, 'setupReset').mockResolvedValue({ setup_done: false })
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   fireEvent.click(screen.getByText('Run setup again…'))
+  expect(api.setupReset).not.toHaveBeenCalled()
+  expect(screen.getByText('Run setup again?')).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Cancel', { selector: 'button' }))
+  expect(api.setupReset).not.toHaveBeenCalled()
+  expect(screen.getByText('Run setup again…')).toBeInTheDocument()
+})
+
+it('resets setup once confirmed', async () => {
+  vi.spyOn(api, 'setupReset').mockResolvedValue({ setup_done: false })
+  render(<SettingsPage live={live} onReconnect={() => {}} />)
+  fireEvent.click(screen.getByText('Run setup again…'))
+  fireEvent.click(screen.getByText('Run setup', { selector: 'button' }))
   await waitFor(() => expect(api.setupReset).toHaveBeenCalled())
   await waitFor(() => expect(mockRefresh).toHaveBeenCalled())
 })
@@ -624,6 +636,7 @@ it('shows error banner when setup reset fails', async () => {
   vi.spyOn(api, 'setupReset').mockRejectedValue(new ApiError(500, errorMsg))
   render(<SettingsPage live={live} onReconnect={() => {}} />)
   fireEvent.click(screen.getByText('Run setup again…'))
+  fireEvent.click(screen.getByText('Run setup', { selector: 'button' }))
   await waitFor(() => expect(screen.getByText(errorMsg)).toBeInTheDocument())
 })
 
@@ -1099,6 +1112,7 @@ describe('an action that worked, followed by a refresh that did not (WEB-2)', ()
     vi.spyOn(api, 'setupReset').mockResolvedValue({ setup_done: false })
     render(<SettingsPage live={live} onReconnect={() => {}} />)
     fireEvent.click(screen.getByText('Run setup again…'))
+    fireEvent.click(screen.getByText('Run setup', { selector: 'button' }))
     await waitFor(() => expect(mockRefresh).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByText('Run setup again…')).not.toBeDisabled())
     expect(screen.queryByText('Could not restart setup. Try again.')).not.toBeInTheDocument()
