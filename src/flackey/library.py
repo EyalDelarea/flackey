@@ -255,22 +255,31 @@ def _gone(t: Track, library_root: Path, reachable: bool) -> bool:
     return t.path.parent.is_dir()
 
 
-def prune_missing_tracks(store: Store, library_root: Path) -> list[Path]:
+def missing_tracks(store: Store, library_root: Path) -> tuple[list[Track], int]:
+    """The library rows whose file was removed, and how many rows there are in all. Empty while the
+    library folder is missing or empty: an unplugged drive is not a deleted library."""
+    reachable = library_reachable(library_root)
+    tracks = store.list_tracks(limit=1_000_000)
+    if not reachable and any(not t.path.exists() for t in tracks):
+        log.warning("library folder %s is missing or empty (drive unplugged?); not forgetting any tracks",
+                    library_root)
+    return [t for t in tracks if _gone(t, library_root, reachable)], len(tracks)
+
+
+def prune_missing_tracks(store: Store, library_root: Path, *, confirmed: bool = False) -> list[Path]:
     """Drop library rows whose file was removed by hand, so they neither count as duplicates nor
     linger in playlists. Returns the paths that were forgotten.
 
     Forgetting a row also drops its playlist memberships and evidence, and nothing brings those back, so
-    an unreachable library is never taken for an empty one: with the library folder missing or empty, or
-    with most of the library missing at once, nothing is forgotten and the log says why."""
-    reachable = library_reachable(library_root)
-    tracks = store.list_tracks(limit=1_000_000)
-    gone = [t for t in tracks if _gone(t, library_root, reachable)]
-    if not reachable and any(not t.path.exists() for t in tracks):
-        log.warning("library folder %s is missing or empty (drive unplugged?); not forgetting any tracks",
-                    library_root)
-    if len(gone) >= PRUNE_FLOOR and len(gone) > PRUNE_MAX_SHARE * len(tracks):
+    an unreachable library is never taken for an empty one: with the library folder missing or empty,
+    nothing is forgotten and the log says why. With most of the library missing at once, nothing is
+    forgotten either unless the owner `confirmed` it -- a folder that is there and readable but lost most
+    of its files was emptied on purpose more often than not (a wipe to download everything again), but
+    only the owner can say so."""
+    gone, total = missing_tracks(store, library_root)
+    if not confirmed and held_back(len(gone), total):
         log.warning("%d of %d library files are missing at once; assuming the drive is not there and "
-                    "forgetting none of them", len(gone), len(tracks))
+                    "forgetting none of them", len(gone), total)
         return []
     for t in gone:
         log.warning("library file missing, forgetting it: %s", t.path)
@@ -278,7 +287,12 @@ def prune_missing_tracks(store: Store, library_root: Path) -> list[Path]:
     return [t.path for t in gone]
 
 
-def _present(store: Store, t: Track | None, library_root: Path | None) -> Track | None:
+def held_back(gone: int, total: int) -> bool:
+    """Too many files missing at once to forget them without asking the owner first."""
+    return gone >= PRUNE_FLOOR and gone > PRUNE_MAX_SHARE * total
+
+
+def present(store: Store, t: Track | None, library_root: Path | None) -> Track | None:
     """`t`, unless its file was removed, in which case the row is forgotten. Without a library folder to
     check against, or with that folder unreachable, a missing file is not proof of anything: the track
     still counts as owned rather than being downloaded again into a folder that is not there."""
@@ -303,7 +317,7 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
         # A label can reissue a remaster under the original's ISRC (Hallucinogen's "LSD (Remastered
         # 2024)", 2026-10-20), so the ISRC is only the same track when the version agrees too.
         for t in store.find_tracks_by_isrc(isrc):
-            if _same_version(t, version) and _present(store, t, library_root):
+            if _same_version(t, version) and present(store, t, library_root):
                 return t
     if catalog:
         t = store.find_track_by_meta(catalog.artist, catalog.title, catalog.mix_name, catalog.duration_s)
@@ -311,7 +325,7 @@ def find_duplicate(store: Store, catalog: CatalogTrack | None, cand: Candidate,
         t = store.find_track_by_meta(cand.artist, cand.title, candidate_version(cand), cand.duration_s)
     # Beatport files some remasters as "Original Mix" on a remastered release, so the mix name alone
     # matches the original already filed; the version has to agree here too.
-    return _present(store, t, library_root) if t is not None and _same_version(t, version) else None
+    return present(store, t, library_root) if t is not None and _same_version(t, version) else None
 
 
 def find_extended(store: Store, artist: str, title: str, mix_name: str | None, *,
@@ -321,7 +335,7 @@ def find_extended(store: Store, artist: str, title: str, mix_name: str | None, *
     target = extended_target(mix_name)
     for t in store.find_tracks_by_title(artist, title):
         v = split_version(t.mix_name)
-        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and _present(store, t, library_root):
+        if v.cut == EXTENDED and same_arrangement(target, v.arrangement) and present(store, t, library_root):
             return t
     return None
 

@@ -265,3 +265,25 @@ def test_a_failed_candidate_write_keeps_the_previous_list(tmp_path):
         store.add_candidates(rid, [bad])
     store.add_request("other", RequestKind.TEXT)                 # an unrelated commit
     assert [c.source_ref for c in store.get_candidates(rid)] == ["a"]
+
+
+def test_a_confirmed_prune_forgets_a_library_deleted_on_purpose(tmp_path):
+    """0.8 QA bug 1: the owner emptied the library to download it all again. The folder is there with
+    other files in it, so once he says so the missing tracks go."""
+    store = Store(tmp_path / "db.sqlite")
+    root = tmp_path / "Music"
+    (root / "Own sets").mkdir(parents=True)
+    for i in range(12):
+        _track(store, root / "A" / f"A - {i}.mp3", title=str(i))
+    assert prune_missing_tracks(store, root) == []
+    assert len(prune_missing_tracks(store, root, confirmed=True)) == 12
+    assert store.list_tracks() == []
+
+
+def test_a_confirmed_prune_still_forgets_nothing_on_an_unplugged_drive(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    root = tmp_path / "Volumes" / "DJ" / "Music"
+    for i in range(12):
+        _track(store, root / "A" / f"A - {i}.mp3", title=str(i))
+    assert prune_missing_tracks(store, root, confirmed=True) == []
+    assert len(store.list_tracks()) == 12

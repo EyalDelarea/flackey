@@ -228,7 +228,10 @@ export const api = {
     const qs = p.toString()
     return call<Track[]>(`/api/library${qs ? '?' + qs : ''}`)
   },
-  refreshLibrary: () => post<{ removed: number }>('/api/library/refresh'),
+  /** `missing`: files gone but kept, because too many went at once to forget them without asking;
+      `forgetMissing` forgets them. `reachable` is false while the library folder is missing (a drive unplugged). */
+  refreshLibrary: (forgetMissing = false) => post<{ removed: number; missing: number; reachable: boolean }>(
+    '/api/library/refresh', forgetMissing ? { forget_missing: true } : undefined),
   newSinceImport: () => call<NewSinceImport>('/api/library/new'),
   markImported: (through: string) => post<NewSinceImport>('/api/library/new/imported', { through }),
   /** Get extended: download the extended mix on offer and swap it in for the filed track (issue #187). */

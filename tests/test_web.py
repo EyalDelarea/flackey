@@ -1923,9 +1923,43 @@ def test_refresh_library_forgets_files_removed_in_finder(client, tmp_path):
                           duration_s=100, isrc=None, catalog_track_id=None, request_id=None)
     assert any(t["id"] == tid for t in c.get("/api/library").json())
     file.unlink()
-    assert c.post("/api/library/refresh").json() == {"removed": 1}
+    assert c.post("/api/library/refresh").json() == {"removed": 1, "missing": 0, "reachable": False}
     assert c.get("/api/library").json() == []
     assert c.get("/api/stats").json()["tracks"] == 0
+
+
+def test_refresh_asks_before_forgetting_a_library_deleted_on_purpose(client, tmp_path):
+    """0.8 QA bug 1: every file gone from a folder that is there is not an unplugged drive. Refresh says how
+    many are gone instead of "up to date", and forgets them only when asked to."""
+    c, store, settings = client
+    (settings.library_root / "Own sets").mkdir(parents=True)
+    rid = store.add_request("A - T", RequestKind.YT_TRACK, source_url="https://www.youtube.com/watch?v=a")
+    pid = store.upsert_playlist("https://www.youtube.com/playlist?list=PL1", "Set")
+    for i in range(12):
+        tid = store.add_track(path=settings.library_root / "A" / f"A - {i}.mp3", fmt="mp3", bitrate_kbps=320,
+                              cutoff_hz=18000, file_size=5, artist="A", title=str(i), mix_name="Original Mix",
+                              duration_s=100, isrc=None, catalog_track_id=None, request_id=rid)
+        store.add_playlist_track(pid, tid, i + 1)
+    store.update_request(rid, track_id=tid, state=RequestState.DONE)
+    assert c.post("/api/library/refresh").json() == {"removed": 0, "missing": 12, "reachable": True}
+    assert len(c.get("/api/library").json()) == 12
+    assert c.post("/api/library/refresh", json={"forget_missing": True}).json() == {
+        "removed": 12, "missing": 0, "reachable": True}
+    assert c.get("/api/library").json() == []
+    playlist = settings.library_root / "Playlists" / "Set.m3u8"
+    assert "A - " not in playlist.read_text()
+    # The request that filed a forgotten track still names it; the queue and playlists must not trip on that
+    assert c.get("/api/queue").status_code == 200 and c.get("/api/playlists").status_code == 200
+
+
+def test_refresh_says_when_the_library_folder_is_not_there(client):
+    c, store, settings = client
+    store.add_track(path=settings.library_root / "A" / "A - T.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=18000,
+                    file_size=5, artist="A", title="T", mix_name="Original Mix", duration_s=100, isrc=None,
+                    catalog_track_id=None, request_id=None)
+    assert c.post("/api/library/refresh", json={"forget_missing": True}).json() == {
+        "removed": 0, "missing": 0, "reachable": False}
+    assert len(c.get("/api/library").json()) == 1
 
 
 def test_new_playlist_counts_new_tracks_and_forgets_them_once_imported(client, tmp_path):
