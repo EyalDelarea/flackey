@@ -31,3 +31,19 @@ it('on Windows marks FLAC as the default and starts on it', () => {
   // "Recommended" goes with the default, so AIFF does not claim it beside a FLAC marked Default.
   expect(aiff).not.toHaveTextContent('Recommended')
 })
+
+it('warns about cover art when WAV is picked, and switches to AIFF in one press', () => {
+  render(<FormatStep libraryRoot="/lib" initial="aiff" formats={['aiff', 'wav', 'flac']} onDone={mockOnDone} />)
+  expect(screen.queryByText("Rekordbox won't show cover art for WAV files.")).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /WAV/ }))
+  expect(screen.getByText("Rekordbox won't show cover art for WAV files.")).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Use AIFF instead' }))
+  expect(screen.getByRole('button', { name: /AIFF/ })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.queryByText("Rekordbox won't show cover art for WAV files.")).not.toBeInTheDocument()
+})
+
+it('on Windows offers FLAC instead of WAV, since the app cannot play AIFF there', () => {
+  render(<FormatStep libraryRoot="/lib" initial="wav" formats={['aiff', 'wav', 'flac']} onDone={mockOnDone} defaultFormat="flac" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Use FLAC instead' }))
+  expect(screen.getByRole('button', { name: /FLAC/ })).toHaveAttribute('aria-pressed', 'true')
+})
