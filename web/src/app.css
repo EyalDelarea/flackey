@@ -79,6 +79,8 @@
 button.sidebar-footer { width: 100%; border-radius: 0; transition: background 120ms; }
 button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50%, transparent); color: var(--text); }
 .status-line { display: flex; align-items: center; gap: 8px; }
+/* The one-line reason under an amber footer, indented to sit under the text rather than the dot. */
+.status-hint { padding-left: 16px; font-size: 11px; line-height: 1.35; color: var(--secondary); }
 /* Takes over the footer's `margin-top: auto`, so the pair sits at the bottom together; quieter than the
    nav items above it, because it is a way out of trouble rather than a place to go. */
 .sidebar-report { position: relative; margin-top: auto; display: flex; align-items: center; gap: 7px; padding: 6px 18px; border: 0; background: none; font-size: 12px; color: var(--secondary); text-align: left; }

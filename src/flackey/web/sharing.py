@@ -20,4 +20,10 @@ def router(sharing=None) -> APIRouter:
             raise HTTPException(409, "Soulseek isn't set up yet, so there is no port to check.")
         return sharing.start_refresh()
 
+    @r.post("/fix")
+    async def fix() -> dict:
+        if sharing is None or not sharing.can_check:
+            raise HTTPException(409, "Soulseek isn't set up yet, so there is no port to open.")
+        return sharing.start_fix()
+
     return r

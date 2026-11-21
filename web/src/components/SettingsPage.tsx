@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { AppSettings, ExtendedMixes, LosslessHealth, Platform, TelegramStatus, UpdateStatus } from '../api'
+import type { AppSettings, ExtendedMixes, LosslessHealth, Platform, SharingState, TelegramStatus, UpdateStatus } from '../api'
 import type { Live } from '../live'
 import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
@@ -31,6 +31,24 @@ function soulseekLine(l: LosslessHealth | undefined, platform: Platform): { ok: 
     return { ok: false, dot: ' amber', text: 'Signing in…', hint: 'If it stays here, the name may already be taken.' }
   }
   return { ok: false, dot: ' amber', text: 'Not reachable', hint: `The Soulseek helper isn't answering on ${thisComputer(platform)}.` }
+}
+
+/* The sharing port, read the way the sidebar reads it: amber only once the server has seen it closed on
+   two checks a minute apart (`closed_confirmed`), because port tests false-alarm. One closed reading is
+   "checking again", not a fault. `fix` is whether Flackey can do anything about it itself: only while no
+   router mapping is held. With one held, the router already said yes and the block is past it -- a VPN or a
+   second router -- so the row says that instead of offering a button that cannot help. */
+function sharingLine(s: SharingState | null | undefined): { dot: Dot; text: string; hint?: string; fix: boolean } {
+  if (!s || s.checking) return { dot: ' pending', text: s ? 'Checking…' : 'Not checked yet', fix: false }
+  if (s.reachable === true) return { dot: '', text: `Open — other Soulseek users can reach you on port ${s.port}`, fix: false }
+  if (s.reachable === false && s.closed_confirmed) {
+    const fix = !!s.gateway && s.mapping === null
+    return { dot: ' amber', text: `Closed — fewer Soulseek results until port ${s.port} opens`, fix,
+      hint: fix ? 'Fix asks your router to open it again.'
+        : 'Your router is not what blocks it. Using a VPN? Turn it off for Flackey, or open the port in the VPN app. More under Advanced › Sharing.' }
+  }
+  if (s.reachable === false) return { dot: ' pending', text: 'Looked closed once — checking again shortly', fix: false }
+  return { dot: ' off', text: s.error ?? 'Not checked yet', fix: false }
 }
 
 /* Four readings, not two. The bot is reached *through* the Telegram account above it, so "on" is only
@@ -226,6 +244,16 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
     setCheckError(null)
     api.checkSharing().catch(e => setCheckError(getErrorMessage(e, 'Could not start the check. Try again.')))
   }
+  // The Connections row keeps its own error, so a failure there is not printed twice (once here, once in
+  // the Sharing panel under Advanced, which has its own Check again).
+  const [portError, setPortError] = useState<string | null>(null)
+  const portAction = (fix: boolean) => {
+    setPortError(null)
+    ;(fix ? api.fixSharing() : api.checkSharing())
+      .catch(e => setPortError(getErrorMessage(e, fix ? 'Could not start the fix. Try again.' : 'Could not start the check. Try again.')))
+  }
+  const sharing = live.health?.sharing
+  const port = sharingLine(sharing)
   // Both of these used to be `window.open`, which does nothing at all inside the webview the app runs in:
   // the press was real, the handler ran, and not one pixel changed. The work belongs to the server, which
   // can reach a browser and the installer -- the same move `reveal()` above already makes.
@@ -325,6 +353,18 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
           <div className="actions">{lossless?.enabled &&
             <button className="btn-secondary" onClick={reconnectSoulseek} disabled={reconnecting}>
               {reconnecting ? 'Reconnecting…' : soulseek.ok ? 'Reconnect' : 'Try again'}</button>}</div></div>
+        {/* The third light: Soulseek works without it, but a closed port cuts how many peers can answer.
+            Where the sidebar's amber "port closed" lands. Fix only where Flackey can act (see sharingLine);
+            the router-by-hand instructions stay under Advanced › Sharing. */}
+        {lossless?.enabled && <div className="srow"><div className="srow-body"><div className="k">Sharing port</div>
+          <div className="v"><span className={`status-dot${port.dot}`} />{port.text}</div>
+          {port.hint && <div className="v">{port.hint}</div>}
+          {portError && <div className="err">{portError}</div>}</div>
+          <div className="actions">{port.fix
+            ? <button className="btn-secondary" onClick={() => portAction(true)} aria-label="Fix the sharing port">Fix</button>
+            : <button className="btn-secondary" onClick={() => portAction(false)} disabled={!!sharing?.checking}
+                aria-label="Check the sharing port again">
+                {sharing?.checking ? 'Checking…' : 'Check again'}</button>}</div></div>}
       </div>
       {/* Where tracks land and what they land as. The format governs every lossless download, whichever
           source fetched it, so it sits with the folder they all land in rather than with Soulseek. */}

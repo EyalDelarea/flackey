@@ -204,7 +204,7 @@ function AppBody({ live }: { live: Live }) {
   }
   const banner = banners.length ? banners : undefined
   return (
-    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} banner={banner} inset={inset} sourceEnabled={sourceOn}
+    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} sharing={live.health?.sharing} banner={banner} inset={inset} sourceEnabled={sourceOn}
       updateWaiting={!!update?.available} onReport={() => setReporting({})}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
       {tab === 'download' && <DownloadPage live={live} onReport={requestId => setReporting({ requestId })} />}
