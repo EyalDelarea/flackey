@@ -10,6 +10,7 @@ import Toolbar from '../Toolbar'
 import NewSinceImportCard from './NewSinceImportCard'
 import PlaylistCard from './PlaylistCard'
 import TrackTable from './TrackTable'
+import { useLibraryRecheck } from './useLibraryRecheck'
 
 // Both asked of `bucketOf` rather than listed here. Two of the four lists of "the failed states" this app
 // used to keep were in this file, and the Retry button below was a third list of "the retryable ones".
@@ -81,6 +82,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     try { localStorage.setItem('flackey.rekordboxGuideSeen', '1') } catch { /* private window or blocked storage */ }
   }
   const requestCounter = useRef(0)
+  const recheck = useLibraryRecheck(() => { live.refreshLibrary().catch(() => undefined) })
 
   useEffect(() => {
     const currentRequest = ++requestCounter.current
@@ -158,12 +160,17 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     <Toolbar>
       <div className="search"><Icon name="search" size={14} /><input className="input" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} aria-label="search library" /></div>
       <button className="btn-secondary" onClick={refresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
+      {s && s.tracks > 0 && <button className="btn-secondary" onClick={recheck.start} disabled={recheck.running}
+        title="Runs today's quality check on every file again. Takes a while; nothing is moved or changed.">Check all files again</button>}
       {s && <span className="counts">{plural(s.tracks, 'track')} · {plural(s.playlists, 'playlist')} · {gb(s.bytes)} on disk</span>}
       {s && <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Open library folder</button>}
     </Toolbar>
     <div className="scroll">
       {queryError && <Banner tone="red" text={queryError} action={{ label: 'Dismiss', onClick: () => setQueryError(null) }} />}
       {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
+      {recheck.error && <Banner tone="red" text={recheck.error} action={{ label: 'Dismiss', onClick: recheck.clearError }} />}
+      {recheck.text && <Banner tone="amber" text={recheck.text}
+        action={recheck.running ? { label: 'Stop', onClick: recheck.stop } : { label: 'Dismiss', onClick: recheck.dismiss }} />}
       {note && <Banner tone="amber" text={note} action={{ label: 'Dismiss', onClick: () => setNote(null) }} />}
       {pl && <PlaylistCard playlist={pl} count={pl.track_ids.length} onShowFile={() => reveal(pl.file)} />}
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
@@ -194,8 +201,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
         : visible.length === 0
         ? <div className="empty">No tracks match these filters. <button className="btn-link" onClick={clearFilters}>Clear filters</button></div>
         : folder === 'all' && !pl && !q
-        ? folders.map(f => <section key={f} className="library-folder"><h2>{f} <span className="counts">{visible.filter(t => relativeFolder(t) === f).length}</span></h2><TrackTable tracks={visible.filter(t => relativeFolder(t) === f)} onReveal={reveal} onUpgrade={upgrade} /></section>)
-        : <TrackTable tracks={visible} onReveal={reveal} onUpgrade={upgrade} />}
+        ? folders.map(f => <section key={f} className="library-folder"><h2>{f} <span className="counts">{visible.filter(t => relativeFolder(t) === f).length}</span></h2><TrackTable tracks={visible.filter(t => relativeFolder(t) === f)} onReveal={reveal} onUpgrade={upgrade} recheckRunning={recheck.running} /></section>)
+        : <TrackTable tracks={visible} onReveal={reveal} onUpgrade={upgrade} recheckRunning={recheck.running} />}
     </div>
   </>)
 }

@@ -50,6 +50,7 @@ from ..slskd_config import (
 from ..slskd_process import SlskdProcess
 from ..store import Store
 from ..tools import no_window, tool_path
+from ..trust import flagged, measure, receipt, record, spectrogram_of
 from ..youtube import ytdlp_available
 from . import SETUP_DONE_KEY, Bundles, to_dict
 from .guard import from_the_app
@@ -248,6 +249,92 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                 # The marker is saved, which is what the owner asked for; the file follows on the next filing.
                 log.warning("could not rewrite the New playlist: %s", e)
         return new_out()
+
+    def receipt_out(tid: int) -> dict:
+        try:
+            t = store.get_track(tid)
+        except KeyError:
+            raise HTTPException(404, "That track is no longer in the library.") from None
+        return {**receipt(store, t), "format": bundles.track(tid)["format"]["label"]}
+
+    @r.get("/library/{tid}/receipt")
+    async def track_receipt(tid: int) -> dict:
+        """Why the library trusts this file: where it came from and every check it went through."""
+        return receipt_out(tid)
+
+    @r.get("/library/{tid}/spectrogram.png")
+    async def track_spectrogram(tid: int):
+        try:
+            t = store.get_track(tid)
+        except KeyError:
+            raise HTTPException(404, "not found") from None
+        # Only ever served from `spectrogram_dir`, like a rejection's picture: the stored path is a database
+        # value, and this must not become a way to read any file on the disk.
+        path = _contained(spectrogram_of(store, t), settings.spectrogram_dir)
+        if path is None:
+            raise HTTPException(404, "no spectrogram")
+        return FileResponse(path, media_type="image/png")
+
+    # Checking the whole library again: one file at a time, in the background, for as long as it takes. In
+    # memory only -- a quit stops it, and pressing the button again starts over.
+    recheck_state: dict = {"state": "idle", "done": 0, "total": 0, "flagged": 0, "run": 0}
+    recheck_tasks: set[asyncio.Task] = set()
+
+    @r.post("/library/{tid}/recheck")
+    async def recheck_one(tid: int) -> dict:
+        """Check one filed file again with today's check. Reads the file only; nothing is moved or replaced."""
+        if recheck_state["state"] == "running":
+            raise HTTPException(409, "The library is being checked already. Wait for it to finish.")
+        try:
+            t = store.get_track(tid)
+        except KeyError:
+            raise HTTPException(404, "That track is no longer in the library.") from None
+        record(store, t, await asyncio.to_thread(measure, t, settings.spectrogram_dir, settings.verification_rule))
+        return receipt_out(tid)
+
+    async def _recheck_all(ids: list[int], run: int) -> None:
+        try:
+            for tid in ids:
+                # Stopped, or stopped and started again: a newer run owns the counters now
+                if recheck_state["state"] != "running" or recheck_state["run"] != run:
+                    return
+                try:
+                    t = store.get_track(tid)
+                except KeyError:     # forgotten while the run was going: nothing to check
+                    recheck_state["done"] += 1
+                    continue
+                value = await asyncio.to_thread(measure, t, settings.spectrogram_dir, settings.verification_rule)
+                record(store, t, value)          # a true answer about the file, whichever run asked
+                if recheck_state["run"] != run:
+                    return
+                recheck_state["done"] += 1
+                recheck_state["flagged"] += int(flagged(value))
+            recheck_state["state"] = "done"
+        except Exception:
+            log.exception("checking the library again stopped")
+            recheck_state["state"] = "error"
+
+    @r.get("/library/recheck")
+    async def recheck_status() -> dict:
+        return dict(recheck_state)
+
+    @r.post("/library/recheck")
+    async def recheck_all() -> dict:
+        if recheck_state["state"] == "running":
+            return dict(recheck_state)
+        ids = [t.id for t in store.list_tracks(limit=1_000_000)]
+        run = recheck_state["run"] + 1
+        recheck_state.update(state="running", done=0, total=len(ids), flagged=0, run=run)
+        task = asyncio.create_task(_recheck_all(ids, run))
+        recheck_tasks.add(task)
+        task.add_done_callback(recheck_tasks.discard)
+        return dict(recheck_state)
+
+    @r.post("/library/recheck/stop")
+    async def recheck_stop() -> dict:
+        if recheck_state["state"] == "running":
+            recheck_state["state"] = "stopped"    # the file being checked finishes; no further one starts
+        return dict(recheck_state)
 
     @r.get("/playlists")
     async def playlists() -> list:

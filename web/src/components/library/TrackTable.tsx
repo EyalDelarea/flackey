@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import Artwork from '../download/Artwork'
+import TrackReceipt from './TrackReceipt'
 import Icon from '../Icon'
 import type { Track } from '../../api'
 import { revealLabel, usePlatform } from '../../platform'
@@ -8,6 +9,17 @@ import { revealLabel, usePlatform } from '../../platform'
     it. That is the state the owner wants to act on, and it names no provider, so it stays true for the next
     one. Every other row is the verified lossless file and gets the green check. */
 const isLossy = (t: Track) => !t.source_fmt
+
+/** The badge a row wears when its file is not simply trusted: the owner kept it after the quality check
+    refused it, the check could not vouch for it, or checking it again found something. */
+function trustBadge(t: Track): { text: string; tone: 'bad' | 'plain' } | null {
+  const ev = (kind: string) => t.evidence?.filter(e => e.kind === kind).at(-1)?.value
+  if (ev('quality_check')?.status === 'failed') return { text: 'Kept anyway', tone: 'bad' }
+  const again = ev('recheck')
+  if (again && !(again.status === 'checked' && again.tier === 'clear')) return { text: 'Check flagged', tone: 'bad' }
+  if (ev('verification')?.tier === 'unverified') return { text: 'Unverified', tone: 'plain' }
+  return null
+}
 
 /** Let go of a button the pointer clicked. The buttons live in a cell held at opacity 0 and revealed by
     `:hover`, `:focus-within` or selection, so a button that keeps focus after a click holds its whole row
@@ -24,9 +36,11 @@ function releaseOf(c: Track['catalog']): string | undefined {
   return parts.length ? parts.join(' · ') : undefined
 }
 
-export default function TrackTable({ tracks, onReveal, onUpgrade }: {
+export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning }: {
   tracks: Track[]; onReveal: (path: string) => void
   onUpgrade?: (t: Track) => Promise<void>
+  /** The whole library is being checked again; a single "Check again" waits for it. */
+  recheckRunning?: boolean
 }) {
   const platform = usePlatform()
   const [selected, setSelected] = useState<number | null>(null)
@@ -52,14 +66,17 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
       // and falls back to the record -- the first release's where one is known, as `tag.py` writes it.
       const year = (t.tag_date || c?.original_date || c?.release_date)?.slice(0, 4) ?? ''
       const compactMeta = [c?.genre, c?.label, year].filter(Boolean).join(' · ')
-      return (<div className={`trow${selected === t.id ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} key={t.id} onClick={() => setSelected(t.id)} onDoubleClick={() => onReveal(t.path)}>
+      const badge = trustBadge(t)
+      const open = selected === t.id
+      return (<Fragment key={t.id}><div className={`trow${open ? ' selected' : ''}${lossy ? ' lossy-row' : ''}`} aria-expanded={open}
+        onClick={() => setSelected(open ? null : t.id)} onDoubleClick={() => onReveal(t.path)}>
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
-        <div className="cell"><div className="t" title={`${t.artist} – ${t.title}`}>{t.artist} – {t.title}</div><div className="v">{t.mix_name}</div>
+        <div className="cell"><div className="t" title={`${t.artist} – ${t.title}`}>{t.artist} – {t.title}</div><div className="v">{t.mix_name}{badge && <span className={`trust-badge ${badge.tone}`}>{badge.text}</span>}</div>
           {compactMeta && <div className="v compact-meta">{compactMeta}</div>}</div>
         <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
         <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span className="col-optional">{year}</span>
         <span className={lossy ? 'kbps lossy' : 'kbps'} title={lossy ? 'Filed from Deezer — no lossless copy was obtained' : undefined}>
-          {t.bitrate_kbps}{!lossy && t.verified_at && <Icon name="check" size={12} stroke={2.4} />}
+          {t.bitrate_kbps}{!lossy && t.verified_at && !badge && <Icon name="check" size={12} stroke={2.4} />}
         </span>
         <span className="fmt">{t.fmt.toUpperCase()}</span>
         <span className="reveal">
@@ -70,7 +87,8 @@ export default function TrackTable({ tracks, onReveal, onUpgrade }: {
           )}
           <button className="btn-secondary" onClick={e => { e.stopPropagation(); releasePointer(e); onReveal(t.path) }}>{revealLabel(platform)}</button>
         </span>
-      </div>)
+      </div>
+      {open && <TrackReceipt trackId={t.id} disabled={recheckRunning} />}</Fragment>)
     })}
     {tracks.length === 0 && <div className="empty">Nothing here yet.</div>}
   </div>)
