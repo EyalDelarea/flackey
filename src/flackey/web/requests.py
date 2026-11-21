@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +16,7 @@ from ..store import Store
 from ..telemetry import buckets
 from ..worker import CANCELLABLE, Worker, usage
 from . import Bundles, to_dict
+from .library import reveal_path
 
 log = logging.getLogger(__name__)
 RECENT = 500
@@ -299,6 +301,34 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
             unlink_evidence(attempt)
         action("clear_failed", count=len(removed))
         return {"removed": removed}
+
+    def missing_line(req) -> str:
+        """A failed request as a shopping-list line: the catalog's name for it where there is one, else what
+        the link said, else the link itself."""
+        cat = store.get_catalog_track(req.catalog_track_id) if req.catalog_track_id else None
+        if cat:
+            return f"{cat.artist} - {cat.title}" + (f" ({cat.mix_name})" if cat.mix_name else "")
+        if req.query_artist and req.query_title:
+            return f"{req.query_artist} - {req.query_title}" + (f" ({req.query_version})" if req.query_version else "")
+        return req.raw_text
+
+    @r.post("/requests/export-missing")
+    async def export_missing() -> dict:
+        """Every failed track, one per line, as a text file for a shopping session (idea 8), shown in the
+        file manager. Downloads where there is one, else Flackey's own data folder. Nothing is fetched."""
+        failed = sorted(store.list_requests(FAILED_STATES, limit=100_000), key=lambda q: q.id)
+        if not failed:
+            raise HTTPException(409, "Nothing is missing: the Failed list is empty.")
+        downloads = Path.home() / "Downloads"
+        folder = downloads if downloads.is_dir() else settings.data_dir
+        path = folder / f"Flackey missing tracks {date.today().isoformat()}.txt"
+        lines = list(dict.fromkeys(missing_line(q) for q in failed))      # one line per track, in order
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(500, f"Could not write the list to {folder}: {e.strerror or e}")
+        reveal_path(path)
+        return {"path": str(path), "count": len(lines)}
 
     return r
 

@@ -57,6 +57,7 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   // playlist, because each group owns a bar and a summary that nesting would break.
   const [filter, setFilter] = useState<Filter>('all')
   const [retryingAll, setRetryingAll] = useState(false)
+  const [exporting, setExporting] = useState(false)
   // The ids "Remove these" will take, snapshotted at the first press: the list keeps changing under a live
   // queue, and the confirm must remove exactly the rows it counted. Null when no confirm is open.
   const [confirmRemove, setConfirmRemove] = useState<{ ids: number[]; live: number } | null>(null)
@@ -209,6 +210,14 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRetryingBatch(null))
   }
+  // The whole Failed list as a text file in Downloads, shown in the file manager, for a shopping session.
+  const exportMissing = () => {
+    setExporting(true)
+    api.exportMissing()
+      .then(() => setActionError(null))
+      .catch(err => setActionError(failMessage(err)))
+      .finally(() => setExporting(false))
+  }
   const removeThese = (ids: number[]) => {
     setRemoving(true)
     api.removeRequests(ids)
@@ -334,6 +343,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
             removeCount={removable.ids.length} onRemoveThese={askRemove} confirming={confirmRemove != null || confirmClear != null} />
           <div className="filterbar-row">
           {summary && <p className="failed-summary">{summary}</p>}
+          <button className="btn-secondary export-missing" disabled={exporting} onClick={exportMissing}>
+            {exporting ? 'Exporting…' : 'Export missing list'}</button>
           <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
             {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
           </button>

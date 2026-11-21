@@ -47,11 +47,22 @@ it('lines the report link up with the note above it rather than centring it in t
   const view: RowView = { ...base, bucket: 'failed', reportable: true, outcome: { retryable: true, note: 'Try again starts over.' } }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
   const link = screen.getByRole('button', { name: 'Report this failure' })
-  expect(link.parentElement).toBe(screen.getByText('Try again starts over.').parentElement)
+  // In the links line under the note, which sits in the same text column as the note itself.
+  expect(link.closest('.row-links')!.parentElement).toBe(screen.getByText('Try again starts over.').parentElement)
   const css = readFileSync(resolve(__dirname, '../../app.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
   const rule = css.match(/\.row \.report-failure\s*\{([^}]*)\}/)?.[1] ?? ''
   expect(rule).toMatch(/align-self:\s*flex-start/)
   expect(rule).toMatch(/text-align:\s*left/)
+})
+
+it('offers store searches for a track Flackey gave up on, as browser links', () => {
+  render(<RequestRow view={{ ...base, bucket: 'failed', storeLinks: [
+    { label: 'Bandcamp', url: 'https://bandcamp.com/search?q=a%20b&item_type=t' },
+    { label: 'Traxsource', url: 'https://www.traxsource.com/search?term=a%20b' }] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  const bandcamp = screen.getByRole('link', { name: 'Bandcamp' })
+  expect(bandcamp).toHaveAttribute('href', 'https://bandcamp.com/search?q=a%20b&item_type=t')
+  expect(bandcamp).toHaveAttribute('target', '_blank')
+  expect(screen.getByRole('link', { name: 'Traxsource' })).toHaveAttribute('target', '_blank')
 })
 
 it('renders title, status and tag', () => {

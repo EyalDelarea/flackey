@@ -89,7 +89,10 @@ export interface RowView {
   extendedOffer: ExtendedOfferView | null
   held?: HeldView | null
   samples: SamplesView | null
+  /** Store searches for a track Flackey gave up on (idea 8): opened in the browser, never fetched here. */
+  storeLinks?: StoreLink[] | null
 }
+export interface StoreLink { label: string; url: string }
 /** A live transfer's position. Every downloading row has one of these -- they all run at once. */
 export interface ProgressView { pct: number | null; label: string }
 /** This track is on the lossy Deezer copy and why, so a miss is visible rather than silent. */
@@ -517,6 +520,19 @@ function extendedOfferOf(b: Bundle): ExtendedOfferView | null {
   return null
 }
 
+/** Where else a track Flackey could not get might be bought (idea 8): a Bandcamp and a Traxsource search
+ *  for its artist and title. Only for a row that has a name -- a search for a bare link finds nothing. */
+function storeLinksOf(b: Bundle): StoreLink[] | null {
+  const artist = b.catalog?.artist ?? b.request.query_artist
+  const title = b.catalog?.title ?? b.request.query_title
+  if (!artist || !title) return null
+  const q = encodeURIComponent(`${artist} ${title}`)
+  return [
+    { label: 'Bandcamp', url: `https://bandcamp.com/search?q=${q}&item_type=t` },
+    { label: 'Traxsource', url: `https://www.traxsource.com/search?term=${q}` },
+  ]
+}
+
 function titleOf(b: Bundle): { title: string; version: string | null } {
   const r = b.request
   // The filed track's own mix name first: an extended file found for a radio-edit record is filed as the
@@ -792,6 +808,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   // One place decides which rows get a retry button, and it is the same `canRetry` the Failed tab counts
   // with and the worker is pinned to. It used to be spelled out in the two cases above, which is how a
   // third list of "failed" states could be written elsewhere and disagree with it.
+  v.storeLinks = REPORTABLE.includes(r.state) ? storeLinksOf(b) : null
   if (canRetry(r.state)) v.action = { label: 'Try again', kind: 'retry',
     ...(r.state === 'cancelled' ? { tip: STOPPED_TIP } : {}) }
   return v
