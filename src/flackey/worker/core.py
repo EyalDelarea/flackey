@@ -120,6 +120,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._unscanned: list[LosslessProvider] = []
         self._leftovers_lock = asyncio.Lock()
         self._leftovers_since: float | None = None      # when startup first asked; None once warned
+        # When `on_start` ran: until SIDECAR_PATIENCE_S after it, slskd may still be signing in (`_no_route`)
+        self._started_at: float | None = None
         # The extended-mix search for a filed track (`ExtendedMixin`): one at a time, while the queue is
         # empty, and not before `_scan_after` once Soulseek was unreachable.
         self._scan: asyncio.Task | None = None
@@ -161,6 +163,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     def on_start(self) -> None:
+        self._started_at = self.clock()
         n = self.store.reset_inflight()
         if n:
             log.info("re-queued %d in-flight requests", n)

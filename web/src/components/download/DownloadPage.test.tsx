@@ -456,7 +456,7 @@ describe('stage chips and the batch bar', () => {
     openFailed()
     expect(screen.getByText('4 of 5 tracks stopped')).toBeInTheDocument()
     expect(document.querySelector('.group-legend')!.textContent)
-      .toBe('1 found nothing to download1 could not finish the download1 failed the quality check1 you stopped')
+      .toBe('1 stopped while searching1 could not finish the download1 failed the quality check1 you stopped')
   })
 })
 
@@ -1027,4 +1027,15 @@ it('puts the tracks still being looked for on a folded Waiting shelf (idea 1)', 
   fireEvent.click(screen.getByRole('button', { name: 'Show' }))
   expect(shelf).toHaveTextContent('Nobody sharing it came online')
   expect(shelf).toHaveTextContent('next look in 3 h')
+})
+
+it("keeps the shelf header from naming a reason the rows contradict (0.8 QA bug 5)", () => {
+  const parked: Bundle = { request: { ...baseRequest, id: 9, state: 'queued', query_artist: 'Afgin', query_title: 'Echoes',
+    retry_after: new Date(Date.now() + 3 * 3600_000).toISOString(),
+    flag_reason: 'waiting for Soulseek: the people who had it are busy and their queue has not reached us yet; 3 more looks, one every 6 h' },
+    candidates: [], catalog: null, track: null, rejection: null }
+  render(<DownloadPage live={makeLive([parked])} />)
+  const shelf = screen.getByRole('region', { name: 'Waiting for a copy' })
+  expect(shelf).toHaveTextContent('No copy of this one yet')
+  expect(shelf).not.toHaveTextContent(/online/)
 })

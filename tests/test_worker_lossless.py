@@ -52,6 +52,7 @@ from flackey.worker import extended as extended_mod
 from flackey.worker import filing as filing_mod
 from flackey.worker import lossless_attempt as lossless_attempt_mod
 from flackey.worker import pipeline as pipeline_mod
+from flackey.worker.policy import SIDECAR_PATIENCE_S
 from flackey.youtube import YouTubeError
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import CT, TEXT, FakeSource, FakeTagLookup, good_cand, no_art
@@ -3307,3 +3308,27 @@ async def test_a_wrong_recording_on_the_first_spelling_is_not_hidden_by_the_next
     assert provider.searches == ["Outputmessage Asteroids", "Universal Sound Asteroids"]
     assert store.get_attempt_for_request(rid).outcome == "no_pick"
     assert r.state == RequestState.QUEUED and r.lossless_retry == 1
+
+
+# ---- 0.8 QA bug 4: slskd still signing in at launch is not one of the request's tries -----------------
+
+async def test_soulseek_still_signing_in_at_launch_spends_no_attempt(lenv):
+    _, store, _, provider, _, clock = lenv
+    provider.health_status = "not_logged_in"
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no results")))
+    w._started_at = clock()
+    clock.t += 2
+    r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
+    assert r.state == RequestState.QUEUED and r.attempts == 0 and r.retry_after is not None
+    assert r.flag_reason == "Soulseek is still signing in; trying again shortly"
+
+
+async def test_soulseek_still_not_signed_in_after_the_startup_patience_counts_as_a_try(lenv):
+    _, store, _, provider, _, clock = lenv
+    provider.health_status = "not_logged_in"
+    w = make(lenv, provider=provider, source=FakeSource(error=SourceNotFound("no results")))
+    w._started_at = clock()
+    clock.t += SIDECAR_PATIENCE_S
+    r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
+    assert r.state == RequestState.QUEUED and r.attempts == 1
+    assert "Soulseek was not reachable at the time" in r.flag_reason

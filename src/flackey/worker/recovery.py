@@ -15,6 +15,7 @@ from .policy import (
     RETRY_BACKOFF_S,
     RETRY_LOSSLESS_OUTCOMES,
     SEARCH_AGAIN_AFTER,
+    SIDECAR_PATIENCE_S,
     SLOW_BACKOFF_S,
     SLOW_RETRY_OUTCOMES,
     TELEGRAM_RETRY_WAITS_S,
@@ -120,6 +121,14 @@ class RecoveryMixin:
         -- three passes, two "retrying" messages, no searches. Say it once and stop, the same way a track
         neither side can identify lands terminally rather than burning the backoff schedule."""
         _, outcome = self._lossless_outcome(req.id)
+        if outcome == "unavailable" and self._sidecar_starting():
+            # slskd is started beside the worker and takes ten-odd seconds to sign in, so a request re-queued
+            # at launch reaches it first. That is not one of the request's tries: wait for the sign-in
+            # without spending one (0.8 QA bug 4). Bounded by the startup patience, after which it counts.
+            retry_after = (datetime.now(UTC) + timedelta(seconds=RETRY_BACKOFF_S[0])).isoformat(timespec="seconds")
+            self._set_state(req, RequestState.QUEUED, retry_after=retry_after,
+                            flag_reason="Soulseek is still signing in; trying again shortly")
+            return
         why = self._miss_reason(req.id, outcome)
         usage.failure_reason(req.id, usage.outcome_reason(
             outcome, no_results=bool(outcome and self.store.lossless_no_results(req.id, outcome))))
@@ -166,6 +175,11 @@ class RecoveryMixin:
                    else ". Press Try again to search once more")
         self._set_state(req, RequestState.ERROR, attempts=req.attempts + 1, error_message=reason)
         await self.notifier.send(f"Could not fetch: {req.raw_text}\n{reason}{self._held_line(req.id)}")
+
+
+    def _sidecar_starting(self) -> bool:
+        """Within SIDECAR_PATIENCE_S of startup, when slskd not answering yet is expected."""
+        return self._started_at is not None and self.clock() - self._started_at < SIDECAR_PATIENCE_S
 
 
     def _lossless_allowed(self, req: Request) -> bool:

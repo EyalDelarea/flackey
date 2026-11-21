@@ -12,7 +12,9 @@ export default function WaitingShelf({ items }: { items: WaitingItem[] }) {
       <div className="waiting-shelf-head">
         <span className="waiting-ring" aria-hidden="true" />
         <h2>Waiting for a copy · {items.length}</h2>
-        <span className="summary">Nobody sharing {items.length === 1 ? 'it' : 'these'} is online yet. Flackey keeps
+        {/* Says nothing about why: the rows do, and the reasons differ (nobody online, a busy queue,
+            copies that did not match). A header that named one contradicted the row beneath it. */}
+        <span className="summary">No copy of {items.length === 1 ? 'this one' : 'these'} yet. Flackey keeps
           looking and sends a notification when one lands.</span>
         <button className="btn-link" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'Hide' : 'Show'}</button>
       </div>
