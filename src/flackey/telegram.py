@@ -60,7 +60,12 @@ def watch_disconnect(client: object) -> None:
     what it was in the app's own words.
 
     Each connect() that finds the old future finished makes a new one, so this is called after every
-    successful connect. A fake client in tests may have no `disconnected` at all."""
+    successful connect. Once per connection, though: connect() on a client that is already connected
+    returns at once with the same future still pending, and a second watcher would log the one drop twice.
+    A fake client in tests may have no `disconnected` at all."""
+    watching = getattr(client, "_flackey_end_watch", None)
+    if watching is not None and not watching.done():
+        return
     try:
         ended = client.disconnected  # type: ignore[attr-defined]
     except (AttributeError, RuntimeError):   # RuntimeError: no running loop to make the future on
@@ -74,6 +79,7 @@ def watch_disconnect(client: object) -> None:
             log.warning("Telegram connection lost (%s); it reconnects on the next request", e)
 
     ended.add_done_callback(_seen)
+    client._flackey_end_watch = ended  # type: ignore[attr-defined]
 
 
 async def connect_or_close(client: LoginClient) -> None:
