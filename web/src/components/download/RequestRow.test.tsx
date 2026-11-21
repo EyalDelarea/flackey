@@ -155,14 +155,17 @@ it('every rung explains itself, so the ladder needs no legend beside it', () => 
   for (const rung of rungs) expect(rung.getAttribute('aria-label')).toMatch(/\w.*\. /)
 })
 
-it('renders every step by name with the current one marked, as one ladder', () => {
+it('renders every step, naming each to screen readers and printing only the current one, as one ladder', () => {
   const view: RowView = { ...base, tag: null, status: 'Downloading the file',
     steps: [{ name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
             { name: 'Verify', state: 'pending' }, { name: 'Done', state: 'pending' }] }
   render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
   const track = screen.getByLabelText('progress')
   expect(track.querySelectorAll('.step')).toHaveLength(5)
-  for (const name of ['Search', 'Choose', 'Download', 'Verify', 'Done']) expect(screen.getByText(name)).toBeInTheDocument()
+  for (const name of ['Search', 'Choose', 'Download', 'Verify', 'Done'])
+    expect(screen.getByRole('button', { name: new RegExp(`^${name}:`) })).toBeInTheDocument()
+  expect(screen.getByText('Download')).toBeInTheDocument()
+  expect(screen.queryByText('Verify')).not.toBeInTheDocument()
   expect(track.querySelector('[aria-current="step"]')!.textContent).toContain('Download')
   expect(screen.queryByText('queued')).not.toBeInTheDocument()
 })

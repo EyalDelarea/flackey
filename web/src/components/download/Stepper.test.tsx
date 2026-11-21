@@ -17,8 +17,8 @@ it('explains a rung on hover', () => {
 })
 
 it('explains a rung on keyboard focus too, since it replaces a native affordance', () => {
-  render(<Stepper steps={steps} />)
-  const rung = screen.getByText('Search').closest('.step')!.querySelector('.step-tip-target')!
+  const { container } = render(<Stepper steps={steps} />)
+  const rung = container.querySelectorAll('.step')[0].querySelector('.step-tip-target')!
   fireEvent.focus(rung)
   expect(screen.getByRole('tooltip')).toHaveTextContent(STEP_TIPS.Search)
   fireEvent.blur(rung)
@@ -49,4 +49,17 @@ it('draws a hollow ring on the rung a parked row will resume at, not a fourth gr
   const { container } = render(<Stepper steps={[{ name: 'Search', state: 'paused' }, { name: 'Download', state: 'pending' }]} />)
   expect(container.querySelectorAll('.step')[0]).toHaveClass('paused')
   expect(container.querySelectorAll('.step')[0].getAttribute('aria-current')).toBeNull()
+})
+
+it('prints only the name of the rung the row is on, and keeps every name for the tooltip and screen readers', () => {
+  // Four names took a 256px column and cut the track titles short. The dots say how far along a row is.
+  const { container } = render(<Stepper steps={[...steps, { name: 'Verify', state: 'pending' }]} />)
+  expect([...container.querySelectorAll('.step-name')].map(n => n.textContent)).toEqual(['Download'])
+  expect(screen.getByRole('button', { name: /^Search:/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^Verify:/ })).toBeInTheDocument()
+})
+
+it('names the rung a parked row will resume at', () => {
+  const { container } = render(<Stepper steps={[{ name: 'Search', state: 'paused' }, { name: 'Download', state: 'pending' }]} />)
+  expect([...container.querySelectorAll('.step-name')].map(n => n.textContent)).toEqual(['Search'])
 })
