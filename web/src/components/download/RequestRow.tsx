@@ -108,8 +108,11 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {/* A cancel sits under the choices when there are choices to skip past, and on the right of the
               row when there are not -- which is where a track that is downloading right now needs it. */}
           <span className="row-action">
-            {v.action && (v.action.kind !== 'cancel' || !v.candidates) && (
-              <button className="btn-secondary" onClick={() => onAction(v.action!.kind, v.id, v.action!.path)}>{v.action.label}</button>)}
+            {v.action && (v.action.kind !== 'cancel' || !v.candidates) && (() => {
+              const button = <button className="btn-secondary" aria-description={v.action.tip}
+                onClick={() => onAction(v.action!.kind, v.id, v.action!.path)}>{v.action.label}</button>
+              return v.action.tip ? <HelpTag text={v.action.tip}>{button}</HelpTag> : button
+            })()}
           </span>
           <span className="row-remove">
             {v.removable && <button className="btn-link muted" onClick={() => onAction('remove', v.id, undefined)}>Remove</button>}

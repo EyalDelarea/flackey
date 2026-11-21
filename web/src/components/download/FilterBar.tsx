@@ -70,7 +70,7 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed, vie
       <button className="btn-secondary bulk-remove" disabled={removeCount === 0 || confirming} onClick={onRemoveThese}>
         {removeCount === 1 ? 'Remove 1 track' : `Remove these ${removeCount}`}
       </button>
-      {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0} onClick={onClearFailed}>Clear failed</button>}
+      {view !== 'active' && <button className="btn-secondary" disabled={counts.failed === 0 || confirming} onClick={onClearFailed}>Clear failed</button>}
     </div>
   )
 }

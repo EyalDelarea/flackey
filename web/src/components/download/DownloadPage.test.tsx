@@ -175,14 +175,29 @@ describe('filter bar, remove and clear failed', () => {
     expect(await screen.findByText('One track was not removed — a file was being checked or filed. Try again in a moment.')).toBeInTheDocument()
   })
 
-  it('Clear failed calls api.clearFailed', async () => {
+  it('Clear failed asks first, saying how many it takes, and only then calls api.clearFailed', async () => {
     vi.mocked(api.clearFailed).mockResolvedValueOnce({ removed: [4] })
     render(<DownloadPage live={makeLive(mixed)} />)
     fireEvent.click(screen.getByRole('tab', { name: 'History' }))
     const clearBtn = screen.getByRole('button', { name: 'Clear failed' })
     expect(clearBtn).not.toBeDisabled()
     fireEvent.click(clearBtn)
+    expect(api.clearFailed).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('group', { name: 'Confirm clearing failed' })
+    expect(confirm).toHaveTextContent('Clear the failed track from the list? Files already in your library stay where they are.')
+    expect(clearBtn).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear 1' }))
     await waitFor(() => expect(api.clearFailed).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Confirm clearing failed' })).not.toBeInTheDocument())
+  })
+
+  it('Clear failed can be cancelled without clearing anything', () => {
+    render(<DownloadPage live={makeLive(mixed)} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear failed' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('group', { name: 'Confirm clearing failed' })).not.toBeInTheDocument()
+    expect(api.clearFailed).not.toHaveBeenCalled()
   })
 
   it('Clear failed is disabled when there are no failed rows', () => {
@@ -293,9 +308,7 @@ describe('Retry all on the Failed tab', () => {
     // One rejected row is final; the stopped one has its own Try again and is not swept, so the button
     // counts one and the sentence has to account for the other two separately (issue #92).
     expect(screen.getByRole('button', { name: 'Retry all 1' })).toBeInTheDocument()
-    expect(screen.getByText(/1 of these 3 cannot be tried again — 1 failed the quality check/))
-      .toBeInTheDocument()
-    expect(screen.getByText(/One of these you stopped yourself, so Retry all leaves it out/))
+    expect(screen.getByText('1 failed the quality check · 1 stopped by you (Retry all skips it)'))
       .toBeInTheDocument()
   })
 
@@ -306,15 +319,14 @@ describe('Retry all on the Failed tab', () => {
     // than leaving a disabled button beside two live ones.
     expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
-    expect(screen.getByText(/2 of these you stopped yourself, so Retry all leaves them out/))
-      .toBeInTheDocument()
+    expect(screen.getByText('2 stopped by you (Retry all skips them)')).toBeInTheDocument()
   })
 
   it('leaves the sentence out when the two counts already agree', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found')])} />)
     openFailed()
     expect(screen.getByRole('button', { name: 'Retry all 2' })).toBeInTheDocument()
-    expect(screen.queryByText(/cannot be tried again/)).not.toBeInTheDocument()
+    expect(document.querySelector('.failed-summary')).toBeNull()
   })
 
   it('tells every failed row why it is here and whether it can come back', () => {
@@ -323,7 +335,7 @@ describe('Retry all on the Failed tab', () => {
     // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
     expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
     expect(screen.getAllByText(/paste the link again/i)).toHaveLength(1)
-    expect(screen.getAllByText(/Retry all leaves stopped tracks alone/)).toHaveLength(1)
+    expect(screen.getAllByText('Try again picks up where it left off.')).toHaveLength(1)
   })
 
   it('says so when the call succeeds but nothing was re-queued', async () => {
@@ -405,10 +417,11 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(3, 'error', { failed_stage: 'download' }), inPlaylist(4, 'rejected'), inPlaylist(5, 'rejected'),
     ], { playlists })} />)
     openFailed()
-    expect(screen.getByText(/2 of these 5 cannot be tried again/)).toBeInTheDocument()
+    expect(document.querySelector('.failed-summary')).toHaveTextContent('2 failed the quality check')
+    expect(screen.getByRole('button', { name: 'Retry all 3' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Verify 2' }))
     expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
-    expect(screen.getByText(/^Nothing here can be tried again — 2 failed the quality check/)).toBeInTheDocument()
+    expect(document.querySelector('.failed-summary')).toHaveTextContent('2 failed the quality check')
   })
 
   it('draws one filter bar on the Failed tab, not two stacked on each other', () => {
@@ -835,9 +848,9 @@ it('keeps stopped tracks individually retryable but out of the sweep when filter
   fireEvent.click(screen.getByRole('radio', { name: 'Stopped 1' }))
   expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Retry all 0' })).toBeDisabled()
-  expect(screen.getByText(/One of these you stopped yourself, so Retry all leaves it out/)).toBeInTheDocument()
+  expect(screen.getByText('1 stopped by you (Retry all skips it)')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('radio', { name: 'Search 1' }))
-  expect(screen.queryByText(/One of these you stopped yourself/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/stopped by you/)).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Retry all 1' }))
   await waitFor(() => expect(api.retryFailed).toHaveBeenCalledWith([2]))
 })

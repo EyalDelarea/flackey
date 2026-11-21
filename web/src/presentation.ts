@@ -27,7 +27,10 @@ export interface StepView { name: string; state: Dot }
 export interface CheckView { label: string; value: string; ok: boolean | null; title?: string }
 export type Tone = 'muted' | 'amber' | 'green' | 'red' | 'text'
 export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
-export interface RowAction { label: string; kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
+export interface RowAction { label: string
+  /** A longer word on the button, shown on hover and focus. */
+  tip?: string
+  kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
 /** A longer version of a filed track, found on Soulseek after it was filed (issue #187). `offer` until the
  *  owner answers it; `swapped` once Get extended has put it in the track's place. `busy` while that runs. */
 /** A lossless copy from Soulseek the quality check refused and the worker held instead of deleting (issue
@@ -225,9 +228,15 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
   },
   cancelled: {
     tally: 'you stopped',
-    note: 'You stopped this one — nothing went wrong with it. Try again puts it back in the queue and picks up where it left off. Retry all leaves stopped tracks alone, so this is the only button that starts it.',
+    // One short line: the row says "Stopped by you" right above it, and the rest of the story -- why Retry
+    // all leaves it alone -- is on the Try again button's help tag, where the owner looks when deciding.
+    note: 'Try again picks up where it left off.',
   },
 }
+
+/** The explanation a stopped row used to print in full, five lines deep, on every one of them. */
+const STOPPED_TIP = 'You stopped this one, so nothing went wrong with it. Try again puts it back in the queue '
+  + 'and picks up where it left off. Retry all leaves stopped tracks alone, so this is the only button that starts it.'
 
 /** The long wait for Soulseek (issue #74), as the owner should read it, or null when this is not one.
  *  The worker already words that flag -- what is being waited for, and how many looks are left -- so every
@@ -562,7 +571,7 @@ function outcomeOf(b: Bundle): OutcomeView | null {
    "failed the quality check" while the row under it says the audio is genuine and offers to file it is the
    same contradiction the row itself stopped making. So the tally is read off the rejection, not off the
    state, and the two readings sit next to each other in the fixed order below. */
-const DIFFERENT_RECORDING_TALLY = 'turned out to be a different recording'
+const DIFFERENT_RECORDING_TALLY = 'needs a different copy'
 const tallyOf = (b: Bundle): string | null =>
   b.request.state === 'rejected' && b.rejection?.kind === 'different_recording'
     ? DIFFERENT_RECORDING_TALLY
@@ -570,43 +579,25 @@ const tallyOf = (b: Bundle): string | null =>
 const TALLY_ORDER: string[] = (Object.keys(FAILED_COPY) as RequestState[])
   .flatMap(s => s === 'rejected' ? [FAILED_COPY[s]!.tally, DIFFERENT_RECORDING_TALLY] : [FAILED_COPY[s]!.tally])
 
-/** The sentence beside "Retry all N" that reconciles it with the "Failed N" badge above it. The two numbers
- *  differ for two separate reasons, and the line answers whichever ones are on screen. A failure can be
- *  final, so no button will ever move it; or it can be a track the owner stopped, which has a Try again on
- *  its own row but is deliberately left out of the sweep. Either gap, unexplained, is what sent the owner
- *  asking whether failed is a final state -- and the second one is worse, because "Retry all 0" above
- *  seventeen live Try again buttons reads as a broken button rather than a decision.
- *  Null only when there is nothing at all to reconcile: every failure on screen is swept, the numbers
- *  already match, and a line saying "0 of these" would be noise.
- *  Counted from the same FINALITY_OF the buttons are drawn from, and worded from the same FAILED_COPY the
- *  rows are, so this line cannot claim a breakdown the list below it does not show. */
+/** The one sentence beside "Retry all N" that reconciles it with the "Failed N" badge above it. The two
+ *  numbers differ for two reasons, and the line names whichever are on screen, in a few words each: a
+ *  failure can be final, so no button will move it ("1 needs a different copy"), or it can be a track the
+ *  owner stopped, which has its own Try again but is left out of the sweep ("2 stopped by you (Retry all
+ *  skips them)"). The rows say the rest. Null only when the numbers already match.
+ *  Counted from the same FINALITY_OF the buttons are drawn from, so it cannot claim a breakdown the list
+ *  below it does not show. */
 export function failedSummary(bundles: Bundle[]): string | null {
   const failed = bundles.filter(b => bucketOf(b.request.state) === 'failed')
   const finals = failed.filter(b => !canRetry(b.request.state))
   const stopped = failed.filter(b => canRetry(b.request.state) && !sweptByRetryAll(b.request.state))
   if (finals.length === 0 && stopped.length === 0) return null
-  const sentences: string[] = []
-  if (finals.length > 0) {
-    // Fixed order, not first-seen order: the line must read the same on every refresh, and the tallies are
-    // rebuilt from scratch each time the list changes.
-    const parts = TALLY_ORDER
-      .map(tally => ({ n: finals.filter(b => tallyOf(b) === tally).length, tally }))
-      .filter(p => p.n > 0)
-      .map(p => `${p.n} ${p.tally}`)
-    // No count in the head when the whole tab is final: "None of these 5" needs the reader to check the
-    // number against the badge, where "Nothing here" is the answer they came for, and it also keeps the
-    // sentence honest on a tab holding exactly one row.
-    const head = failed.length === finals.length
-      ? 'Nothing here can be tried again'
-      : `${finals.length} of these ${failed.length} cannot be tried again`
-    sentences.push(`${head} — ${parts.join(', ')}. ${finals.length === 1 ? 'That row says' : 'Each row says'} what to do instead.`)
-  }
-  if (stopped.length > 0) {
-    sentences.push(stopped.length === 1
-      ? 'One of these you stopped yourself, so Retry all leaves it out — press Try again on the row to start it again.'
-      : `${stopped.length} of these you stopped yourself, so Retry all leaves them out — press Try again on a row to start that one again.`)
-  }
-  return sentences.join(' ')
+  // Fixed order, not first-seen order: the line must read the same on every refresh.
+  const parts = TALLY_ORDER
+    .map(tally => ({ n: finals.filter(b => tallyOf(b) === tally).length, tally }))
+    .filter(p => p.n > 0)
+    .map(p => `${p.n} ${p.tally}`)
+  if (stopped.length > 0) parts.push(`${stopped.length} stopped by you (Retry all skips ${stopped.length === 1 ? 'it' : 'them'})`)
+  return parts.join(' · ')
 }
 
 /* Two ways to land with no sample, and neither is a failure the page should draw a dead button for. An
@@ -801,7 +792,8 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
   // One place decides which rows get a retry button, and it is the same `canRetry` the Failed tab counts
   // with and the worker is pinned to. It used to be spelled out in the two cases above, which is how a
   // third list of "failed" states could be written elsewhere and disagree with it.
-  if (canRetry(r.state)) v.action = { label: 'Try again', kind: 'retry' }
+  if (canRetry(r.state)) v.action = { label: 'Try again', kind: 'retry',
+    ...(r.state === 'cancelled' ? { tip: STOPPED_TIP } : {}) }
   return v
 }
 
@@ -899,4 +891,11 @@ export function removeConfirmText({ ids, live }: { ids: number[]; live: number }
     : live === n ? (n === 1 ? ' It will be stopped first.' : ' They will be stopped first.')
     : ` ${live} still in progress will be stopped first.`
   return `${head}${stops} Files already in your library stay where they are.`
+}
+
+/** The in-app confirm before "Clear failed", which takes every failed row at once, whatever the tab is
+ *  filtered to (WEB-12). Like removal, it never touches a file in the library. */
+export function clearConfirmText(n: number): string {
+  const head = n === 1 ? 'Clear the failed track from the list?' : `Clear all ${n} failed tracks from the list?`
+  return `${head} Files already in your library stay where they are.`
 }
