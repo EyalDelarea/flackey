@@ -499,9 +499,15 @@ class LosslessMixin:
                          f.username)
         except BaseException:
             # The owner stopped the request, or something broke: neither transfer may outlive this call.
+            # A copy already landed is no one's now: it sits under a claimed name no later sweep would find.
             for t in tasks:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            if out.landed is not None:
+                out.landed[1].unlink(missing_ok=True)
+            for result in results:
+                if isinstance(result, tuple) and result[0] is not None:
+                    result[0].unlink(missing_ok=True)
             raise
         return out
 

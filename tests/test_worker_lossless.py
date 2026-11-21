@@ -3348,6 +3348,7 @@ class RaceProvider(FakeProvider):
         self.script = script                  # peer -> (behaviour, seconds until it lands or fails)
         self.cancelled_peers: list[str] = []
         self.started = asyncio.Event()
+        self.cancelling = asyncio.Event()
 
     async def download(self, file, *, on_progress=None, **kw):
         self.downloaded.append(file.username)
@@ -3359,13 +3360,16 @@ class RaceProvider(FakeProvider):
                 on_progress(TransferProgress("InProgress", 1, file.size, 10.0, 50))
             else:
                 on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
-            if how == "stuck":
+            if how in ("stuck", "slow_cancel"):
                 await asyncio.sleep(3600)
             await asyncio.sleep(after)
             if how == "queued":
                 raise _queued()
         except asyncio.CancelledError:
             self.cancelled_peers.append(file.username)
+            if how == "slow_cancel":                 # dropping it in slskd takes a while
+                self.cancelling.set()
+                await asyncio.sleep(3600)
             raise
         dest = self.downloads / file.username / file.name     # one folder per peer: no shared derived path
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -3480,3 +3484,21 @@ async def test_stopping_the_request_mid_race_cancels_both_transfers(lenv):
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert sorted(provider.cancelled_peers) == ["stuck", "stuck2"]
+
+
+async def test_stopping_the_request_while_the_loser_is_being_dropped_leaves_no_copy_behind(lenv):
+    """The raced copy has landed and the stalled one is being dropped in slskd when the owner stops the
+    request: the landed copy goes too, since nothing after this would ever find it."""
+    settings, store, _, _, _, _ = lenv
+    good = lenv[3].audio["a"]
+    files = _race_files("stuck", "quick")
+    provider = RaceProvider(settings.slskd_downloads, files, {f.username: good for f in files},
+                            {"stuck": ("slow_cancel", 0), "quick": ("quick", 0)})
+    w = make(lenv, provider=provider, settings=settings.model_copy(update={"lossless_race_after_s": RACE_AFTER_S}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    task = asyncio.create_task(w.process(rid))
+    await asyncio.wait_for(provider.cancelling.wait(), timeout=5)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert not [p for p in settings.slskd_downloads.rglob("*") if p.is_file()]
