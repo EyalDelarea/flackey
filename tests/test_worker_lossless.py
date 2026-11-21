@@ -1346,7 +1346,8 @@ async def test_upgrade_rewrites_the_playlist_that_points_at_the_old_path(lenv):
     rid = store.add_request(TEXT, RequestKind.TEXT, playlist_id=pid, playlist_position=0)
     r = await w.process(rid)
     before = store.get_track(r.track_id)
-    m3u8 = next((settings.library_root / "Playlists").glob("*.m3u8"))
+    m3u8 = settings.library_root / "Playlists" / "Set.m3u8"
+    new = settings.library_root / "Playlists" / "Flackey - New.m3u8"
     assert before.path.name in m3u8.read_text()
 
     provider.files = [lf("a")]
@@ -1355,6 +1356,9 @@ async def test_upgrade_rewrites_the_playlist_that_points_at_the_old_path(lenv):
     after = store.get_track(before.id)
     text = m3u8.read_text()
     assert after.path.name in text and before.path.name not in text
+    # The new file is new to Rekordbox as well, so the New playlist points at it and not at the old one
+    new_text = new.read_text(encoding="utf-8")
+    assert after.path.name in new_text and before.path.name not in new_text
     assert store.playlist_ids_for_track(after.id) == [pid]
 
 

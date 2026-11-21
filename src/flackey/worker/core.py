@@ -13,7 +13,7 @@ import httpx
 from ..attempts import prune_raw
 from ..config import Settings
 from ..deezer import DeezerTrack
-from ..library import prune_missing_tracks, sweep_tmp
+from ..library import library_reachable, prune_missing_tracks, sweep_tmp
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
 from ..source import (
@@ -163,6 +163,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         gone = prune_missing_tracks(self.store, self.settings.library_root)
         if gone:
             log.info("forgot %d library rows whose files were removed", len(gone))
+        if library_reachable(self.settings.library_root):
+            # So the New playlist is there from the first launch of a build that has it, and drops what
+            # was pruned above. Never on an unplugged drive: that would create the folder on the boot disk.
+            self._export_new()
         n = self.store.mark_open_attempts_interrupted()
         if n:
             log.info("marked %d unfinished lossless attempts interrupted", n)

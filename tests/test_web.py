@@ -1894,6 +1894,28 @@ def test_refresh_library_forgets_files_removed_in_finder(client, tmp_path):
     assert c.get("/api/library").json() == []
     assert c.get("/api/stats").json()["tracks"] == 0
 
+
+def test_new_playlist_counts_new_tracks_and_forgets_them_once_imported(client, tmp_path):
+    c, store, _ = client
+    lib = Path(c.get("/api/settings").json()["library_root"])
+    (lib / "A").mkdir(parents=True, exist_ok=True)
+    tid = store.add_track(path=lib / "A" / "A - T.flac", fmt="flac", bitrate_kbps=900, cutoff_hz=22000,
+                          file_size=5, artist="A", title="T", mix_name="Original Mix",
+                          duration_s=100, isrc=None, catalog_track_id=None, request_id=None)
+    (lib / "A" / "A - T.flac").write_bytes(b"audio")
+    new = c.get("/api/library/new").json()
+    assert new["count"] == 1 and new["through"] == store.get_track(tid).added_at
+    assert new["file"].endswith("Flackey - New.m3u8")
+    after = c.post("/api/library/new/imported", json={"through": new["through"]}).json()
+    assert after == {"count": 0, "file": new["file"], "through": None}
+    assert "A - T.flac" not in Path(new["file"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("body", [{}, {"through": None}, {"through": "yesterday"}, {"through": 5}])
+def test_new_playlist_import_needs_a_time(client, body):
+    c, _, _ = client
+    assert c.post("/api/library/new/imported", json=body).status_code == 400
+
 def test_setup_soulseek_post_asks_the_link_to_connect_when_one_is_wired_in(tmp_path: Path):
     """With a link the wizard can answer "did my account work?" on the spot: the POST starts a connect
     and the status endpoint carries the result, so nothing tells the owner to restart and find out."""

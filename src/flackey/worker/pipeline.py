@@ -5,7 +5,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from ..export import write_playlist
+from ..export import write_new_playlist, write_playlist
 from ..identify import parse_text
 from ..library import clear_request_tmp, find_duplicate, find_extended
 from ..match import candidate_query, candidate_version, decide, identification_order, same_version
@@ -198,6 +198,14 @@ class PipelineMixin:
             write_playlist(self.store, playlist_id, self.settings.library_root)
         except OSError as e:
             log.warning("could not write the file for playlist #%d: %s", playlist_id, e)
+
+    def _export_new(self) -> None:
+        """Rewrite the "Flackey - New" playlist after a file landed in the library. Best effort, for the
+        same reason as `_export_playlist`."""
+        try:
+            write_new_playlist(self.store, self.settings.library_root)
+        except OSError as e:
+            log.warning("could not write the New playlist: %s", e)
 
     async def _mark_duplicate(self, req: Request, track_id: int | None, path: Path) -> None:
         self._set_state(req, RequestState.DUPLICATE, track_id=track_id)

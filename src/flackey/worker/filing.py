@@ -415,6 +415,7 @@ class FilingMixin:
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
             self._export_playlist(req.playlist_id)
+        self._export_new()
         self._set_state(req, RequestState.DONE, track_id=track_id)
         conf = self.store.get_request(req.id).confidence
         parts = [f"Done: {catalog.artist} – {catalog.title} ({catalog.mix_name})", _mmss(catalog.duration_s or cand.duration_s),
@@ -550,6 +551,8 @@ class FilingMixin:
             self.store.set_evidence(t.id, OFFER, offer)
         for pid in self.store.playlist_ids_for_track(t.id):
             write_playlist(self.store, pid, self.settings.library_root)
+        # A new file at a new path is new to Rekordbox too: it has to be imported like a fresh track
+        self._export_new()
         if old != dest:
             # Last, and only now: everything above can be redone from the row, this cannot be undone.
             old.unlink(missing_ok=True)
