@@ -561,6 +561,33 @@ async def test_stopping_a_download_tells_the_sidecar_and_takes_the_partial_file_
 
 
 @respx.mock
+async def test_a_download_cancelled_before_its_first_poll_is_still_dropped_in_the_sidecar(provider):
+    """A race's losing pick can be cancelled before any poll has seen its transfer. It was enqueued all
+    the same, and as one of this run's own transfers no `cancel_all` would ever sweep it: the cancel path
+    looks it up once and drops it."""
+    p, _clock, _downloads = provider
+    p.sleep = asyncio.sleep
+    enqueued = asyncio.Event()
+
+    def enqueue(_request):
+        enqueued.set()
+        return httpx.Response(201)
+
+    respx.post(f"{BASE}/transfers/downloads/peer-alpha").mock(side_effect=enqueue)
+    respx.get(f"{BASE}/transfers/downloads/peer-alpha").mock(
+        return_value=httpx.Response(200, json=transfer("Queued, Remotely", 0)))
+    cancel = respx.delete(f"{BASE}/transfers/downloads/peer-alpha/t1").mock(return_value=httpx.Response(204))
+
+    task = asyncio.create_task(p.download(flac_file(), first_byte_s=60, total_s=600, poll_s=3600))
+    await asyncio.wait_for(enqueued.wait(), timeout=2)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancel.called
+
+
+@respx.mock
 async def test_time_in_the_peers_queue_does_not_count_against_the_first_byte_cap(provider):
     """A peer with no free slot parks us in "Queued, Remotely" until their queue reaches us -- 127 people
     deep on the goa FLACs the owner asks for. That wait is a fact about the peer's popularity, not about

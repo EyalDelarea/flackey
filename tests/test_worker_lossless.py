@@ -1,6 +1,7 @@
 """The worker's lossless step with a fake provider. Every test asserts the attempt row's outcome, that the
 timeline ends with the outcome event, that tmp_dir is empty afterwards, and which source the file came from."""
 import asyncio
+import contextlib
 import hashlib
 import logging
 import shutil
@@ -3332,3 +3333,150 @@ async def test_soulseek_still_not_signed_in_after_the_startup_patience_counts_as
     r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
     assert r.state == RequestState.QUEUED and r.attempts == 1
     assert "Soulseek was not reachable at the time" in r.flag_reason
+
+
+# Racing a second copy beside a pick that has sent nothing (ideas.md #4). Each peer here is scripted: "stuck"
+# sits in the peer's queue until cancelled, "quick" lands after a short wait, "queued" gives up as queued after
+# its wait, and "trickle" sends a byte at once and lands late. The race starts after `lossless_race_after_s`,
+# set small so these run in real time.
+RACE_AFTER_S = 0.05
+
+
+class RaceProvider(FakeProvider):
+    def __init__(self, downloads, files, audio, script: dict[str, tuple[str, float]]):
+        super().__init__(downloads, files, audio=audio)
+        self.script = script                  # peer -> (behaviour, seconds until it lands or fails)
+        self.cancelled_peers: list[str] = []
+        self.started = asyncio.Event()
+
+    async def download(self, file, *, on_progress=None, **kw):
+        self.downloaded.append(file.username)
+        if len(self.downloaded) >= 2:
+            self.started.set()
+        how, after = self.script[file.username]
+        try:
+            if how == "trickle":
+                on_progress(TransferProgress("InProgress", 1, file.size, 10.0, 50))
+            else:
+                on_progress(TransferProgress("Queued, Remotely", 0, file.size, 0.0, None))
+            if how == "stuck":
+                await asyncio.sleep(3600)
+            await asyncio.sleep(after)
+            if how == "queued":
+                raise _queued()
+        except asyncio.CancelledError:
+            self.cancelled_peers.append(file.username)
+            raise
+        dest = self.downloads / file.username / file.name     # one folder per peer: no shared derived path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.audio[file.username], dest)
+        on_progress(TransferProgress("InProgress", 10, file.size, 1e6, 700))
+        on_progress(TransferProgress("Completed, Succeeded", file.size, file.size, 1e6, 700))
+        return dest
+
+
+def _race_files(*peers: str, **per_peer) -> list[LosslessFile]:
+    return [lf(p, path=f"{p}\\02. Astral Projection - Into the Void.flac", queue_length=i, **per_peer.get(p, {}))
+            for i, p in enumerate(peers)]
+
+
+async def _race_case(lenv, files, script, **update):
+    settings, store, _, _, _, _ = lenv
+    good = lenv[3].audio["a"]
+    provider = RaceProvider(settings.slskd_downloads, files, {f.username: good for f in files}, script)
+    w = make(lenv, provider=provider,
+             settings=settings.model_copy(update={"lossless_race_after_s": RACE_AFTER_S, **update}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    r = await w.process(rid)
+    a = attempt_of(store, rid)
+    assert not list(settings.tmp_dir.iterdir()) and not list(settings.slskd_downloads.rglob("*.flac"))
+    return r, a, provider
+
+
+async def test_a_pick_that_sends_nothing_gets_the_next_copy_raced_beside_it(lenv):
+    r, a, provider = await _race_case(lenv, _race_files("stuck", "quick"),
+                                      {"stuck": ("stuck", 0), "quick": ("quick", 0.05)})
+    assert r.state == RequestState.DONE and a.outcome == "filed"
+    assert provider.downloaded == ["stuck", "quick"] and provider.cancelled_peers == ["stuck"]
+    [race] = _events(a, "race")
+    assert (race["pick"], race["peer"], race["stalled_pick"]) == (2, "quick", 1)
+    [lost] = _events(a, "race_lost")
+    assert (lost["pick"], lost["peer"], lost["had_bytes"]) == (1, "stuck", False)
+    # Counted once: one completion, and the attempt's first byte is the kept copy's.
+    assert len(_events(a, "completed")) == 1 and a.first_byte_ms == 700
+
+
+async def test_the_first_pick_is_kept_when_it_lands_first_after_all(lenv):
+    _, a, provider = await _race_case(lenv, _race_files("slowq", "stuck"),
+                                      {"slowq": ("quick", 0.15), "stuck": ("stuck", 0)})
+    assert a.outcome == "filed" and provider.downloaded == ["slowq", "stuck"]
+    assert provider.cancelled_peers == ["stuck"]
+    [lost] = _events(a, "race_lost")
+    assert (lost["pick"], lost["peer"]) == (2, "stuck")
+
+
+async def test_no_race_while_bytes_are_arriving(lenv):
+    """Slow is not stalled: a transfer that has sent anything is left to the too-slow rule."""
+    _, a, provider = await _race_case(lenv, _race_files("trickle", "quick"),
+                                      {"trickle": ("trickle", 0.15), "quick": ("quick", 0)})
+    assert a.outcome == "filed" and provider.downloaded == ["trickle"]
+    assert not _events(a, "race") and provider.cancelled_peers == []
+
+
+@pytest.mark.parametrize("files, why", [
+    (_race_files("stuck", "busy", busy={"has_free_slot": False}), "no free slot"),
+    (_race_files("stuck", "longer", longer={"length_s": 400}), "a different length"),
+    ([lf("stuck", path="Void\\a.flac"), lf("other", path="x\\void\\A.flac", queue_length=1)], "same derived path"),
+])
+async def test_no_race_without_a_copy_worth_starting(lenv, files, why):
+    settings, store, _, _, _, _ = lenv
+    script = {f.username: ("queued", 0.15) if f.username == "stuck" else ("quick", 0) for f in files}
+    good = lenv[3].audio["a"]
+    provider = RaceProvider(settings.slskd_downloads, files, {f.username: good for f in files}, script)
+    w = make(lenv, provider=provider, settings=settings.model_copy(update={"lossless_race_after_s": RACE_AFTER_S}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    a = store.attempts_for_request(rid)[0]
+    assert not _events(a, "race"), why
+    assert provider.downloaded[0] == "stuck" and provider.cancelled_peers == []
+
+
+async def test_no_race_when_it_is_switched_off(lenv):
+    _, a, provider = await _race_case(lenv, _race_files("slowq", "quick"),
+                                      {"slowq": ("quick", 0.15), "quick": ("quick", 0)}, lossless_race_after_s=0)
+    assert provider.downloaded == ["slowq"] and not _events(a, "race")
+
+
+async def test_a_raced_copy_that_fails_leaves_the_first_pick_running(lenv):
+    _, a, provider = await _race_case(lenv, _race_files("slowq", "dud"),
+                                      {"slowq": ("quick", 0.2), "dud": ("queued", 0)})
+    assert a.outcome == "filed" and provider.downloaded == ["slowq", "dud"]
+    assert provider.cancelled_peers == [] and not _events(a, "race_lost")
+    assert len(_events(a, "completed")) == 1
+
+
+async def test_only_one_race_per_attempt(lenv):
+    """Never more than two transfers for one request: after a race, the next pick runs on its own."""
+    _, a, provider = await _race_case(lenv, _race_files("q1", "q2", "q3", "quick"),
+                                      {"q1": ("queued", 0.1), "q2": ("queued", 0.1), "q3": ("queued", 0.1),
+                                       "quick": ("quick", 0)})
+    assert len(_events(a, "race")) == 1
+    assert provider.downloaded == ["q1", "q2", "q3", "quick"]
+    assert a.outcome == "filed"
+
+
+async def test_stopping_the_request_mid_race_cancels_both_transfers(lenv):
+    settings, store, _, _, _, _ = lenv
+    good = lenv[3].audio["a"]
+    files = _race_files("stuck", "stuck2")
+    provider = RaceProvider(settings.slskd_downloads, files, {f.username: good for f in files},
+                            {"stuck": ("stuck", 0), "stuck2": ("stuck", 0)})
+    w = make(lenv, provider=provider, settings=settings.model_copy(update={"lossless_race_after_s": RACE_AFTER_S}))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    task = asyncio.create_task(w.process(rid))
+    await asyncio.wait_for(provider.started.wait(), timeout=5)
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert sorted(provider.cancelled_peers) == ["stuck", "stuck2"]

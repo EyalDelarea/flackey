@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import shutil
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..attempts import AttemptRecorder
@@ -105,6 +105,27 @@ def switch_back_rule_for(dropped: LosslessFile, rate_bps: float, settings: Setti
     (with the same allowance for a queue and first byte as a switch counts)."""
     return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
                     finish_s=dropped.size / rate_bps + SWITCH_ALLOWANCE_S, max_rate_bps=rate_bps)
+
+
+def same_destination(a: LosslessFile, b: LosslessFile) -> bool:
+    """Whether slskd would write both files to one path: the last folder segment and the file name, which is
+    all `slskd.local_path_for` keeps. Compared without case, as the Mac's and Windows' disks do, so a near
+    miss counts as the same place -- the safe side, since that only skips a race."""
+    def where(f: LosslessFile) -> tuple[str, str]:
+        return f.folder.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].casefold(), f.name.casefold()
+    return where(a) == where(b)
+
+
+@dataclass
+class Race:
+    """How `LosslessMixin._race` ended. `landed` is the kept copy (file, path, pick); `failed` the picks that
+    ended without landing, each with its outcome and any TooSlow measured; `lost` the pick cancelled when
+    the other landed, and whether it had sent anything by then."""
+    started: bool = False
+    landed: tuple[LosslessFile, Path, int] | None = None
+    failed: list[tuple[LosslessFile, str, list[TooSlow]]] = field(default_factory=list)
+    lost: LosslessFile | None = None
+    lost_moved: bool = False
 
 
 class LosslessMixin:
@@ -264,6 +285,8 @@ class LosslessMixin:
         promised = None                               # the pick a too-slow switch was made for
         stopped = False                               # ended on a verdict that no other copy can change
         n = 0
+        raced = False                                 # one race per attempt: never more than two in flight
+        tried: set[int] = set()                       # survivors already fetched by a race, by id()
 
         def budget_s(f) -> float:
             # What one pick may cost, for this file: the queue wait is left out because the pick about to
@@ -299,7 +322,39 @@ class LosslessMixin:
                 return None, None
             return slow_rule_for(nxt, s), nxt
 
+        def race_pick(i: int, file):
+            """The copy to start beside the `i`th survivor if that one stalls, or None. As careful as the
+            too-slow switch about what it is worth starting: the same song, version and length by the
+            rankers, on a free slot, from a peer not already holding us in its queue -- and one that slskd
+            would not write to the same place, since two transfers of one derived path wait on each other."""
+            if raced or s.lossless_race_after_s <= 0 or n >= s.lossless_max_picks or file is promised or slow_copies:
+                return None
+            return next((f for f in report.survivors[i + 1:]
+                         if f.username != file.username and f.username not in stuck_peers
+                         and id(f) not in tried and f.has_free_slot and identity(f) == identity(file)
+                         and not same_destination(f, file)
+                         and not any(same_recording(f, r, ref.artist) for r in refused)), None)
+
+        def settle(file, outcome: str, measured: list[TooSlow], nxt) -> bool:
+            """Book one pick that did not file; True when the attempt stops here."""
+            nonlocal stopped, promised
+            if outcome not in SECOND_PICK_AFTER:
+                stopped = outcome not in SLOW_FALLBACK_AFTER
+                return True
+            if outcome in PEER_STUCK_OUTCOMES:
+                stuck_peers.add(file.username)
+            if outcome == "too_slow" and file is promised:
+                return True                           # straight back to the copy it replaced, below
+            if outcome == "too_slow":
+                slow_copies.append((file, measured[0].speed_bps))
+                promised = nxt
+            if outcome == "fingerprint_failed":
+                refused.append(file)
+            return False
+
         for i, file in enumerate(report.survivors):
+            if id(file) in tried:
+                continue
             if file.username in stuck_peers:
                 continue
             if any(same_recording(file, r, ref.artist) for r in refused):
@@ -325,22 +380,41 @@ class LosslessMixin:
             else:
                 slow, nxt = slow_rule(i, file)
             measured: list[TooSlow] = []
-            hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow,
-                                                          measured)
+            racer = race_pick(i, file)
+            if racer is None:
+                hit, outcome = await self._download_and_check(provider, rec, req, ref, file, n, acoustic, slow,
+                                                              measured)
+                if hit is not None:
+                    return self._filed(rec, hit)
+                if settle(file, outcome, measured, nxt):
+                    break
+                continue
+
+            def may_race(racer=racer, n=n) -> bool:
+                # Asked once the first pick has stalled, so the budget and the disk are as they are then.
+                return rec.elapsed_ms() / 1000 <= budget_s(racer) and not disk_short(racer, n + 1)
+
+            race = await self._race(provider, rec, req, file, n, slow, measured, racer, may_race)
+            if race.started:
+                n, raced = n + 1, True
+                tried.add(id(racer))
+            # A copy the race started is already fetched, so a too-slow first pick has no switch left to promise.
+            stop = False
+            for f, f_outcome, f_measured in race.failed:
+                outcome = f_outcome
+                stop = settle(f, f_outcome, f_measured, None if race.started else nxt) or stop
+            if race.landed is None:
+                if stop:
+                    break
+                continue
+            won, landed, _ = race.landed
+            if race.lost is not None and not race.lost_moved:
+                stuck_peers.add(race.lost.username)   # its queue held us while the other copy came in whole
+            hit, outcome = await self._check_landed(rec, req, ref, won, landed, acoustic)
             if hit is not None:
                 return self._filed(rec, hit)
-            if outcome not in SECOND_PICK_AFTER:
-                stopped = outcome not in SLOW_FALLBACK_AFTER
+            if settle(won, outcome, [], None) or stop:
                 break
-            if outcome in PEER_STUCK_OUTCOMES:
-                stuck_peers.add(file.username)
-            if outcome == "too_slow" and file is promised:
-                break                                 # straight back to the copy it replaced, below
-            if outcome == "too_slow":
-                slow_copies.append((file, measured[0].speed_bps))
-                promised = nxt
-            if outcome == "fingerprint_failed":
-                refused.append(file)
         # Out of picks, budget or survivors with a slow copy given up on the way: fetch it again, to the end
         # this time, whatever the pick limit says -- it is the one copy known to arrive.
         back = next((f for f, _ in slow_copies if not any(same_recording(f, r, ref.artist) for r in refused)),
@@ -371,26 +445,103 @@ class LosslessMixin:
                                   slow: SlowRule | None = None,
                                   measured: list[TooSlow] | None = None) -> tuple[LosslessHit | None, str]:
         """`measured` collects the TooSlow a transfer was given up with, for the rate it was measured at."""
+        landed, outcome = await self._fetch(provider, rec, req, file, n, slow, measured)
+        if landed is None:
+            return None, outcome
+        return await self._check_landed(rec, req, ref, file, landed, acoustic)
+
+    async def _race(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, file, n: int,
+                    slow: SlowRule | None, measured: list[TooSlow], racer, may_race) -> Race:
+        """Fetch `file`; if it has sent nothing after `lossless_race_after_s`, fetch `racer` beside it and keep
+        whichever lands first. The other is cancelled -- which tells slskd to drop the transfer, so the peer
+        stops sending and its queue slot goes back -- and a copy that landed in the same moment is deleted.
+        Only the landing is raced: checking and filing happen after, on the one copy kept.
+
+        The row's progress bar follows one transfer at a time (the first to send a byte, the first pick
+        until then), and the attempt's first-byte time is that transfer's, so nothing is counted twice."""
+        s = self.settings
+        lead = {"file": file}
+        moved: set[int] = set()
+        racer_measured: list[TooSlow] = []
+        out = Race()
+        tasks = {asyncio.create_task(self._fetch(provider, rec, req, file, n, slow, measured, lead=lead,
+                                                 moved=moved)): (file, n, measured)}
+        try:
+            done, _ = await asyncio.wait(set(tasks), timeout=s.lossless_race_after_s)
+            if not done and id(file) not in moved and may_race():
+                rec.event("race", pick=n + 1, peer=racer.username, file=racer.name, stalled_pick=n,
+                          after_s=s.lossless_race_after_s)
+                tasks[asyncio.create_task(self._fetch(provider, rec, req, racer, n + 1, None, racer_measured,
+                                                      lead=lead, moved=moved))] = (racer, n + 1, racer_measured)
+                out.started = True
+            pending = set(tasks)
+            while pending and out.landed is None:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    f, f_n, f_measured = tasks[t]
+                    landed, outcome = t.result()
+                    if landed is None:
+                        out.failed.append((f, outcome, f_measured))
+                    elif out.landed is None:
+                        out.landed = (f, landed, f_n)
+                    else:                             # both landed on the same poll: one copy is enough
+                        landed.unlink(missing_ok=True)
+                        rec.event("race_lost", pick=f_n, peer=f.username, landed=True)
+            for t in pending:
+                t.cancel()
+            for t, result in zip(pending, await asyncio.gather(*pending, return_exceptions=True)):
+                f, f_n, _ = tasks[t]
+                if isinstance(result, tuple) and result[0] is not None:
+                    result[0].unlink(missing_ok=True)  # finished in the moment it was being cancelled
+                out.lost, out.lost_moved = f, id(f) in moved
+                rec.event("race_lost", pick=f_n, peer=f.username, had_bytes=out.lost_moved)
+                log.info("req#%d race: kept pick %d, cancelled pick %d from %s", req.id, out.landed[2], f_n,
+                         f.username)
+        except BaseException:
+            # The owner stopped the request, or something broke: neither transfer may outlive this call.
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return out
+
+    async def _fetch(self, provider: LosslessProvider, rec: AttemptRecorder, req: Request, file, n: int,
+                     slow: SlowRule | None = None, measured: list[TooSlow] | None = None, *,
+                     lead: dict | None = None, moved: set[int] | None = None) -> tuple[Path | None, str]:
+        """One pick's transfer: the landed file, or None and the outcome it ended with. `lead` and `moved`
+        are shared by the two transfers of a race (see `_race`); alone, the transfer always leads."""
         s = self.settings
         rec.event("enqueue", pick=n, peer=file.username, file=file.name, size=file.size)
         seen = {"state": None, "first_byte": False}
+
+        def leads(p: TransferProgress) -> bool:
+            if lead is None:
+                return True
+            if p.bytes > 0 and moved is not None and id(file) not in moved:
+                moved.add(id(file))
+                if id(lead["file"]) not in moved:
+                    lead["file"] = file               # the first to send a byte takes the bar
+            return lead["file"] is file
 
         def progress(p: TransferProgress) -> None:
             # Live, for the row's progress bar. The timeline below records *changes* (that is what a
             # timeline is for); this is the current position, republished on every poll, and cleared in
             # `_try_lossless`'s finally so a bar never outlives the transfer it belongs to.
-            self._publish_progress(req.id, {
-                "request_id": req.id, "bytes": p.bytes, "size": p.size, "peer": file.username,
-                "pct": round(100 * p.bytes / p.size) if p.size else 0,
-                "speed_bps": p.speed_bps, "pick": n, "state": p.state})
+            shown = leads(p)
+            if shown:
+                self._publish_progress(req.id, {
+                    "request_id": req.id, "bytes": p.bytes, "size": p.size, "peer": file.username,
+                    "pct": round(100 * p.bytes / p.size) if p.size else 0,
+                    "speed_bps": p.speed_bps, "pick": n, "state": p.state})
             if p.state != seen["state"]:
                 seen["state"] = p.state
-                rec.event("transfer_state", state=p.state, pct=round(100 * p.bytes / max(p.size, 1)),
+                rec.event("transfer_state", pick=n, state=p.state, pct=round(100 * p.bytes / max(p.size, 1)),
                           speed_kbps=round(p.speed_bps / 1000))
             if p.first_byte_ms is not None and not seen["first_byte"]:
                 seen["first_byte"] = True
-                rec.event("first_byte", ms=p.first_byte_ms)
-                self.store.update_attempt(rec.id, first_byte_ms=p.first_byte_ms)
+                rec.event("first_byte", pick=n, ms=p.first_byte_ms)
+                if shown:
+                    self.store.update_attempt(rec.id, first_byte_ms=p.first_byte_ms)
 
         try:
             landed = await provider.download(file, first_byte_s=s.lossless_first_byte_s,
@@ -406,8 +557,14 @@ class LosslessMixin:
                 measured.append(e)
             return None, e.outcome
         except LosslessError as e:
-            rec.event("transfer_failed", error=str(e))
+            rec.event("transfer_failed", pick=n, error=str(e))
             return None, e.outcome
+        return landed, ""
+
+    async def _check_landed(self, rec: AttemptRecorder, req: Request, ref: Reference, file, landed: Path,
+                            acoustic: Acoustic) -> tuple[LosslessHit | None, str]:
+        """A landed transfer, moved off slskd's folder and checked through to a converted file."""
+        s = self.settings
         rec.event("completed", ms=rec.elapsed_ms(), bytes=landed.stat().st_size)
         s.tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp = s.tmp_dir / f"req{req.id}-lossless.{file.extension}"    # never the peer's file name (spec §16.2)

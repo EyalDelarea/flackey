@@ -482,6 +482,12 @@ class SoulseekProvider:
             # file with it: nothing else will ever look at it, and leaving it at the derived path would be
             # the stale file the *next* download of the same track has to clean up. Then re-raise -- a
             # cancellation that is swallowed is a task that never actually stops.
+            # Enqueued but not seen on a poll yet (a race's loser is often cancelled this early): look it up
+            # once, or it would sit in the peer's queue as one of this run's, which no sweep ever takes.
+            if transfer_id is None:
+                with contextlib.suppress(LosslessError):
+                    tr = await self._find(file)
+                    transfer_id = tr.get("id") if tr is not None else None
             if transfer_id is not None:
                 await self.client.cancel_download(file.username, transfer_id)
             dest.unlink(missing_ok=True)
