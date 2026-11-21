@@ -303,8 +303,9 @@ class SoulseekProvider:
     async def health(self) -> dict:
         try:
             app = await self.client.application()
-        except LosslessUnavailable:
-            return {"status": "unreachable", "username": None}
+        except LosslessUnavailable as e:
+            # `error` says which way it failed ("slskd unreachable: ReadTimeout"), for the attempt's log line
+            return {"status": "unreachable", "username": None, "error": str(e)}
         server = app.get("server") or {}
         return {"status": "ok" if server.get("isLoggedIn") else "not_logged_in",
                 "username": (app.get("user") or {}).get("username")}

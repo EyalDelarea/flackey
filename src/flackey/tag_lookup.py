@@ -342,7 +342,7 @@ class Discogs:
                 r = await self.http.get(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
                                         timeout=20)
             except httpx.HTTPError as e:
-                raise DiscogsError(f"discogs: {e}") from e
+                raise DiscogsError(str(e) or type(e).__name__) from e
         if r.status_code == 404:
             self._cache_write(url, None)
             return None
@@ -494,6 +494,8 @@ class FoundTags:
     sub_genre: str | None = None
     sources: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # The sources whose lookup broke (a timeout, an error answer), as opposed to answering with nothing
+    failed: list[str] = field(default_factory=list)
     discogs_release: int | None = None
     # Other dates the sources vouch for, earliest wins (`catalog.with_original_date`): the years of every
     # Discogs release the track passed on. Left empty for a remaster, whose own year is the one to keep.
@@ -519,6 +521,7 @@ class TagLookup:
                 album = await self.deezer.album(track.album_id) if track.album_id else None
             except (DeezerError, ValueError, KeyError, TypeError) as e:
                 found.notes.append(f"deezer: {e}")
+                found.failed.append("Deezer")
             else:
                 found.isrc = track.isrc
                 found.duration_ms = track.duration_s * 1000 if track.duration_s else None
@@ -534,6 +537,7 @@ class TagLookup:
                 match = await discogs_match(self.discogs, wanted, prefer_label=found.label, notes=found.notes)
             except (DiscogsError, KeyError, TypeError, ValueError) as e:
                 found.notes.append(f"discogs: {e}")
+                found.failed.append("Discogs")
                 match = None
             if match is not None:
                 took = False

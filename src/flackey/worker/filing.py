@@ -276,10 +276,15 @@ class FilingMixin:
                 log.exception("req#%d: tag lookup failed; filing with the stand-in's tags", req.id)
             else:
                 catalog = fill_missing(catalog, found)
-                log.info("req#%d: tags %s", req.id, f"filled from {catalog.tag_source}"
-                         if catalog.tag_source else "Deezer and Discogs had none")
-                for note in found.notes:
-                    log.debug("req#%d tag lookup: %s", req.id, note)
+                if found.failed and not catalog.tag_source:
+                    # Not "had none": the lookup never got an answer, and the file goes out without the tags
+                    log.warning("req#%d: tag lookup failed (%s); filing with the stand-in's tags", req.id,
+                                "; ".join(found.notes))
+                else:
+                    log.info("req#%d: tags %s", req.id, f"filled from {catalog.tag_source}"
+                             if catalog.tag_source else "Deezer and Discogs had none")
+                    for note in found.notes:
+                        log.debug("req#%d tag lookup: %s", req.id, note)
         self.store.upsert_catalog_track(catalog)
         self.store.update_request(req.id, catalog_track_id=catalog.id)
         return catalog
