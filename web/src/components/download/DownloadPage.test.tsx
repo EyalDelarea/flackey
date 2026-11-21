@@ -163,7 +163,7 @@ describe('filter bar, remove and clear failed', () => {
     render(<DownloadPage live={makeLive([mk(1, 'queued')])} />)
     expect(screen.getByText('Downloads · 1 track')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Remove 1 track' })).toBeInTheDocument()
-    expect(screen.getByText('Whole batch · 1 track')).toBeInTheDocument()
+    expect(screen.getByText('1 track · 0% filed')).toBeInTheDocument()
     expect(screen.queryByText(/\b1 tracks\b|Remove these 1\b/)).not.toBeInTheDocument()
   })
 
@@ -438,7 +438,10 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(1, 'done'), inPlaylist(2, 'done'), inPlaylist(3, 'rejected'),
       inPlaylist(4, 'fetching'), parked(5),
     ], { playlists })} />)
-    expect(screen.getByText('Whole batch · 5 tracks')).toBeInTheDocument()
+    expect(screen.getByText('5 tracks · 40% filed')).toBeInTheDocument()
+    // The rows shown sit at the end of the legend; the full sentence is kept for screen readers.
+    expect(document.querySelector('.group-shown')).toHaveTextContent('2 shown')
+    expect(screen.getByText('Showing 2 downloads matching this filter')).toHaveClass('visually-hidden')
     const legend = document.querySelector('.group-legend')!.textContent
     expect(legend).toBe('2 filed1 searching / downloading / verifying1 waiting to retry1 failed')
     // Trap 3: the header used to say "1 in progress" an inch above a bar drawn to correct exactly that.
@@ -451,7 +454,7 @@ describe('stage chips and the batch bar', () => {
       inPlaylist(3, 'error', { failed_stage: 'download' }), inPlaylist(4, 'rejected'), inPlaylist(5, 'cancelled'),
     ], { playlists })} />)
     openFailed()
-    expect(screen.getByText('Whole batch · 4 of 5 stopped')).toBeInTheDocument()
+    expect(screen.getByText('4 of 5 tracks stopped')).toBeInTheDocument()
     expect(document.querySelector('.group-legend')!.textContent)
       .toBe('1 found nothing to download1 could not finish the download1 failed the quality check1 you stopped')
   })
