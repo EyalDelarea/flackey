@@ -89,7 +89,8 @@ it('does not call an unplugged library drive up to date', async () => {
   vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0, missing: 0, reachable: false })
   render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
   fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
-  expect(await screen.findByText(/library folder isn't there/)).toBeInTheDocument()
+  expect(await screen.findByText(/library folder is missing or empty, so nothing was changed/)).toBeInTheDocument()
+  expect(screen.queryByText('Library is up to date.')).not.toBeInTheDocument()
 })
 
 it('leaves the toolbar free of drag layers, and search still works', async () => {

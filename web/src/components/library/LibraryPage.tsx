@@ -129,7 +129,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       await live.refreshLibrary().catch(() => undefined)
       if (result.removed) setNote(`Removed ${plural(result.removed, 'missing file')} from the library.`)
       else if (result.missing) { setNote(null); setMissing(result.missing) }
-      else if (!result.reachable) setNote("Your library folder isn't there (is the drive plugged in?). Nothing was changed.")
+      else if (!result.reachable) setNote("Your library folder is missing or empty, so nothing was changed. If it is on a drive, plug the drive in and refresh again.")
       else setNote('Library is up to date.')
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Couldn't refresh library. Try again.")

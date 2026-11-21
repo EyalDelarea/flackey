@@ -395,3 +395,35 @@ async def test_a_missing_library_folder_still_counts_its_tracks_as_owned(inbox, 
     tid = _filed(store, "https://www.youtube.com/watch?v=a", root / "gone.flac")
     s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
     assert s.already_in_library == 1 and store.get_playlist(s.playlist_id).track_ids == [tid]
+
+
+async def test_without_a_library_folder_to_check_a_track_still_counts_as_owned(inbox, tmp_path):
+    """The CLI pastes with no library folder: a missing file then proves nothing."""
+    ib, store = inbox
+    tid = _filed(store, "https://www.youtube.com/watch?v=a", tmp_path / "lib" / "gone.flac")
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 1 and store.get_playlist(s.playlist_id).track_ids == [tid]
+
+
+async def test_an_older_filed_request_does_not_stand_in_for_a_forgotten_track(inbox, tmp_path):
+    """Two filed requests for one link, both pointing at forgotten rows: neither is a library hit."""
+    ib, store = inbox
+    root = _reachable_root(tmp_path)
+    ib.library_root = lambda: root
+    url = "https://www.youtube.com/watch?v=a"
+    store.delete_track(_filed(store, url, root / "old.flac"))
+    store.delete_track(_filed(store, url, root / "new.flac"))
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 0 and store.get_playlist(s.playlist_id).track_ids == []
+
+
+async def test_a_deleted_extended_copy_is_not_owned_while_preferring_extended(inbox, tmp_path):
+    ib, store = inbox
+    root = _reachable_root(tmp_path)
+    ib.library_root = lambda: root
+    ib.prefer_extended = lambda: True
+    store.add_track(path=root / "X" / "X - Y (Extended Mix).mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=20000,
+                    file_size=1, artist="X", title="Y", mix_name="Extended Mix", duration_s=420, isrc=None,
+                    catalog_track_id=None, request_id=None)
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 0 and store.list_tracks() == []
