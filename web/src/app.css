@@ -556,7 +556,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .thead > :nth-child(n+3), .trow > :nth-child(n+3) { text-align: center; }
 .thead > :last-child, .trow > :last-child { text-align: right; }
 .trow { height: 44px; font-size: 12px; color: var(--secondary); }
-.trow:nth-child(odd) { background: var(--alt); }
+.trow:nth-child(even of .trow) { background: var(--alt); }
 .trow .cell { min-width: 0; }
 .trow .t { color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow .v { font-size: 11px; }
@@ -571,7 +571,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .trow .reveal { display: flex; justify-content: flex-end; gap: 6px; opacity: 0; }
 .trow:hover .reveal, .trow.selected .reveal, .trow .reveal:focus-within { opacity: 1; }
 .trow.lossy-row .reveal { opacity: 1; }
-.trow.selected, .trow.selected:nth-child(odd) { background: var(--accent-fill); color: var(--accent-text); }
+.trow.selected, .trow.selected:nth-child(even of .trow) { background: var(--accent-fill); color: var(--accent-text); }
 .trow.selected .t, .trow.selected .kbps, .trow.selected .kbps svg, .trow.selected .fmt { color: var(--accent-text); } .trow.selected .v { color: var(--accent-text); opacity: .8; }
 /* .kbps.lossy's own color (below) is the same specificity as .trow.selected .kbps and follows it in the
    sheet, so without this it would win over white text on the selected row's blue fill. */
@@ -954,3 +954,29 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .waiting-when { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .waiting-why { color: var(--tertiary); }
 .waiting-shelf-head .waiting-ring { color: var(--orange); }
+
+/* Why the library trusts a file: the receipt under a selected library row, and the badge a row wears when
+   its file is not simply trusted (kept anyway, unverified, or flagged when checked again). */
+.trust-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 600; line-height: 16px; vertical-align: 1px; }
+.trust-badge.bad { background: var(--red-wash); color: var(--red-text); }
+.trust-badge.plain { background: var(--orange-wash-soft); color: var(--orange-text); }
+.receipt { display: flex; gap: 20px; align-items: flex-start; min-width: 900px; padding: 12px 16px 14px 60px; border-top: .5px solid var(--sep); border-bottom: .5px solid var(--sep); background: var(--group); cursor: default; }
+.receipt-body { flex: 1; min-width: 0; font-size: 12px; color: var(--secondary); }
+.receipt h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.receipt dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 0 0 10px; }
+.receipt dt { color: var(--tertiary); }
+.receipt dd { margin: 0; color: var(--text); }
+.receipt-checks { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 4px; }
+.receipt-checks li { display: flex; align-items: center; gap: 8px; }
+.receipt-checks li .label { width: 120px; color: var(--secondary); }
+.receipt-checks li .value { color: var(--text); }
+.receipt-checks li.ok svg { color: var(--green); }
+.receipt-checks li.bad svg, .receipt-checks li.bad .value { color: var(--red-text); }
+.receipt-checks li .dot { width: 6px; height: 6px; margin: 0 3px; border-radius: 50%; background: var(--tertiary); }
+.receipt-again { margin: 0 0 10px; color: var(--text); }
+.receipt-again.bad { color: var(--red-text); }
+.receipt-again.plain { color: var(--orange-text); }
+.receipt-error { margin: 0 0 10px; color: var(--red-text); }
+.receipt-actions { display: flex; align-items: center; gap: 10px; }
+.receipt-actions .muted { color: var(--tertiary); font-size: 11px; }
+.receipt-spectrogram { flex: none; width: 300px; max-width: 40%; border-radius: 6px; border: .5px solid var(--well-border); background: var(--well); }

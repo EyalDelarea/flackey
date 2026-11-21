@@ -68,6 +68,13 @@ export interface Playlist { id:number; source_url:string; name:string; created_a
 /** The "Flackey - New" playlist: what was filed since the owner last said they imported into Rekordbox.
     `through` is the newest of those tracks, sent back with "I've imported these". */
 export interface NewSinceImport { count:number; file:string; through:string|null }
+/** One line of a library track's receipt: `ok` true a pass, false a failure, null a plain fact or not checked. */
+export interface ReceiptCheck { label:string; value:string; ok:boolean|null; note:string|null }
+export interface Recheck { checked_at:string; status:'checked'|'missing'|'error'; tier?:string; reason?:string }
+/** Why the library trusts a filed file: where it came from and every check it went through. */
+export interface Receipt { track_id:number; asked_for:string|null; filed_at:string; replaced_at:string|null; format:string
+  lossless_source:boolean; kept_anyway:boolean; unverified:boolean; checks:ReceiptCheck[]; has_spectrogram:boolean; recheck:Recheck|null }
+export interface RecheckRun { state:'idle'|'running'|'done'|'stopped'|'error'; done:number; total:number; flagged:number }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
 export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null; fpcalc:boolean;
@@ -232,6 +239,11 @@ export const api = {
       `forgetMissing` forgets them. `reachable` is false while the library folder is missing (a drive unplugged). */
   refreshLibrary: (forgetMissing = false) => post<{ removed: number; missing: number; reachable: boolean }>(
     '/api/library/refresh', forgetMissing ? { forget_missing: true } : undefined),
+  receipt: (trackId: number) => call<Receipt>(`/api/library/${trackId}/receipt`),
+  recheckTrack: (trackId: number) => post<Receipt>(`/api/library/${trackId}/recheck`),
+  recheckStatus: () => call<RecheckRun>('/api/library/recheck'),
+  recheckLibrary: () => post<RecheckRun>('/api/library/recheck'),
+  stopRecheck: () => post<RecheckRun>('/api/library/recheck/stop'),
   newSinceImport: () => call<NewSinceImport>('/api/library/new'),
   markImported: (through: string) => post<NewSinceImport>('/api/library/new/imported', { through }),
   /** Get extended: download the extended mix on offer and swap it in for the filed track (issue #187). */
@@ -306,6 +318,7 @@ export const api = {
     post<{ ok: boolean }>('/api/telemetry/ui', { event, fields }),
 }
 export const spectrogramUrl = (rejectionId: number) => `/api/rejections/${rejectionId}/spectrogram.png`
+export const trackSpectrogramUrl = (trackId: number) => `/api/library/${trackId}/spectrogram.png`
 // Not a fetch: the `<audio>` element asks for this itself and follows the 302 to Deezer's CDN. The route
 // resolves the signed sample URL upstream on every request, so this is built at the moment play is
 // pressed -- never set on an element that is only sitting there.
