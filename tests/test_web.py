@@ -2694,11 +2694,16 @@ def test_sharing_routes_with_a_service(tmp_path: Path):
             self.started += 1
             return {**self.state, "checking": True}
 
+        def start_fix(self):
+            self.fixed = getattr(self, "fixed", 0) + 1
+            return {**self.state, "checking": True}
+
     sharing = FakeSharing()
     app, _, _ = make(tmp_path, sharing=sharing)
     c = AppClient(app)
     assert c.get("/api/sharing").json()["reachable"] is False
     assert c.post("/api/sharing/check").json()["checking"] is True and sharing.started == 1
+    assert c.post("/api/sharing/fix").json()["checking"] is True and sharing.fixed == 1
 
 
 def _sharing_service(soulseek_enabled: bool):
@@ -2726,6 +2731,7 @@ def test_sharing_check_is_refused_while_soulseek_is_off(tmp_path: Path):
     _, sharing = _sharing_service(soulseek_enabled=False)
     app, _, _ = make(tmp_path, sharing=sharing)
     assert AppClient(app).post("/api/sharing/check").status_code == 409
+    assert AppClient(app).post("/api/sharing/fix").status_code == 409
 
 
 def test_sharing_check_follows_the_setting_not_the_last_refresh(tmp_path: Path):

@@ -876,7 +876,54 @@ describe('the Soulseek panel', () => {
   it('has no sharing row when no Soulseek account was ever saved', () => {
     show(lossless({ enabled: false }), settings({ soulseek_enabled: false }), sharing({ reachable: false }))
     expect(screen.queryByText('Sharing')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sharing port')).not.toBeInTheDocument()
     expect(screen.queryByText(/Your Soulseek port is closed/)).not.toBeInTheDocument()
+  })
+
+  describe('the Sharing port row in Connections', () => {
+    it('is green with the port when other users can reach it', () => {
+      show(lossless(), settings(), sharing({ reachable: true, mapping: 'natpmp', gateway: '10.0.0.1' }))
+      expect(within(connRow('Sharing port')).getByText(/Open — other Soulseek users can reach you on port 50300/)).toBeInTheDocument()
+      expect(dot(connRow('Sharing port'))).not.toHaveClass('amber')
+      expect(screen.queryByRole('button', { name: 'Fix the sharing port' })).not.toBeInTheDocument()
+    })
+
+    it('does not call one closed reading a fault: it is checked again first', () => {
+      show(lossless(), settings(), sharing({ reachable: false, closed_confirmed: false, gateway: '10.0.0.1' }))
+      expect(screen.getByText(/Looked closed once — checking again shortly/)).toBeInTheDocument()
+      expect(dot(connRow('Sharing port'))).toHaveClass('pending')
+      expect(screen.queryByRole('button', { name: 'Fix the sharing port' })).not.toBeInTheDocument()
+    })
+
+    it('offers Fix when the port is confirmed closed and the router never opened it', async () => {
+      const fix = vi.spyOn(api, 'fixSharing').mockResolvedValue(sharing({ checking: true }))
+      show(lossless(), settings(), sharing({ reachable: false, closed_confirmed: true, gateway: '10.0.0.1', mapping: null }))
+      expect(screen.getByText(/Closed — fewer Soulseek results until port 50300 opens/)).toBeInTheDocument()
+      expect(dot(connRow('Sharing port'))).toHaveClass('amber')
+      fireEvent.click(screen.getByRole('button', { name: 'Fix the sharing port' }))
+      await waitFor(() => expect(fix).toHaveBeenCalled())
+    })
+
+    it('points past the router, not at a Fix, when the router already opened it', () => {
+      show(lossless(), settings(), sharing({ reachable: false, closed_confirmed: true, gateway: '10.0.0.1', mapping: 'upnp' }))
+      expect(screen.queryByRole('button', { name: 'Fix the sharing port' })).not.toBeInTheDocument()
+      expect(screen.getByText(/Using a VPN\? Turn it off for Flackey/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Check the sharing port again' })).toBeInTheDocument()
+    })
+
+    it('shows why a fix could not start, once', async () => {
+      vi.spyOn(api, 'fixSharing').mockRejectedValue(new Error('network error'))
+      show(lossless(), settings(), sharing({ reachable: false, closed_confirmed: true, gateway: '10.0.0.1', mapping: null }))
+      fireEvent.click(screen.getByRole('button', { name: 'Fix the sharing port' }))
+      await waitFor(() => expect(screen.getAllByText('Could not start the fix. Try again.')).toHaveLength(1))
+    })
+
+    it('checks again from the row while nothing can be fixed', async () => {
+      const check = vi.spyOn(api, 'checkSharing').mockResolvedValue(sharing({ checking: true }))
+      show(lossless(), settings(), sharing({ reachable: null }))
+      fireEvent.click(screen.getByRole('button', { name: 'Check the sharing port again' }))
+      await waitFor(() => expect(check).toHaveBeenCalled())
+    })
   })
 })
 

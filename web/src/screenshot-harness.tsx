@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './theme.css'
 import { api } from './api'
-import type { AppSettings, Health, TelemetryState, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
+import type { AppSettings, Health, SharingState, TelemetryState, Stats, Track, Bundle, Candidate, Playlist, Request, RequestState } from './api'
 
 /* Every EventSource this harness has handed out. StrictMode mounts twice, so `live` subscribes more than
    once: the 'stages' status frame has to reach all of them, while 'choose' only needs the newest, which is
@@ -422,17 +422,22 @@ function scenarioSetup() {
     /* Two settings scenarios, because the interesting thing about the panel is what it says when a
        connection is missing: `settings` is the everything-works reading, `settings-telegram-signed-out`
        is the same panel with the account the Deezer bot depends on signed out from under it. */
+    /* `settings-port-closed` is the everything-works reading with the sharing port found closed on two
+       checks in a row (a VPN, typically): the sidebar turns amber and Connections offers the fix. */
     case 'settings':
+    case 'settings-port-closed':
     case 'settings-telegram-signed-out': {
       const signedOut = scenario === 'settings-telegram-signed-out'
+      const portClosed = scenario === 'settings-port-closed'
       vi_spy(api, 'settings', async () => settingsPanel)
       // Echoes what was saved, so the folder layout and format choices can be clicked through for a picture.
       vi_spy(api, 'saveSettings', async (library_root: string, extra = {}) => ({ ...settingsPanel, library_root, ...extra }))
       vi_spy(api, 'health', async () => health({ telegram_authorized: !signedOut,
         lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'saffrontempo0147' },
           fpcalc: true, attempts_24h: {}, raw_mb: 0 },
-        sharing: { port: 50300, enabled: true, checking: false, mapping: 'natpmp', reachable: true,
-          public_ip: null, lan_ip: '10.0.0.5', gateway: '10.0.0.1', checked_at: null, error: null } }))
+        sharing: { port: 50300, enabled: true, checking: false, mapping: portClosed ? null : 'natpmp',
+          reachable: !portClosed, public_ip: portClosed ? '185.220.101.7' : null, lan_ip: '10.0.0.5',
+          gateway: '10.0.0.1', checked_at: null, error: null, closed_confirmed: portClosed } as SharingState }))
       vi_spy(api, 'library', async () => [])
       vi_spy(api, 'telegramStatus', async () => ({ authorized: !signedOut, configured: true,
         phone_masked: signedOut ? null : '+97 •••• ••79' }))
