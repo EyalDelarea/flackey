@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
+import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, clearConfirmText, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
@@ -59,6 +59,10 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   // queue, and the confirm must remove exactly the rows it counted. Null when no confirm is open.
   const [confirmRemove, setConfirmRemove] = useState<{ ids: number[]; live: number } | null>(null)
   const [removing, setRemoving] = useState(false)
+  // "Clear failed" forgets every failed row, on every tab and filter, in one press (WEB-12): the count it
+  // will take, snapshotted when the confirm opens. Null when no confirm is open.
+  const [confirmClear, setConfirmClear] = useState<number | null>(null)
+  const [clearing, setClearing] = useState(false)
   const [view, setView] = useState<'active' | 'history' | 'failed'>('active')
   // One element for the whole page, and the key it is playing: two rows can sit in `awaiting_review` at
   // once, and starting a sample in one has to stop the one already running in the other.
@@ -117,7 +121,23 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
   const summary = failedSummary(visible)
   const removable = bulkRemoveOf(groups)
   // A confirm counted against one tab or filter is not a question about the next one.
-  useEffect(() => { setConfirmRemove(null) }, [view, filter])
+  useEffect(() => { setConfirmRemove(null); setConfirmClear(null) }, [view, filter])
+  const failedCount = bundles.filter(isFailed).length
+  // One confirm at a time: two stacked strips would each claim to be the next step.
+  const askRemove = () => { setConfirmClear(null); setConfirmRemove(removable) }
+  const askClear = () => { setConfirmRemove(null); setConfirmClear(failedCount) }
+  const clearFailed = () => {
+    setClearing(true)
+    api.clearFailed()
+      .then(async ({ removed }) => {
+        removed.forEach(id => live.dropBundle(id))
+        setActionError(null)
+        setConfirmClear(null)
+        await refreshAfter()
+      })
+      .catch(err => setActionError(failMessage(err)))
+      .finally(() => setClearing(false))
+  }
   // A refused action's reason comes straight from the worker ("this copy is also a different recording…"), so
   // it is made into a sentence before it heads a banner.
   const failMessage = (err: unknown) => err instanceof ApiError ? asSentence(err.message) : "That didn't work. Try again."
@@ -271,8 +291,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       </div>
       <div className="download-panel" role="tabpanel" id="download-panel" aria-labelledby={`download-tab-${view}`} tabIndex={0}>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
-      {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view={view}
-        removeCount={removable.ids.length} onRemoveThese={() => setConfirmRemove(removable)} confirming={confirmRemove != null} />}
+      {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={askClear} view={view}
+        removeCount={removable.ids.length} onRemoveThese={askRemove} confirming={confirmRemove != null || confirmClear != null} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
           rows are all rejected needs a disabled "Retry all 0" to answer why, where an absent button
           just looks like the feature is missing.
@@ -283,8 +303,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
           single-line chrome elsewhere; the wide modifier lets this one grow to hold a sentence. */}
       {view === 'failed' && scoped.length > 0 && (
         <div className="filterbar wide stacked">
-          <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={() => run(api.clearFailed())} view="failed" bare
-            removeCount={removable.ids.length} onRemoveThese={() => setConfirmRemove(removable)} confirming={confirmRemove != null} />
+          <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={askClear} view="failed" bare
+            removeCount={removable.ids.length} onRemoveThese={askRemove} confirming={confirmRemove != null || confirmClear != null} />
           <div className="filterbar-row">
           {summary && <p className="failed-summary">{summary}</p>}
           <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
@@ -299,6 +319,14 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
           <button className="btn-primary" disabled={removing} onClick={() => removeThese(confirmRemove.ids)}>
             {removing ? 'Removing…' : `Remove ${confirmRemove.ids.length}`}</button>
           <button className="btn-link" disabled={removing} onClick={() => setConfirmRemove(null)}>Cancel</button>
+        </div>
+      )}
+      {confirmClear != null && (
+        <div className="banner amber confirm" role="group" aria-label="Confirm clearing failed"><span className="dot" />
+          <span className="text">{clearConfirmText(confirmClear)}</span>
+          <button className="btn-primary" disabled={clearing} onClick={clearFailed}>
+            {clearing ? 'Clearing…' : `Clear ${confirmClear}`}</button>
+          <button className="btn-link" disabled={clearing} onClick={() => setConfirmClear(null)}>Cancel</button>
         </div>
       )}
       <div className="scroll">
