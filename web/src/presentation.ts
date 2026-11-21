@@ -316,17 +316,27 @@ const PHASE_TEXT: Record<string, string> = {
   converting: 'Converting it for your library',
 }
 
+/** A Soulseek username as the row prints it. Some people name themselves after a website
+ *  ("https://www.rawzik.com/"), which on the row reads as a link and eats the narrow text column, so the
+ *  scheme, a leading www. and a trailing slash go. Any other username is shown exactly as it is spelled. */
+export const peerName = (peer: string): string => {
+  const bare = peer.trim().replace(/^https?:\/\/(?:www\.)?/i, '')
+  return bare === peer.trim() ? peer : bare.replace(/\/+$/, '') || peer
+}
+
 function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): ProgressView | null {
   const p = all?.find(x => x.request_id === b.request.id)
   if (!p) return null
   // No bytes are moving in these, so the platter sweeps instead of filling -- the same signal as a queue wait.
   if (p.phase && PHASE_TEXT[p.phase]) return { pct: null, label: PHASE_TEXT[p.phase] }
+  const peer = peerName(p.peer)
   // Queued at the peer means no bytes are moving yet; a 0% bar there would read as a stall rather than
-  // as a wait, so it says so in words and shows an indeterminate bar instead.
-  if (p.state.startsWith('Queued')) return { pct: null, label: `Waiting in ${p.peer}'s queue` }
-  if (!p.size) return { pct: null, label: `Downloading from ${p.peer}` }
+  // as a wait, so it says so in words and shows an indeterminate bar instead. "On their side" because the
+  // queue is the other person's, not anything Flackey is holding up.
+  if (p.state.startsWith('Queued')) return { pct: null, label: `Queued on ${peer}'s side · waiting for them to start` }
+  if (!p.size) return { pct: null, label: `Downloading from ${peer}` }
   return { pct: Math.min(100, p.pct),
-    label: `${mb(p.bytes)} of ${mb(p.size)} from ${p.peer}${p.speed_bps > 0 ? ` · ${kbps(p.speed_bps)}` : ''}` }
+    label: `${mb(p.bytes)} of ${mb(p.size)} from ${peer}${p.speed_bps > 0 ? ` · ${kbps(p.speed_bps)}` : ''}` }
 }
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
 /** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
