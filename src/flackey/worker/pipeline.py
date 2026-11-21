@@ -79,7 +79,12 @@ class PipelineMixin:
                 # Not a verdict any more: the request's own words can still reach Soulseek below.
                 source_why = f"the Deezer bot found nothing ({e})"
                 log.info("req#%d not found at source: %s", req.id, e)
-            except (SourceTimeout, SourceError) as e:
+            except SourceTimeout as e:
+                # Telegram dropped, or the bot was slow: nothing about the track (TELEGRAM_RETRY_WAITS_S).
+                usage.failure_reason(req.id, usage.reason_of(e))
+                await self._retry_after_telegram(req, f"source error: {e}")
+                return None
+            except SourceError as e:
                 usage.failure_reason(req.id, usage.reason_of(e))
                 # The source may be back in an hour and would offer a lossy fallback the query-only
                 # path does not have; a retry is worth more than a Soulseek-or-nothing pass now. (A
@@ -302,15 +307,19 @@ class PipelineMixin:
                 # than asking each of them to remember to make its own names unique.
                 fetch_dir = self.settings.tmp_dir / f"req{req.id}"
                 tmp = await self.source.fetch(cand, fetch_dir)
+                self._telegram_answered(req)   # a file arrived: the next miss gets the whole hour again
             except SourceUnauthorized:
                 self.store.update_request(req.id, fetch_source=None)
                 raise
-            except (SourceTimeout, SourceError) as e:
+            except SourceError as e:
                 self.store.update_request(req.id, fetch_source=None)
                 # Noted here as the search's failure is above: without it a give-up reads its reason off
                 # the Soulseek attempt, and a bot that timed out was sent as `peer_queue_timeout`.
                 usage.failure_reason(req.id, usage.reason_of(e))
-                await self._retry_or_fail(req, f"source error: {e}")
+                if isinstance(e, SourceTimeout):
+                    await self._retry_after_telegram(req, f"source error: {e}")
+                else:
+                    await self._retry_or_fail(req, f"source error: {e}")
                 return
         else:
             tmp = hit.path

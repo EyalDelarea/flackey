@@ -103,6 +103,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
         self._bot_skipped: set[int] = set()
+        # How many Telegram misses in a row each request has had (`_retry_after_telegram`). In memory on
+        # purpose: a restart reconnects Telegram from scratch, so misses on the old connection say nothing
+        # about the new one.
+        self._telegram_misses: dict[int, int] = {}
         # What `_bot_ready` said on the last tick, so the tick it changes to yes can re-queue what the
         # paused bot left behind. False to begin with: a sign-in made while the app was closed counts.
         self._bot_was_ready = False
