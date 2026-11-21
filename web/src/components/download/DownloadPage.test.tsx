@@ -6,7 +6,7 @@ import type { Live } from '../../live'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
-  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), removeRequests: vi.fn(), clearFailed: vi.fn(), retryFailed: vi.fn(), accept: vi.fn() } }
+  return { ...actual, api: { ...actual.api, submit: vi.fn(), retry: vi.fn(), removeRequest: vi.fn(), removeRequests: vi.fn(), clearFailed: vi.fn(), exportMissing: vi.fn(), retryFailed: vi.fn(), accept: vi.fn() } }
 })
 
 function makeLive(bundles: Bundle[], overrides: Partial<Live> = {}): Live {
@@ -1002,4 +1002,15 @@ describe('a playlist that has finished (idea 9)', () => {
     render(<DownloadPage live={makeLive([row(1, 'done'), row(2, 'error')], { playlists })} />)
     expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
   })
+})
+
+it('exports the missing list from the Failed tab, and says so if that fails', async () => {
+  vi.mocked(api.exportMissing).mockResolvedValueOnce({ path: '/Users/me/Downloads/x.txt', count: 1 })
+  render(<DownloadPage live={makeLive([mk(1, 'not_found')])} />)
+  fireEvent.click(screen.getByRole('tab', { name: /^Failed/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Export missing list' }))
+  await waitFor(() => expect(api.exportMissing).toHaveBeenCalledTimes(1))
+  vi.mocked(api.exportMissing).mockRejectedValueOnce(new ApiError(500, 'Could not write the list'))
+  fireEvent.click(screen.getByRole('button', { name: 'Export missing list' }))
+  expect(await screen.findByText('Could not write the list')).toBeInTheDocument()
 })

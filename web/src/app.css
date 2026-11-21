@@ -936,3 +936,9 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .batch-missing { margin: 8px 0 0 30px; padding: 0; list-style: none; font-size: 12px; color: var(--secondary); }
 .batch-missing li { padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-missing li.more { color: var(--tertiary); }
+
+/* Under a failed row's note: where else to look for it, and the report (idea 8). */
+.row-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 3px; font-size: 11px; color: var(--secondary); }
+.row-links .btn-link { font-size: 11px; }
+/* Sits beside Retry all at the right, not straight after the capped-width summary. */
+.filterbar-row .export-missing + .btn-secondary { margin-left: 0; }

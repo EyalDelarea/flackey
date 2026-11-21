@@ -219,6 +219,8 @@ export const api = {
   removeRequest: (id: number) => del<{ ok: boolean }>('/api/requests/' + id),
   removeRequests: (ids: number[]) => post<{ removed: number[]; skipped: number[] }>('/api/requests/remove', { ids }),
   clearFailed: () => post<{ removed: number[] }>('/api/requests/clear-failed'),
+  /** Every failed track as a text file in Downloads, shown in the file manager (idea 8). */
+  exportMissing: () => post<{ path: string; count: number }>('/api/requests/export-missing'),
   library: (q?: string, playlistId?: number | null) => {
     const p = new URLSearchParams()
     if (q) p.set('q', q)

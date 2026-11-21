@@ -1446,6 +1446,39 @@ def test_clear_failed_removes_only_failed_states(client):
     assert errored not in ids and cancelled not in ids
 
 
+def test_export_missing_writes_one_line_per_failed_track_and_shows_it(client, tmp_path, monkeypatch):
+    """Idea 8: the shopping list. Every failed track, named the way the owner would search for it, in a text
+    file in Downloads, shown in the file manager. Nothing is fetched."""
+    import flackey.web.requests as requests_mod
+    c, store, _ = client
+    home = tmp_path / "home"
+    (home / "Downloads").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    shown: list[Path] = []
+    monkeypatch.setattr(requests_mod, "reveal_path", shown.append)
+    named = store.add_request("https://youtu.be/x", RequestKind.TEXT)
+    store.update_request(named, query_artist="Afgin", query_title="Echoes", query_version="Original Mix")
+    store.set_state(named, RequestState.NOT_FOUND)
+    bare = store.add_request("some words", RequestKind.TEXT)
+    store.set_state(bare, RequestState.ERROR, error_message="x")
+    done = store.add_request("filed", RequestKind.TEXT)
+    store.set_state(done, RequestState.DONE)
+    r = c.post("/api/requests/export-missing")
+    assert r.status_code == 200 and r.json()["count"] == 2
+    path = Path(r.json()["path"])
+    assert path.parent == home / "Downloads" and path.name.startswith("Flackey missing tracks ")
+    assert path.read_text(encoding="utf-8") == "Afgin - Echoes (Original Mix)\nsome words\n"
+    assert shown == [path]
+
+
+def test_export_missing_says_so_when_nothing_is_missing(client, monkeypatch):
+    import flackey.web.requests as requests_mod
+    c, _, _ = client
+    monkeypatch.setattr(requests_mod, "reveal_path", lambda p: pytest.fail("nothing to show"))
+    r = c.post("/api/requests/export-missing")
+    assert r.status_code == 409 and "Failed list is empty" in r.json()["detail"]
+
+
 def test_delete_and_clear_failed_publish_a_queue_event(tmp_path):
     bus = EventBus()
     app, store, _ = make(tmp_path, bus=bus)

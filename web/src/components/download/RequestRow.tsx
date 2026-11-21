@@ -85,8 +85,15 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.outcome && <div className={`outcome${v.outcome.retryable ? '' : ' final'}`}>{v.outcome.note}</div>}
           {/* Under the note rather than on the rail beside Try again: it is not a way out of the failure, and
               the rail of a failed row already holds the one that is. */}
-          {v.reportable && <button className="btn-link muted report-failure" onClick={() => onAction('report', v.id, undefined)}>
-            Report this failure</button>}
+          {/* Where else to get it, beside the report: both are about a track Flackey could not get. Plain
+              links, opened in the browser -- nothing is searched or fetched by the app (idea 8). */}
+          {(v.storeLinks || v.reportable) && <div className="row-links">
+            {v.storeLinks && <span className="store-links">Look for it on{' '}
+              {v.storeLinks.map((l, i) => <span key={l.label}>{i > 0 && ' · '}
+                <a className="btn-link" href={l.url} target="_blank" rel="noreferrer">{l.label}</a></span>)}</span>}
+            {v.reportable && <button className="btn-link muted report-failure" onClick={() => onAction('report', v.id, undefined)}>
+              Report this failure</button>}
+          </div>}
           <Checks checks={v.checks} />
         </div>
         {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}

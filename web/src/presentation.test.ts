@@ -1038,3 +1038,20 @@ describe('batchFinishOf', () => {
     expect(batchFinishText(f)).toBe('1 of 1 track filed in under a minute · nothing missing')
   })
 })
+
+describe('store links for a track Flackey gave up on (idea 8)', () => {
+  it('searches Bandcamp and Traxsource for the artist and title', () => {
+    const v = presentRow(bundle({ state: 'not_found', query_artist: 'Man With No Name', query_title: 'Teleport & Co' }), opts)
+    expect(v.storeLinks).toEqual([
+      { label: 'Bandcamp', url: 'https://bandcamp.com/search?q=Man%20With%20No%20Name%20Teleport%20%26%20Co&item_type=t' },
+      { label: 'Traxsource', url: 'https://www.traxsource.com/search?term=Man%20With%20No%20Name%20Teleport%20%26%20Co' },
+    ])
+  })
+
+  it('offers none on a stopped, finished or live row, or on one with no name to search for', () => {
+    for (const state of ['cancelled', 'done', 'fetching'] as const) {
+      expect(presentRow(bundle({ state, query_artist: 'A', query_title: 'B' }), opts).storeLinks ?? null).toBeNull()
+    }
+    expect(presentRow(bundle({ state: 'error', query_artist: null, query_title: null }), opts).storeLinks).toBeNull()
+  })
+})
