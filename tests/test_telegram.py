@@ -738,6 +738,17 @@ async def test_a_connection_telegram_gives_up_on_is_logged_by_flackey_not_by_asy
     assert "Telegram connection lost (Connection to Telegram failed 5 time(s))" in caplog.text
 
 
+async def test_connecting_again_while_connected_reports_the_drop_once(caplog):
+    from flackey.telegram import connect_or_close
+
+    client = _DroppingClient()
+    for _ in range(3):
+        await connect_or_close(client)          # connect() on a live client returns at once
+    client.ended.set_exception(ConnectionError("gone"))
+    await _settle()
+    assert caplog.text.count("Telegram connection lost") == 1
+
+
 async def test_signing_out_on_purpose_is_not_reported_as_a_lost_connection(caplog):
     from flackey.telegram import connect_or_close
 
