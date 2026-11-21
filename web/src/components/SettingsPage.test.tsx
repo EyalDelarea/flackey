@@ -81,6 +81,26 @@ it('says its update check is a manual one', async () => {
   await waitFor(() => expect(check).toHaveBeenCalledWith('manual'))
 })
 
+/* WEB-15: with automatic checks off, opening Settings must not contact the release server on its own.
+   The owner can still ask, and asking is a manual check like any other. */
+it('does not check for updates on its own when automatic checks are off', async () => {
+  const check = vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  const off = { ...(live as object), settings: { ...(live as { settings: object }).settings, auto_update_check: false } } as never
+  render(<SettingsPage live={off} onReconnect={() => {}} />)
+  expect(await screen.findByText('Automatic update checks are off.')).toBeInTheDocument()
+  expect(check).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+  await waitFor(() => expect(check).toHaveBeenCalledWith('manual'))
+  expect(await screen.findByText('Download update')).toBeInTheDocument()
+  expect(screen.queryByText('Automatic update checks are off.')).not.toBeInTheDocument()
+})
+
+it('waits for the settings before deciding whether to check', () => {
+  const check = vi.spyOn(api, 'update').mockResolvedValue({ ...updateAvailable })
+  render(<SettingsPage live={{ ...(live as object), settings: null } as never} onReconnect={() => {}} />)
+  expect(check).not.toHaveBeenCalled()
+})
+
 /* The bug this row was rebuilt for: the press went to `window.open`, which does nothing inside the
    webview, so nothing happened and nothing said so. The download is the server's job now. */
 it('hands the download to the server rather than opening a window', async () => {
