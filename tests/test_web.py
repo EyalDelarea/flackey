@@ -18,7 +18,7 @@ from flackey.config import Settings, default_filing_format
 from flackey.deezer import DeezerApi
 from flackey.events import EventBus, Status
 from flackey.inbox import Inbox
-from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState
+from flackey.models import Candidate, CatalogTrack, RequestKind, RequestState, Verdict
 from flackey.notify import MemoryNotifier
 from flackey.selfupdate import signature as _signature
 from flackey.store import Store
@@ -2998,3 +2998,56 @@ def test_soulseek_setup_again_with_a_grandfathered_whole_drive_share_succeeds(tm
 
     r = AppClient(app).post("/api/setup/soulseek", json={"username": "dj2", "password": "pw2"})
     assert r.status_code == 200, r.text
+
+
+# ---- why the library trusts a file, and checking it again ------------------------------------------------
+def _filed(store, settings, name="A - T.aiff", **kw) -> int:
+    path = settings.library_root / "A" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"audio")
+    return store.add_track(path=path, fmt="aiff", bitrate_kbps=1411, cutoff_hz=21500, file_size=5, artist="A",
+                           title="T", mix_name="Original Mix", duration_s=100, isrc=None, catalog_track_id=None,
+                           request_id=None, **kw)
+
+
+def test_receipt_and_its_spectrogram_are_served_from_the_spectrogram_folder_only(client, tmp_path):
+    c, store, settings = client
+    outside = tmp_path / "elsewhere.png"
+    outside.write_bytes(b"\x89PNG")
+    tid = _filed(store, settings, spectrogram_path=outside)
+    r = c.get(f"/api/library/{tid}/receipt").json()
+    assert r["track_id"] == tid and r["format"].startswith("AIFF") and r["checks"]
+    assert c.get(f"/api/library/{tid}/spectrogram.png").status_code == 404
+    settings.spectrogram_dir.mkdir(parents=True, exist_ok=True)
+    inside = settings.spectrogram_dir / "t.png"
+    inside.write_bytes(b"\x89PNG")
+    store.update_track(tid, spectrogram_path=str(inside))
+    assert c.get(f"/api/library/{tid}/spectrogram.png").content == b"\x89PNG"
+    assert c.get("/api/library/999/receipt").status_code == 404
+
+
+def test_recheck_one_track_returns_the_new_receipt(client, monkeypatch):
+    c, store, settings = client
+    tid = _filed(store, settings)
+    monkeypatch.setattr("flackey.trust.verify", lambda *a: Verdict(True, "aiff", 1411, 16000, "one sign", None,
+                                                                   tier="unverified"))
+    r = c.post(f"/api/library/{tid}/recheck").json()
+    assert r["recheck"]["tier"] == "unverified"
+    assert store.get_track(tid).path.read_bytes() == b"audio"
+
+
+def test_recheck_the_whole_library_counts_what_it_flagged(tmp_path, monkeypatch):
+    app, store, settings = make(tmp_path)
+    _filed(store, settings, "A - One.aiff")
+    _filed(store, settings, "A - Two.aiff")
+    tiers = iter(["clear", "unverified"])
+    monkeypatch.setattr("flackey.trust.verify", lambda *a: Verdict(True, "aiff", 1411, 21000, "x", None,
+                                                                   tier=next(tiers)))
+    with AppClient(app) as c:   # one event loop for the whole test, so the background run keeps going
+        assert c.post("/api/library/recheck").json()["state"] == "running"
+        for _ in range(250):
+            state = c.get("/api/library/recheck").json()
+            if state["state"] != "running":
+                break
+            time.sleep(0.02)
+    assert state["state"] == "done" and state["done"] == 2 and state["flagged"] == 1
