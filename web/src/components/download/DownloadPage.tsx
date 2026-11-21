@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
 import type { Live } from '../../live'
-import { asSentence, bucketCounts, bucketOf, bulkRemoveOf, clearConfirmText, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
+import { asSentence, batchFinishOf, bucketCounts, bucketOf, bulkRemoveOf, clearConfirmText, failedSummary, groupRows, matchesFilter, removeConfirmText } from '../../presentation'
 import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
 import Banner from '../Banner'
+import BatchFinished from './BatchFinished'
 import EmptyDownloads from './EmptyDownloads'
 import FilterBar from './FilterBar'
 import { selectionKeys } from './selectionKeys'
@@ -100,6 +101,19 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
     seededHistory.current = true
     setSeenHistoryIds(new Set(historyIds))
   }, [bundles.length])
+  // Playlists seen moving since the page opened (idea 9). One of these that has stopped moving gets its
+  // finish card on the Downloads tab until the owner dismisses it; a batch that was already finished when
+  // the app opened is old news and gets none.
+  const [watched, setWatched] = useState<Set<number>>(new Set())
+  const moving = [...new Set(bundles.filter(b => b.request.playlist_id != null && !isFinished(b))
+    .map(b => b.request.playlist_id!))].sort((a, c) => a - c)
+  useEffect(() => {
+    if (moving.some(id => !watched.has(id))) setWatched(w => new Set([...w, ...moving]))
+  }, [moving.join(',')])
+  const finished = live.playlists.filter(p => watched.has(p.id))
+    .map(p => batchFinishOf(bundles, p)).filter(f => f != null)
+  const [retryingBatch, setRetryingBatch] = useState<number | null>(null)
+  const dismissBatch = (id: number) => setWatched(w => { const n = new Set(w); n.delete(id); return n })
   const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)
@@ -182,6 +196,18 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       })
       .catch(err => setActionError(failMessage(err)))
       .finally(() => setRetryingAll(false))
+  }
+  // The finish card's second pass: the batch starts moving again, so the card steps aside by itself and
+  // comes back with fresh numbers once it settles.
+  const retryMissing = (playlistId: number, ids: number[]) => {
+    setRetryingBatch(playlistId)
+    api.retryFailed(ids)
+      .then(async ({ retried }) => {
+        setActionError(retried.length === 0 ? 'Nothing could be retried — this list may be out of date.' : null)
+        await refreshAfter()
+      })
+      .catch(err => setActionError(failMessage(err)))
+      .finally(() => setRetryingBatch(null))
   }
   const removeThese = (ids: number[]) => {
     setRemoving(true)
@@ -332,6 +358,8 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
       )}
       <div className="scroll">
         {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
+        {view === 'active' && finished.map(f => <BatchFinished key={f.playlistId} f={f} busy={retryingBatch === f.playlistId}
+          onRetry={ids => retryMissing(f.playlistId, ids)} onDismiss={() => dismissBatch(f.playlistId)} />)}
         {groups.length === 0 && bundles.length === 0 && <EmptyDownloads />}
         {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be

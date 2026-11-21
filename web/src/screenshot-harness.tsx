@@ -352,7 +352,7 @@ const scenario = new URLSearchParams(window.location.search).get('scenario') ?? 
 function scenarioSetup() {
   vi_spy(api, 'settings', async () => settings)
   vi_spy(api, 'playlists', async () => scenario === 'library-with-playlist' ? [playlist]
-    : scenario === 'many-playlists' ? manyPlaylists : scenario === 'stages' ? [goaPlaylist]
+    : scenario === 'many-playlists' ? manyPlaylists : scenario === 'stages' || scenario === 'batch-finished' ? [goaPlaylist]
     : scenario === 'extended-playlist' ? [summerPlaylist] : [])
   vi_spy(api, 'stats', async () => stats)
   vi_spy(api, 'queue', async () => scenario === 'failed' ? failures
@@ -363,6 +363,7 @@ function scenarioSetup() {
     : scenario === 'telegram-revoked-before' ? burnedOnRevoke
     : scenario === 'extended' ? extendedRows
     : scenario === 'unverified' ? unverifiedRows
+    : scenario === 'batch-finished' ? finishRows
     : scenario === 'extended-playlist' ? extendedPlaylistRows : [] as Bundle[])
   const rows = scenario === 'extended-playlist' ? extendedPlaylistRows : extendedRows
   vi_spy(api, 'getExtended', async (trackId: number) => {
@@ -480,6 +481,7 @@ function scenarioSetup() {
        what it lands on, and the Failed tab is one chip press away -- the same division of labour the
        `failed` scenario below already uses. */
     case 'stages':
+    case 'batch-finished':
       vi_spy(api, 'health', async () => health())
       vi_spy(api, 'library', async () => [])
       break
@@ -594,6 +596,14 @@ function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K])
 }
 
 const staged = scenario === 'stages' ? stageBundles() : []
+/* A playlist that settles while the page watches (idea 9): it starts with one track downloading, then a
+   'queue' event lands with every track finished -- 12 filed, 2 missing -- and the finish card appears. */
+const finishRows: Bundle[] = scenario === 'batch-finished' ? (() => {
+  const rows = Array.from({ length: 14 }, () => { const [a, t] = nextGoa(); return stageRow(a, t, 'done') })
+  rows[3] = stageRow('Man With No Name', 'Teleport', 'fetching', { fetch_source: 'soulseek' })
+  rows[9] = stageRow('Juno Reactor', 'Guardian Angel', 'queued')
+  return rows
+})() : []
 const layout = scenario === 'row-layout' ? layoutRows() : []
 
 /* Nothing is serving audio here, so every press would take a 404 and the element would fire `error` -- a
@@ -630,6 +640,16 @@ if (scenario === 'stages') {
   const fetching = staged.find(b => b.request.state === 'fetching')!
   setTimeout(() => sources.forEach(es =>
     es.handlers['status']?.({ data: JSON.stringify({ fetch_progress: [stageProgress(fetching.request.id)] }) })), 200)
+}
+if (scenario === 'batch-finished') {
+  setTimeout(() => {
+    const at = (title: string) => finishRows.find(b => b.request.query_title === title)!.request
+    Object.assign(at('Teleport'), { state: 'not_found', error_message: 'no copy turned up on Deezer or Soulseek',
+      updated_at: '2026-09-22T09:14:00Z' })
+    Object.assign(at('Guardian Angel'), { state: 'error', failed_stage: 'download', attempts: 5,
+      error_message: 'gave up after 5 tries — every peer refused the transfer', updated_at: '2026-09-22T09:12:00Z' })
+    sources.forEach(es => es.handlers['queue']?.({ data: '' }))
+  }, 500)
 }
 if (scenario === 'row-layout') {
   setTimeout(() => sources.forEach(es =>
