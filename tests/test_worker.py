@@ -158,7 +158,9 @@ async def test_happy_path_files_tags_exports(env):
     assert track.path.exists() and track.isrc == "UKU932231081"
     assert track.verified_at is not None and track.spectrogram_path.exists()
     assert not list(settings.tmp_dir.glob("*.mp3"))
-    assert not (settings.library_root / "Playlists").exists()  # no playlist, no export
+    # No playlist of the owner's to export; only "Flackey - New", which now holds the track
+    assert [p.name for p in (settings.library_root / "Playlists").iterdir()] == ["Flackey - New.m3u8"]
+    assert "Astral Projection - Into the Void.mp3" in (settings.library_root / "Playlists" / "Flackey - New.m3u8").read_text()
     assert notifier.sent[-1][0].startswith("Done: Astral Projection – Into the Void")
     assert "BPM" not in notifier.sent[-1][0] and "A Major" not in notifier.sent[-1][0]  # Rekordbox analyzes both
 
