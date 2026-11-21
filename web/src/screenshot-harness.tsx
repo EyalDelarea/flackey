@@ -681,3 +681,8 @@ if (scenario === 'unverified') {
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+/* `?drop=1`: the stream from Flackey drops for good after the first load, for a picture of the reconnecting state.
+   The page waits 5 s past an error before it calls the stream lost, so shoot after about 7 s. */
+if (new URLSearchParams(window.location.search).get('drop')) {
+  setTimeout(() => (lastEventSource() as unknown as { onerror?: () => void } | null)?.onerror?.(), 1000)
+}

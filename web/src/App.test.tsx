@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import App from './App'
 import { api } from './api'
 import type { AppSettings, Health, Stats } from './api'
@@ -387,5 +387,43 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     await screen.findByText('Not connected')
     await waitFor(() => expect(vi.mocked(api.telemetry).mock.calls.length).toBeGreaterThanOrEqual(2))
     expect(screen.queryByText('Hey! Eyal here 👋')).not.toBeInTheDocument()
+  })
+})
+
+
+describe('losing Flackey itself (WEB-9)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  /** Connected and showing `tab`, then the event stream errors and stays down past the 5 s grace. */
+  async function dropStream(tab: string) {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ source_enabled: false,
+      lossless: { enabled: true, provider: { name: 'soulseek', status: 'ok', username: 'dj' }, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
+    render(<App />)
+    expect(await screen.findByText('Connected')).toBeInTheDocument()
+    const es = FakeEventSource.last as FakeEventSource & { onerror?: () => void }
+    act(() => { es.onopen?.() })                 // the first update: from here on a drop is a drop
+    fireEvent.click(screen.getByRole('button', { name: tab }))
+    vi.useFakeTimers()
+    act(() => { es.onerror?.() })
+    act(() => { vi.advanceTimersByTime(5100) })
+    return es
+  }
+
+  it.each(['Library', 'Uploads', 'Settings', 'Download'])('says it is reconnecting on %s, not only on Download', async tab => {
+    await dropStream(tab)
+    expect(screen.getByText(/Reconnecting to Flackey… Last update/)).toBeInTheDocument()
+  })
+
+  it('stops the sidebar claiming Connected from a reading that is now stale', async () => {
+    await dropStream('Library')
+    expect(screen.getByText('Reconnecting…')).toBeInTheDocument()
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument()
+  })
+
+  it('clears both once the stream is back', async () => {
+    const es = await dropStream('Settings')
+    act(() => { es.onopen?.() })
+    expect(screen.queryByText(/Reconnecting to Flackey/)).not.toBeInTheDocument()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
   })
 })
