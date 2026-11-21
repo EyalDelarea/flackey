@@ -189,9 +189,10 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 /* art | title, status, detail | ladder | status cell | actions. The two right-hand cells are fixed widths and
    every row draws both, so Stop, Try again and Remove sit at the same x on every row of the list. The
    status cell is as wide as the widest thing it holds (the waiting pill); the actions cell is Try again
-   plus Remove. The ladder's column is its own width, so the room left over goes to the title. */
+   plus Remove. The ladder's column is its own width -- dots plus the one name it prints -- so the room left
+   over goes to the title. */
 .row-main { --row-status-w: 132px; --row-action-w: 74px; --row-remove-w: 46px;
-  display: grid; grid-template-columns: 36px minmax(200px, 1fr) 256px var(--row-status-w)
+  display: grid; grid-template-columns: 36px minmax(200px, 1fr) 150px var(--row-status-w)
     calc(var(--row-action-w) + 10px + var(--row-remove-w));
   align-items: center; gap: 12px; min-height: 54px; padding: 8px 12px; }
 .row-text { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -334,6 +335,7 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 @media (max-width: 1087px) {
   .row-main { grid-template-columns: 36px minmax(0, 1fr) var(--row-status-w) calc(var(--row-action-w) + 10px + var(--row-remove-w)); }
   .row-steps { grid-column: 2; grid-row: 2; justify-content: flex-start; margin-top: 2px; }
+  .row-steps .stepper { justify-content: flex-start; }
   .row-status { grid-column: 3; }
   .row-actions { grid-column: 4; }
   .row-main:not(:has(.row-steps)) .row-status { grid-column: 2; grid-row: 2; justify-content: flex-start; }

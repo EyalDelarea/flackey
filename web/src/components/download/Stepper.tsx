@@ -10,8 +10,12 @@ interface Tip { name: string; x: number; y: number; below: boolean }
 const TIP_ROOM = 96
 
 /** One ladder, not two widgets. The old row put dots on the left and a `Search · Choose · …` string on the
- *  right, so the reader had to pair them up by counting. Here each rung carries its own name, state and
- *  the sentence explaining it -- the words come from STEP_TIPS so the ladder has a single source.
+ *  right, so the reader had to pair them up by counting. Here each rung carries its own state and the
+ *  sentence explaining it -- the words come from STEP_TIPS so the ladder has a single source.
+ *
+ *  Only the rung the row is on (or will resume at, when parked) prints its name. Four names took a 256px
+ *  column, which cut the track titles beside it short at ordinary window widths; the dots alone say how far
+ *  along a row is, and every rung still names itself in its tooltip and to a screen reader.
  *
  *  The sentence used to ride on the `title` attribute, which showed nothing: inside the packaged app the
  *  page is a WKWebView, and WKWebView draws no tooltip layer of its own. So the app draws one. It is
@@ -36,7 +40,7 @@ export default function Stepper({ steps }: { steps: StepView[] }) {
             <button type="button" className="step-tip-target" aria-label={`${s.name}: ${STEP_TIPS[s.name]}`}
                     onFocus={show(s.name)} onBlur={() => setTip(null)}>
               <span className="step-mark" aria-hidden="true" />
-              <span className="step-name">{s.name}</span>
+              {(s.state === 'current' || s.state === 'paused') && <span className="step-name">{s.name}</span>}
             </button>
           </li>
         ))}
