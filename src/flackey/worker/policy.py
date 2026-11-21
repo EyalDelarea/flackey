@@ -5,6 +5,15 @@ from ..models import RequestState
 
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_S = (30, 120)  # wait before attempt 2, before attempt 3
+# Telegram losing the connection, or the Deezer bot not answering in time, says nothing about the track:
+# the client reconnects (`deezer_bot._lost_connection` asks Telegram, which connects it again) and the bot
+# usually answers a few minutes later. The 30 s/120 s ladder above gave up inside three minutes, which
+# turned every short Telegram outage into red failed rows (Nov 16 and 18: 7 in two days). So these waits
+# come first and cost no attempt: about an hour in all, spaced out so the bot is asked only a handful of
+# times. Counted until the bot actually sends a file: a bot that answers every search and then never sends
+# the file (Nov 18, four tracks) would otherwise reset the count each pass and be retried for ever. Once
+# they are spent the ordinary ladder above takes over.
+TELEGRAM_RETRY_WAITS_S = (60, 300, 900, 1800)
 REVIEW_BUTTONS = 5
 # IDENTIFYING and FETCHING are here because a download in progress is exactly the thing an owner watching a
 # slow transfer wants to stop. VERIFYING and FILING deliberately are not: those stages move a file into the
