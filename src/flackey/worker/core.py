@@ -396,6 +396,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         if req.state == RequestState.AWAITING_REVIEW:
             usage.review_answered(self.store, req, "cancelled")
         self._set_state(req, RequestState.CANCELLED)
+        self._telegram_misses.pop(request_id, None)
         task = self._tasks.get(request_id)
         if task is not None:
             task.cancel()
@@ -451,7 +452,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     def _fresh_pass(self, req: Request) -> None:
-        """Back on the queue, due now, with the whole retry budget and one more look at the providers."""
+        """Back on the queue, due now, with the whole retry budget and one more look at the providers --
+        the hour of Telegram waits included, or a Try again after a Telegram give-up would skip straight to
+        the quick ladder and fail again inside three minutes."""
+        self._telegram_misses.pop(req.id, None)
         self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
                         error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
 

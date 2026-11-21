@@ -57,6 +57,8 @@ class RecoveryMixin:
         misses = self._telegram_misses.get(req.id, 0)
         if misses >= len(TELEGRAM_RETRY_WAITS_S):
             await self._retry_or_fail(req, reason)
+            if self.store.get_request(req.id).state == RequestState.ERROR:
+                self._telegram_misses.pop(req.id, None)   # finished with; Try again starts a fresh count
             return
         self._telegram_misses[req.id] = misses + 1
         wait = TELEGRAM_RETRY_WAITS_S[misses]
@@ -82,6 +84,9 @@ class RecoveryMixin:
         shows the countdown and the reason meanwhile. `attempts` keeps counting past MAX_ATTEMPTS so the
         budget survives a restart: it lives on the row, not in memory."""
         hours = LONG_RETRY_EVERY_S // 3600
+        # Each look is hours after the last, so a Telegram drop on it is a new drop: it gets the whole hour
+        # of waits. Carried over, the fifth drop across three days would end the request in ERROR.
+        self._telegram_misses.pop(req.id, None)
         if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
             reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
                       f"Press Try again to search once more")

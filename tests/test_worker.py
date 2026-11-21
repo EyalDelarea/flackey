@@ -327,19 +327,42 @@ async def test_a_telegram_timeout_waits_about_an_hour_without_spending_attempts(
     assert r.attempts == worker_mod.MAX_ATTEMPTS and "source bot did not send the file" in r.error_message
 
 
-async def test_a_file_from_the_bot_starts_the_telegram_waits_again(env):
-    """A file arriving is evidence the connection is back, so a later drop gets the whole hour again rather
-    than what an earlier, unrelated drop left over."""
+async def test_try_again_after_a_telegram_give_up_gets_the_whole_hour_again(env):
+    """Pressing Try again is the owner's own retry after the give-up. Left at the spent count, the next
+    drop would skip the waits and fail inside three minutes -- the behaviour these waits replace."""
     _settings, store, _notifier = env
     src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
     w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
-    for _ in range(len(worker_mod.TELEGRAM_RETRY_WAITS_S) - 1):
-        await w.process(rid)
-    assert w._telegram_misses[rid] == len(worker_mod.TELEGRAM_RETRY_WAITS_S) - 1
-    w._telegram_answered(store.get_request(rid))
+    await _until_error(w, rid)
+    assert rid not in w._telegram_misses
+    await w.retry(rid)
+    before = datetime.now(UTC)
     r = await w.process(rid)
-    assert r.state == RequestState.QUEUED and r.attempts == 0 and w._telegram_misses[rid] == 1
+    assert r.state == RequestState.QUEUED and r.attempts == 0
+    first = worker_mod.TELEGRAM_RETRY_WAITS_S[0]
+    assert first - 5 <= (datetime.fromisoformat(r.retry_after) - before).total_seconds() <= first + 5
+
+
+async def test_stopping_a_track_forgets_its_telegram_count(env):
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file")))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert w._telegram_misses[rid] == 1
+    await w.cancel(rid)
+    assert rid not in w._telegram_misses
+
+
+async def test_each_long_soulseek_look_gets_the_whole_telegram_hour(env):
+    """The long Soulseek wait looks again every few hours for days. A Telegram drop on one of those looks
+    is a new drop, so the count spent on an earlier one must not carry over and end the request."""
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    w._telegram_misses[rid] = len(worker_mod.TELEGRAM_RETRY_WAITS_S)
+    await w._wait_for_soulseek(store.get_request(rid), "peers busy", worker_mod.MAX_ATTEMPTS)
+    assert store.get_request(rid).state == RequestState.QUEUED and rid not in w._telegram_misses
 
 
 async def test_a_file_from_the_bot_clears_the_telegram_count(env):
