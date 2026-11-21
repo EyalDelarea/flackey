@@ -454,11 +454,16 @@ function scenarioSetup() {
         lossless: { enabled: false, provider: null, fpcalc: true, attempts_24h: {}, raw_mb: 0 } }))
       vi_spy(api, 'library', async () => [])
       break
+    /* `setup-signed-in`: Telegram already signed in, so its step is one Continue and the Ready step is
+       reachable by clicks alone -- the screen the first-run walkthrough lives on. */
     case 'setup':
+    case 'setup-signed-in':
       vi_spy(api, 'health', async () => health({ setup_done: false, telegram_authorized: false }))
       vi_spy(api, 'pickFolderAvailable', async () => ({ available: false }))
       vi_spy(api, 'saveSettings', async (library_root: string) => ({ ...settings, library_root }))
-      vi_spy(api, 'telegramStatus', async () => ({ authorized: false, configured: true, phone_masked: null }))
+      vi_spy(api, 'telegramStatus', async () => scenario === 'setup-signed-in'
+        ? { authorized: true, configured: true, phone_masked: '+44 •••• ••21' }
+        : { authorized: false, configured: true, phone_masked: null })
       vi_spy(api, 'skipTelegram', async () => ({ source_enabled: false }))
       vi_spy(api, 'soulseekSetup', async () => ({ configured: false, username: null }))
       vi_spy(api, 'slskdSetup', async () => ({ installed: true, running: false, version: '0.26.0' }))

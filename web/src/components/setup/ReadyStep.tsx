@@ -3,6 +3,7 @@ import { api, ApiError } from '../../api'
 import Icon from '../Icon'
 import type { Tools } from '../../api'
 import { usePlatform } from '../../platform'
+import TryItDemo from './TryItDemo'
 
 const NAME: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', yt_dlp: 'yt-dlp' }
 const BREW: Record<keyof Tools, string> = { ffmpeg: 'ffmpeg', ffprobe: 'ffmpeg', yt_dlp: 'yt-dlp' }
@@ -64,7 +65,11 @@ export default function ReadyStep({ libraryRoot, onStart, onConnectSource, error
           <button className="btn-primary lg" onClick={onConnectSource} disabled={!tools}>Connect a source</button>
           <button className="btn-link" onClick={start} disabled={!tools || busy}>Explore the app</button>
         </div>
-      : <button className="btn-primary lg" onClick={start} disabled={!tools || busy}>Start digging</button>}
+      : <>
+          {/* With nowhere to fetch from, a walkthrough of a download would promise what cannot happen yet. */}
+          <TryItDemo libraryRoot={libraryRoot} soulseek={soulseek !== 'skipped'} telegram={telegram === 'connected'} />
+          <button className="btn-primary lg" onClick={start} disabled={!tools || busy}>Start digging</button>
+        </>}
     {err && <div className="err">{err}</div>}
     {error && <div className="err">{error}</div>}
   </>)
