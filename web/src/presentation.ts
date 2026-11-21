@@ -899,3 +899,44 @@ export function clearConfirmText(n: number): string {
   const head = n === 1 ? 'Clear the failed track from the list?' : `Clear all ${n} failed tracks from the list?`
   return `${head} Files already in your library stay where they are.`
 }
+
+/** A playlist that has stopped moving: nothing searching, downloading, waiting to retry or waiting on the
+ *  owner (idea 9). The one moment a batch can be summed up -- "38 of 40, here are the 2 missing". */
+export interface BatchFinishView {
+  playlistId: number; name: string; filed: number; total: number
+  /** The failed rows, by title, in playlist order. */
+  missing: { id: number; title: string }[]
+  /** The missing ones "Retry the missing ones" takes: the same `sweptByRetryAll` rule as Retry all, so a
+   *  track the owner stopped is not started behind their back. */
+  retryIds: number[]
+  /** From the first row added to the last row finishing, rounded to the minute. Null when unknown. */
+  minutes: number | null
+}
+
+/** The finish summary for one playlist, or null while any of it is still moving. */
+export function batchFinishOf(all: Bundle[], playlist: Playlist): BatchFinishView | null {
+  const rows = all.filter(b => b.request.playlist_id === playlist.id)
+  if (rows.length === 0) return null
+  if (rows.some(b => bucketOf(b.request.state) === 'progress' || bucketOf(b.request.state) === 'needs')) return null
+  const failed = rows.filter(b => bucketOf(b.request.state) === 'failed')
+    .sort((a, c) => (a.request.playlist_position ?? a.request.id) - (c.request.playlist_position ?? c.request.id))
+  const times = (k: 'created_at' | 'updated_at') => rows.map(b => Date.parse(b.request[k])).filter(Number.isFinite)
+  const started = times('created_at'), ended = times('updated_at')
+  const minutes = started.length && ended.length
+    ? Math.max(0, Math.round((Math.max(...ended) - Math.min(...started)) / 60000)) : null
+  return {
+    playlistId: playlist.id, name: playlist.name, total: rows.length,
+    filed: rows.filter(b => COMPLETE.includes(b.request.state)).length,
+    missing: failed.map(b => ({ id: b.request.id, title: titleOf(b).title })),
+    retryIds: failed.filter(b => sweptByRetryAll(b.request.state)).map(b => b.request.id),
+    minutes,
+  }
+}
+
+/** The card's one line: "38 of 40 filed in 14 min · 2 missing". */
+export function batchFinishText(f: BatchFinishView): string {
+  const took = f.minutes == null ? '' : f.minutes < 1 ? ' in under a minute'
+    : f.minutes < 120 ? ` in ${f.minutes} min` : ` in ${Math.round(f.minutes / 60)} h`
+  const missing = f.missing.length === 0 ? ' · nothing missing' : ` · ${f.missing.length} missing`
+  return `${f.filed} of ${plural(f.total, 'track')} filed${took}${missing}`
+}

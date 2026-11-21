@@ -907,3 +907,17 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .usage-log-head .k { margin-top: 0; }
 .usage-log { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--alt);
   border: .5px solid var(--sep); white-space: pre; user-select: text; }
+
+/* A playlist that has stopped moving (idea 9): one card with the counts, the missing tracks and a second
+   pass at them. Sits above the list like a group, in the group's own surface. */
+.batch-finished { margin: 0 0 16px; padding: 12px 14px; border: .5px solid var(--group-border); border-radius: 10px; background: var(--group); }
+.batch-finished-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.batch-finished-head h2 { font-size: 14px; font-weight: 600; }
+.batch-finished-head .summary { font-size: 12px; color: var(--secondary); }
+.batch-finished-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--green); color: #fff; flex: none; }
+.batch-finished-mark.partial { background: var(--orange); }
+.batch-finished-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
+.batch-missing { margin: 8px 0 0 30px; padding: 0; list-style: none; font-size: 12px; color: var(--secondary); }
+.batch-missing li { padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-missing li.more { color: var(--tertiary); }

@@ -964,3 +964,42 @@ it('sends a row action once when it is pressed twice before the first answer (WE
   expect(api.retry).toHaveBeenCalledTimes(2)
   await act(async () => release())
 })
+
+describe('a playlist that has finished (idea 9)', () => {
+  const playlists = [{ id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '',
+    track_ids: [], file: '/lib/Playlists/Goa.m3u8' }]
+  const row = (id: number, state: Request['state']): Bundle => ({
+    request: { ...baseRequest, id, state, playlist_id: 7, playlist_position: id, query_artist: 'Afgin', query_title: `Track ${id}`,
+      error_message: state === 'error' ? 'network blip' : null },
+    candidates: [], catalog: null, track: null, rejection: null,
+  })
+
+  it('sums the batch up once it stops moving, and retries the missing ones from the card', async () => {
+    vi.mocked(api.retryFailed).mockResolvedValueOnce({ retried: [3], skipped: [] })
+    const { rerender } = render(<DownloadPage live={makeLive([row(1, 'done'), row(2, 'fetching'), row(3, 'queued')], { playlists })} />)
+    expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
+    rerender(<DownloadPage live={makeLive([row(1, 'done'), row(2, 'done'), row(3, 'not_found'), row(4, 'cancelled')], { playlists })} />)
+    const card = screen.getByRole('region', { name: 'Goa Set finished' })
+    expect(card).toHaveTextContent('2 of 4 tracks filed')
+    expect(card).toHaveTextContent('2 missing')
+    expect(card).toHaveTextContent('Afgin – Track 3')
+    expect(card).toHaveTextContent('Afgin – Track 4')
+    // The stopped one is listed as missing but not started behind the owner's back, as with Retry all.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry the missing one' }))
+    await waitFor(() => expect(api.retryFailed).toHaveBeenCalledWith([3]))
+  })
+
+  it('goes away when dismissed', () => {
+    const { rerender } = render(<DownloadPage live={makeLive([row(1, 'fetching')], { playlists })} />)
+    rerender(<DownloadPage live={makeLive([row(1, 'done')], { playlists })} />)
+    expect(screen.getByRole('region', { name: 'Goa Set finished' })).toHaveTextContent('nothing missing')
+    expect(screen.queryByRole('button', { name: /Retry the/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
+  })
+
+  it('says nothing about a playlist that was already finished when the app opened', () => {
+    render(<DownloadPage live={makeLive([row(1, 'done'), row(2, 'error')], { playlists })} />)
+    expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
+  })
+})

@@ -1,4 +1,4 @@
-import { STEP_TIPS, asSentence, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { STEP_TIPS, asSentence, batchFinishOf, batchFinishText, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -1006,5 +1006,35 @@ describe('Beatport is gone', () => {
     for (const state of ['identifying', 'not_found'] as const) {
       expect(JSON.stringify(presentRow(bundle({ state }), opts))).not.toMatch(/Beatport/)
     }
+  })
+})
+
+describe('batchFinishOf', () => {
+  const pl = { id: 7, source_url: 'u', name: 'Goa Set', created_at: '', updated_at: '', track_ids: [], file: '' }
+  const at = (id: number, state: Request['state'], created: string, updated: string) =>
+    bundle({ id, state, playlist_id: 7, playlist_position: id, created_at: created, updated_at: updated })
+
+  it('is null while anything in the batch is still moving or waiting on the owner', () => {
+    expect(batchFinishOf([at(1, 'done', '', ''), at(2, 'fetching', '', '')], pl)).toBeNull()
+    expect(batchFinishOf([at(1, 'done', '', ''), at(2, 'awaiting_review', '', '')], pl)).toBeNull()
+    expect(batchFinishOf([at(1, 'done', '', ''), bundle({ id: 2, playlist_id: 7, retry_after: '2099-01-01T00:00:00Z' })], pl)).toBeNull()
+    expect(batchFinishOf([], pl)).toBeNull()
+  })
+
+  it('counts what landed, lists what did not, and times the run', () => {
+    const f = batchFinishOf([
+      at(1, 'done', '2026-11-20T10:00:00Z', '2026-11-20T10:05:00Z'),
+      at(2, 'duplicate', '2026-11-20T10:00:00Z', '2026-11-20T10:01:00Z'),
+      at(3, 'rejected', '2026-11-20T10:00:00Z', '2026-11-20T10:14:00Z'),
+      at(4, 'error', '2026-11-20T10:00:00Z', '2026-11-20T10:09:00Z'),
+    ], pl)!
+    expect(f).toMatchObject({ filed: 2, total: 4, minutes: 14, retryIds: [4] })
+    expect(f.missing.map(m => m.id)).toEqual([3, 4])
+    expect(batchFinishText(f)).toBe('2 of 4 tracks filed in 14 min · 2 missing')
+  })
+
+  it('words a quick or a clean run plainly', () => {
+    const f = batchFinishOf([at(1, 'done', '2026-11-20T10:00:00Z', '2026-11-20T10:00:20Z')], pl)!
+    expect(batchFinishText(f)).toBe('1 of 1 track filed in under a minute · nothing missing')
   })
 })
