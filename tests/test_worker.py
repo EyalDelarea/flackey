@@ -186,7 +186,7 @@ async def test_a_track_that_waited_for_soulseek_announces_itself_when_filed(env)
 
 def test_desktop_notify_hands_the_text_over_as_arguments_and_never_raises(monkeypatch):
     """The text is a track title from the internet: it goes in as argv, never into the script."""
-    import flackey.notify as notify
+    from flackey import notify
     calls: list[list[str]] = []
     monkeypatch.setattr(notify.sys, "platform", "darwin")
     monkeypatch.setattr(notify.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))

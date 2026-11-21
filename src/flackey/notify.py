@@ -67,8 +67,8 @@ def desktop_notify(title: str, body: str) -> None:
         cmd = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _TOAST]
         env = {**os.environ, "FLACKEY_NOTE_TITLE": title, "FLACKEY_NOTE_BODY": body}
     else:
-        cmd = ["notify-send", title, body]
+        cmd = ["notify-send", "--", title, body]   # "--": a title like "-Rezz" is not an option
     try:
         subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_window())
-    except OSError as e:
+    except (OSError, ValueError) as e:     # ValueError: a NUL byte in the text
         logging.getLogger(__name__).debug("could not show a notification: %s", e)

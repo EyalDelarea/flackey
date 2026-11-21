@@ -380,10 +380,6 @@ class FilingMixin:
         file_track(tmp, dest)
         log.info("req#%d filed %s -> %s", req.id, f"{catalog.artist} – {catalog.title}",
                 dest.relative_to(self.settings.library_root))
-        if req.attempts >= MAX_ATTEMPTS and self.on_found is not None:
-            # Only a request that ran out the quick ladder reaches the long wait for Soulseek, so this is the
-            # track the owner was told "it will come" about (idea 1) -- and now it has.
-            self.on_found(f"{catalog.artist} – {catalog.title}")
         track_id = self.store.add_track(
             path=dest, fmt=verdict.fmt, bitrate_kbps=verdict.bitrate_kbps, cutoff_hz=verdict.cutoff_hz,
             file_size=dest.stat().st_size, artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
@@ -392,6 +388,14 @@ class FilingMixin:
             catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
             source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate,
             tag_date=catalog.tag_date)
+        if req.attempts >= MAX_ATTEMPTS and self.on_found is not None:
+            # Only a request that ran out the quick ladder reaches the long wait for Soulseek, so this is the
+            # track the owner was told "it will come" about (idea 1) -- and now it has. After the track row
+            # exists, and guarded: a notification is never worth a filing.
+            try:
+                self.on_found(f"{catalog.artist} – {catalog.title}")
+            except Exception as e:  # noqa: BLE001 -- whatever the callback raises, the track is filed
+                log.debug("req#%d found-notification failed: %s", req.id, e)
         # None only when the check could not be run at all at accept time -- no stored reference, no fpcalc.
         # A track with no recording_match row says "not checked", which is true; a fabricated passing one
         # would not be.
