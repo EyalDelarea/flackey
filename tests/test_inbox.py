@@ -333,3 +333,65 @@ async def test_preferring_extended_a_link_filed_as_the_radio_edit_is_looked_up_a
     ib.prefer_extended = lambda: True
     s = await ib.submit("https://open.spotify.com/playlist/pl1")
     assert s.already_in_library == 0
+
+
+# ---- a library deleted on purpose is downloaded again (0.8 QA, bug 1) -------------------------------
+
+def _reachable_root(tmp_path: Path) -> Path:
+    """A library folder that is there, with something left in it: not an unplugged drive."""
+    root = tmp_path / "lib"
+    (root / "Kept").mkdir(parents=True)
+    return root
+
+
+def _filed(store: Store, url: str, path: Path) -> int:
+    rid = store.add_request("Astral Projection - Into The Void", RequestKind.YT_TRACK, source_url=url)
+    tid = store.add_track(path=path, fmt="flac", bitrate_kbps=900, cutoff_hz=22000, file_size=1,
+                          artist="Astral Projection", title="Into The Void", mix_name="Original Mix",
+                          duration_s=442, isrc=None, catalog_track_id=None, request_id=rid)
+    store.update_request(rid, track_id=tid, state=RequestState.DONE)
+    return tid
+
+
+async def test_a_filed_link_whose_file_was_deleted_is_queued_again(inbox, tmp_path):
+    ib, store = inbox
+    root = _reachable_root(tmp_path)
+    ib.library_root = lambda: root
+    _filed(store, "https://www.youtube.com/watch?v=a", root / "Astral Projection" / "gone.flac")
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 0 and len(s.request_ids) == 2
+    assert store.list_tracks() == [] and store.get_playlist(s.playlist_id).track_ids == []
+
+
+async def test_a_track_matched_by_name_whose_file_was_deleted_is_queued_again(inbox, tmp_path):
+    ib, store = inbox
+    root = _reachable_root(tmp_path)
+    ib.library_root = lambda: root
+    store.add_track(path=root / "X" / "X - Y.mp3", fmt="mp3", bitrate_kbps=320, cutoff_hz=20000, file_size=1,
+                    artist="X", title="Y", mix_name="Original Mix", duration_s=300, isrc=None,
+                    catalog_track_id=None, request_id=None)
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 0 and len(s.request_ids) == 2
+
+
+async def test_a_forgotten_track_behind_a_filed_request_is_queued_again(inbox, tmp_path):
+    """Forgetting a track leaves the request that filed it pointing at no row: that is not a library hit,
+    and no playlist entry may point at the missing row."""
+    ib, store = inbox
+    root = _reachable_root(tmp_path)
+    ib.library_root = lambda: root
+    tid = _filed(store, "https://www.youtube.com/watch?v=a", root / "gone.flac")
+    store.delete_track(tid)
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 0 and len(s.request_ids) == 2
+    assert store.get_playlist(s.playlist_id).track_ids == []
+
+
+async def test_a_missing_library_folder_still_counts_its_tracks_as_owned(inbox, tmp_path):
+    """An unplugged drive: nothing is downloaded again into a folder that is not there."""
+    ib, store = inbox
+    root = tmp_path / "Volumes" / "DJ"
+    ib.library_root = lambda: root
+    tid = _filed(store, "https://www.youtube.com/watch?v=a", root / "gone.flac")
+    s = await ib.submit("https://www.youtube.com/playlist?list=PL1")
+    assert s.already_in_library == 1 and store.get_playlist(s.playlist_id).track_ids == [tid]

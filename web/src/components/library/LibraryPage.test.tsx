@@ -59,13 +59,37 @@ it('shows a red banner when api.library fails', async () => {
 
 it('refreshes missing files and re-reads the library without relaunching', async () => {
   vi.mocked(api.library).mockResolvedValue([])
-  const refreshApi = vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 1 })
+  const refreshApi = vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 1, missing: 0, reachable: true })
   const refreshLive = vi.fn().mockResolvedValue(undefined)
   render(<LibraryPage live={{ ...makeLive(), refreshLibrary: refreshLive }} selectedPlaylist={null} />)
   fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
   await waitFor(() => expect(refreshApi).toHaveBeenCalled())
   await waitFor(() => expect(refreshLive).toHaveBeenCalled())
   expect(screen.getByText('Removed 1 missing file from the library.')).toBeInTheDocument()
+})
+
+it('asks before forgetting a library whose files were deleted on purpose', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  const refreshApi = vi.spyOn(api, 'refreshLibrary')
+    .mockResolvedValueOnce({ removed: 0, missing: 354, reachable: true })
+    .mockResolvedValueOnce({ removed: 354, missing: 0, reachable: true })
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+  expect(await screen.findByText(/354 tracks are no longer in your library folder/)).toBeInTheDocument()
+  expect(screen.queryByText('Library is up to date.')).not.toBeInTheDocument()
+  expect(refreshApi).toHaveBeenLastCalledWith(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Forget them' }))
+  await waitFor(() => expect(refreshApi).toHaveBeenLastCalledWith(true))
+  expect(await screen.findByText('Removed 354 missing files from the library.')).toBeInTheDocument()
+  expect(screen.queryByText(/no longer in your library folder/)).not.toBeInTheDocument()
+})
+
+it('does not call an unplugged library drive up to date', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0, missing: 0, reachable: false })
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+  expect(await screen.findByText(/library folder isn't there/)).toBeInTheDocument()
 })
 
 it('leaves the toolbar free of drag layers, and search still works', async () => {
@@ -198,7 +222,7 @@ describe('after a lossless upgrade', () => {
 
   it('reports a library refresh that went through even when re-reading it fails (WEB-2)', async () => {
     vi.mocked(api.library).mockResolvedValue([])
-    vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0 })
+    vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0, missing: 0, reachable: true })
     const refreshLibrary = vi.fn().mockRejectedValue(new Error('stats timed out'))
     render(<LibraryPage live={{ ...makeLive(), refreshLibrary }} selectedPlaylist={null} />)
     fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))

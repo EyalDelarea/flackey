@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .export import write_playlist
 from .identify import classify, interpretations, parse_version
-from .library import find_extended
+from .library import find_extended, present
 from .models import Query, RequestKind, RequestState
 from .spotify import (
     SpotifyError,
@@ -92,7 +92,10 @@ class Inbox:
         if self._seeks_extended(q):
             return find_extended(self.store, q.artist, q.title, q.version or "Original Mix",
                                  library_root=self.library_root())
-        return self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix", q.duration_s)
+        # Owned means the file is still there: a library deleted on purpose is downloaded again (present
+        # still counts a track as owned while the whole library folder is missing, as on an unplugged drive)
+        return present(self.store, self.store.find_track_by_meta(q.artist, q.title, q.version or "Original Mix",
+                                                                  q.duration_s), self.library_root())
 
     def _export(self, sub: Submission) -> None:
         """Write the playlist's M3U8 when tracks already in the library joined it at paste time (ENG-2).
@@ -109,17 +112,18 @@ class Inbox:
     def _add_existing_playlist_track(self, playlist_id: int, source_url: str, position: int,
                                      q: Query | None = None) -> bool:
         previous = self.store.filed_request_for_url(source_url)
-        if previous and previous.track_id is not None:
-            if q is not None and self._seeks_extended(q):
-                try:
-                    mix = self.store.get_track(previous.track_id).mix_name
-                except KeyError:
-                    mix = None
-                if not split_version(mix).cut:
-                    return False      # the link's normal version: the worker looks for its extended mix
-            self.store.add_playlist_track(playlist_id, previous.track_id, position)
-            return True
-        return False
+        if previous is None or previous.track_id is None:
+            return False
+        try:
+            t = self.store.get_track(previous.track_id)
+        except KeyError:
+            return False              # forgot since: its file was removed, so the link is downloaded again
+        if present(self.store, t, self.library_root()) is None:
+            return False
+        if q is not None and self._seeks_extended(q) and not split_version(t.mix_name).cut:
+            return False              # the link's normal version: the worker looks for its extended mix
+        self.store.add_playlist_track(playlist_id, t.id, position)
+        return True
 
     def _retry_failed_playlist_request(self, playlist_id: int, source_url: str, position: int) -> int | None:
         """Reuse this playlist position's failed request instead of growing duplicate history on re-import."""

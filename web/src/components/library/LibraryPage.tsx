@@ -67,6 +67,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
   const [q, setQ] = useState(''); const [tracks, setTracks] = useState<Track[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  // Files gone at once in numbers that could be an unplugged drive: forgotten only when the owner says so
+  const [missing, setMissing] = useState(0)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [format, setFormat] = useState('all')
@@ -119,13 +121,16 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     (folder === 'all' || relativeFolder(t) === folder))
   const filtered = q || folder !== 'all' || format !== 'all'
   const clearFilters = () => { setQ(''); setFolder('all'); setFormat('all') }
-  const refresh = async () => {
-    setRefreshing(true); setActionError(null)
+  const refresh = async (forgetMissing = false) => {
+    setRefreshing(true); setActionError(null); setMissing(0)
     try {
-      const result = await api.refreshLibrary()
+      const result = await api.refreshLibrary(forgetMissing)
       // Re-reading is only there to show the result sooner; the refresh itself already went through.
       await live.refreshLibrary().catch(() => undefined)
-      setNote(result.removed ? `Removed ${plural(result.removed, 'missing file')} from the library.` : 'Library is up to date.')
+      if (result.removed) setNote(`Removed ${plural(result.removed, 'missing file')} from the library.`)
+      else if (result.missing) { setNote(null); setMissing(result.missing) }
+      else if (!result.reachable) setNote("Your library folder isn't there (is the drive plugged in?). Nothing was changed.")
+      else setNote('Library is up to date.')
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Couldn't refresh library. Try again.")
     } finally { setRefreshing(false) }
@@ -157,7 +162,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
   return (<>
     <Toolbar>
       <div className="search"><Icon name="search" size={14} /><input className="input" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} aria-label="search library" /></div>
-      <button className="btn-secondary" onClick={refresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
+      <button className="btn-secondary" onClick={() => { refresh() }} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
       {s && <span className="counts">{plural(s.tracks, 'track')} · {plural(s.playlists, 'playlist')} · {gb(s.bytes)} on disk</span>}
       {s && <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Open library folder</button>}
     </Toolbar>
@@ -165,6 +170,9 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       {queryError && <Banner tone="red" text={queryError} action={{ label: 'Dismiss', onClick: () => setQueryError(null) }} />}
       {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
       {note && <Banner tone="amber" text={note} action={{ label: 'Dismiss', onClick: () => setNote(null) }} />}
+      {missing > 0 && <Banner tone="amber"
+        text={`${plural(missing, 'track')} ${missing === 1 ? 'is' : 'are'} no longer in your library folder. Forget them so they can be downloaded again? No files are deleted.`}
+        action={{ label: 'Forget them', onClick: () => { refresh(true) } }} onDismiss={() => setMissing(0)} />}
       {pl && <PlaylistCard playlist={pl} count={pl.track_ids.length} onShowFile={() => reveal(pl.file)} />}
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))

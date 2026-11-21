@@ -32,7 +32,7 @@ from ..export import (
     write_new_playlist,
     write_playlists,
 )
-from ..library import library_reachable, prune_missing_tracks
+from ..library import library_reachable, missing_tracks, prune_missing_tracks
 from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
@@ -215,12 +215,18 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         return [bundles.track(t.id) for t in store.list_tracks(search=q, limit=LIBRARY_LIMIT, playlist_id=playlist_id)]
 
     @r.post("/library/refresh")
-    async def refresh_library() -> dict:
-        """Reconcile files removed in Finder and rewrite affected playlist exports."""
-        removed = prune_missing_tracks(store, settings.library_root)
+    async def refresh_library(body: dict | None = None) -> dict:
+        """Reconcile files removed in Finder and rewrite affected playlist exports. `missing` is how many
+        files are gone but were kept, because so many went at once that only the owner can say they were
+        deleted on purpose; sending `{"forget_missing": true}` forgets them. `reachable` is false when the
+        library folder is missing or empty (an unplugged drive), and then nothing is ever forgotten."""
+        root = settings.library_root
+        removed = prune_missing_tracks(store, root, confirmed=bool((body or {}).get("forget_missing")))
         if removed:
-            write_playlists(store, settings.library_root)
-        return {"removed": len(removed)}
+            write_playlists(store, root)
+        reachable = library_reachable(root)
+        missing = len(missing_tracks(store, root)[0]) if reachable and not removed else 0
+        return {"removed": len(removed), "missing": missing, "reachable": reachable}
 
     def new_out() -> dict:
         tracks = new_tracks(store)
