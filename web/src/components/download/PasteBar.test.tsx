@@ -53,3 +53,11 @@ it('takes ⌘V from anywhere on the page into the link field, but leaves other f
   fireEvent.keyDown(other, { key: 'v', metaKey: true })
   expect(other).toHaveFocus()
 })
+
+it('does not pull focus out of an open dialog', () => {
+  render(<><div role="dialog" aria-modal="true"><button>Send</button></div><PasteBar onSubmit={vi.fn()} /></>)
+  const send = screen.getByRole('button', { name: 'Send' })
+  send.focus()
+  fireEvent.keyDown(window, { key: 'v', metaKey: true })
+  expect(send).toHaveFocus()
+})

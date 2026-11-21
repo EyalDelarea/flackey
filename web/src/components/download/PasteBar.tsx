@@ -3,9 +3,11 @@ import { ApiError } from '../../api'
 import { usePlatform } from '../../platform'
 import Toolbar from '../Toolbar'
 
-/** Typing into a field, so a paste there is that field's own. */
+/** Typing into a field, so a paste there is that field's own -- or inside an open dialog, which the link
+ *  field sits behind and must not pull focus out of. */
 const editing = (el: Element | null) =>
   el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable)
+  || el?.closest('[aria-modal="true"]') != null
 
 export default function PasteBar({ onSubmit }: { onSubmit: (url: string) => Promise<string> }) {
   const [url, setUrl] = useState(''); const [pending, setPending] = useState(false)
