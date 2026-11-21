@@ -257,6 +257,7 @@ async def connect_telegram(client) -> bool | None:
     try:
         async with asyncio.timeout(timeout_s):
             await client.connect()
+            telegram.watch_disconnect(client)
             return await client.is_user_authorized()
     except TimeoutError:
         log.warning("Telegram did not answer within %gs; starting with the Deezer bot paused", timeout_s)

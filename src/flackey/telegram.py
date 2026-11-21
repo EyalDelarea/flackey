@@ -48,6 +48,40 @@ PROBE_TIMEOUT_S = 8.0
 CONNECT_TIMEOUT_S = 15.0
 
 
+def watch_disconnect(client: object) -> None:
+    """Take delivery of the way this connection ends, so asyncio is not left holding it.
+
+    Telethon resolves `client.disconnected` when the connection ends, and with a `ConnectionError` when its
+    own automatic reconnect gives up ("Connection to Telegram failed 5 time(s)"). It expects someone to be
+    awaiting that future -- `run_until_disconnected` does -- and nothing in Flackey does, because the
+    worker finds out on its next request and the session watcher on its next poll. So the exception sat
+    unread until the future was collected, and asyncio logged it as an ERROR, "Future exception was never
+    retrieved" (Nov 17, Sep 8), for a drop the app was already handling. Read it here instead, and say
+    what it was in the app's own words.
+
+    Each connect() that finds the old future finished makes a new one, so this is called after every
+    successful connect. Once per connection, though: connect() on a client that is already connected
+    returns at once with the same future still pending, and a second watcher would log the one drop twice.
+    A fake client in tests may have no `disconnected` at all."""
+    watching = getattr(client, "_flackey_end_watch", None)
+    if watching is not None and not watching.done():
+        return
+    try:
+        ended = client.disconnected  # type: ignore[attr-defined]
+    except (AttributeError, RuntimeError):   # RuntimeError: no running loop to make the future on
+        return
+
+    def _seen(f: asyncio.Future) -> None:
+        if f.cancelled():
+            return
+        e = f.exception()   # this call is what marks it retrieved
+        if e is not None:
+            log.warning("Telegram connection lost (%s); it reconnects on the next request", e)
+
+    ended.add_done_callback(_seen)
+    client._flackey_end_watch = ended  # type: ignore[attr-defined]
+
+
 async def connect_or_close(client: LoginClient) -> None:
     """`client.connect()`, closing whatever it opened when it does not return -- the deadline around it
     fired, or the socket failed.
@@ -63,6 +97,7 @@ async def connect_or_close(client: LoginClient) -> None:
     except BaseException:
         await client.disconnect()
         raise
+    watch_disconnect(client)
 
 
 def _this_computer() -> str:
