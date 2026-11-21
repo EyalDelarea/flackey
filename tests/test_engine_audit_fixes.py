@@ -287,3 +287,44 @@ def test_a_confirmed_prune_still_forgets_nothing_on_an_unplugged_drive(tmp_path)
         _track(store, root / "A" / f"A - {i}.mp3", title=str(i))
     assert prune_missing_tracks(store, root, confirmed=True) == []
     assert len(store.list_tracks()) == 12
+
+
+# ---- 0.8 QA bugs 6 and 7: a forgotten track takes the requests that filed it along ---------------------
+
+def _filed_in_playlist(store: Store, path: Path, pid: int, pos: int) -> tuple[int, int]:
+    rid = store.add_request(f"A - {pos}", RequestKind.YT_TRACK, source_url=f"https://youtu.be/{pos}",
+                            playlist_id=pid, playlist_position=pos)
+    tid = _track(store, path, title=str(pos))
+    store.update_request(rid, track_id=tid, state=RequestState.DONE)
+    store.add_playlist_track(pid, tid, pos)
+    return rid, tid
+
+
+def test_forgetting_tracks_drops_the_requests_that_filed_them(tmp_path):
+    """Left behind, a re-pasted 14-track playlist counted 28 rows, 14 of them "filed" with no file."""
+    store = Store(tmp_path / "db.sqlite")
+    root = tmp_path / "Music"
+    (root / "Own sets").mkdir(parents=True)
+    pid = store.upsert_playlist("https://www.youtube.com/playlist?list=PL1", "Set")
+    rows = [_filed_in_playlist(store, root / "A" / f"A - {i}.mp3", pid, i) for i in range(1, 13)]
+    other = store.add_request("unrelated", RequestKind.TEXT)
+    events = []
+    store.listeners.append(lambda kind, oid: events.append(kind))
+    assert len(prune_missing_tracks(store, root, confirmed=True)) == 12
+    assert [r.id for r in store.list_requests()] == [other]
+    assert store.get_playlist(pid).track_ids == []
+    assert events == ["queue"]                       # one event for the lot, not one per track
+    assert len(rows) == 12
+
+
+def test_startup_drops_requests_and_entries_an_older_build_left_pointing_at_nothing(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    pid = store.upsert_playlist("u", "Set")
+    _, tid = _filed_in_playlist(store, tmp_path / "gone.mp3", pid, 1)
+    store.conn.execute("DELETE FROM tracks WHERE id=?", (tid,))      # what the 0.8 build's forget left
+    store.conn.commit()
+    failed = store.add_request("still failed", RequestKind.TEXT)
+    store.update_request(failed, state=RequestState.ERROR)
+    assert store.forget_orphans() == (1, 1)
+    assert [r.id for r in store.list_requests()] == [failed]
+    assert store.get_playlist(pid).track_ids == [] and store.forget_orphans() == (0, 0)

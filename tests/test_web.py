@@ -1948,8 +1948,8 @@ def test_refresh_asks_before_forgetting_a_library_deleted_on_purpose(client, tmp
     assert c.get("/api/library").json() == []
     playlist = settings.library_root / "Playlists" / "Set.m3u8"
     assert "A - " not in playlist.read_text()
-    # The request that filed a forgotten track still names it; the queue and playlists must not trip on that
-    assert c.get("/api/queue").status_code == 200 and c.get("/api/playlists").status_code == 200
+    # The request that filed the forgotten tracks goes with them: left, it counted as filed (0.8 QA bug 6)
+    assert c.get("/api/queue").json() == [] and c.get("/api/playlists").status_code == 200
 
 
 def test_refresh_says_when_the_library_folder_is_not_there(client):

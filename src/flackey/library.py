@@ -283,7 +283,7 @@ def prune_missing_tracks(store: Store, library_root: Path, *, confirmed: bool = 
         return []
     for t in gone:
         log.warning("library file missing, forgetting it: %s", t.path)
-        store.delete_track(t.id)
+    store.delete_tracks([t.id for t in gone])
     return [t.path for t in gone]
 
 
