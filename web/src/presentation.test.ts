@@ -1037,6 +1037,14 @@ describe('batchFinishOf', () => {
     const f = batchFinishOf([at(1, 'done', '2026-11-20T10:00:00Z', '2026-11-20T10:00:20Z')], pl)!
     expect(batchFinishText(f)).toBe('1 of 1 track filed in under a minute · nothing missing')
   })
+
+  it('times a batch retried today from today, not from its first paste weeks ago', () => {
+    const rows = [at(1, 'done', '2026-10-07T13:22:56Z', '2026-10-07T14:00:00Z'),
+      at(2, 'cancelled', '2026-10-07T13:22:56Z', '2026-11-21T21:26:48Z')]
+    expect(batchFinishOf(rows, pl)!.minutes).toBeGreaterThan(60 * 1000)
+    const f = batchFinishOf(rows, pl, Date.parse('2026-11-21T21:20:00Z'))!
+    expect(batchFinishText(f)).toBe('1 of 2 tracks filed in 7 min · 1 missing')
+  })
 })
 
 describe('store links for a track Flackey gave up on (idea 8)', () => {

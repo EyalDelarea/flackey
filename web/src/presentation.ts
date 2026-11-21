@@ -926,12 +926,15 @@ export interface BatchFinishView {
   /** The missing ones "Retry the missing ones" takes: the same `sweptByRetryAll` rule as Retry all, so a
    *  track the owner stopped is not started behind their back. */
   retryIds: number[]
-  /** From the first row added to the last row finishing, rounded to the minute. Null when unknown. */
+  /** From the first row added (or from `since`, if later) to the last row finishing, rounded to the
+   *  minute. Null when unknown. */
   minutes: number | null
 }
 
-/** The finish summary for one playlist, or null while any of it is still moving. */
-export function batchFinishOf(all: Bundle[], playlist: Playlist): BatchFinishView | null {
+/** The finish summary for one playlist, or null while any of it is still moving. `since` is when the page
+ *  first saw the batch moving (ms): a batch pasted weeks ago and retried today is timed from today, not
+ *  from its first paste -- "filed in 1088 h" was the 0.8 QA finding. */
+export function batchFinishOf(all: Bundle[], playlist: Playlist, since?: number): BatchFinishView | null {
   const rows = all.filter(b => b.request.playlist_id === playlist.id)
   if (rows.length === 0) return null
   if (rows.some(b => bucketOf(b.request.state) === 'progress' || bucketOf(b.request.state) === 'needs')) return null
@@ -939,8 +942,9 @@ export function batchFinishOf(all: Bundle[], playlist: Playlist): BatchFinishVie
     .sort((a, c) => (a.request.playlist_position ?? a.request.id) - (c.request.playlist_position ?? c.request.id))
   const times = (k: 'created_at' | 'updated_at') => rows.map(b => Date.parse(b.request[k])).filter(Number.isFinite)
   const started = times('created_at'), ended = times('updated_at')
-  const minutes = started.length && ended.length
-    ? Math.max(0, Math.round((Math.max(...ended) - Math.min(...started)) / 60000)) : null
+  const start = started.length ? Math.max(Math.min(...started), since ?? -Infinity) : null
+  const minutes = start != null && ended.length
+    ? Math.max(0, Math.round((Math.max(...ended) - start) / 60000)) : null
   return {
     playlistId: playlist.id, name: playlist.name, total: rows.length,
     filed: rows.filter(b => COMPLETE.includes(b.request.state)).length,

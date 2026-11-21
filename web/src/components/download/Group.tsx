@@ -12,7 +12,9 @@ const shown = (segments: Segment[]) => segments.filter(s => s.n > 0)
    chip's job, and a legend beneath a bar has room to say what stopping there meant. Pipeline order, with
    the two answers that are not rungs at the end. */
 const FAILED_LEGEND: Record<Stage, string> = {
-  search: 'found nothing to download',
+  // Not "found nothing": a search that never got an answer (Telegram dropped, the bot did not reply)
+  // stops here too, and the rows say which it was (0.8 QA bug 2).
+  search: 'stopped while searching',
   choose: 'stopped while waiting on you',
   download: 'could not finish the download',
   verify: 'failed the quality check',
