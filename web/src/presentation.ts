@@ -57,8 +57,15 @@ export interface RejectionView { reason: string; cutoffKhz: number | null; capti
 /** Why a row is sitting in a list called "Failed" and whether it can come back. Present on failed rows
  *  only -- the ones the owner is looking at when they ask that question. */
 export interface OutcomeView { retryable: boolean; note: string }
+/** A short word on the right rail for a row that is moving but has nothing else to show there yet, so it
+ *  does not read as stuck. `connecting`: a Soulseek download with no transfer frame yet. `upnext`: a queued
+ *  track the worker has not picked up. */
+export interface PillView { kind: 'connecting' | 'upnext'; label: string
+  /** The line under the status, where a transfer's bytes go once it has some. */
+  detail?: string }
 export interface RowView {
   id: number; title: string; version: string | null; status: string; statusTone: Tone
+  pill?: PillView | null
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
@@ -704,8 +711,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         // There is no line any more: every queued track is picked up on the worker's next pass, so this
         // is a second or two, not a position. The old text counted the tracks ahead because the wait was
         // real and permanent; it is neither, now, and a queue length nobody waits in would be theatre.
-        v.status = 'Starting…'
-        v.tag = 'queued'; v.dimmed = true
+        // Not dimmed any more: a faded row beside a faded "queued" read as stuck. "Next in line" promises no
+        // position -- there is none to give -- only that it is the next thing to start.
+        v.status = 'Next in line'
+        v.pill = { kind: 'upnext', label: 'Up next' }
         v.action = STOP
       }
       break
@@ -717,6 +726,12 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       // and they are over in seconds. Everything before them can be stopped, which is the point: a
       // download crawling at 100 kB/s from one peer is exactly what an owner wants to be rid of.
       if (r.state === 'identifying' || r.state === 'fetching') v.action = STOP
+      // A Soulseek download whose first transfer frame has not arrived yet: a peer is being asked and has
+      // not answered. Without this the rail was empty and the row looked frozen. Deezer sends no frames at
+      // all, so it gets no pill -- "connecting to a peer" would be untrue there.
+      if (r.state === 'fetching' && r.fetch_source === 'soulseek' && !v.progress) {
+        v.pill = { kind: 'connecting', label: 'Connecting', detail: 'Connecting to a peer…' }
+      }
       break
     }
     case 'awaiting_review': {
