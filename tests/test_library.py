@@ -11,6 +11,7 @@ from flackey.library import (
     find_duplicate,
     refile_path,
     sanitize,
+    strip_track_number,
 )
 from flackey.models import Candidate, CatalogTrack
 from flackey.store import Store
@@ -52,6 +53,50 @@ def test_final_path_files_a_collaboration_under_the_first_artist(tmp_path: Path)
     ct = CatalogTrack(**{**CT.__dict__, "artist": "Abeber Project, Filteria", "mix_name": "Abeber Project Remix"})
     p = final_path(tmp_path, ct, "mp3")
     assert p == tmp_path / "Abeber Project" / "Abeber Project, Filteria - Into the Void (Abeber Project Remix).mp3"
+
+
+@pytest.mark.parametrize("existing, artist, folder", [
+    ("Miranda!", "Miranda", "Miranda!"),
+    ("S.U.N Project", "Sun Project", "S.U.N Project"),
+    ("11. Space Tribe", "Space Tribe", "11. Space Tribe"),
+    ("Space Tribe", "11. Space Tribe", "Space Tribe"),
+    ("Bjork", "Björk", "Bjork"),
+    # A collaboration keeps its own folder, and is never folded into a member's (owner's call, issue idea 5)
+    ("Duvdev", "Duvdev & Shidapu", "Duvdev & Shidapu"),
+])
+def test_a_new_track_joins_the_artist_folder_already_there(tmp_path: Path, existing, artist, folder):
+    (tmp_path / existing).mkdir()
+    ct = CatalogTrack(**{**CT.__dict__, "artist": artist})
+    assert final_path(tmp_path, ct, "aiff").parent == tmp_path / folder
+    assert sorted(p.name for p in tmp_path.iterdir()) == [existing]    # nothing was moved or created
+
+
+def test_the_folder_kept_among_several_spellings_is_the_clean_one(tmp_path: Path):
+    for name in ("02. Man With No Name", "Man With No Name"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "02. Man With No Name" / "a.flac").write_bytes(b"x")
+    (tmp_path / "02. Man With No Name" / "b.flac").write_bytes(b"x")
+    ct = CatalogTrack(**{**CT.__dict__, "artist": "man with no name"})
+    assert final_path(tmp_path, ct, "aiff").parent.name == "Man With No Name"
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("02. Man With No Name", "Man With No Name"), ("11 - Space Tribe", "Space Tribe"), ("3) X", "X"),
+    ("4-Mat", "4-Mat"), ("808 State", "808 State"), ("2 Unlimited", "2 Unlimited"), ("12.", "12."),
+])
+def test_strip_track_number_takes_only_a_leaked_number(raw, clean):
+    assert strip_track_number(raw) == clean
+
+
+def test_a_leaked_track_number_never_reaches_the_file_name(tmp_path: Path):
+    ct = CatalogTrack(**{**CT.__dict__, "artist": "02. Man With No Name"})
+    assert final_path(tmp_path, ct, "aiff") == tmp_path / "Man With No Name" / "Man With No Name - Into the Void.aiff"
+
+
+def test_the_playlists_folder_is_never_an_artist(tmp_path: Path):
+    (tmp_path / "Playlists").mkdir()
+    ct = CatalogTrack(**{**CT.__dict__, "artist": "playlists"})
+    assert final_path(tmp_path, ct, "aiff").parent.name == "playlists"
 
 
 @pytest.mark.parametrize("layout,folder", [

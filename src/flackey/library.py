@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
@@ -135,6 +136,61 @@ def _fit_windows_path(folder: Path, artist: str, title: str, ext: str) -> str:
     return f"{artist} - {cut}{tag}.{ext}"
 
 
+# A track number leaked into an artist name from a file name: "02. Man With No Name", "11 - Space Tribe".
+# The separator must be followed by a space, so "4-Mat" and "808 State" are names, not numbers.
+_TRACK_NUMBER = re.compile(r"^\s*\d{1,3}\s*[.)\-_]\s+(?=\S)")
+
+
+def strip_track_number(name: str) -> str:
+    return _TRACK_NUMBER.sub("", name, count=1)
+
+
+def has_track_number(name: str) -> bool:
+    return _TRACK_NUMBER.match(name) is not None
+
+
+def artist_key(name: str) -> str:
+    """What two spellings of one artist have in common: no leaked track number, no case, no accents, no
+    punctuation or spaces. "Miranda!" and "Miranda", "S.U.N Project" and "Sun Project" share a key;
+    "Duvdev & Shidapu" keeps its own, so a collaboration is never merged into one of its members."""
+    plain = unicodedata.normalize("NFKD", strip_track_number(name))
+    key = "".join(c for c in plain.casefold() if c.isalnum())
+    return key or name.casefold()
+
+
+def artist_folders(root: Path) -> list[Path]:
+    """The library's artist folders: every visible folder but Playlists."""
+    try:
+        return [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".") and d.name != _PLAYLIST_DIR]
+    except OSError:
+        return []
+
+
+def _file_count(d: Path) -> int:
+    try:
+        return sum(1 for _ in d.iterdir())
+    except OSError:
+        return 0
+
+
+def preferred_folder(folders: list[Path]) -> Path:
+    """Which of several spellings of one artist stays: one without a leaked track number, then the one
+    holding the most, then the first by name -- so the answer is the same every time it is asked."""
+    return min(folders, key=lambda d: (has_track_number(d.name), -_file_count(d), d.name))
+
+
+def artist_folder(root: Path, name: str) -> str:
+    """The folder a new track by `name` goes in: an existing one with exactly that name, else an existing
+    one that is the same artist spelled differently, else `name` itself. Only ever picks a folder; never
+    moves or renames anything already in the library."""
+    folders = artist_folders(root)
+    if any(d.name == name for d in folders):
+        return name
+    key = artist_key(name)
+    same = [d for d in folders if artist_key(d.name) == key]
+    return preferred_folder(same).name if same else name
+
+
 # The date layouts of `config.LIBRARY_LAYOUTS` name the folder after the day the track was filed, in ISO form so
 # Finder and Explorer list the folders in order.
 _DATE_FOLDER = {"month": "%Y-%m", "day": "%Y-%m-%d"}
@@ -150,7 +206,11 @@ def final_path(root: Path, catalog: CatalogTrack, ext: str, layout: str = "artis
     On Windows the title is shortened when it has to be, so the whole path stays under MAX_PATH; see
     `_fit_windows_path`."""
     if layout == "artist":
-        folder = root / _fit_folder_bytes(sanitize(catalog.artist.split(",")[0]))
+        # The artist's folder as it already exists, if it does under another spelling ("Miranda!" for
+        # "Miranda"): one artist keeps one folder. A collaboration's folder is matched the same way, whole --
+        # it is never folded into a member's folder.
+        name = _fit_folder_bytes(sanitize(strip_track_number(catalog.artist.split(",")[0])))
+        folder = root / artist_folder(root, name)
     elif layout in _DATE_FOLDER:
         folder = root / (when or datetime.now().astimezone().date()).strftime(_DATE_FOLDER[layout])
     elif layout == "flat":
@@ -164,7 +224,7 @@ def refile_path(folder: Path, catalog: CatalogTrack, ext: str) -> Path:
     """The track's file name inside `folder`. A lossless upgrade calls this with the folder the track
     is already in, so a replaced file stays where the owner put it -- or where an earlier layout put it --
     rather than moving into this month's folder."""
-    artist, title, ext = sanitize(catalog.artist), sanitize(catalog.display_title), ext.lstrip(".")
+    artist, title, ext = sanitize(strip_track_number(catalog.artist)), sanitize(catalog.display_title), ext.lstrip(".")
     if sys.platform == "win32":
         return folder / _fit_windows_path(folder, artist, title, ext)
     return folder / _fit_name_bytes(artist, title, ext)

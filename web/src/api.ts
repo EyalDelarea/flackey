@@ -74,6 +74,8 @@ export interface Recheck { checked_at:string; status:'checked'|'missing'|'error'
 /** Why the library trusts a filed file: where it came from and every check it went through. */
 export interface Receipt { track_id:number; asked_for:string|null; filed_at:string; replaced_at:string|null; format:string
   lossless_source:boolean; kept_anyway:boolean; unverified:boolean; checks:ReceiptCheck[]; has_spectrogram:boolean; recheck:Recheck|null }
+export interface TidyMove { track_id:number; source:string; dest:string }
+export interface TidyGroup { folder:string; merges:string[]; moves:TidyMove[]; left_behind:number; conflicts:string[] }
 export interface RecheckRun { state:'idle'|'running'|'done'|'stopped'|'error'; done:number; total:number; flagged:number }
 export interface Stats { tracks:number; bytes:number; playlists:number; rejections:number; library_root:string; playlist_dir:string; requests_by_state:Record<string,number> }
 export interface ProviderHealth { name:string; status:string; username:string|null }
@@ -244,6 +246,9 @@ export const api = {
   recheckStatus: () => call<RecheckRun>('/api/library/recheck'),
   recheckLibrary: () => post<RecheckRun>('/api/library/recheck'),
   stopRecheck: () => post<RecheckRun>('/api/library/recheck/stop'),
+  tidyPreview: () => call<{ groups: TidyGroup[] }>('/api/library/tidy'),
+  /** Moves exactly the previewed files; the server refuses (409) if the library changed since the preview. */
+  tidyApply: (moves: TidyMove[]) => post<{ moved: number; failed: string[] }>('/api/library/tidy', { moves }),
   newSinceImport: () => call<NewSinceImport>('/api/library/new'),
   markImported: (through: string) => post<NewSinceImport>('/api/library/new/imported', { through }),
   /** Get extended: download the extended mix on offer and swap it in for the filed track (issue #187). */

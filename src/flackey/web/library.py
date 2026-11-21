@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .. import __version__
+from .. import __version__, tidy
 from ..config import (
     EXTENDED_MIXES,
     FILING_FORMATS,
@@ -343,6 +343,29 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         if recheck_state["state"] == "running":
             recheck_state["state"] = "stopped"    # the file being checked finishes; no further one starts
         return dict(recheck_state)
+
+    # Tidying artist folders: a preview, then the moves only on the owner's confirmation of that preview.
+    tidy_lock = asyncio.Lock()
+
+    @r.get("/library/tidy")
+    async def tidy_preview() -> dict:
+        groups = await asyncio.to_thread(tidy.plan, store, settings.library_root, settings.library_layout)
+        return {"groups": tidy.as_json(groups)}
+
+    @r.post("/library/tidy")
+    async def tidy_apply(body: dict) -> dict:
+        moves = body.get("moves")
+        if not isinstance(moves, list) or not moves:
+            raise HTTPException(400, "Nothing to tidy was confirmed.")
+        if recheck_state["state"] == "running" or tidy_lock.locked():
+            raise HTTPException(409, "Wait for the library check to finish first.")
+        async with tidy_lock:
+            try:
+                out = await asyncio.to_thread(tidy.apply, store, settings.library_root, moves,
+                                              settings.library_layout)
+            except tidy.PlanChanged as e:
+                raise HTTPException(409, str(e)) from None
+        return out           # `tidy.apply` rewrote every playlist, the New one included
 
     @r.get("/playlists")
     async def playlists() -> list:

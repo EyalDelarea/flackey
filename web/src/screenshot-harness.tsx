@@ -382,6 +382,13 @@ function scenarioSetup() {
   let fresh = { count: 3, file: '/lib/Playlists/Flackey - New.m3u8', through: '2026-11-20T10:00:00+00:00' as string | null }
   vi_spy(api, 'newSinceImport', async () => fresh)
   vi_spy(api, 'markImported', async () => (fresh = { ...fresh, count: 0, through: null }))
+  vi_spy(api, 'tidyPreview', async () => ({ groups: [
+    { folder: 'Miranda!', merges: ['Miranda'], left_behind: 1, conflicts: [], moves: [
+      { track_id: 11, source: '/lib/Miranda/Miranda - Fiesta.aiff', dest: '/lib/Miranda!/Miranda - Fiesta.aiff' },
+      { track_id: 12, source: '/lib/Miranda/Miranda - Prisionero.aiff', dest: '/lib/Miranda!/Miranda - Prisionero.aiff' }] },
+    { folder: 'Man With No Name', merges: ['02. Man With No Name'], left_behind: 0, conflicts: [], moves: [
+      { track_id: 13, source: '/lib/02. Man With No Name/02. Man With No Name - Teleport.aiff',
+        dest: '/lib/Man With No Name/Man With No Name - Teleport.aiff' }] }] }))
   // Why the library trusts a file: a Soulseek lossless file, and the Deezer copy (id 2) checked again
   const receiptOf = (id: number) => ({ track_id: id, asked_for: 'Example Artist - Track One', filed_at: '2026-11-02T10:00:00+00:00',
     replaced_at: null, format: id === 2 ? 'MP3 320 kbps via Deezer' : 'FLAC 16-bit/44.1 kHz via Soulseek',

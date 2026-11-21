@@ -3124,3 +3124,31 @@ def test_recheck_the_whole_library_counts_what_it_flagged(tmp_path, monkeypatch)
                 break
             time.sleep(0.02)
     assert state["state"] == "done" and state["done"] == 2 and state["flagged"] == 1
+
+
+def _add(store, path, artist):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"audio")
+    return store.add_track(path=path, fmt="aiff", bitrate_kbps=1411, cutoff_hz=21500, file_size=5, artist=artist,
+                           title=path.stem, mix_name="Original Mix", duration_s=100, isrc=None, catalog_track_id=None,
+                           request_id=None)
+
+
+def test_tidying_artist_folders_previews_then_moves_only_what_was_confirmed(client):
+    c, store, settings = client
+    root = settings.library_root
+    _add(store, root / "Miranda!" / "Miranda! - A.aiff", "Miranda!")
+    _add(store, root / "Miranda!" / "Miranda! - B.aiff", "Miranda!")
+    cid = _add(store, root / "Miranda" / "Miranda - C.aiff", "Miranda")
+    tid = _filed(store, settings)          # "A/A - T.aiff": its own artist, never part of the tidy
+    groups = c.get("/api/library/tidy").json()["groups"]
+    assert [(g["folder"], g["merges"]) for g in groups] == [("Miranda!", ["Miranda"])]
+    assert (root / "Miranda" / "Miranda - C.aiff").exists()                    # the preview moved nothing
+    assert c.post("/api/library/tidy", json={"moves": []}).status_code == 400
+    stale = [{**groups[0]["moves"][0], "dest": str(root / "Elsewhere" / "x.aiff")}]
+    assert c.post("/api/library/tidy", json={"moves": stale}).status_code == 409
+    assert (root / "Miranda" / "Miranda - C.aiff").exists()
+    r = c.post("/api/library/tidy", json={"moves": groups[0]["moves"]}).json()
+    assert r == {"moved": 1, "failed": []}
+    assert store.get_track(cid).path == root / "Miranda!" / "Miranda - C.aiff"
+    assert store.get_track(tid).path == root / "A" / "A - T.aiff"

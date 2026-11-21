@@ -979,4 +979,14 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .receipt-error { margin: 0 0 10px; color: var(--red-text); }
 .receipt-actions { display: flex; align-items: center; gap: 10px; }
 .receipt-actions .muted { color: var(--tertiary); font-size: 11px; }
+/* Tidy artist folders: the preview of every move, shown before anything moves. */
+.tidy-folders { align-items: flex-start; }
+.tidy-preview { margin-top: 10px; }
+.tidy-warning { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--orange-wash-soft); color: var(--orange-text); font-weight: 500; }
+.tidy-preview > ul { list-style: none; margin: 0 0 12px; padding: 0; max-height: 280px; overflow: auto; display: grid; gap: 8px; }
+.tidy-preview > ul > li strong { color: var(--text); font-weight: 600; }
+.tidy-preview li ul { margin: 2px 0 0; padding-left: 16px; color: var(--text); overflow-wrap: anywhere; }
+.tidy-preview li .from { color: var(--secondary); }
+.tidy-preview .muted { margin: 2px 0 0 16px; color: var(--tertiary); }
+.tidy-actions { display: flex; gap: 8px; }
 .receipt-spectrogram { flex: none; width: 300px; max-width: 40%; border-radius: 6px; border: .5px solid var(--well-border); background: var(--well); }
