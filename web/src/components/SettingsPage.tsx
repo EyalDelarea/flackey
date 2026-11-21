@@ -5,7 +5,7 @@ import type { Live } from '../live'
 import { revealLabel, thisComputer, usePlatform } from '../platform'
 import Banner from './Banner'
 import CopyButton from './CopyButton'
-import { FORMAT_LABELS, shortFormatNote } from './FormatOptions'
+import { FORMAT_LABELS, shortFormatNote, WavCoverWarning } from './FormatOptions'
 import LayoutOptions from './LayoutOptions'
 import PrivacySection from './PrivacySection'
 import Segmented from './Segmented'
@@ -413,7 +413,10 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
             <LayoutOptions value={currentLayout} onChange={saveLayout} busy={layoutBusy} />
             {layoutError && <div className="err">{layoutError}</div>}</div></div>
           <div className="srow stack-narrow"><div className="srow-body"><div className="k">File format</div>
-            <div className="v">{shortFormatNote(currentFormat, defaultFormat)}</div>
+            {/* WAV's note is the warning itself, with the way out beside it, rather than the same fact twice. */}
+            {currentFormat === 'wav'
+              ? <WavCoverWarning format={currentFormat} defaultFormat={defaultFormat} onSwitch={saveFormat} disabled={formatBusy} />
+              : <div className="v">{shortFormatNote(currentFormat, defaultFormat)}</div>}
             {formatError && <div className="err">{formatError}</div>}</div>
             <div className="actions"><Segmented label="File format" options={formatOptions} value={currentFormat}
               onChange={saveFormat} busy={formatBusy} /></div></div>
