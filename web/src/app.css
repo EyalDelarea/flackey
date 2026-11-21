@@ -844,15 +844,32 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
   background: var(--group); border: .5px solid var(--group-border); border-radius: 10px; }
 .optin-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .optin-title { font-size: 13px; font-weight: 600; }
-.optin-text { font-size: 12px; color: var(--secondary); line-height: 1.45; }
-.optin-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 4px; }
+.optin-lead { font-size: 12px; color: var(--secondary); line-height: 1.45; }
+/* One short line per point, each behind its emoji: as many columns as fit, one per row in a narrow card. */
+.optin-points { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 16px; }
+.optin-points li { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.45; color: var(--text); }
+.optin-emoji { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font-size: 14px; line-height: 1;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.optin-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; }
+.optin-buttons, .optin-links { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.optin-buttons { gap: 8px; }
+.optin-buttons .btn-primary, .optin-buttons .btn-secondary { height: 28px; padding: 0 16px; border-radius: 6px; font-size: 13px; }
+/* Both links look the same: the anchor drops its default underline, and both underline on hover. */
+.optin-links .btn-link { font-size: 12px; font-weight: 500; text-decoration: none; }
+.optin-links .btn-link:hover { text-decoration: underline; }
+/* Dark's link blue is 3.9:1 on the card; lifted toward white it clears 4.5:1 at this size. */
+@media (prefers-color-scheme: dark) { .optin-links .btn-link { color: color-mix(in srgb, var(--link-text) 70%, white); } }
+.optin-card .btn-link:focus-visible, .optin-card .banner-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 /* The two answers are the same size and neither is raised until picked: no default, no nudge. */
 .optin-actions .segmented { display: inline-grid; grid-template-columns: 1fr 1fr; }
 .optin-actions .segmented button { height: 26px; padding: 0 16px; }
 .optin-foot { font-size: 11px; color: var(--secondary); }
 /* The one-time prompt for an owner who set up before Welcome asked: a card at the top of the page, above
-   whatever tab is open, pushing it down rather than covering it. */
-.optin-card.usage-prompt { width: auto; max-width: 560px; margin: 12px 20px 14px; flex: none; animation: rise .4s cubic-bezier(.2,.7,.2,1) both; }
+   whatever tab is open, pushing it down rather than covering it. As wide as the page's own cards. */
+.optin-card.usage-prompt { width: auto; margin: 12px 20px 14px; padding: 16px 18px; gap: 8px; flex: none; animation: rise .4s cubic-bezier(.2,.7,.2,1) both; }
+.optin-card.usage-prompt .optin-title { font-size: 15px; letter-spacing: -.01em; }
+/* Same edges as the page's cards once the narrow layout tightens .scroll's padding. */
+@media (max-width: 700px) { .optin-card.usage-prompt { margin: 12px 12px 14px; padding: 14px; } }
 @media (prefers-reduced-motion: reduce) { .optin-card.usage-prompt { animation: none; } }
 .usage-catalog { display: flex; flex-direction: column; gap: 8px; margin: 0; }
 .usage-catalog-row { display: grid; grid-template-columns: minmax(140px, 38%) 1fr; gap: 10px; padding-bottom: 8px; border-bottom: .5px solid var(--sep); }

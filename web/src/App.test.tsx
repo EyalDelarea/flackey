@@ -308,7 +308,7 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     return { asked, put }
   }
 
-  it('asks with the same wording and two equal, unchosen answers, without blocking the app', async () => {
+  it('asks with the same wording, a Share button and a separate Not now, without blocking the app', async () => {
     server()
     vi.spyOn(api, 'health').mockResolvedValue(health())
     render(<App />)
@@ -317,8 +317,10 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     expect(screen.getByText(/If you’re OK with it, please opt in\./)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Privacy page' })).toHaveAttribute('href', 'https://eyaldelarea.github.io/flackey/privacy.html')
     expect(screen.getByText('You can change this any time in Settings › Privacy.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Share usage stats' })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('My stats server never stores your IP address.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Share usage stats' })).toHaveClass('btn-primary')
+    expect(screen.getByRole('button', { name: 'Not now' })).toHaveClass('btn-secondary')
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()       // a click answers at once: nothing to hold
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()      // a card, not a sheet
     expect(screen.getByText('Not connected')).toBeInTheDocument()     // the app is right there behind it
   })
@@ -327,7 +329,7 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     const { asked, put } = server()
     vi.spyOn(api, 'health').mockResolvedValue(health())
     const { unmount } = render(<App />)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Not now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Not now' }))
     expect(screen.queryByText('Hey! Eyal here 👋')).not.toBeInTheDocument()
     expect(asked).toHaveBeenCalledTimes(1)
     expect(put).not.toHaveBeenCalled()
@@ -353,7 +355,7 @@ describe('the one-time usage-stats question for an owner who set up before Welco
     const { asked, put } = server()
     vi.spyOn(api, 'health').mockResolvedValue(health())
     render(<App />)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Share usage stats' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Share usage stats' }))
     expect(screen.queryByText('Hey! Eyal here 👋')).not.toBeInTheDocument()
     await waitFor(() => expect(put).toHaveBeenCalledWith(true))
     expect(asked).not.toHaveBeenCalled()

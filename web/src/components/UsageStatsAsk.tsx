@@ -8,10 +8,15 @@ export type UsageStatsChoice = 'share' | 'not-now'
    in the owner's own voice (approved 2026-11-18). It promises only what is true of every event: counts and
    outcomes, never what was downloaded -- so it never says (or implies) that a failed song can be picked out. */
 export const ASK_TITLE = 'Hey! Eyal here 👋'
-export const ASK_TEXT = 'I’m adding usage stats to Flackey so I can see where downloads fail and fix them faster. I '
-  + 'never collect anything sensitive: no song names, links or files, just counts like “a Soulseek search found '
-  + 'nothing”. My stats server never stores your IP address.'
-export const ASK_PLEA = 'If you’re OK with it, please opt in. It really helps me improve Flackey as we go. Thank you! 🙏'
+export const ASK_LEAD = 'I’m adding usage stats to Flackey.'
+/* The approved paragraph, one sentence per bullet, so none of it changes meaning on the way into a list. */
+export const ASK_POINTS = [
+  ['📉', 'They show me where downloads fail, so I can fix them faster.'],
+  ['🙈', 'I never collect anything sensitive: no song names, links or files, just counts like “a Soulseek search '
+    + 'found nothing”.'],
+  ['🔒', 'My stats server never stores your IP address.'],
+  ['🙏', 'If you’re OK with it, please opt in. It really helps me improve Flackey as we go. Thank you!'],
+] as const
 /* The website's privacy page. A `target="_blank"` link: pywebview opens those in the system browser
    (OPEN_EXTERNAL_LINKS_IN_BROWSER, on by default), as the Telegram step's link does. */
 export const PRIVACY_URL = 'https://eyaldelarea.github.io/flackey/privacy.html'
@@ -26,8 +31,10 @@ export const IP_NOTE = 'Flackey’s stats server never stores or logs your IP ad
 export const ASK_SETTINGS_LINE = 'You can change this any time in Settings › Privacy.'
 const OPTIONS = [['share', 'Share usage stats'], ['not-now', 'Not now']] as const
 
-/** The usage-stats question: two equal answers, neither chosen until the owner picks one, and the full list
- *  of what can be sent one click away. `value` is null until then. */
+/** The usage-stats question, with the full list of what can be sent one click away. `value` is null until
+ *  the owner picks. On Welcome (no `onDismiss`) the answer is held until Get started, so it is two equal
+ *  segments, neither chosen until picked. As the dismissable one-time prompt a click answers at once, so it
+ *  is a primary "Share usage stats" button beside a plain "Not now" (the owner's call, 2026-11-21). */
 export default function UsageStatsAsk({ value, onChoose, onDismiss, className = '' }: {
   value: UsageStatsChoice | null; onChoose: (c: UsageStatsChoice) => void; onDismiss?: () => void; className?: string
 }) {
@@ -37,12 +44,22 @@ export default function UsageStatsAsk({ value, onChoose, onDismiss, className = 
       <div className="optin-title" id="usage-ask-title">{ASK_TITLE}</div>
       {onDismiss && <button type="button" className="banner-dismiss" aria-label="Dismiss" onClick={onDismiss}>×</button>}
     </div>
-    <p className="optin-text">{ASK_TEXT}</p>
-    <p className="optin-text">{ASK_PLEA}</p>
+    <p className="optin-lead">{ASK_LEAD}</p>
+    <ul className="optin-points">
+      {ASK_POINTS.map(([emoji, text]) => <li key={emoji}>
+        <span className="optin-emoji" aria-hidden="true">{emoji}</span><span>{text}</span></li>)}
+    </ul>
     <div className="optin-actions">
-      <Segmented label="Usage stats" options={OPTIONS} value={value} onChange={onChoose} />
-      <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>What's shared?</button>
-      <a className="btn-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy page</a>
+      {onDismiss
+        ? <div className="optin-buttons">
+            <button type="button" className="btn-primary" onClick={() => onChoose('share')}>Share usage stats</button>
+            <button type="button" className="btn-secondary" onClick={() => onChoose('not-now')}>Not now</button>
+          </div>
+        : <Segmented label="Usage stats" options={OPTIONS} value={value} onChange={onChoose} />}
+      <div className="optin-links">
+        <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>What's shared?</button>
+        <a className="btn-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy page</a>
+      </div>
     </div>
     <p className="optin-foot">{ASK_SETTINGS_LINE}</p>
     {catalogOpen && <UsageStatsCatalog onClose={() => setCatalogOpen(false)} />}
