@@ -772,6 +772,21 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .ready-disc { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .ready-disc.bad { background: var(--red-wash); color: var(--red); }
 .ready-disc.neutral { background: var(--chip); color: var(--secondary); }
+/* The Ready screen's walkthrough (TryItDemo): a pasted example, then the four steps appearing in turn. */
+.try-it { display: flex; flex-direction: column; gap: 10px; width: min(440px, 100%); text-align: left; }
+.try-paste { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
+  background: var(--well); border: .5px solid var(--well-border); animation: try-in .3s ease both; }
+.try-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.try-kind { font-size: 11px; color: var(--secondary); }
+.try-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.try-steps li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.4;
+  color: var(--secondary); animation: try-in .35s ease both; }
+.try-steps b { color: var(--text); font-weight: 600; }
+.try-mark { flex: none; display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px;
+  border-radius: 50%; background: var(--green); color: #fff; }
+.try-note { margin: 0; font-size: 11px; color: var(--secondary); line-height: 1.4; }
+@keyframes try-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .try-paste, .try-steps li { animation: none; } }
 .path-well { padding: 8px 14px; border-radius: 8px; background: var(--well); border: .5px solid var(--well-border); font: 12px var(--mono); }
 .fields { display: flex; flex-direction: column; gap: 12px; width: 320px; max-width: 100%; text-align: left; }
 .fields .field { display: flex; flex-direction: column; gap: 4px; }
