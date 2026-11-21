@@ -203,6 +203,11 @@ jobs:
       !cancelled() && needs.python.result == 'success' && needs.web.result == 'success' &&
       (github.event_name == 'push' || needs.changes.outputs.mac_installer == 'true')
     runs-on: macos-15
+    outputs:
+      # Checked by the release job before it signs: the bytes it signs are the bytes built here, not
+      # whatever another job in the run may have uploaded under the same artifact name.
+      pkg_sha256: ${{ steps.digests.outputs.pkg }}
+      zip_sha256: ${{ steps.digests.outputs.zip }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -211,16 +216,20 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          enable-cache: true
+          # Never on a tag: a cache is written by every main-branch run, and a release is built from
+          # scratch so nothing restored from one can reach the installer.
+          enable-cache: ${{ github.ref_type != 'tag' }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-          cache: npm
+          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - name: Tag matches the version in the tree
         if: startsWith(github.ref, 'refs/tags/v')
         run: packaging/check_version.sh "$GITHUB_REF_NAME"
       - name: Cache helper downloads
+        # Off on a tag, like the uv and npm caches: the release fetches and builds its helpers fresh.
+        if: github.ref_type != 'tag'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packaging/build/helpers
@@ -247,9 +256,15 @@ jobs:
           test -x packaging/build/dist.noindex/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
           codesign --verify --deep --strict packaging/build/dist.noindex/Flackey.app
       - name: Installer
+        id: digests
         run: |
+          set -euo pipefail
           packaging/build_installer.sh
           cd packaging/build && shasum -a 256 Flackey.pkg > Flackey.pkg.sha256 && cat Flackey.pkg.sha256
+          zips=(Flackey-*.zip)
+          (( ${#zips[@]} == 1 )) || { echo "::error::expected one Flackey-*.zip, found ${#zips[@]}"; exit 1; }
+          echo "pkg=$(shasum -a 256 Flackey.pkg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "zip=$(shasum -a 256 "${zips[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Flackey.installer
@@ -264,6 +279,9 @@ jobs:
     needs: [python, web]
     # Unlike the mac job, pull requests too: see the header.
     runs-on: windows-latest
+    outputs:
+      # Checked by the release job before it signs (see the mac job).
+      setup_sha256: ${{ steps.digest.outputs.setup }}
     defaults:
       run:
         shell: pwsh
@@ -278,11 +296,13 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          enable-cache: true
+          # Never on a tag: a cache is written by every main-branch run, and a release is built from
+          # scratch so nothing restored from one can reach the installer.
+          enable-cache: ${{ github.ref_type != 'tag' }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-          cache: npm
+          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
           cache-dependency-path: web/package-lock.json
       - name: Tag matches the version in the tree
         if: startsWith(github.ref, 'refs/tags/v')
@@ -303,6 +323,8 @@ jobs:
           }
       - name: Cache helper downloads
         id: helpers-cache
+        # Off on a tag (see the mac job); a skipped step reports no cache hit, so MSYS2 is installed.
+        if: github.ref_type != 'tag'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packaging/build/helpers
@@ -354,6 +376,11 @@ jobs:
           $env:FLACKEY_SLIM_FFMPEG = $slim
           uv run pytest -q -rs tests/test_slim_ffmpeg.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installer digest
+        id: digest
+        run: |
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath packaging/build/Flackey-Setup.exe).Hash.ToLowerInvariant()
+          "setup=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Flackey.windows
@@ -415,6 +442,24 @@ jobs:
         with:
           name: Flackey.windows
           path: dist
+      - name: The artifacts are the bytes the build jobs made
+        # The .sha256 files inside the artifacts travel with the bytes they describe, so they prove
+        # nothing; the digests come from the build jobs' outputs instead.
+        env:
+          PKG_SHA256: ${{ needs.mac.outputs.pkg_sha256 }}
+          ZIP_SHA256: ${{ needs.mac.outputs.zip_sha256 }}
+          SETUP_SHA256: ${{ needs.windows.outputs.setup_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in PKG_SHA256 ZIP_SHA256 SETUP_SHA256; do
+            [[ "${!v}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error title=No build digest::$v is missing."; exit 1; }
+          done
+          sha256sum --strict -c - <<SUMS
+          $PKG_SHA256  dist/Flackey.pkg
+          $ZIP_SHA256  dist/Flackey-${GITHUB_REF_NAME#v}.zip
+          $SETUP_SHA256  dist/Flackey-Setup.exe
+          SUMS
       - name: Sign the update archive
         # Here rather than in the mac job: this is the only step that needs the private key, and it
         # should not run alongside npm install and PyInstaller.
@@ -465,6 +510,9 @@ jobs:
             [[ -f "$f" ]] || { echo "::error title=Missing asset::$f is missing."; exit 1; }
             assets+=("$f")
           done
+          # One checksum file for every published file, the update archive included.
+          (cd dist && sha256sum "${assets[@]#dist/}" > SHA256SUMS)
+          assets+=(dist/SHA256SUMS)
           channel=()
           [[ "$PRERELEASE" == "true" ]] && channel=(--prerelease --latest=false)
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${channel[@]}" \
