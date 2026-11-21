@@ -426,12 +426,15 @@ function scenarioSetup() {
        checks in a row (a VPN, typically): the sidebar turns amber and Connections offers the fix. */
     case 'settings':
     case 'settings-port-closed':
+    case 'settings-updates-off':
     case 'settings-telegram-signed-out': {
       const signedOut = scenario === 'settings-telegram-signed-out'
       const portClosed = scenario === 'settings-port-closed'
-      vi_spy(api, 'settings', async () => settingsPanel)
+      // `settings-updates-off`: the owner has switched automatic update checks off (WEB-15).
+      const panel = scenario === 'settings-updates-off' ? { ...settingsPanel, auto_update_check: false } : settingsPanel
+      vi_spy(api, 'settings', async () => panel)
       // Echoes what was saved, so the folder layout and format choices can be clicked through for a picture.
-      vi_spy(api, 'saveSettings', async (library_root: string, extra = {}) => ({ ...settingsPanel, library_root, ...extra }))
+      vi_spy(api, 'saveSettings', async (library_root: string, extra = {}) => ({ ...panel, library_root, ...extra }))
       vi_spy(api, 'health', async () => health({ telegram_authorized: !signedOut,
         lossless: { enabled: true, provider: { name: 'slskd', status: 'ok', username: 'saffrontempo0147' },
           fpcalc: true, attempts_24h: {}, raw_mb: 0 },
