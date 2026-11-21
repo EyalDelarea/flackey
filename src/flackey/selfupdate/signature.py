@@ -19,7 +19,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .key import PUBLIC_KEY_HEX
+from .key import NEXT_PUBLIC_KEY_HEX, PUBLIC_KEY_HEX
 
 PUBLIC_KEY_BYTES = 32
 SIGNATURE_BYTES = 64
@@ -54,10 +54,8 @@ def encode_public_key(public_key: Ed25519PublicKey) -> bytes:
     return public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
-def baked_public_key() -> bytes | None:
-    """None for a malformed constant too: a mistake in the source means "no seamless updates", not
-    "every update fails to verify", which looks like a compromised release."""
-    text = PUBLIC_KEY_HEX.strip()
+def _parse_key(text: str) -> bytes | None:
+    text = text.strip()
     if not text:
         return None
     try:
@@ -67,8 +65,29 @@ def baked_public_key() -> bytes | None:
     return raw if len(raw) == PUBLIC_KEY_BYTES else None
 
 
+def baked_public_key() -> bytes | None:
+    """None for a malformed constant too: a mistake in the source means "no seamless updates", not
+    "every update fails to verify", which looks like a compromised release."""
+    return _parse_key(PUBLIC_KEY_HEX)
+
+
+def next_public_key() -> bytes | None:
+    """The key a future release may be signed with (see key.py). None when unset or malformed: a
+    mistake here must never take the current key down with it."""
+    return _parse_key(NEXT_PUBLIC_KEY_HEX)
+
+
+def trusted_public_keys() -> list[bytes]:
+    """The current key, then the next one, without the ones that are missing or malformed."""
+    keys: list[bytes] = []
+    for key in (baked_public_key(), next_public_key()):
+        if key is not None and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def seamless_updates_configured() -> bool:
-    return baked_public_key() is not None
+    return bool(trusted_public_keys())
 
 
 def decode_signature(asset: bytes) -> bytes | None:
@@ -85,14 +104,21 @@ def decode_signature(asset: bytes) -> bytes | None:
 
 def verify_archive(version: str, archive: bytes, sig: bytes,
                    public_key: bytes | None = None, domain: bytes = DOMAIN) -> bool:
-    """False for every kind of no: wrong version, wrong signature, wrong key, no key at all."""
-    key = public_key if public_key is not None else baked_public_key()
-    if key is None or len(key) != PUBLIC_KEY_BYTES or len(sig) != SIGNATURE_BYTES:
+    """False for every kind of no: wrong version, wrong signature, wrong key, no key at all.
+
+    Without an explicit `public_key`, a signature from any trusted key (current or next) is accepted."""
+    keys = [public_key] if public_key is not None else trusted_public_keys()
+    if len(sig) != SIGNATURE_BYTES:
         return False
     digest = hashlib.sha256(archive).digest()
-    try:
-        Ed25519PublicKey.from_public_bytes(key).verify(sig, _message(version, digest, domain))
-    except (InvalidSignature, ValueError):
-        return False
-    _verified.add((domain, normalise_version(version), digest))
-    return True
+    message = _message(version, digest, domain)
+    for key in keys:
+        if len(key) != PUBLIC_KEY_BYTES:
+            continue
+        try:
+            Ed25519PublicKey.from_public_bytes(key).verify(sig, message)
+        except (InvalidSignature, ValueError):
+            continue
+        _verified.add((domain, normalise_version(version), digest))
+        return True
+    return False

@@ -135,3 +135,45 @@ def test_only_a_payload_that_verified_is_remembered_as_verified(keypair):
     assert signature.was_verified("v" + VERSION, digest) is True
     assert signature.was_verified("9.9.9", digest) is False
     assert signature.was_verified(VERSION, digest, domain=signature.INSTALLER_DOMAIN) is False
+
+
+def _hex(private):
+    return signature.encode_public_key(private.public_key()).hex()
+
+
+def test_a_release_signed_with_the_next_key_verifies(monkeypatch):
+    """SEC-8: the rotation slot. A copy that carries the next key takes a release signed with it."""
+    current, following = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    monkeypatch.setattr(signature, "PUBLIC_KEY_HEX", _hex(current))
+    monkeypatch.setattr(signature, "NEXT_PUBLIC_KEY_HEX", _hex(following))
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(current)) is True
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(following)) is True
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(Ed25519PrivateKey.generate())) is False
+
+
+def test_without_a_next_key_only_the_current_key_verifies(monkeypatch):
+    current, following = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    monkeypatch.setattr(signature, "PUBLIC_KEY_HEX", _hex(current))
+    monkeypatch.setattr(signature, "NEXT_PUBLIC_KEY_HEX", "")
+    assert signature.trusted_public_keys() == [bytes.fromhex(_hex(current))]
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(current)) is True
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(following)) is False
+
+
+@pytest.mark.parametrize("bad", ["zz", "abcd", "  ", "00" * 31])
+def test_a_malformed_next_key_is_ignored_and_the_current_one_still_works(monkeypatch, bad):
+    current = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(signature, "PUBLIC_KEY_HEX", _hex(current))
+    monkeypatch.setattr(signature, "NEXT_PUBLIC_KEY_HEX", bad)
+    assert signature.next_public_key() is None
+    assert signature.seamless_updates_configured() is True
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(current)) is True
+
+
+def test_an_explicit_key_is_the_only_one_tried(monkeypatch):
+    """Tests and callers that name a key get exactly that key, not the baked ones as well."""
+    current, other = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    monkeypatch.setattr(signature, "PUBLIC_KEY_HEX", _hex(current))
+    assert signature.verify_archive(VERSION, PAYLOAD, sign(current),
+                                    signature.encode_public_key(other.public_key())) is False
+
