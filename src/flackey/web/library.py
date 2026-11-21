@@ -315,10 +315,12 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
                     return
                 recheck_state["done"] += 1
                 recheck_state["flagged"] += int(flagged(value))
-            recheck_state["state"] = "done"
+            if recheck_state["state"] == "running" and recheck_state["run"] == run:
+                recheck_state["state"] = "done"   # not over a Stop pressed during the last file
         except Exception:
             log.exception("checking the library again stopped")
-            recheck_state["state"] = "error"
+            if recheck_state["run"] == run:
+                recheck_state["state"] = "error"
 
     @r.get("/library/recheck")
     async def recheck_status() -> dict:

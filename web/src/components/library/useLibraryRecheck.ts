@@ -14,7 +14,8 @@ export function useLibraryRecheck(onFinished: () => void) {
   finished.current = onFinished
 
   // A run started before this page opened (or in another window) is picked up where it is
-  useEffect(() => { api.recheckStatus().then(setRun).catch(() => undefined) }, [])
+  // -- only while it is still going: a finished run was already reported, and Dismiss stays dismissed.
+  useEffect(() => { api.recheckStatus().then(r => { if (r.state === 'running') setRun(r) }).catch(() => undefined) }, [])
 
   const running = run?.state === 'running'
   useEffect(() => {
@@ -33,7 +34,9 @@ export function useLibraryRecheck(onFinished: () => void) {
     api.recheckLibrary().then(setRun)
       .catch(err => setError(err instanceof ApiError ? err.message : "Couldn't start checking the library. Try again."))
   }, [])
-  const stop = useCallback(() => { api.stopRecheck().then(setRun).catch(() => undefined) }, [])
+  const stop = useCallback(() => {
+    api.stopRecheck().then(r => { setRun(r); finished.current() }).catch(() => undefined)
+  }, [])
   const dismiss = useCallback(() => setRun(r => r && { ...r, state: 'idle' }), [])
 
   let text: string | null = null
