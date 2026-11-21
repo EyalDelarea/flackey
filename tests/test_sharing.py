@@ -31,6 +31,7 @@ def make(**kw):
     sharing = Sharing(S(), status, http=None, port=50300, mapper=mapper, unmapper=unmapper,
                       checker=checker, gateway=lambda: "10.0.0.1", lan=lambda g=None: "10.0.0.5",
                       lease_s=kw.get("lease_s", 100), recheck_s=kw.get("recheck_s", 1000),
+                      confirm_s=kw.get("confirm_s", 120), confirm_gap_s=kw.get("confirm_gap_s", 60),
                       clock=kw.get("clock", lambda: 0.0), sleep=kw.get("sleep", asyncio.sleep))
     return sharing, status, calls
 
@@ -196,3 +197,102 @@ async def test_release_still_unmaps_when_the_shutdown_was_cancelled():
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert calls["unmap"] == 1
+
+
+def closed_then(*readings):
+    """A checker that answers each reading in turn (True open, False closed, None could not tell),
+    repeating the last one once they run out."""
+    answers = list(readings)
+
+    async def checker(port, http):
+        r = answers.pop(0) if len(answers) > 1 else answers[0]
+        return PortCheck(r, "1.2.3.4" if r is not None else None,
+                         None if r is not None else "Could not reach the port test service.")
+    return checker
+
+
+async def test_one_closed_reading_is_not_reported_as_closed():
+    """Port checks can false-alarm, so the sidebar must not go amber on the first one."""
+    sharing, status, _ = make(check=PortCheck(False, "1.2.3.4"))
+    state = await sharing.refresh()
+    assert state["reachable"] is False and state["closed_confirmed"] is False
+    assert status["sharing"]["closed_confirmed"] is False
+
+
+async def test_a_second_closed_reading_a_minute_later_confirms_it():
+    now = [0.0]
+    sharing, _, _ = make(clock=lambda: now[0])
+    sharing._check = closed_then(False)
+    await sharing.refresh()
+    now[0] = 90.0
+    assert (await sharing.refresh())["closed_confirmed"] is True
+
+
+async def test_two_closed_readings_seconds_apart_do_not_confirm():
+    """At launch the sign-in and the loop's first tick both check within seconds: those two are one
+    reading as far as a false alarm goes."""
+    now = [0.0]
+    sharing, _, _ = make(clock=lambda: now[0])
+    sharing._check = closed_then(False)
+    await sharing.refresh()
+    now[0] = 5.0
+    assert (await sharing.refresh())["closed_confirmed"] is False
+
+
+async def test_an_open_reading_clears_a_confirmed_closed_port():
+    now = [0.0]
+    sharing, _, _ = make(clock=lambda: now[0])
+    sharing._check = closed_then(False, False, True)
+    await sharing.refresh()
+    now[0] = 90.0
+    assert (await sharing.refresh())["closed_confirmed"] is True
+    now[0] = 200.0
+    state = await sharing.refresh()
+    assert state["reachable"] is True and state["closed_confirmed"] is False
+
+
+async def test_an_unknown_reading_neither_confirms_nor_clears():
+    now = [0.0]
+    sharing, _, _ = make(clock=lambda: now[0])
+    sharing._check = closed_then(False, None, False, None)
+    await sharing.refresh()
+    now[0] = 90.0
+    assert (await sharing.refresh())["closed_confirmed"] is False    # unknown is not a second "closed"
+    now[0] = 100.0
+    assert (await sharing.refresh())["closed_confirmed"] is True
+    now[0] = 200.0
+    assert (await sharing.refresh())["closed_confirmed"] is True     # and not an "open" either
+
+
+async def test_run_forever_rechecks_soon_after_a_first_closed_reading():
+    """The confirmation lands in about two minutes, not after the half-hour recheck."""
+    now, slept, sleep = ticking(3)
+    sharing, status, calls = make(lease_s=10_000, recheck_s=1800, confirm_s=120, confirm_gap_s=60,
+                                  check=PortCheck(False, "1.2.3.4"), clock=lambda: now[0], sleep=sleep)
+    await run_ticks(sharing)
+    assert slept[0] == 120                       # one closed reading: come back soon
+    assert status["sharing"]["closed_confirmed"] is True
+    assert slept[1:] == [1800, 1800]             # confirmed: back to the ordinary schedule
+    assert calls["check"] == 3                   # at 0, at 120 (confirms), at 1920
+
+
+async def test_fix_asks_the_router_again_even_with_a_mapping_held():
+    sharing, _, calls = make()
+    await sharing.refresh()
+    await sharing.refresh()
+    assert calls["map"] == 1                     # an ordinary recheck keeps the live mapping
+    sharing.start_fix()
+    await sharing._task
+    assert calls["map"] == 2 and calls["check"] == 3
+
+
+async def test_turning_soulseek_off_clears_a_confirmed_closed_port():
+    now = [0.0]
+    sharing, status, _ = make(clock=lambda: now[0], check=PortCheck(False, "1.2.3.4"))
+    await sharing.refresh()
+    now[0] = 90.0
+    await sharing.refresh()
+    assert status["sharing"]["closed_confirmed"] is True
+    sharing._settings.soulseek_enabled = False
+    await sharing._tick(None)
+    assert status["sharing"]["closed_confirmed"] is False and status["sharing"]["enabled"] is False

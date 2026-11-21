@@ -73,7 +73,10 @@ export interface LosslessHealth { enabled:boolean; provider:ProviderHealth|null;
     that matters; the addresses exist so the panel can tell the owner what to forward and where, and are
     null whenever the router, the network or the check itself would not say. */
 export interface SharingState { port:number|null; enabled:boolean; checking:boolean; mapping:'natpmp'|'upnp'|null
-  reachable:boolean|null; public_ip:string|null; lan_ip:string|null; gateway:string|null; checked_at:string|null; error:string|null }
+  reachable:boolean|null; public_ip:string|null; lan_ip:string|null; gateway:string|null; checked_at:string|null; error:string|null
+  /** Closed on two checks a minute or more apart, so not a one-off false alarm. Only this turns the sidebar
+      amber. Optional so a fixture written before it existed still type-checks. */
+  closed_confirmed?:boolean }
 export type Platform = 'mac' | 'windows' | 'linux'
 export interface Health { ok:boolean; version:string; telegram_authorized:boolean; worker_running:boolean;
   setup_done:boolean; lossless?:LosslessHealth
@@ -278,6 +281,8 @@ export const api = {
   // Answers with `checking: true` and does the work behind it: the result arrives on the status event,
   // not in this response. 409 when there is no Soulseek account to share anything from.
   checkSharing: () => post<SharingState>('/api/sharing/check'),
+  // Same shape as checkSharing, but asks the router to open the port again first, even if it said yes before.
+  fixSharing: () => post<SharingState>('/api/sharing/fix'),
   telemetry: () => call<TelemetryState>('/api/telemetry'),
   // Turning it off deletes what was sent: the server queues the delete to the collector.
   setTelemetry: (enabled: boolean) => call<TelemetryState>('/api/telemetry', { method: 'PUT', body: JSON.stringify({ enabled }) }),
