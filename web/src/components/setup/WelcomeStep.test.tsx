@@ -32,8 +32,10 @@ describe('usage stats opt-in', () => {
     expect(notNow).toHaveAttribute('aria-checked', 'false')
     expect(share.className).toBe(notNow.className)      // equal weight: neither is styled as the default
     expect(screen.getByText('Hey! Eyal here 👋')).toBeInTheDocument()
-    expect(screen.getByText(/I’m adding usage stats to Flackey so I can see where downloads fail/)).toBeInTheDocument()
-    expect(screen.getByText(/no song names, links or files, just counts .*My stats server never stores your IP address\./)).toBeInTheDocument()
+    expect(screen.getByText('I’m adding usage stats to Flackey.')).toBeInTheDocument()
+    expect(screen.getByText(/where downloads fail, so I can fix them faster/)).toBeInTheDocument()
+    expect(screen.getByText(/no song names, links or files, just counts like “a Soulseek search found nothing”/)).toBeInTheDocument()
+    expect(screen.getByText('My stats server never stores your IP address.')).toBeInTheDocument()
     expect(screen.getByText(/If you’re OK with it, please opt in\./)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: "What's shared?" })).toBeInTheDocument()
     const privacy = screen.getByRole('link', { name: 'Privacy page' })
