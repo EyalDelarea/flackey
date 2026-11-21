@@ -81,6 +81,7 @@ it('walks through a download on request, without sending anything or adding a ro
     .map(k => vi.spyOn(api, k as never))
   expect(screen.queryByText('Search')).not.toBeInTheDocument()   // short until asked
   fireEvent.click(screen.getByText('See how a download goes'))
+  expect(screen.getByRole('region', { name: 'How a download goes' })).toHaveFocus()
   for (const name of ['Search', 'Download', 'Verify', 'Done']) expect(screen.getByText(name)).toBeInTheDocument()
   expect(screen.getByText(/filed under the artist's folder in \/tmp\/lib/)).toBeInTheDocument()
   expect(screen.getByText(/nothing was downloaded/)).toBeInTheDocument()
@@ -104,5 +105,5 @@ it('describes the download from the sources this owner actually set up', async (
   unmount()
   render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="skipped" soulseek="pending" />)
   fireEvent.click(await screen.findByText('See how a download goes'))
-  expect(screen.getByText('From Soulseek, as a lossless copy.')).toBeInTheDocument()
+  expect(screen.getByText('Looks on Soulseek for a lossless copy.')).toBeInTheDocument()
 })

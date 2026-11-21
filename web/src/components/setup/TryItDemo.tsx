@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Icon from '../Icon'
 
 /** A stand-in link, plainly not a real video. The walkthrough never downloads anything, so there is no
@@ -12,7 +12,7 @@ export const SAMPLE_LINK = 'https://www.youtube.com/watch?v=your-track'
 function steps(libraryRoot: string, soulseek: boolean, telegram: boolean): { name: string; text: string }[] {
   // Only the sources this owner set up: a skipped one is not part of their first download.
   const download = soulseek && telegram ? 'Soulseek first, for a lossless copy. Deezer is the fallback.'
-    : soulseek ? 'From Soulseek, as a lossless copy.'
+    : soulseek ? 'Looks on Soulseek for a lossless copy.'
     : "From Deezer through Telegram, as an MP3. Add Soulseek in Settings for lossless copies."
   return [
     { name: 'Search', text: 'Works out which track it is: official title, remix and release.' },
@@ -28,13 +28,16 @@ function steps(libraryRoot: string, soulseek: boolean, telegram: boolean): { nam
  *  short for anyone who just wants to start. */
 export default function TryItDemo({ libraryRoot, soulseek, telegram }: { libraryRoot: string; soulseek: boolean; telegram: boolean }) {
   const [open, setOpen] = useState(false)
+  // The link that opened it is gone, so focus moves to what replaced it rather than falling to the page.
+  const panel = useRef<HTMLElement>(null)
+  useEffect(() => { if (open) panel.current?.focus() }, [open])
   if (!open) return <button type="button" className="btn-link" onClick={() => setOpen(true)}>See how a download goes</button>
-  return (<section className="try-it" aria-label="How a download goes">
+  return (<section className="try-it" aria-label="How a download goes" tabIndex={-1} ref={panel}>
     <div className="try-paste">
       <span className="try-link mono">{SAMPLE_LINK}</span>
       <span className="try-kind">Example</span>
     </div>
-    <ol className="try-steps">
+    <ol className="try-steps" role="list">
       {steps(libraryRoot, soulseek, telegram).map((s, i) => (
         <li key={s.name} style={{ animationDelay: `${300 + i * 450}ms` }}>
           <span className="try-mark"><Icon name="check" size={10} stroke={3} /></span>
