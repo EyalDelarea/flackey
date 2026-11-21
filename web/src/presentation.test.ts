@@ -1,4 +1,4 @@
-import { STEP_TIPS, asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { STEP_TIPS, asSentence, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -627,11 +627,11 @@ describe('failed states say why they are failed and whether they can come back',
     expect(presentRow(bundle({ state: 'rejected' }), opts).outcome!.note).toMatch(/paste the link again/i)
   })
 
-  it('tells a stopped row its Try again works and that Retry all will not press it', () => {
-    const note = presentRow(bundle({ state: 'cancelled' }), opts).outcome!.note
-    expect(note).toMatch(/Try again/)
-    expect(note).toMatch(/Retry all leaves stopped tracks alone/)
-    expect(note).not.toMatch(/paste the link again/i)
+  it('tells a stopped row its Try again works in one line, with the rest on the button', () => {
+    const v = presentRow(bundle({ state: 'cancelled' }), opts)
+    expect(v.outcome!.note).toBe('Try again picks up where it left off.')
+    expect(v.action).toEqual({ label: 'Try again', kind: 'retry', tip: expect.stringMatching(/Retry all leaves stopped tracks alone/) })
+    expect(presentRow(bundle({ state: 'error' }), opts).action!.tip).toBeUndefined()
   })
 
   it('does not repeat a stale retry promise on a row it has just called final', () => {
@@ -651,25 +651,20 @@ describe('failedSummary', () => {
                           failed(4, 'cancelled'), failed(5, 'cancelled')]))
       // Ordered by FAILED_COPY, not by what the list happens to hold first, so the sentence does not
       // reshuffle itself under the owner every time a row is retried or removed.
-      .toBe('1 of these 5 cannot be tried again — 1 failed the quality check. That row says what to do '
-            + 'instead. 2 of these you stopped yourself, so Retry all leaves them out — press Try again '
-            + 'on a row to start that one again.')
+      .toBe('1 failed the quality check · 2 stopped by you (Retry all skips them)')
   })
 
   it('explains a Retry all of nothing even when no row is final', () => {
     // The worst version of the gap: seventeen live Try again buttons under a disabled "Retry all 0".
     // Nothing here is final, so the old summary returned null and the owner was left with two numbers.
     expect(failedSummary([failed(1, 'error'), failed(2, 'cancelled'), failed(3, 'cancelled')]))
-      .toBe('2 of these you stopped yourself, so Retry all leaves them out — press Try again on a row '
-            + 'to start that one again.')
-    expect(failedSummary([failed(1, 'cancelled')]))
-      .toBe('One of these you stopped yourself, so Retry all leaves it out — press Try again on the row '
-            + 'to start it again.')
+      .toBe('2 stopped by you (Retry all skips them)')
+    expect(failedSummary([failed(1, 'cancelled')])).toBe('1 stopped by you (Retry all skips it)')
   })
 
-  it('says so plainly when the button is disabled because nothing here can move', () => {
+  it('names the final ones in a few words when nothing here can move', () => {
     expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected')]))
-      .toBe('Nothing here can be tried again — 2 failed the quality check. Each row says what to do instead.')
+      .toBe('2 failed the quality check')
   })
 
   it('counts the two refusals apart, because only one of them is about quality', () => {
@@ -679,8 +674,7 @@ describe('failedSummary', () => {
       reason: 'a different recording', bitrate_kbps: 320, cutoff_hz: null, spectrogram_path: null,
       created_at: '', kind: 'different_recording' } })
     expect(failedSummary([failed(1, 'rejected'), failed(2, 'rejected'), different]))
-      .toBe('Nothing here can be tried again — 2 failed the quality check, 1 turned out to be a different '
-            + 'recording. Each row says what to do instead.')
+      .toBe('2 failed the quality check · 1 needs a different copy')
   })
 
   it('stays silent when there is no gap to explain', () => {
@@ -691,7 +685,14 @@ describe('failedSummary', () => {
 
   it('counts only failures, so a History tab full of finished tracks does not inflate it', () => {
     expect(failedSummary([failed(1, 'done'), failed(2, 'duplicate'), failed(3, 'rejected')]))
-      .toBe('Nothing here can be tried again — 1 failed the quality check. That row says what to do instead.')
+      .toBe('1 failed the quality check')
+  })
+})
+
+describe('clearConfirmText', () => {
+  it('counts what Clear failed takes and says the library is not touched', () => {
+    expect(clearConfirmText(1)).toBe('Clear the failed track from the list? Files already in your library stay where they are.')
+    expect(clearConfirmText(7)).toBe('Clear all 7 failed tracks from the list? Files already in your library stay where they are.')
   })
 })
 
