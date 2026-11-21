@@ -75,6 +75,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {/* The percentage moved to the platter on the right; what stays here is the part it cannot
               show -- how much of how big, from whom, how fast. */}
           {v.progress && <div className="xfer-label">{v.progress.label}</div>}
+          {!v.progress && v.pill?.detail && <div className="xfer-label">{v.pill.detail}</div>}
           {v.fallback && <div className="fallback" title={v.fallback.reason}>{v.fallback.reason}</div>}
           {v.extendedNote && <div className="extended-note">{v.extendedNote}</div>}
           {v.extendedOffer?.state === 'swapped' && <div className="extended-note">{v.extendedOffer.label}</div>}
@@ -97,6 +98,7 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
         <div className="row-status">
           {v.retryInSeconds != null && <RetryCountdown seconds={v.retryInSeconds} />}
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
+          {v.pill && <span className={`row-pill ${v.pill.kind}`}>{v.pill.kind === 'connecting' && <span className="row-pill-dot" aria-hidden="true" />}{v.pill.label}</span>}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
             : v.formatLabel ? <span className={`verified${vouched ? '' : ' plain'}`}>
                 {vouched && <Icon name="check" size={13} stroke={2.2} />}{v.formatLabel}</span>

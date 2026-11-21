@@ -136,6 +136,17 @@ it('a queued row still shows the whole road ahead beside its tag', () => {
   expect(screen.getByLabelText('progress').querySelectorAll('.step')).toHaveLength(STEPS.length)
 })
 
+it('a row with nothing to draw yet says so on the rail instead of sitting blank', () => {
+  const { container, rerender } = render(<RequestRow view={{ ...base, tag: null, dimmed: false, status: 'Downloading the file',
+    pill: { kind: 'connecting', label: 'Connecting', detail: 'Connecting to a peer…' } }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(container.querySelector('.row-status .row-pill.connecting')).toHaveTextContent('Connecting')
+  expect(screen.getByText('Connecting to a peer…')).toHaveClass('xfer-label')
+  rerender(<RequestRow view={{ ...base, tag: null, dimmed: false, status: 'Next in line', pill: { kind: 'upnext', label: 'Up next' } }}
+    onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(container.querySelector('.row-status .row-pill.upnext')).toHaveTextContent('Up next')
+  expect(container.querySelector('.xfer-label')).toBeNull()
+})
+
 it('a row being checked after the transfer is not announced as waiting in a queue', () => {
   // `pct: null` used to mean one thing -- queued at the peer. The phases after the last byte land use it
   // too now, so the platter cannot keep announcing every one of them as a wait.

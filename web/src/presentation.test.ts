@@ -50,10 +50,11 @@ describe('formatting', () => {
 })
 
 describe('presentRow', () => {
-  it('queued row is dimmed and tagged, and can be stopped before it starts', () => {
+  it('queued row says it is up next rather than fading out, and can be stopped before it starts', () => {
     const v = presentRow(bundle({}), opts)
     expect(v.title).toBe('Ace Ventura – Rezonate')
-    expect(v.status).toBe('Starting\u2026'); expect(v.tag).toBe('queued'); expect(v.dimmed).toBe(true)
+    expect(v.status).toBe('Next in line'); expect(v.pill).toEqual({ kind: 'upnext', label: 'Up next' })
+    expect(v.tag).toBeNull(); expect(v.dimmed).toBe(false)
     expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
   it('in-progress row carries one ladder: each step names itself and holds its own state', () => {
@@ -817,6 +818,18 @@ describe('a running transfer shows where it has got to', () => {
     expect(peerName('https://')).toBe('https://')
   })
 
+  it('says it is connecting to a peer before the first transfer frame arrives', () => {
+    const v = presentRow(fetching, { ...opts, soulseekConnected: true, fetchProgress: [] })
+    expect(v.progress).toBeNull()
+    expect(v.pill).toEqual({ kind: 'connecting', label: 'Connecting', detail: 'Connecting to a peer…' })
+    expect(presentRow(fetching, { ...opts, soulseekConnected: true, fetchProgress: [p()] as never }).pill).toBeFalsy()
+  })
+
+  it('does not claim a peer for a Deezer download, which sends no frames', () => {
+    const deezer = bundle({ state: 'fetching', fetch_source: 'deezer' })
+    expect(presentRow(deezer, { ...opts, fetchProgress: [] }).pill).toBeFalsy()
+  })
+
   it('belongs only to the row it names, with several transfers running at once', () => {
     const v = presentRow(fetching, { ...opts, fetchProgress: [p({ request_id: 999 })] as never })
     expect(v.progress).toBeNull()
@@ -835,9 +848,9 @@ describe('a running transfer shows where it has got to', () => {
 })
 
 describe('a queued track', () => {
-  it('says it is starting rather than counting a line it does not wait in', () => {
-    // Every queued track is picked up on the worker's next pass now, so there is no position to report.
-    expect(presentRow(bundle({ id: 2 }), opts).status).toBe('Starting\u2026')
+  it('says it is next in line rather than counting a line position it does not have', () => {
+    // Up to ten run at once and the rest start as room frees, so there is no position to report.
+    expect(presentRow(bundle({ id: 2 }), opts).status).toBe('Next in line')
     expect(presentRow(bundle({ id: 2 }), opts).action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
 
