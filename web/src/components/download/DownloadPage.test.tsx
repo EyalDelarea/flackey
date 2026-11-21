@@ -230,7 +230,7 @@ describe('filter bar, remove and clear failed', () => {
 
   it('shows the paste prompt only when there are no requests at all', () => {
     render(<DownloadPage live={makeLive([])} />)
-    expect(screen.getByText('Paste a link above to start digging.')).toBeInTheDocument()
+    expect(screen.getByText('Nothing downloading yet')).toBeInTheDocument()
   })
 
   it('hides the filter bar entirely when there are no requests at all', () => {

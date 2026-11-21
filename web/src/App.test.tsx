@@ -205,7 +205,7 @@ describe('the update banner', () => {
       available: true, latest: '0.1.3', url: 'https://example.test/Flackey.pkg', release_url: null,
       size: null, size_label: null, published_at: null, published_date: null, prerelease: false })
     render(<App />)
-    await screen.findByText('Paste a link above to start digging.')
+    await screen.findByText('Nothing downloading yet')
     expect(check).not.toHaveBeenCalled()
     expect(document.querySelector('.nav-badge')).not.toBeInTheDocument()
   })
