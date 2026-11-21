@@ -794,12 +794,13 @@ async def test_miss_then_deezer_failure_runs_no_second_attempt(lenv):
     w = make(lenv, source=source)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
-    assert r.state == RequestState.QUEUED and r.attempts == 1 and r.fetch_source is None
+    # A bot timeout is Telegram's trouble and costs the request no attempt (TELEGRAM_RETRY_WAITS_S).
+    assert r.state == RequestState.QUEUED and r.attempts == 0 and r.fetch_source is None
     store.update_request(rid, retry_after=None)
     r = await w.process(rid)
     # The second pass searches Soulseek again -- an empty search is about who was online, not about the
     # track -- but it must not duplicate the candidate rows the first pass already saved.
-    assert r.attempts == 2 and len(provider.searches) == 2
+    assert r.attempts == 0 and len(provider.searches) == 2
     assert len(store.get_candidates(rid)) == 1
 
 
@@ -1541,7 +1542,7 @@ async def test_a_silent_source_retries_soon_rather_than_searching_soulseek(lenv)
     r = await w.process(store.add_request(TEXT_AT, RequestKind.TEXT))
 
     assert provider.downloaded == [] and provider.searches == []
-    assert r.state == RequestState.QUEUED and r.retry_after is not None and r.attempts == 1
+    assert r.state == RequestState.QUEUED and r.retry_after is not None and r.attempts == 0
     assert "source error" in r.flag_reason
 
 
@@ -1572,7 +1573,7 @@ async def test_without_a_beatport_match_a_silent_source_still_fails_the_request(
 
     # unchanged from before the fallback existed: the source's own error, retried with backoff
     assert r.state == RequestState.QUEUED
-    assert r.flag_reason == "source error: source bot did not answer the search"
+    assert r.flag_reason.startswith("source error: source bot did not answer the search; Telegram trouble")
 
 
 async def test_a_track_neither_side_can_identify_fails_once_instead_of_backing_off(lenv):

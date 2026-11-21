@@ -17,6 +17,7 @@ from .policy import (
     SEARCH_AGAIN_AFTER,
     SLOW_BACKOFF_S,
     SLOW_RETRY_OUTCOMES,
+    TELEGRAM_RETRY_WAITS_S,
     bot_paused,
 )
 
@@ -44,6 +45,38 @@ class RecoveryMixin:
             await self.notifier.send(f"Gave up after {attempts} attempts: {req.raw_text}\n{reason}")
 
 
+    async def _retry_after_telegram(self, req: Request, reason: str) -> None:
+        """A Telegram connection drop or a bot that did not answer in time (`SourceTimeout`): wait and ask
+        again on TELEGRAM_RETRY_WAITS_S without spending one of the request's attempts -- the request did
+        nothing wrong. Once those waits are spent, with no file from the bot in between, `_retry_or_fail`
+        as before.
+
+        No notifier message per wait: the notifier is what tells the owner a track gave up, and four
+        messages an hour about a hiccup the app is already handling would be noise. The row shows the wait
+        and the reason meanwhile."""
+        misses = self._telegram_misses.get(req.id, 0)
+        if misses >= len(TELEGRAM_RETRY_WAITS_S):
+            await self._retry_or_fail(req, reason)
+            if self.store.get_request(req.id).state == RequestState.ERROR:
+                self._telegram_misses.pop(req.id, None)   # finished with; Try again starts a fresh count
+            return
+        self._telegram_misses[req.id] = misses + 1
+        wait = TELEGRAM_RETRY_WAITS_S[misses]
+        left = len(TELEGRAM_RETRY_WAITS_S) - misses - 1
+        more = ("last automatic try" if left == 0
+                else f"{left} more automatic tr{'y' if left == 1 else 'ies'}")
+        retry_after = (datetime.now(UTC) + timedelta(seconds=wait)).isoformat(timespec="seconds")
+        self._set_state(req, RequestState.QUEUED, retry_after=retry_after,
+                        flag_reason=f"{reason}; Telegram trouble, trying again on its own ({more})")
+        log.info("req#%d: %s; Telegram retry %d of %d in %d s", req.id, reason, misses + 1,
+                 len(TELEGRAM_RETRY_WAITS_S), wait)
+
+    def _telegram_answered(self, req: Request) -> None:
+        """The bot sent a file, so the next miss starts the Telegram waits from the top. Not on a search
+        that answered: the bot can answer every search and still never send the file."""
+        self._telegram_misses.pop(req.id, None)
+
+
     async def _wait_for_soulseek(self, req: Request, why: str, attempts: int) -> None:
         """Park the request in `queued` for LONG_RETRY_EVERY_S with `lossless_retry` granted, so the next
         pass really searches whatever the last outcome was (`_lossless_allowed`); or in `error` once the
@@ -51,6 +84,9 @@ class RecoveryMixin:
         shows the countdown and the reason meanwhile. `attempts` keeps counting past MAX_ATTEMPTS so the
         budget survives a restart: it lives on the row, not in memory."""
         hours = LONG_RETRY_EVERY_S // 3600
+        # Each look is hours after the last, so a Telegram drop on it is a new drop: it gets the whole hour
+        # of waits. Carried over, the fifth drop across three days would end the request in ERROR.
+        self._telegram_misses.pop(req.id, None)
         if attempts >= MAX_ATTEMPTS + LONG_RETRY_TIMES:
             reason = (f"{why}; looked {LONG_RETRY_TIMES} times over {LONG_RETRY_TIMES * hours} h. "
                       f"Press Try again to search once more")

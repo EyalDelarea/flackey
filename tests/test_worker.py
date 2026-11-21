@@ -3,7 +3,7 @@ import json
 import logging
 import subprocess
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,7 +26,7 @@ from flackey.models import (
 )
 from flackey.notify import MemoryNotifier
 from flackey.reference import Identification
-from flackey.source import SourceNotFound, SourceTimeout, SourceUnauthorized
+from flackey.source import SourceError, SourceNotFound, SourceTimeout, SourceUnauthorized
 from flackey.store import Store
 from flackey.tag import read_tags
 from flackey.tag_lookup import FoundTags
@@ -283,7 +283,7 @@ async def test_choose_validates_candidate_and_state(env):
 
 async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     _settings, store, notifier = env
-    src = FakeSource([good_cand()], fetch_error=SourceTimeout("slow"))
+    src = FakeSource([good_cand()], fetch_error=SourceError("the bot sent something odd"))
     w = make_worker(env, src)
     rid = store.add_request(TEXT, RequestKind.TEXT)
     r = await w.process(rid)
@@ -292,6 +292,101 @@ async def test_fetch_failure_backs_off_without_duplicating_candidates(env):
     assert store.due_queued() == []                          # backoff: not picked up again immediately
     r = await w.process(rid)                                # forced second attempt
     assert r.attempts == 2 and src.searches == 1 and len(store.get_candidates(rid)) == 1
+
+
+async def _until_error(w, rid, limit=20):
+    """Process `rid` pass after pass, as the queue would once each wait is over, until it gives up."""
+    for _ in range(limit):
+        r = await w.process(rid)
+        if r.state == RequestState.ERROR:
+            return r
+    raise AssertionError(f"req#{rid} never gave up in {limit} passes")
+
+
+async def test_a_telegram_timeout_waits_about_an_hour_without_spending_attempts(env):
+    """Nov 16 and 18: seven Telegram drops in two days, each a red row inside three minutes, each fetched
+    fine when retried by hand. A timeout now waits TELEGRAM_RETRY_WAITS_S first, spending no attempt,
+    and quietly; only then does the ordinary ladder run and give up."""
+    _settings, store, notifier = env
+    src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
+    w = make_worker(env, src)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    sent = len(notifier.sent)
+    for i, wait in enumerate(worker_mod.TELEGRAM_RETRY_WAITS_S):
+        before = datetime.now(UTC)
+        r = await w.process(rid)
+        assert r.state == RequestState.QUEUED and r.attempts == 0
+        due = datetime.fromisoformat(r.retry_after)
+        assert wait - 5 <= (due - before).total_seconds() <= wait + 5
+        assert r.flag_reason.startswith("source error: source bot did not send the file; Telegram trouble")
+        left = len(worker_mod.TELEGRAM_RETRY_WAITS_S) - i - 1
+        assert (f"{left} more automatic tr" in r.flag_reason) if left else ("last automatic try" in r.flag_reason)
+    assert len(notifier.sent) == sent                        # quiet while it is handling it
+    assert sum(worker_mod.TELEGRAM_RETRY_WAITS_S) >= 45 * 60   # "a few times over an hour"
+    r = await _until_error(w, rid)
+    assert r.attempts == worker_mod.MAX_ATTEMPTS and "source bot did not send the file" in r.error_message
+
+
+async def test_try_again_after_a_telegram_give_up_gets_the_whole_hour_again(env):
+    """Pressing Try again is the owner's own retry after the give-up. Left at the spent count, the next
+    drop would skip the waits and fail inside three minutes -- the behaviour these waits replace."""
+    _settings, store, _notifier = env
+    src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
+    w = make_worker(env, src)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await _until_error(w, rid)
+    assert rid not in w._telegram_misses
+    await w.retry(rid)
+    before = datetime.now(UTC)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 0
+    first = worker_mod.TELEGRAM_RETRY_WAITS_S[0]
+    assert first - 5 <= (datetime.fromisoformat(r.retry_after) - before).total_seconds() <= first + 5
+
+
+async def test_stopping_a_track_forgets_its_telegram_count(env):
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file")))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    assert w._telegram_misses[rid] == 1
+    await w.cancel(rid)
+    assert rid not in w._telegram_misses
+
+
+async def test_each_long_soulseek_look_gets_the_whole_telegram_hour(env):
+    """The long Soulseek wait looks again every few hours for days. A Telegram drop on one of those looks
+    is a new drop, so the count spent on an earlier one must not carry over and end the request."""
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    w._telegram_misses[rid] = len(worker_mod.TELEGRAM_RETRY_WAITS_S)
+    await w._wait_for_soulseek(store.get_request(rid), "peers busy", worker_mod.MAX_ATTEMPTS)
+    assert store.get_request(rid).state == RequestState.QUEUED and rid not in w._telegram_misses
+
+
+async def test_a_file_from_the_bot_clears_the_telegram_count(env):
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource([good_cand()]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    w._telegram_misses[rid] = 2
+    r = await w.process(rid)
+    assert r.state == RequestState.DONE and rid not in w._telegram_misses
+
+
+async def test_a_bot_that_answers_searches_but_never_sends_the_file_still_gives_up(env):
+    """Nov 18: the bot answered every search and then sent nothing. The search answering must not reset
+    the Telegram count, or the request would wait and retry for ever."""
+    _settings, store, _notifier = env
+    src = FakeSource([good_cand()], fetch_error=SourceTimeout("source bot did not send the file"))
+    w = make_worker(env, src)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    w._telegram_misses[rid] = 2
+    r = await w.process(rid)                                 # the search on this pass is answered...
+    assert src.searches == 1 and r.state == RequestState.QUEUED
+    assert w._telegram_misses[rid] == 3                      # ...and the count carries on regardless
+    r = await _until_error(w, rid)
+    assert r.attempts == worker_mod.MAX_ATTEMPTS
 
 
 async def test_not_on_beatport_files_when_confident(env):
@@ -571,10 +666,19 @@ async def test_source_timeout_retries_then_errors(env):
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceTimeout("slow")))
     rid = store.add_request("q", RequestKind.TEXT)
-    assert (await w.process(rid)).state == RequestState.QUEUED
-    assert (await w.process(rid)).state == RequestState.QUEUED
+    for _ in range(len(worker_mod.TELEGRAM_RETRY_WAITS_S) + worker_mod.MAX_ATTEMPTS - 1):
+        assert (await w.process(rid)).state == RequestState.QUEUED
     r = await w.process(rid)
     assert r.state == RequestState.ERROR and r.attempts == 3
+
+
+async def test_a_source_error_that_is_not_a_timeout_keeps_the_quick_ladder(env):
+    """Only a timeout is Telegram's trouble. A bot that answered with something unusable answered."""
+    _settings, store, _notifier = env
+    w = make_worker(env, FakeSource(error=SourceError("the bot sent a menu we cannot read")))
+    rid = store.add_request("q", RequestKind.TEXT)
+    r = await w.process(rid)
+    assert r.state == RequestState.QUEUED and r.attempts == 1 and rid not in w._telegram_misses
 
 
 async def test_beatport_blocked_downloads_without_it(env):
@@ -1239,9 +1343,7 @@ async def test_a_failure_while_identifying_is_stamped_search(env):
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource(error=SourceTimeout("slow")))
     rid = store.add_request("q", RequestKind.TEXT)
-    for _ in range(worker_mod.MAX_ATTEMPTS - 1):
-        assert (await w.process(rid)).state == RequestState.QUEUED
-    r = await w.process(rid)
+    r = await _until_error(w, rid)
     assert r.state == RequestState.ERROR and r.failed_stage == "search"
 
 
@@ -1253,9 +1355,7 @@ async def test_a_failure_while_fetching_is_stamped_download(env):
     _settings, store, _notifier = env
     w = make_worker(env, FakeSource([good_cand()], fetch_error=SourceTimeout("slow")))
     rid = store.add_request(TEXT, RequestKind.TEXT)
-    for _ in range(worker_mod.MAX_ATTEMPTS - 1):
-        assert (await w.process(rid)).state == RequestState.QUEUED
-    r = await w.process(rid)
+    r = await _until_error(w, rid)
     assert r.state == RequestState.ERROR and r.failed_stage == "download"
 
 
@@ -1808,6 +1908,7 @@ async def test_a_give_up_on_the_bot_fetch_says_the_bot_timed_out_not_the_peer_qu
         aid = store.add_attempt(rid, "soulseek", TEXT)
         store.update_attempt(aid, outcome="queued")
         store.update_request(rid, attempts=2)
+        w._telegram_misses[rid] = len(worker_mod.TELEGRAM_RETRY_WAITS_S)   # the hour of Telegram waits is spent
         assert (await w.process(rid)).state == RequestState.ERROR
     finally:
         telemetry.uninstall()

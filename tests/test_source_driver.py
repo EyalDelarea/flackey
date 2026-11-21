@@ -430,9 +430,10 @@ async def test_a_revoked_session_keeps_the_request_queued_instead_of_burning_it(
 
 
 async def test_a_network_blip_leaves_the_session_alone_and_retries(tmp_path: Path):
-    """The same failure with a live session behind it: the request goes back on the quick ladder and
-    the app keeps saying it is connected. Asserting the exception type alone would miss this -- a
-    transient error the worker does not recognise still burns the row into `error`."""
+    """The same failure with a live session behind it: the request waits and retries on its own
+    (TELEGRAM_RETRY_WAITS_S) and the app keeps saying it is connected. Asserting the exception type
+    alone would miss this -- a transient error the worker does not recognise still burns the row into
+    `error`."""
     status = {"telegram_authorized": True}
     alive = FakeClient(FakeResponseMessage(), None, conversation_error=DISCONNECTED, me=A_USER)
     alive.connected = False
@@ -442,5 +443,6 @@ async def test_a_network_blip_leaves_the_session_alone_and_retries(tmp_path: Pat
     r = await w.process(rid)
 
     assert r.state == RequestState.QUEUED and r.retry_after is not None
-    assert r.attempts == 1, "a blip is a failed attempt, and the ladder is what retries it"
+    # A blip is Telegram's trouble, not the request's: it waits without spending an attempt.
+    assert r.attempts == 0 and "Telegram trouble" in r.flag_reason
     assert status["telegram_authorized"] is True

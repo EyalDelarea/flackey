@@ -103,6 +103,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # rather than read off `status` when the pass ends: Telegram can come back while a track is on
         # Soulseek, and then "the bot is paused" would be true of the pass and false of the moment.
         self._bot_skipped: set[int] = set()
+        # How many Telegram misses in a row each request has had (`_retry_after_telegram`). In memory on
+        # purpose: a restart reconnects Telegram from scratch, so misses on the old connection say nothing
+        # about the new one.
+        self._telegram_misses: dict[int, int] = {}
         # What `_bot_ready` said on the last tick, so the tick it changes to yes can re-queue what the
         # paused bot left behind. False to begin with: a sign-in made while the app was closed counts.
         self._bot_was_ready = False
@@ -392,6 +396,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         if req.state == RequestState.AWAITING_REVIEW:
             usage.review_answered(self.store, req, "cancelled")
         self._set_state(req, RequestState.CANCELLED)
+        self._telegram_misses.pop(request_id, None)
         task = self._tasks.get(request_id)
         if task is not None:
             task.cancel()
@@ -447,7 +452,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
 
 
     def _fresh_pass(self, req: Request) -> None:
-        """Back on the queue, due now, with the whole retry budget and one more look at the providers."""
+        """Back on the queue, due now, with the whole retry budget and one more look at the providers --
+        the hour of Telegram waits included, or a Try again after a Telegram give-up would skip straight to
+        the quick ladder and fail again inside three minutes."""
+        self._telegram_misses.pop(req.id, None)
         self._set_state(req, RequestState.QUEUED, attempts=0, retry_after=None,
                         error_message=None, flag_reason=None, failed_stage=None, lossless_retry=1)
 
