@@ -69,6 +69,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
   const [note, setNote] = useState<string | null>(null)
   // Files gone at once in numbers that could be an unplugged drive: forgotten only when the owner says so
   const [missing, setMissing] = useState(0)
+  // The second step of Forget them: it cannot be undone, so the first click only asks
+  const [confirmForget, setConfirmForget] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [format, setFormat] = useState('all')
@@ -122,7 +124,7 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
   const filtered = q || folder !== 'all' || format !== 'all'
   const clearFilters = () => { setQ(''); setFolder('all'); setFormat('all') }
   const refresh = async (forgetMissing = false) => {
-    setRefreshing(true); setActionError(null); setMissing(0)
+    setRefreshing(true); setActionError(null); setMissing(0); setConfirmForget(false)
     try {
       const result = await api.refreshLibrary(forgetMissing)
       // Re-reading is only there to show the result sooner; the refresh itself already went through.
@@ -170,9 +172,16 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       {queryError && <Banner tone="red" text={queryError} action={{ label: 'Dismiss', onClick: () => setQueryError(null) }} />}
       {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
       {note && <Banner tone="amber" text={note} action={{ label: 'Dismiss', onClick: () => setNote(null) }} />}
-      {missing > 0 && <Banner tone="amber"
+      {missing > 0 && !confirmForget && <Banner tone="amber"
         text={`${plural(missing, 'track')} ${missing === 1 ? 'is' : 'are'} no longer in your library folder. Forget them so they can be downloaded again? No files are deleted.`}
-        action={{ label: 'Forget them', onClick: () => { refresh(true) } }} onDismiss={() => setMissing(0)} />}
+        action={{ label: 'Forget them', onClick: () => setConfirmForget(true) }} onDismiss={() => setMissing(0)} />}
+      {missing > 0 && confirmForget && (
+        <div className="banner amber confirm" role="group" aria-label="Confirm forgetting missing tracks"><span className="dot" />
+          <span className="text">{`Forget ${plural(missing, 'track')}? Flackey drops ${missing === 1 ? 'it' : 'them'} from the library, its playlists and the download history, so pasting a playlist downloads ${missing === 1 ? 'it' : 'them'} again. This cannot be undone. Files on disk are not touched.`}</span>
+          <button className="btn-primary" disabled={refreshing} onClick={() => { refresh(true) }}>{`Forget ${missing}`}</button>
+          <button className="btn-secondary" onClick={() => setConfirmForget(false)}>Cancel</button>
+        </div>
+      )}
       {pl && <PlaylistCard playlist={pl} count={pl.track_ids.length} onShowFile={() => reveal(pl.file)} />}
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))

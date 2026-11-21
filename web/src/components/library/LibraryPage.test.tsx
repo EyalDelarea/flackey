@@ -79,9 +79,24 @@ it('asks before forgetting a library whose files were deleted on purpose', async
   expect(screen.queryByText('Library is up to date.')).not.toBeInTheDocument()
   expect(refreshApi).toHaveBeenLastCalledWith(false)
   fireEvent.click(screen.getByRole('button', { name: 'Forget them' }))
+  // It cannot be undone, so the first click only asks
+  expect(refreshApi).toHaveBeenCalledTimes(1)
+  expect(screen.getByText(/Forget 354 tracks\? .*This cannot be undone/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Forget 354' }))
   await waitFor(() => expect(refreshApi).toHaveBeenLastCalledWith(true))
   expect(await screen.findByText('Removed 354 missing files from the library.')).toBeInTheDocument()
   expect(screen.queryByText(/no longer in your library folder/)).not.toBeInTheDocument()
+})
+
+it('backs out of forgetting without touching anything', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  const refreshApi = vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0, missing: 3, reachable: true })
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Forget them' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('button', { name: 'Forget them' })).toBeInTheDocument()
+  expect(refreshApi).toHaveBeenCalledTimes(1)
 })
 
 it('does not call an unplugged library drive up to date', async () => {

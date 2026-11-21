@@ -624,11 +624,44 @@ class Store:
         return None
 
     def delete_track(self, track_id: int) -> None:
-        """Forget a track whose file is gone: its row and its playlist memberships."""
+        self.delete_tracks([track_id])
+
+    def delete_tracks(self, track_ids: list[int]) -> None:
+        """Forget tracks whose files are gone: their rows, their playlist memberships, and the requests that
+        filed them (or found them as a duplicate). Left behind, such a request still counts as a filed
+        track: a playlist pasted again after its files were deleted read "28 tracks" for 14 positions
+        (0.8 QA bug 6). One event for the lot, not one per track -- a page answering hundreds of events by
+        re-reading its counts each time ended up showing the old ones (bug 7)."""
+        if not track_ids:
+            return
         with self.conn:
-            self.conn.execute("DELETE FROM playlist_tracks WHERE track_id=?", (track_id,))
-            self.conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+            for i in range(0, len(track_ids), 500):          # SQLite's limit on bound parameters
+                chunk = track_ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                self._delete_requests_where(f"track_id IN ({marks})", chunk)
+                self.conn.execute(f"DELETE FROM playlist_tracks WHERE track_id IN ({marks})", chunk)
+                self.conn.execute(f"DELETE FROM tracks WHERE id IN ({marks})", chunk)
         self._emit("queue", 0)
+
+    def forget_orphans(self) -> tuple[int, int]:
+        """Drop what still points at a track row that is gone: finished requests and playlist entries. A
+        database forgotten by an older build kept both (0.8 QA bugs 6 and 7). Returns (requests, entries)."""
+        gone = "track_id IS NOT NULL AND track_id NOT IN (SELECT id FROM tracks)"
+        with self.conn:
+            n_req = self._delete_requests_where(f"{gone} AND state IN (?,?)",
+                                                [str(RequestState.DONE), str(RequestState.DUPLICATE)])
+            n_pl = self.conn.execute(f"DELETE FROM playlist_tracks WHERE {gone}").rowcount
+        if n_req or n_pl:
+            self._emit("queue", 0)
+        return n_req, n_pl
+
+    def _delete_requests_where(self, where: str, params: list) -> int:
+        """Delete the requests matching `where` and their child rows, as `delete_request` does, inside the
+        caller's transaction. Returns how many requests went."""
+        sub = f"SELECT id FROM requests WHERE {where}"
+        for child in ("candidates", "rejections", "lossless_attempts", "request_references"):
+            self.conn.execute(f"DELETE FROM {child} WHERE request_id IN ({sub})", params)
+        return self.conn.execute(f"DELETE FROM requests WHERE {where}", params).rowcount
 
     def find_track_by_path(self, path: Path) -> Track | None:
         r = self.conn.execute("SELECT * FROM tracks WHERE path=?", (str(path),)).fetchone()

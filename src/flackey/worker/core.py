@@ -173,6 +173,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         gone = prune_missing_tracks(self.store, self.settings.library_root)
         if gone:
             log.info("forgot %d library rows whose files were removed", len(gone))
+        reqs, entries = self.store.forget_orphans()
+        if reqs or entries:
+            log.info("dropped %d filed requests and %d playlist entries whose tracks were forgotten", reqs, entries)
         if library_reachable(self.settings.library_root):
             # So the New playlist is there from the first launch of a build that has it, and drops what
             # was pruned above. Never on an unplugged drive: that would create the folder on the boot disk.
