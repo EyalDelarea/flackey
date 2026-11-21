@@ -70,3 +70,39 @@ it('names the saved Soulseek account rather than claiming sources in general', a
   expect(screen.queryByText(/Your sources are saved/)).not.toBeInTheDocument()
   expect(screen.queryByText(/Telegram is connected/)).not.toBeInTheDocument()
 })
+
+it('walks through a download on request, without sending anything or adding a row', async () => {
+  vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: true, ffprobe: true, yt_dlp: true })
+  render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="connected" soulseek="connected" />)
+  await waitFor(() => expect(screen.getByText('Start digging')).toBeInTheDocument())
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const calls = (Object.keys(api) as (keyof typeof api)[])
+    .filter(k => typeof api[k] === 'function' && k !== 'tools')
+    .map(k => vi.spyOn(api, k as never))
+  expect(screen.queryByText('Search')).not.toBeInTheDocument()   // short until asked
+  fireEvent.click(screen.getByText('See how a download goes'))
+  for (const name of ['Search', 'Download', 'Verify', 'Done']) expect(screen.getByText(name)).toBeInTheDocument()
+  expect(screen.getByText(/filed under the artist's folder in \/tmp\/lib/)).toBeInTheDocument()
+  expect(screen.getByText(/nothing was downloaded/)).toBeInTheDocument()
+  expect(fetchSpy).not.toHaveBeenCalled()
+  for (const c of calls) expect(c).not.toHaveBeenCalled()
+})
+
+it('offers no walkthrough when there is nowhere to fetch from yet', async () => {
+  vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: true, ffprobe: true, yt_dlp: true })
+  render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="skipped" soulseek="skipped" />)
+  await waitFor(() => expect(screen.getByText('Connect a source')).toBeInTheDocument())
+  expect(screen.queryByText('See how a download goes')).not.toBeInTheDocument()
+})
+
+it('describes the download from the sources this owner actually set up', async () => {
+  vi.spyOn(api, 'tools').mockResolvedValue({ ffmpeg: true, ffprobe: true, yt_dlp: true })
+  const { unmount } = render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="connected" soulseek="skipped" />)
+  fireEvent.click(await screen.findByText('See how a download goes'))
+  expect(screen.getByText(/From Deezer through Telegram, as an MP3/)).toBeInTheDocument()
+  expect(screen.queryByText(/Soulseek first/)).not.toBeInTheDocument()
+  unmount()
+  render(<ReadyStep libraryRoot="/tmp/lib" onStart={vi.fn()} telegram="skipped" soulseek="pending" />)
+  fireEvent.click(await screen.findByText('See how a download goes'))
+  expect(screen.getByText('From Soulseek, as a lossless copy.')).toBeInTheDocument()
+})
