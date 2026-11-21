@@ -1,4 +1,4 @@
-import { STEP_TIPS, asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import { STEP_TIPS, asSentence, bucketCounts, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -801,7 +801,20 @@ describe('a running transfer shows where it has got to', () => {
   it('shows a waiting bar with no percentage while queued at the peer', () => {
     // 0% would read as a stall; this is a queue, which is a different thing to say.
     const v = presentRow(fetching, { ...opts, fetchProgress: [p({ state: 'Queued, Remotely', bytes: 0, pct: 0 })] as never })
-    expect(v.progress).toEqual({ pct: null, label: "Waiting in someone's queue" })
+    expect(v.progress).toEqual({ pct: null, label: "Queued on someone's side · waiting for them to start" })
+  })
+
+  it('shows a peer named after a website as a plain name, not a link', () => {
+    const v = presentRow(fetching, { ...opts, fetchProgress: [p({ peer: 'https://www.rawzik.com/' })] as never })
+    expect(v.progress?.label).toBe('21.0 MB of 42.0 MB from rawzik.com · 1.4 MB/s')
+    const q = presentRow(fetching, { ...opts, fetchProgress: [p({ peer: 'http://rawzik.com', state: 'Queued, Remotely' })] as never })
+    expect(q.progress?.label).toBe("Queued on rawzik.com's side · waiting for them to start")
+  })
+
+  it('leaves an ordinary username exactly as it is spelled', () => {
+    expect(peerName('DJ_www.Shadow/')).toBe('DJ_www.Shadow/')
+    expect(peerName('goadealer')).toBe('goadealer')
+    expect(peerName('https://')).toBe('https://')
   })
 
   it('belongs only to the row it names, with several transfers running at once', () => {
