@@ -1534,7 +1534,7 @@ async def test_try_now_on_a_waiting_row_starts_it_once_and_keeps_its_place_on_th
     w._start_due()
     assert w._tasks == {}               # still waiting
 
-    r = await w.retry(rid)
+    r = await w.try_now(rid)
     assert r.state == RequestState.QUEUED and r.retry_after is None
     assert r.attempts == 2 and r.lossless_retry == 1
 
@@ -1542,8 +1542,8 @@ async def test_try_now_on_a_waiting_row_starts_it_once_and_keeps_its_place_on_th
     w._start_due()                      # the timer's own tick in the same moment
     assert list(w._tasks) == [rid]
     await src.started.wait()
-    with pytest.raises(ValueError, match="nothing to retry"):
-        await w.retry(rid)              # a second press, now that it is running
+    with pytest.raises(ValueError, match="nothing to skip"):
+        await w.try_now(rid)            # a second press, now that it is running
     assert store.get_request(rid).state != RequestState.QUEUED
     w._start_due()
     assert list(w._tasks) == [rid]

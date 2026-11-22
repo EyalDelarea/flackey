@@ -286,9 +286,9 @@ export default function DownloadPage({ live, onReport, watching }: {
     if (kind === 'why') setWhyOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
     else if (kind === 'reveal' && path) run(api.reveal(path))
     else if (kind === 'retry') once(`retry:${id}`, () => api.retry(id).then(refreshAfter))
-    // A wait that ended on its own a moment before the press: the row is already running, the server says
-    // there is nothing to retry, and the refresh shows the row moving -- an error banner would be wrong.
-    else if (kind === 'tryNow') once(`retry:${id}`, () => api.retry(id)
+    // A wait that ended on its own a moment before the press: the row has moved on, the server refuses with
+    // a 400 and touches nothing, and the refresh shows where the row is now -- an error banner would be wrong.
+    else if (kind === 'tryNow') once(`retry:${id}`, () => api.tryNow(id)
       .catch(err => { if (!(err instanceof ApiError && err.status === 400)) throw err })
       .then(refreshAfter))
     // Filing moves the very file the block above was playing, so the clip has to stop with it -- the row

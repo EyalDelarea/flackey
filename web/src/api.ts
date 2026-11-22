@@ -219,6 +219,8 @@ export const api = {
   choose: (rid: number, cid: number) => post<Request>(`/api/requests/${rid}/choose/${cid}`),
   cancel: (rid: number) => post<Request>(`/api/requests/${rid}/cancel`),
   retry: (rid: number) => post<Request>(`/api/requests/${rid}/retry`),
+  /** Skip a waiting row's backoff; refused (400) once the row is no longer waiting. */
+  tryNow: (rid: number) => post<Request>(`/api/requests/${rid}/try-now`),
   accept: (rid: number) => post<Request>(`/api/requests/${rid}/accept`),
   /** Keep it anyway, for the lossless copy the quality check held back (issue #97) */
   keepHeld: (rid: number) => post<Request>(`/api/requests/${rid}/keep-held`),

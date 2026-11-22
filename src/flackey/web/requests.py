@@ -217,6 +217,10 @@ def router(store: Store, worker: Worker, inbox: Inbox, bundles: Bundles, setting
     async def retry(rid: int) -> dict:
         return await act_logged(rid, None, lambda: worker.retry(rid))
 
+    @r.post("/requests/{rid}/try-now")
+    async def try_now(rid: int) -> dict:
+        return await act_logged(rid, "try_now", lambda: worker.try_now(rid))
+
     @r.post("/requests/retry-failed")
     async def retry_failed(body: dict) -> dict:
         """"Retry all" on the Failed tab: the same `worker.retry` the per-row button calls, once per id,

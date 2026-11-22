@@ -363,8 +363,8 @@ function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): Progres
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
 /** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
 const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
-/** Skips the rest of a backoff wait: the same `/retry` route as Try again, which on a waiting row only
- *  clears the wait -- the attempts already spent and the looks left stay as they were. */
+/** Skips the rest of a backoff wait (`/try-now`): only the wait is cleared -- the attempts already spent and
+ *  the looks left stay as they were -- and a row that is no longer waiting is left alone. */
 const TRY_NOW: RowAction = { label: 'Try now', kind: 'tryNow', tip: 'Skip the wait and look for it again now' }
 /** The live states the worker will stop (`CANCELLABLE` less the terminal `error`), and so the live rows
  *  that carry Remove: `POST /api/requests/remove` stops them and forgets them in one press. Verify and
