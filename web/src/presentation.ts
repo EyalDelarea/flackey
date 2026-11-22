@@ -10,11 +10,11 @@ export const STEPS = ['Search', 'Choose', 'Download', 'Verify', 'Done'] as const
 /** Hover text for each rung. Here rather than in Stepper.tsx for the same reason the "step N of 6" counter
  *  went: two places describing one ladder disagreed the moment the map below changed. */
 export const STEP_TIPS: Record<string, string> = {
-  Search: 'Working out which track this is. Deezer gives the official title, remix name and release, and who has a copy.',
+  Search: 'Working out which track this is: the official title, remix name and release from Deezer, matched against the video\'s audio when there is one. If Deezer has nothing, Soulseek is searched with the track\'s own name.',
   Choose: 'More than one copy could be the right one and none of them won outright, so it is waiting on you. Most tracks skip this.',
   Download: "Pulling the file down. Soulseek first for a lossless copy, which can mean waiting in a stranger's queue; Deezer as the fallback. A Soulseek copy is also checked and fingerprinted here, before it moves on.",
-  Verify: 'Reading the spectrogram for signs of a lossy source. An MP3 re-wrapped as FLAC usually shows a sharp edge, often around 16 kHz, where the encoder threw the top away. A clean spectrum is consistent with lossless, not proof of it.',
-  Done: 'Tagged with artist, title, remix and artwork, and filed under the artist\'s folder. No BPM or key — Rekordbox works those out on import.',
+  Verify: 'Checking it is the recording you asked for, and looking for signs of a lossy source: a sharp edge in the spectrum, often near 16 kHz, or traces of an earlier MP3 or AAC encode. A clean result is consistent with lossless, not proof of it.',
+  Done: 'Tagged with artist, title, remix and artwork, and filed in your library folder. No BPM or key — Rekordbox works those out on import.',
 }
 /** `paused` is the parked row's rung: a hollow ring where `current` is a filled pulsing dot. Without it a
  *  row waiting out a backoff draws four identical grey rungs -- the same picture as a track that has not
@@ -222,7 +222,7 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
     tally: 'gave up',
     // Follows the count of tries `outcomeOf` puts in front of it: one error stops a track after a single
     // pass as often as the retry ladder runs out, and "several times" over one try is a claim the row can check.
-    note: 'Try again starts the search over from the beginning, Soulseek included.',
+    note: 'Try again looks for a copy again, Soulseek included.',
   },
   not_found: {
     tally: 'found no copy anywhere',
@@ -236,13 +236,13 @@ const FAILED_COPY: Partial<Record<RequestState, { tally: string; note: string }>
     tally: 'you stopped',
     // One short line: the row says "Stopped by you" right above it, and the rest of the story -- why Retry
     // all leaves it alone -- is on the Try again button's help tag, where the owner looks when deciding.
-    note: 'Try again picks up where it left off.',
+    note: 'Try again puts it back in the queue.',
   },
 }
 
 /** The explanation a stopped row used to print in full, five lines deep, on every one of them. */
 const STOPPED_TIP = 'You stopped this one, so nothing went wrong with it. Try again puts it back in the queue '
-  + 'and picks up where it left off. Retry all leaves stopped tracks alone, so this is the only button that starts it.'
+  + 'and looks for a copy again. Retry all leaves stopped tracks alone, so this is the only button that starts it.'
 
 /** The long wait for Soulseek (issue #74), as the owner should read it, or null when this is not one.
  *  The worker already words that flag -- what is being waited for, and how many looks are left -- so every
@@ -484,7 +484,7 @@ function heldOf(b: Bundle): HeldView | null {
   const replaces = b.track != null
   return {
     label: 'Soulseek had a lossless copy the quality check refused',
-    tip: `${asSentence(h.reason)}. That is evidence of a lossy source, not proof. Listen, and if it sounds right `
+    tip: `${asSentence(h.reason)}. That is evidence, not proof. Listen, and if it sounds right, `
       + (replaces ? 'Keep lossless files it in place of the MP3, marked as unverified.'
         : 'Keep lossless files it, marked as unverified.'),
     sample: { key: `held-${h.id}`, label: 'the held lossless copy', url: rejectedAudioUrl(h.id) },

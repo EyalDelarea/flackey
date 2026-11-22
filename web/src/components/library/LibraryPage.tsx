@@ -4,6 +4,7 @@ import type { Bundle, Track } from '../../api'
 import type { Live } from '../../live'
 import { asSentence, bucketOf, canRetry, gb, plural, soulseekWait } from '../../presentation'
 import { revealLabel, usePlatform } from '../../platform'
+import HelpTag from '../HelpTag'
 import Icon from '../Icon'
 import Banner from '../Banner'
 import Toolbar from '../Toolbar'
@@ -167,8 +168,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
     <Toolbar>
       <div className="search"><Icon name="search" size={14} /><input className="input" placeholder="Search" value={q} onChange={e => setQ(e.target.value)} aria-label="search library" /></div>
       <button className="btn-secondary" onClick={() => { refresh() }} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh library'}</button>
-      {s && s.tracks > 0 && <button className="btn-secondary" onClick={recheck.start} disabled={recheck.running}
-        title="Runs today's quality check on every file again. Takes a while; nothing is moved or changed.">Check all files again</button>}
+      {s && s.tracks > 0 && <HelpTag text="Runs today's quality check on every file again. Takes a while; nothing is moved or changed.">
+        <button className="btn-secondary" onClick={recheck.start} disabled={recheck.running}>Check all files again</button></HelpTag>}
       {s && <span className="counts">{plural(s.tracks, 'track')} · {plural(s.playlists, 'playlist')} · {gb(s.bytes)} on disk</span>}
       {s && <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Open library folder</button>}
     </Toolbar>

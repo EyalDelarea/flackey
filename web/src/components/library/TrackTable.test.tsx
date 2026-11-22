@@ -145,3 +145,10 @@ it('leaves the cover untitled when the catalogue knows no release', () => {
   render(<TrackTable tracks={[t]} onReveal={() => {}} />)
   expect(document.querySelector('.artwork')).not.toHaveAttribute('title')
 })
+
+it('explains a lossy bitrate on the app\'s own help tag, which the Mac window can show', () => {
+  // WKWebView draws no `title` tooltip, so the note has to be one the app draws itself
+  render(<TrackTable tracks={[{ ...t, source: 'deezer_bot', source_fmt: null }]} onReveal={() => {}} />)
+  fireEvent.mouseEnter(screen.getByText('320').closest('.help-tag-target')!)
+  expect(screen.getByRole('tooltip')).toHaveTextContent('Filed from Deezer — no lossless copy was found')
+})

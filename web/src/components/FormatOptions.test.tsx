@@ -1,10 +1,11 @@
 import { render, screen } from '@testing-library/react'
 import FormatOptions from './FormatOptions'
 
-it('tooltips the WAV choice with the Rekordbox artwork caveat', () => {
+it('gives the WAV choice the Rekordbox artwork caveat on the card itself, with no duplicate tooltip', () => {
   render(<FormatOptions formats={['aiff', 'wav', 'flac']} value="aiff" onChange={() => {}} />)
-  expect(screen.getByRole('button', { name: /WAV/ }))
-    .toHaveAttribute('title', 'Uncompressed audio with Rekordbox-readable text tags. Rekordbox does not import cover art from WAV files.')
+  const wav = screen.getByRole('button', { name: /WAV/ })
+  expect(wav).toHaveTextContent('Uncompressed audio with Rekordbox-readable text tags. Rekordbox does not import cover art from WAV files.')
+  expect(wav).not.toHaveAttribute('title')
 })
 
 it('puts the Default badge and the recommendation on AIFF when nothing says otherwise', () => {

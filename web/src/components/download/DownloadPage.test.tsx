@@ -334,9 +334,9 @@ describe('Retry all on the Failed tab', () => {
     render(<DownloadPage live={makeLive([mk(1, 'error'), mk(2, 'not_found'), mk(3, 'rejected'), mk(4, 'cancelled')])} />)
     openFailed()
     // The bar: no row sits in a list called "Failed" saying nothing about what happens to it next.
-    expect(screen.getAllByText(/Try again starts the search over|searches again from scratch/)).toHaveLength(2)
+    expect(screen.getAllByText(/Try again looks for a copy again|searches again from scratch/)).toHaveLength(2)
     expect(screen.getAllByText(/paste the link again/i)).toHaveLength(1)
-    expect(screen.getAllByText('Try again picks up where it left off.')).toHaveLength(1)
+    expect(screen.getAllByText('Try again puts it back in the queue.')).toHaveLength(1)
   })
 
   it('says so when the call succeeds but nothing was re-queued', async () => {

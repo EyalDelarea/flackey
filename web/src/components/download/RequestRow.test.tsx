@@ -387,7 +387,9 @@ it('an unverified track names its format without the green tick, and gives the r
     { label: 'Quality check', value: 'unverified', ok: false, title: 'Lossless, but nothing above 20.4 kHz' },
     { label: 'Content to', value: '20.4 kHz', ok: null }] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
   expect(screen.getByText(/AIFF 16-bit/)).toHaveClass('plain')
-  expect(screen.getByText('unverified').parentElement).toHaveAttribute('title', 'Lossless, but nothing above 20.4 kHz')
+  // On the app's own help tag: the Mac window shows no `title` tooltip
+  fireEvent.mouseEnter(screen.getByText('unverified').closest('.help-tag-target')!)
+  expect(screen.getByRole('tooltip')).toHaveTextContent('Lossless, but nothing above 20.4 kHz')
   expect(screen.getByText('20.4 kHz').parentElement).toHaveClass('check', 'plain')
 })
 

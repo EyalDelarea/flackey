@@ -720,14 +720,14 @@ describe('the Soulseek panel', () => {
     const details = screen.getByText('Technical details').closest('details')!
     expect(details).not.toHaveAttribute('open')
     expect(details).toContainElement(screen.getByText(/50300 — incoming Soulseek transfers/))
-    expect(details).toContainElement(screen.getByText(/keeps a copy only if its fingerprint matches/))
+    expect(details).toContainElement(screen.getByText(/a copy is kept only if its fingerprint matches/))
   })
 
   it('says the length only orders the copies and that the recording check is what decides', () => {
     // The rules that used to reject a copy on its length, title, version or artist are rankers now
     // (issue #69), so the panel must not keep promising the owner a match on length and title.
     show(lossless())
-    expect(screen.getByText(/tried nearest the video's length first; the recording check decides/)).toBeInTheDocument()
+    expect(screen.getByText(/then the one nearest its length.*The recording check decides/)).toBeInTheDocument()
     expect(screen.queryByText(/must match on length/)).not.toBeInTheDocument()
     expect(screen.getByText(/matches the original at 79% or better/)).toBeInTheDocument()
   })
@@ -869,7 +869,7 @@ describe('the Soulseek panel', () => {
     openMoreLibrary()
     expect(screen.getByText(/Not set up — run setup again, under Advanced/)).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'WAV' })).toBeInTheDocument()
-    expect(screen.queryByText(/keeps a copy only if its fingerprint matches/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/a copy is kept only if its fingerprint matches/)).not.toBeInTheDocument()
   })
 
   it('says whether other people can reach you, and how to open the port when they cannot', () => {
