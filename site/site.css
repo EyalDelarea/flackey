@@ -456,10 +456,6 @@ p {
   border: 1px solid rgba(0, 0, 0, 0.14);
   white-space: nowrap;
 }
-.wn-finish-row i {
-  font-style: normal;
-  color: var(--blue);
-}
 /* New since your last Rekordbox import: the Library's banner and its button */
 .wn-rb {
   width: 190px;
