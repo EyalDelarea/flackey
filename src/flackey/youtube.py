@@ -79,9 +79,11 @@ def parse_ytdlp_json(data: dict) -> tuple[str, list[YouTubeEntry]]:
 YOUTUBE_FETCH_TIMEOUT_S = 120
 # How YouTube, through yt-dlp, says a video is gone rather than unreadable: "Video unavailable", "This video
 # is unavailable", "Private video", "This video has been removed by the uploader", "This video is no longer
-# available because the YouTube account associated with this video has been terminated".
+# available because the YouTube account associated with this video has been terminated". A playlist says
+# it on the tab page: "YouTube said: The playlist does not exist.", "This playlist is private".
 _GONE_RE = re.compile(r"\bvideo (?:is )?unavailable\b|\bprivate video\b|\bthis video is (?:private|no longer "
-                      r"available)\b|\bthis video has been removed\b", re.IGNORECASE)
+                      r"available)\b|\bthis video has been removed\b|\bplaylist does not exist\b|"
+                      r"\bplaylist is private\b", re.IGNORECASE)
 # ... except that YouTube opens other refusals with the same words: "Video unavailable. This content isn't
 # available, try again later. The current session has been rate-limited", and a video blocked "in your
 # country" or "location". Those are not gone, and saying "removed or private" would be untrue.
@@ -89,7 +91,8 @@ _NOT_GONE_RE = re.compile(r"try again later|rate[- ]limit|\bcountry\b|\blocation
 
 
 def gone(message: str) -> bool:
-    """Whether yt-dlp's message is YouTube saying the video is not there (removed, private, terminated)."""
+    """Whether yt-dlp's message is YouTube saying the video or playlist is not there (removed, private,
+    terminated)."""
     return bool(_GONE_RE.search(message)) and not _NOT_GONE_RE.search(message)
 _UNREACHABLE = (TransportError, ConnectionError, TimeoutError, socket.gaierror)
 

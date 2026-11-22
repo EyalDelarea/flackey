@@ -7,6 +7,7 @@ import Shell from './components/Shell'
 import type { Tab } from './components/Sidebar'
 import SettingsPage from './components/SettingsPage'
 import DownloadPage from './components/download/DownloadPage'
+import { useWatchedPlaylists } from './components/download/watchedPlaylists'
 import LibraryPage from './components/library/LibraryPage'
 import UploadsPage from './components/uploads/UploadsPage'
 import PlaylistNav from './components/library/PlaylistNav'
@@ -35,6 +36,8 @@ export default function App() {
 
 function AppBody({ live }: { live: Live }) {
   const [tab, setTab] = useState<Tab>('download')
+  // Above the tabs, so a finished playlist's card is still on Downloads after a look at the Library.
+  const watching = useWatchedPlaylists([...live.bundles.values()])
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
   const [updateDismissed, setUpdateDismissed] = useState(false)
@@ -215,7 +218,7 @@ function AppBody({ live }: { live: Live }) {
     <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} sharing={live.health?.sharing} appConnected={appConnected} banner={banner} inset={inset} sourceEnabled={sourceOn}
       updateWaiting={!!update?.available} onReport={() => setReporting({})}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
-      {tab === 'download' && <DownloadPage live={live} onReport={requestId => setReporting({ requestId })} />}
+      {tab === 'download' && <DownloadPage live={live} watching={watching} onReport={requestId => setReporting({ requestId })} />}
       {tab === 'library' && <LibraryPage live={live} selectedPlaylist={selectedPlaylist} />}
       {tab === 'uploads' && <UploadsPage />}
       {tab === 'settings' && <SettingsPage live={live} onReconnect={() => setReconnecting(true)} focusUpdate={focusUpdate} onReport={() => setReporting({})} />}

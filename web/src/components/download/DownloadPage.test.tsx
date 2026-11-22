@@ -1,5 +1,6 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import DownloadPage from './DownloadPage'
+import { useWatchedPlaylists } from './watchedPlaylists'
 import { ApiError, api } from '../../api'
 import type { Bundle, Candidate, Health, Request } from '../../api'
 import type { Live } from '../../live'
@@ -995,6 +996,24 @@ describe('a playlist that has finished (idea 9)', () => {
     expect(screen.getByRole('region', { name: 'Goa Set finished' })).toHaveTextContent('nothing missing')
     expect(screen.queryByRole('button', { name: /Retry the/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
+  })
+
+  it('is still there after the owner looks at another tab and comes back', () => {
+    // App keeps the watch, because the page itself unmounts on every tab switch (BUG 10).
+    function Host({ live, shown }: { live: Live; shown: boolean }) {
+      const watching = useWatchedPlaylists([...live.bundles.values()])
+      return shown ? <DownloadPage live={live} watching={watching} /> : null
+    }
+    const { rerender } = render(<Host live={makeLive([row(1, 'fetching')], { playlists })} shown />)
+    rerender(<Host live={makeLive([row(1, 'done')], { playlists })} shown />)
+    expect(screen.getByRole('region', { name: 'Goa Set finished' })).toBeInTheDocument()
+    rerender(<Host live={makeLive([row(1, 'done')], { playlists })} shown={false} />)
+    rerender(<Host live={makeLive([row(1, 'done')], { playlists })} shown />)
+    expect(screen.getByRole('region', { name: 'Goa Set finished' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    rerender(<Host live={makeLive([row(1, 'done')], { playlists })} shown={false} />)
+    rerender(<Host live={makeLive([row(1, 'done')], { playlists })} shown />)
     expect(screen.queryByRole('region', { name: 'Goa Set finished' })).not.toBeInTheDocument()
   })
 

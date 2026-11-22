@@ -77,8 +77,10 @@ RATE_LIMITED = ("ERROR: [youtube] abc: Video unavailable. This content isn't ava
     ("ERROR: [youtube] abc: Video unavailable. The uploader has not made this video available in your country",
      False),
     ("ERROR: [youtube] abc: Video unavailable. This video is not available in your location", False),
+    ("ERROR: [youtube:tab] PLXrOt0Oe46vY: YouTube said: The playlist does not exist.", True),
+    ("ERROR: [youtube:tab] PLabc: YouTube said: This playlist is private", True),
 ], ids=["unavailable", "unavailable-long", "private", "removed", "terminated", "extraction", "unsupported",
-        "rate-limited", "country", "location"])
+        "rate-limited", "country", "location", "playlist-deleted", "playlist-private"])
 async def test_a_video_youtube_says_is_gone_is_told_apart_from_one_yt_dlp_cannot_read(monkeypatch, message,
                                                                                       unavailable):
     from yt_dlp.utils import DownloadError
