@@ -77,9 +77,19 @@ SECOND_PICK_AFTER = {"verify_failed", "damaged", "fingerprint_failed", "transfer
 # or sent too slowly for any of its files to be worth the wait -- so its other files are skipped for the rest
 # of the attempt. A failed check or a broken transfer says something about the file, and the peer stays
 # eligible. A too-slow copy is still the attempt's fallback when the switch leads nowhere (see `_attempt`).
-# Within one attempt only: nothing carries a peer over to the next request (no outcome bans a peer),
-# because a peer's speed is whatever else its line is doing at the time: slow is not bad.
+# Within one attempt only: a slow peer is not carried over to the next request, because a peer's speed is
+# whatever else its line is doing at the time: slow is not bad. A peer that sent nothing at all is a
+# different fact, and the next requests do hear of it (`NEVER_SENT_OUTCOMES`).
 PEER_STUCK_OUTCOMES = {"queued", "first_byte_timeout", "too_slow"}
+# The outcomes that, with not one byte received, say the peer took the pick and never sent it: held in its
+# queue to our limit, never answering, or a transfer slskd ended itself ("Completed, TimedOut", "Rejected",
+# "Errored"), which reaches here as transfer_failed. Such a peer cools off across requests and restarts
+# (`Store.peer_never_sent`): one advertising account with a free slot and an empty queue was picked first 46
+# times and sent nothing once (2026-11-22). Cooling only ranks the peer below every other copy as good as
+# its own; as the only copy it is still tried.
+NEVER_SENT_OUTCOMES = {"queued", "first_byte_timeout", "transfer_failed"}
+# How long a peer cools off after its first, second, third and later no-sends in a row.
+COOLOFF_WINDOWS_S = (3600.0, 6 * 3600.0, 24 * 3600.0, 7 * 24 * 3600.0)
 # How many slow transfers one attempt gives up. One: each switch costs a grace period, a restart from the
 # first byte and a new peer's queue, and a second slow peer in a row is as likely to say the line at this
 # end is the slow one (ten requests share it) -- then another switch only makes the track arrive later.

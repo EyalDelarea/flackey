@@ -443,3 +443,41 @@ def test_a_bare_extended_is_filed_as_the_extended_mix_and_a_mashup_is_no_extende
     club = mk(path="Above & Beyond - Sun & Moon (Club Mix).flac")
     assert own_extended(club, Reference("Above & Beyond", "Sun & Moon", "Original Mix", 300))
     assert search_text(extended_reference(alice, "club mix")) == "Alice Deejay Better Off Alone club mix"
+
+
+# A peer that took a pick and sent nothing cools off across requests (`Store.peer_never_sent`): ranked
+# below every other copy as good as its own, never rejected.
+def test_a_cooling_peer_goes_after_an_equally_good_copy_from_anyone_else():
+    ad = mk(username="https://rawzik.com", queue_length=0, upload_speed_bps=9_000_000)
+    other = mk(username="other", queue_length=3, upload_speed_bps=500_000)
+    report = pick([ad, other], REF, PickPolicy(cooling_users=frozenset({"https://rawzik.com"})))
+    assert [f.username for f in report.survivors] == ["other", "https://rawzik.com"]
+    assert report.summary == ("2 files: chose other (slot, q3, flac); "
+                              "held back https://rawzik.com (sent nothing lately)")
+    # Without the memory the advertiser's free slot and empty queue win, as they did 46 times.
+    assert pick([ad, other], REF, PickPolicy()).chosen.username == "https://rawzik.com"
+
+
+def test_a_cooling_peer_is_still_tried_when_it_is_the_only_copy():
+    ad = mk(username="ad")
+    report = pick([ad], REF, PickPolicy(cooling_users=frozenset({"ad"})))
+    assert report.chosen is ad and not report.rejections
+    assert report.summary == "1 files: chose ad (slot, q0, flac) though it sent nothing lately: no other copy as good"
+
+
+def test_cooling_never_puts_a_different_song_ahead_of_the_asked_one():
+    ad = mk(username="ad")
+    wrong = mk(username="other", path="Music\\Twisted\\03. Hallucinogen - LSD.flac")
+    report = pick([wrong, ad], REF, PickPolicy(cooling_users=frozenset({"ad"})))
+    assert report.chosen is ad          # identity first: the fingerprint would only refuse the other file
+
+
+def test_the_cooling_peers_ride_in_the_stored_policy_so_a_replay_picks_the_same():
+    ad, other = mk(username="ad"), mk(username="other", queue_length=5)
+    report = pick([ad, other], REF, PickPolicy(cooling_users=frozenset({"ad"})))
+    stored = json.loads(json.dumps(report.to_dict()))
+    assert stored["policy"]["cooling_users"] == ["ad"]
+    again = pick([ad, other], REF, PickPolicy.from_dict(stored["policy"]))
+    assert again.chosen.username == "other"
+    old = {k: v for k, v in stored["policy"].items() if k != "cooling_users"}   # a report from before it
+    assert PickPolicy.from_dict(old).cooling_users == frozenset()
