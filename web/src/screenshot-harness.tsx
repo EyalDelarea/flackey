@@ -382,6 +382,18 @@ function scenarioSetup() {
   let fresh = { count: 3, file: '/lib/Playlists/Flackey - New.m3u8', through: '2026-11-20T10:00:00+00:00' as string | null }
   vi_spy(api, 'newSinceImport', async () => fresh)
   vi_spy(api, 'markImported', async () => (fresh = { ...fresh, count: 0, through: null }))
+  // Why the library trusts a file: a Soulseek lossless file, and the Deezer copy (id 2) checked again
+  const receiptOf = (id: number) => ({ track_id: id, asked_for: 'Example Artist - Track One', filed_at: '2026-11-02T10:00:00+00:00',
+    replaced_at: null, format: id === 2 ? 'MP3 320 kbps via Deezer' : 'FLAC 16-bit/44.1 kHz via Soulseek',
+    lossless_source: id !== 2, kept_anyway: false, unverified: false, has_spectrogram: false,
+    checks: [{ label: 'Same recording', value: '98.2% match', ok: true, note: 'Deezer preview' },
+      { label: 'Quality check', value: 'passed', ok: true, note: 'lossless, content to 21.6 kHz' },
+      { label: 'Version', value: 'unconfirmed', ok: null, note: null },
+      { label: 'Spectrum', value: 'content to 21.6 kHz', ok: null, note: null }],
+    recheck: { checked_at: '2026-11-21T09:00:00+00:00', status: 'checked' as const, tier: 'clear', reason: 'lossless, content to 21.6 kHz' } })
+  vi_spy(api, 'receipt', async (id: number) => receiptOf(id))
+  vi_spy(api, 'recheckTrack', async (id: number) => receiptOf(id))
+  vi_spy(api, 'recheckStatus', async () => ({ state: 'running' as const, done: 41, total: 312, flagged: 2 }))
 
   switch (scenario) {
     case 'library-narrow':
@@ -390,7 +402,8 @@ function scenarioSetup() {
       vi_spy(api, 'library', async () => [
         track({ id: 1, path: '/lib/Example Artist/Track One.flac', artist: 'Example Artist', title: 'Track One' }),
         track({ id: 2, path: '/lib/Example Artist/Track Two.mp3', artist: 'Example Artist', title: 'Track Two', fmt: 'mp3', bitrate_kbps: 320, source_fmt: null, catalog: null }),
-        track({ id: 3, path: '/lib/Other Artist/Track Three.flac', artist: 'Other Artist', title: 'Track Three' }),
+        track({ id: 3, path: '/lib/Other Artist/Track Three.flac', artist: 'Other Artist', title: 'Track Three',
+          evidence: [{ kind: 'quality_check', value: { status: 'failed', kept_by: 'owner' } }] }),
       ])
       break
     case 'extended-playlist':
