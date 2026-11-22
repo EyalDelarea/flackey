@@ -48,7 +48,7 @@ export default function Sidebar({ tab, onTab, telegramAuthorized, lossless, shar
         ? <div className="sidebar-footer" role="status"><div className="status-line">
             <span className={`status-dot${status.tone === 'wait' ? ' pending' : ''}`} />{status.text}</div></div>
         : <button className={`sidebar-footer ${status.tone}`} onClick={() => onTab('settings')}
-            title={status.tone === 'bad' ? 'Open Settings to check connections' : 'Open Settings to open the port'}>
+            title={status.tone === 'bad' ? 'Open Settings to check connections' : 'Open Settings to see the sharing port'}>
             <span className="status-line"><span className={`status-dot ${status.tone === 'bad' ? 'red' : 'amber'}`} />{status.text}</span>
             {status.hint && <span className="status-hint">{status.hint}</span>}
           </button>}

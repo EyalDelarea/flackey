@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import Artwork from '../download/Artwork'
 import TrackReceipt from './TrackReceipt'
+import HelpTag from '../HelpTag'
 import Icon from '../Icon'
 import type { Track } from '../../api'
 import { revealLabel, usePlatform } from '../../platform'
@@ -75,8 +76,10 @@ export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning
           {compactMeta && <div className="v compact-meta">{compactMeta}</div>}</div>
         <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
         <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span className="col-optional">{year}</span>
-        <span className={lossy ? 'kbps lossy' : 'kbps'} title={lossy ? 'Filed from Deezer — no lossless copy was obtained' : undefined}>
-          {t.bitrate_kbps}{!lossy && t.verified_at && !badge && <Icon name="check" size={12} stroke={2.4} />}
+        {/* The app's own help tag, not `title`: the Mac window (WKWebView) shows no `title` tooltip */}
+        <span className={lossy ? 'kbps lossy' : 'kbps'}>
+          {lossy ? <HelpTag text="Filed from Deezer — no lossless copy was found">{t.bitrate_kbps}</HelpTag> : t.bitrate_kbps}
+          {!lossy && t.verified_at && !badge && <Icon name="check" size={12} stroke={2.4} />}
         </span>
         <span className="fmt">{t.fmt.toUpperCase()}</span>
         <span className="reveal">

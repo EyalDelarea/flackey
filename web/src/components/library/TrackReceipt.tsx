@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiError, api, trackSpectrogramUrl } from '../../api'
 import type { Receipt, Recheck } from '../../api'
 import { asSentence } from '../../presentation'
+import HelpTag from '../HelpTag'
 import Icon from '../Icon'
 
 const day = (iso: string) => {
@@ -53,10 +54,14 @@ export default function TrackReceipt({ trackId, disabled }: { trackId: number; d
         <dt>Filed</dt><dd>{day(r.filed_at)}{r.replaced_at && ` · replaced with a better copy ${day(r.replaced_at)}`}</dd>
       </dl>
       <ul className="receipt-checks">
-        {r.checks.map(c => <li key={c.label} className={mark(c.ok)} title={c.note ? asSentence(c.note) : undefined}>
-          {c.ok === null ? <span className="dot" aria-hidden /> : <Icon name={c.ok ? 'check' : 'x'} size={12} stroke={2.2} />}
-          <span className="label">{c.label}</span><span className="value">{c.value}</span>
-        </li>)}
+        {r.checks.map(c => {
+          // The note on the app's own help tag, not `title`: the Mac window (WKWebView) shows no `title` tooltip
+          const value = <span className="value">{c.value}</span>
+          return <li key={c.label} className={mark(c.ok)}>
+            {c.ok === null ? <span className="dot" aria-hidden /> : <Icon name={c.ok ? 'check' : 'x'} size={12} stroke={2.2} />}
+            <span className="label">{c.label}</span>{c.note ? <HelpTag text={asSentence(c.note)}>{value}</HelpTag> : value}
+          </li>
+        })}
       </ul>
       {again && <p className={`receipt-again ${mark(again.ok)}`}>Checked again {day(r.recheck!.checked_at)}: {again.text}</p>}
       {error && <p className="receipt-error">{error}</p>}

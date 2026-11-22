@@ -1,3 +1,4 @@
+import HelpTag from '../HelpTag'
 import Icon from '../Icon'
 import type { CheckView } from '../../presentation'
 
@@ -8,12 +9,14 @@ export default function Checks({ checks }: { checks: CheckView[] }) {
   if (!checks.length) return null
   return (
     <div className="checks">
-      {checks.map(c => (
-        <span key={c.label} className={`check${c.ok === null ? ' plain' : c.ok ? '' : ' bad'}`} title={c.title}>
+      {checks.map(c => {
+        // The reason rides on the app's own help tag: the Mac window (WKWebView) shows no `title` tooltip
+        const check = <span key={c.label} className={`check${c.ok === null ? ' plain' : c.ok ? '' : ' bad'}`}>
           {c.ok !== null && <Icon name={c.ok ? 'check' : 'x'} size={11} stroke={2.4} />}
           {c.label} <b>{c.value}</b>
         </span>
-      ))}
+        return c.title ? <HelpTag key={c.label} text={c.title}>{check}</HelpTag> : check
+      })}
     </div>
   )
 }

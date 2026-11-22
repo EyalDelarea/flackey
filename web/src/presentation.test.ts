@@ -308,8 +308,8 @@ describe('presentRow', () => {
       verified_at: null, spectrogram_path: null, source: 'deezer_bot', source_fmt: null, bit_depth: null, sample_rate: null, catalog: null }
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track: mp3, held }), opts)
     expect(v.held).toEqual({ label: 'Soulseek had a lossless copy the quality check refused',
-      tip: 'Nothing above 16 kHz in a lossless file, which points to a lossy source. That is evidence of a lossy source, '
-        + 'not proof. Listen, and if it sounds right Keep lossless files it in place of the MP3, marked as unverified.',
+      tip: 'Nothing above 16 kHz in a lossless file, which points to a lossy source. That is evidence, '
+        + 'not proof. Listen, and if it sounds right, Keep lossless files it in place of the MP3, marked as unverified.',
       sample: { key: 'held-5', label: 'the held lossless copy', url: '/api/rejections/5/audio' }, replaces: true })
     // Still working: a later pick may pass and drop the hold. Gone from disk: nothing to offer.
     expect(presentRow(bundle({ state: 'fetching' }, { held }), opts).held).toBeNull()
@@ -614,7 +614,7 @@ describe('failed states say why they are failed and whether they can come back',
     const v = presentRow(bundle({ state: 'error', attempts: 15, error_message: 'the people who had it are busy and '
       + 'their queue has not reached us yet; looked 12 times over 72 h. Press Try again to search once more' }), opts)
     expect(v.status).toBe('Failed — the people who had it are busy and their queue has not reached us yet; looked 12 times over 72 h')
-    expect(v.outcome!.note).toBe('Flackey stopped trying. Try again starts the search over from the beginning, Soulseek included.')
+    expect(v.outcome!.note).toBe('Flackey stopped trying. Try again looks for a copy again, Soulseek included.')
     expect((v.status + v.outcome!.note).match(/Try again/g)).toHaveLength(1)
     expect(v.outcome!.note).not.toMatch(/15/)
     // Advice that says *when* is not a repeat, and stays.
@@ -629,7 +629,7 @@ describe('failed states say why they are failed and whether they can come back',
 
   it('tells a stopped row its Try again works in one line, with the rest on the button', () => {
     const v = presentRow(bundle({ state: 'cancelled' }), opts)
-    expect(v.outcome!.note).toBe('Try again picks up where it left off.')
+    expect(v.outcome!.note).toBe('Try again puts it back in the queue.')
     expect(v.action).toEqual({ label: 'Try again', kind: 'retry', tip: expect.stringMatching(/Retry all leaves stopped tracks alone/) })
     expect(presentRow(bundle({ state: 'error' }), opts).action!.tip).toBeUndefined()
   })

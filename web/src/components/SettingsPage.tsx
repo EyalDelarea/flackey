@@ -589,11 +589,11 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
                   return <div key={key}>{p.port} — {label} {p.public ? '· open to other Soulseek users' : `· ${thisComputer(platform)} only`}</div>
                 })}</div></>}
               {lossless?.enabled && s.ranking && <><div className="k">How copies are ranked</div>
-                <div className="v">Files a peer offers are tried nearest the video's length first
-                  {s.ranking.max_queue != null ? ` (queues longer than ${s.ranking.max_queue} are skipped)` : ''}; the
-                  recording check decides. Survivors are then ordered by quality and by who can send now. Flackey tries
-                  up to {s.ranking.max_picks} of them, and keeps a copy only if its fingerprint matches the original
-                  at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
+                <div className="v">Files whose name matches the track and version come first, then the one nearest
+                  its length, then whoever can send soonest
+                  {s.ranking.max_queue != null ? ` (queues longer than ${s.ranking.max_queue} are skipped)` : ''}. Flackey
+                  tries up to {s.ranking.max_picks} of them. The recording check decides: a copy is kept only if its
+                  fingerprint matches the original at {Math.round(s.ranking.fingerprint_min * 100)}% or better.</div></>}
             </details></div></div>}
           {confirmingReset
             ? <div className="srow" role="group" aria-label="Confirm running setup again"><div className="srow-body"><div className="k">Run setup again?</div>

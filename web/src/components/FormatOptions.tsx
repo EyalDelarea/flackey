@@ -44,7 +44,7 @@ export default function FormatOptions({ formats, value, onChange, disabled = fal
     {formats.map(format => {
       const selected = format === value
       return <button key={format} type="button" className={`format-choice${selected ? ' selected' : ''}`}
-        aria-pressed={selected} onClick={() => onChange(format)} disabled={disabled} title={formatNote(format, defaultFormat)}>
+        aria-pressed={selected} onClick={() => onChange(format)} disabled={disabled}>
         <span className="format-name">{FORMAT_LABELS[format] ?? format.toUpperCase()}</span>
         {format === defaultFormat && <span className="format-badge">Default</span>}
         <span className="format-note">{formatNote(format, defaultFormat)}</span>
