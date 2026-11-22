@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS track_evidence (
   value_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS track_evidence_track ON track_evidence(track_id);
+-- Soulseek peers that took a pick and never sent a byte (`Store.peer_never_sent`), kept across requests and
+-- restarts so the next pick goes to someone else first. One row per peer; a transfer that lands deletes it.
+CREATE TABLE IF NOT EXISTS peer_cooloff (
+  username TEXT PRIMARY KEY, strikes INTEGER NOT NULL, failed_at TEXT NOT NULL, until TEXT NOT NULL
+);
 """
 
 
@@ -416,6 +421,40 @@ class Store:
         self.conn.execute("UPDATE requests SET lossless_verdict=?, lossless_no_results=? WHERE id=?",
                           (outcome, empty, request_id))
         self.conn.commit()
+
+    def peer_never_sent(self, username: str, windows_s: tuple[float, ...],
+                        now: datetime | None = None) -> tuple[int, datetime] | None:
+        """Book a peer that held a pick and sent nothing. It cools off for `windows_s[strikes - 1]` (the
+        last window once the strikes outrun the list), and only a transfer that lands resets the strikes,
+        so a peer that keeps doing it cools off for longer each time. A failure while it is still cooling
+        adds nothing: ten requests share one queue, and one bad minute at that peer would otherwise climb
+        the whole ladder at once. Returns the strikes and the end of the new window, or None when the
+        peer was already cooling."""
+        now = now or datetime.now(UTC)
+        row = self.conn.execute("SELECT strikes, until FROM peer_cooloff WHERE username=?", (username,)).fetchone()
+        if row is not None and datetime.fromisoformat(row["until"]) > now:
+            return None
+        strikes = (row["strikes"] if row is not None else 0) + 1
+        until = now + timedelta(seconds=windows_s[min(strikes, len(windows_s)) - 1])
+        self.conn.execute(
+            "INSERT INTO peer_cooloff (username, strikes, failed_at, until) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(username) DO UPDATE SET strikes=excluded.strikes, failed_at=excluded.failed_at, "
+            "until=excluded.until",
+            (username, strikes, now.isoformat(timespec="seconds"), until.isoformat(timespec="seconds")))
+        self.conn.commit()
+        return strikes, until
+
+    def peer_sent(self, username: str) -> None:
+        """A transfer from this peer landed: whatever it did before, it sends now."""
+        self.conn.execute("DELETE FROM peer_cooloff WHERE username=?", (username,))
+        self.conn.commit()
+
+    def cooling_peers(self, now: datetime | None = None) -> dict[str, tuple[int, datetime]]:
+        """The peers still inside their cool-off window, each with its strikes and the window's end."""
+        now = now or datetime.now(UTC)
+        rows = self.conn.execute("SELECT username, strikes, until FROM peer_cooloff").fetchall()
+        out = {r["username"]: (r["strikes"], datetime.fromisoformat(r["until"])) for r in rows}
+        return {u: v for u, v in out.items() if v[1] > now}
 
     def lossless_no_results(self, request_id: int, outcome: str | None) -> bool:
         """Whether the `no_pick` that `outcome` names (`lossless_outcome`'s) came from searches that found

@@ -3502,3 +3502,77 @@ async def test_stopping_the_request_while_the_loser_is_being_dropped_leaves_no_c
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert not [p for p in settings.slskd_downloads.rglob("*") if p.is_file()]
+
+
+class TimesOutProvider(FakeProvider):
+    """`silent` peers do what one advertising account did 46 times (2026-11-22): take the pick, sit in
+    Requested, and have slskd end the transfer "Completed, TimedOut" with not one byte sent."""
+
+    def __init__(self, *a, silent: set[str], **kw):
+        super().__init__(*a, **kw)
+        self.silent = silent
+
+    async def download(self, file, *, on_progress=None, **kw):
+        if file.username not in self.silent:
+            return await super().download(file, on_progress=on_progress, **kw)
+        self.downloaded.append(file.username)
+        on_progress(TransferProgress("Requested", 0, file.size, 0.0, None))
+        on_progress(TransferProgress("Completed, TimedOut", 0, file.size, 0.0, None))
+        raise LosslessError("transfer ended Completed, TimedOut", "transfer_failed")
+
+
+async def test_a_peer_that_sent_nothing_is_picked_after_the_others_on_the_next_request(lenv):
+    settings, store, _, _, _, _ = lenv
+    good = lenv[3].audio["a"]
+    files = [lf("ad", queue_length=0), lf("other", queue_length=4)]
+    provider = TimesOutProvider(settings.slskd_downloads, files, audio={"ad": good, "other": good}, silent={"ad"})
+    w = make(lenv, provider=provider)
+    first = store.add_request(TEXT, RequestKind.TEXT)
+    done = await w.process(first)
+    assert done.state == RequestState.DONE
+    assert provider.downloaded == ["ad", "other"]
+    [booked] = _events(attempt_of(store, first), "peer_cooloff")
+    assert (booked["peer"], booked["no_sends"]) == ("ad", 1)
+    assert set(store.cooling_peers()) == {"ad"}
+
+    provider.downloaded.clear()
+    store.get_track(done.track_id).path.unlink()               # the same song again, as a new request
+    store.delete_track(done.track_id)
+    second = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(second)).state == RequestState.DONE
+    assert provider.downloaded == ["other"]                    # the free slot and empty queue no longer win
+    a = attempt_of(store, second)
+    assert "held back ad (sent nothing lately)" in _events(a, "pick")[0]["summary"]
+    assert set(_events(a, "cooling_peers")[0]["peers"]) == {"ad"}
+
+
+async def test_a_cooling_peer_that_sends_is_forgiven(lenv):
+    _, store, _, _, _, _ = lenv
+    store.peer_never_sent("a", (3600.0,))
+    w = make(lenv)                                            # "a" is the only copy, and it sends
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    assert (await w.process(rid)).state == RequestState.DONE
+    assert "though it sent nothing lately" in _events(attempt_of(store, rid), "pick")[0]["summary"]
+    assert store.cooling_peers() == {}
+
+
+async def test_a_race_lost_without_a_byte_books_the_peer(lenv):
+    _, store, _, _, _, _ = lenv
+    _, a, _ = await _race_case(lenv, _race_files("stuck", "quick"),
+                               {"stuck": ("stuck", 0), "quick": ("quick", 0.05)})
+    assert a.outcome == "filed" and set(store.cooling_peers()) == {"stuck"}
+
+
+@pytest.mark.parametrize(("outcome", "state", "had_bytes", "booked"), [
+    ("queued", "Queued, Remotely", False, True),
+    ("first_byte_timeout", None, False, True),
+    ("transfer_failed", "Completed, TimedOut", False, True),
+    ("transfer_failed", "Completed, Rejected", False, True),
+    ("transfer_failed", "Completed, Cancelled", False, False),   # this end's doing
+    ("transfer_failed", "InProgress", False, False),              # a move or size check, not the peer
+    ("transfer_failed", "Completed, Errored", True, False),       # it did send
+    ("transfer_timeout", "InProgress", True, False),
+    ("too_slow", "InProgress", True, False),
+])
+def test_which_failures_say_the_peer_never_sent(outcome, state, had_bytes, booked):
+    assert lossless_attempt_mod.never_sent(outcome, state, had_bytes) is booked

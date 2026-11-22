@@ -34,7 +34,9 @@ from ..verify import Disguised, ToolMissing, VerifyError, probe, summary, verify
 from ..version import EXTENDED, check_version, split_version, wants_extended
 from . import usage
 from .policy import (
+    COOLOFF_WINDOWS_S,
     MAX_SLOW_SWITCHES,
+    NEVER_SENT_OUTCOMES,
     PEER_STUCK_OUTCOMES,
     SECOND_PICK_AFTER,
     SECOND_SEARCH_AFTER,
@@ -105,6 +107,18 @@ def switch_back_rule_for(dropped: LosslessFile, rate_bps: float, settings: Setti
     (with the same allowance for a queue and first byte as a switch counts)."""
     return SlowRule(grace_s=settings.lossless_slow_grace_s, spare_from=settings.lossless_slow_spare_from,
                     finish_s=dropped.size / rate_bps + SWITCH_ALLOWANCE_S, max_rate_bps=rate_bps)
+
+
+def never_sent(outcome: str, last_state: str | None, had_bytes: bool) -> bool:
+    """Whether a failed transfer says its peer took the pick and sent nothing (`NEVER_SENT_OUTCOMES`). A
+    transfer_failed counts only when slskd itself ended the transfer short of success with no byte in --
+    timed out, rejected, errored -- and not when it was cancelled: that is this end's doing."""
+    if had_bytes or outcome not in NEVER_SENT_OUTCOMES:
+        return False
+    if outcome != "transfer_failed":
+        return True
+    state = last_state or ""
+    return state.startswith("Completed") and "Succeeded" not in state and "Cancelled" not in state
 
 
 def same_destination(a: LosslessFile, b: LosslessFile) -> bool:
@@ -267,7 +281,7 @@ class LosslessMixin:
             rec.finish(e.outcome)
             return None
         rec.event("search_completed", files=len(files), peers=len({f.username for f in files}))
-        report = pick(files, ref, policy)
+        report = pick(files, ref, self._with_cooling(policy, rec, {f.username for f in files}))
         self.store.update_attempt(rec.id, report=report.to_dict())
         rec.event("pick", summary=report.summary)
         if report.chosen is None:
@@ -411,6 +425,7 @@ class LosslessMixin:
             won, landed, _ = race.landed
             if race.lost is not None and not race.lost_moved:
                 stuck_peers.add(race.lost.username)   # its queue held us while the other copy came in whole
+                self._never_sent(rec, req, race.lost.username)
             hit, outcome = await self._check_landed(rec, req, ref, won, landed, acoustic)
             if hit is not None:
                 return self._filed(rec, hit)
@@ -430,6 +445,39 @@ class LosslessMixin:
                     return self._filed(rec, hit)
         rec.finish(outcome)
         return None
+
+    def _with_cooling(self, policy, rec: AttemptRecorder, peers: set[str]):
+        """`policy` with the peers in this search that are cooling off after sending nothing, read fresh
+        for every search: another request may have booked one a moment ago. The timeline says how long
+        each has left; the pick summary says what that did to the order."""
+        try:
+            cooling = {u: v for u, v in self.store.cooling_peers().items() if u in peers}
+        except Exception:     # a memory of bad peers is an optimisation; the pick goes on without it
+            log.exception("could not read the peers cooling off")
+            return policy
+        if cooling:
+            rec.event("cooling_peers", peers={u: {"no_sends": n, "until": t.isoformat(timespec="seconds")}
+                                              for u, (n, t) in sorted(cooling.items())})
+        return replace(policy, cooling_users=frozenset(cooling))
+
+    def _never_sent(self, rec: AttemptRecorder, req: Request, peer: str) -> None:
+        """Book a peer that took a pick and sent no byte, so the next requests try other copies first."""
+        try:
+            booked = self.store.peer_never_sent(peer, COOLOFF_WINDOWS_S)
+        except Exception:
+            log.exception("req#%d could not book %s as sending nothing", req.id, peer)
+            return
+        if booked is not None:
+            n, until = booked
+            rec.event("peer_cooloff", peer=peer, no_sends=n, until=until.isoformat(timespec="seconds"))
+            log.info("req#%d %s sent nothing (%d in a row): other copies go first until %s", req.id, peer, n,
+                     until.isoformat(timespec="seconds"))
+
+    def _sent(self, req: Request, peer: str) -> None:
+        try:
+            self.store.peer_sent(peer)
+        except Exception:
+            log.exception("req#%d could not clear %s's cool-off", req.id, peer)
 
     @staticmethod
     def _filed(rec: AttemptRecorder, hit: LosslessHit) -> LosslessHit:
@@ -565,7 +613,10 @@ class LosslessMixin:
             return None, e.outcome
         except LosslessError as e:
             rec.event("transfer_failed", pick=n, error=str(e))
+            if never_sent(e.outcome, seen["state"], seen["first_byte"]):
+                self._never_sent(rec, req, file.username)
             return None, e.outcome
+        self._sent(req, file.username)
         return landed, ""
 
     async def _check_landed(self, rec: AttemptRecorder, req: Request, ref: Reference, file, landed: Path,

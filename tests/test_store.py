@@ -1,5 +1,6 @@
 import dataclasses
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -622,3 +623,27 @@ def test_rejections_load_with_a_column_from_a_newer_build(store: Store):
     assert store.get_rejection_for_request(rid).id == rj
     assert [r.id for r in store.rejections_for_request(rid)] == [rj]
     assert [r.id for r in store.list_rejections()] == [rj]
+
+
+def test_a_peer_that_sent_nothing_cools_off_longer_each_time_until_it_sends(tmp_path):
+    windows = (3600.0, 6 * 3600.0, 24 * 3600.0)
+    t0 = datetime(2026, 11, 22, 21, 34, tzinfo=UTC)
+    s = Store(tmp_path / "f.sqlite")
+    assert s.peer_never_sent("ad", windows, now=t0) == (1, t0 + timedelta(hours=1))
+    # Another request's failure inside the window adds nothing: ten requests share one bad minute.
+    assert s.peer_never_sent("ad", windows, now=t0 + timedelta(minutes=1)) is None
+    assert s.cooling_peers(now=t0 + timedelta(minutes=59)) == {"ad": (1, t0 + timedelta(hours=1))}
+    assert s.cooling_peers(now=t0 + timedelta(hours=1, seconds=1)) == {}
+    # The window ran out, the strikes did not: the next no-send cools it off for longer.
+    t1 = t0 + timedelta(hours=2)
+    assert s.peer_never_sent("ad", windows, now=t1) == (2, t1 + timedelta(hours=6))
+    t2 = t1 + timedelta(hours=7)
+    assert s.peer_never_sent("ad", windows, now=t2) == (3, t2 + timedelta(hours=24))
+    t3 = t2 + timedelta(hours=25)
+    assert s.peer_never_sent("ad", windows, now=t3) == (4, t3 + timedelta(hours=24))   # the last window holds
+    # It survives a restart.
+    assert Store(tmp_path / "f.sqlite").cooling_peers(now=t3) == {"ad": (4, t3 + timedelta(hours=24))}
+    # A transfer that lands forgets all of it.
+    s.peer_sent("ad")
+    assert s.cooling_peers(now=t3) == {}
+    assert s.peer_never_sent("ad", windows, now=t3) == (1, t3 + timedelta(hours=1))

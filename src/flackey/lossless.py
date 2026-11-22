@@ -233,11 +233,15 @@ class PickPolicy:
     lossless_extensions: frozenset[str] = LOSSLESS_EXTENSIONS
     max_queue_length: int | None = None
     banned_users: frozenset[str] = frozenset()
+    # Peers cooling off after taking a pick and sending nothing (`Store.peer_never_sent`). Ranked below
+    # every other copy as good as theirs, never rejected: as the only copy, theirs is still tried.
+    cooling_users: frozenset[str] = frozenset()
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["lossless_extensions"] = sorted(self.lossless_extensions)
         d["banned_users"] = sorted(self.banned_users)
+        d["cooling_users"] = sorted(self.cooling_users)
         return d
 
     @classmethod
@@ -248,6 +252,7 @@ class PickPolicy:
         kw = {k: v for k, v in d.items() if k in known}
         kw["lossless_extensions"] = frozenset(kw.get("lossless_extensions", LOSSLESS_EXTENSIONS))
         kw["banned_users"] = frozenset(kw.get("banned_users", ()))
+        kw["cooling_users"] = frozenset(kw.get("cooling_users", ()))
         return cls(**kw)
 
 
@@ -454,9 +459,22 @@ class PickReport:
                    chosen=LosslessFile(**d["chosen"]) if d["chosen"] else None, summary=d["summary"])
 
 
+def with_cooling(rankers: list[tuple[str, Ranker]], policy: PickPolicy) -> list[tuple[str, Ranker]]:
+    """`rankers` with the policy's cooling peers ranked last among equals: after identity, ahead of every
+    peer ranker. A cooling peer advertises a free slot and an empty queue as well as anyone (that is how it
+    kept being picked first), so below identity is where its record has to count."""
+    if not policy.cooling_users:
+        return rankers
+    cooling = policy.cooling_users
+    peer = {name for name, _ in PEER_RANKERS}
+    at = next((i for i, (name, _) in enumerate(rankers) if name in peer), len(rankers))
+    return [*rankers[:at], ("cooling", lambda f, ref: f.username in cooling), *rankers[at:]]
+
+
 def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
          rules: list[tuple[str, Rule]] = RULES, rankers: list[tuple[str, Ranker]] = RANKERS) -> PickReport:
     report = PickReport(reference=ref, policy=policy, seen=len(files))
+    rankers = with_cooling(rankers, policy)
     for f in files:
         for name, rule in rules:
             reason = rule(f, ref, policy)
@@ -473,6 +491,11 @@ def pick(files: list[LosslessFile], ref: Reference, policy: PickPolicy,
     if report.chosen:
         c = report.chosen
         tail = f"chose {c.username} ({'slot' if c.has_free_slot else 'no slot'}, q{c.queue_length}, {c.extension})"
+        held = sorted({f.username for f in report.survivors if f.username in policy.cooling_users})
+        if c.username in policy.cooling_users:
+            tail += " though it sent nothing lately: no other copy as good"
+        elif held:
+            tail += f"; held back {', '.join(held)} (sent nothing lately)"
     else:
         tail = "nothing left"
     report.summary = f"{head}; {tail}" if parts else f"{head}{tail}"
