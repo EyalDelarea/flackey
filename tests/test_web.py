@@ -1112,6 +1112,30 @@ def test_choose_cancel_retry(client):
     assert c.post("/api/requests/999/retry").status_code == 404
 
 
+def test_try_now_clears_a_waiting_rows_wait_and_nothing_else(client):
+    """The waiting row's Try now makes the row due now and keeps its attempts. Once the row is no longer
+    waiting -- due already, running, or failed since the page was drawn -- the press is a 400 that changes
+    nothing: a failed row must not get Try again's fresh pass from a stale Try now."""
+    c, store, _ = client
+    rid = store.add_request("w", RequestKind.TEXT)
+    store.update_request(rid, retry_after="2999-01-01T00:00:00+00:00", attempts=2,
+                         flag_reason="waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h")
+    assert store.due_queued() == []
+
+    r = c.post(f"/api/requests/{rid}/try-now")
+    assert r.status_code == 200
+    assert r.json()["state"] == "queued" and r.json()["retry_after"] is None and r.json()["attempts"] == 2
+    assert [q.id for q in store.due_queued()] == [rid]
+
+    assert c.post(f"/api/requests/{rid}/try-now").status_code == 400    # no longer waiting
+    for state in (RequestState.FETCHING, RequestState.ERROR, RequestState.NOT_FOUND):
+        store.update_request(rid, state=state, attempts=5)
+        before = store.get_request(rid)
+        assert c.post(f"/api/requests/{rid}/try-now").status_code == 400, state
+        assert store.get_request(rid) == before
+    assert c.post("/api/requests/999/try-now").status_code == 404
+
+
 def test_retry_failed_requeues_the_ids_it_can_and_skips_the_rest(client):
     c, store, _ = client
     errored = store.add_request("e", RequestKind.TEXT)

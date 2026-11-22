@@ -83,6 +83,11 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
               carries it, on the Failed tab and in History alike -- "why is this here and can it come back"
               is the same question wherever the row is read. */}
           {v.outcome && <div className={`outcome${v.outcome.retryable ? '' : ' final'}`}>{v.outcome.note}</div>}
+          {/* Stop, when the rail's one button is a waiting row's Try now: still on the row, just quieter. */}
+          {v.stopLink && <div className="row-links">
+            <button className="btn-link muted" aria-label={`${v.stopLink.label} ${v.title}`}
+              onClick={() => onAction(v.stopLink!.kind, v.id, undefined)}>{v.stopLink.label}</button>
+          </div>}
           {/* Under the note rather than on the rail beside Try again: it is not a way out of the failure, and
               the rail of a failed row already holds the one that is. */}
           {/* Where else to get it, beside the report: both are about a track Flackey could not get. Plain

@@ -30,7 +30,7 @@ export type Bucket = 'progress' | 'needs' | 'done' | 'failed'
 export interface RowAction { label: string
   /** A longer word on the button, shown on hover and focus. */
   tip?: string
-  kind: 'reveal' | 'retry' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
+  kind: 'reveal' | 'retry' | 'tryNow' | 'why' | 'cancel' | 'remove' | 'accept' | 'report' | 'extended' | 'keep' | 'keepHeld'; path?: string }
 /** A longer version of a filed track, found on Soulseek after it was filed (issue #187). `offer` until the
  *  owner answers it; `swapped` once Get extended has put it in the track's place. `busy` while that runs. */
 /** A lossless copy from Soulseek the quality check refused and the worker held instead of deleting (issue
@@ -69,6 +69,9 @@ export interface PillView { kind: 'connecting' | 'upnext'; label: string
 export interface RowView {
   id: number; title: string; version: string | null; status: string; statusTone: Tone
   pill?: PillView | null
+  /** Stop, as a quiet link under the status, on a row whose rail button is something else (a waiting row's
+   *  Try now). The rail has one button slot, and the wait still needs its way out. */
+  stopLink?: RowAction | null
   steps: StepView[] | null; tag: string | null; dimmed: boolean; washed: boolean
   action: RowAction | null; candidates: CandidateView[] | null; rejection: RejectionView | null
   artworkUrl: string | null; rejected: boolean; retryInSeconds: number | null; bucket: Bucket; removable: boolean
@@ -360,6 +363,9 @@ function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): Progres
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
 /** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
 const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
+/** Skips the rest of a backoff wait (`/try-now`): only the wait is cleared -- the attempts already spent and
+ *  the looks left stay as they were -- and a row that is no longer waiting is left alone. */
+const TRY_NOW: RowAction = { label: 'Try now', kind: 'tryNow', tip: 'Skip the wait and look for it again now' }
 /** The live states the worker will stop (`CANCELLABLE` less the terminal `error`), and so the live rows
  *  that carry Remove: `POST /api/requests/remove` stops them and forgets them in one press. Verify and
  *  filing are absent for the reason Stop is. `test_stoppable_states_match_the_worker` pins this list. */
@@ -695,8 +701,10 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     case 'queued':
       if (r.retry_after) {
         // A wait of up to six hours is the last place to leave without a way out: the worker has always
-        // been able to stop a parked row, the row just never offered it.
-        v.action = STOP
+        // been able to stop a parked row, the row just never offered it. It is also the last place to be
+        // made to sit, so the rail's button skips the wait and Stop moves to a link under the status.
+        v.action = TRY_NOW
+        v.stopLink = STOP
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
         const waiting = soulseekWait(r.flag_reason)

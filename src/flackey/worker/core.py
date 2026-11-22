@@ -460,6 +460,20 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         return self.store.get_request(request_id)
 
 
+    async def try_now(self, request_id: int) -> Request:
+        """The waiting row's Try now: skip the rest of the backoff and nothing else. Narrower than `retry` on
+        purpose. The button is drawn from a page that can be a few seconds old, and by the time it is pressed
+        the wait may have ended and the row failed; `retry` would then start a fresh pass with the whole
+        budget, which is Try again's job, not this button's. So only a queued row that is still waiting is
+        touched; anything else is refused and left as it is."""
+        req = self.store.get_request(request_id)
+        if req.state != RequestState.QUEUED or req.retry_after is None:
+            raise ValueError(f"request {request_id} is {req.state.value} and not waiting; nothing to skip")
+        usage.owner_retry(request_id)
+        self.store.update_request(request_id, retry_after=None)
+        return self.store.get_request(request_id)
+
+
     def _fresh_pass(self, req: Request) -> None:
         """Back on the queue, due now, with the whole retry budget and one more look at the providers --
         the hour of Telegram waits included, or a Try again after a Telegram give-up would skip straight to
