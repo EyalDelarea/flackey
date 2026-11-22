@@ -29,11 +29,17 @@ def transfer_marks(timeline: list[dict]) -> tuple[dict | None, dict | None, dict
     The two waits the attempt event reports are told apart here (review 2026-11-16: they were the same
     span): `queue_wait` runs from the enqueue to the first transfer state that is no longer Requested or
     Queued (or the first byte, if that came first); `first_byte` runs from there to the first byte. Only
-    the last pick counts, because that is the transfer the outcome is about."""
-    idx = max((i for i, e in enumerate(timeline) if e["event"] == "enqueue"), default=None)
+    the last pick counts, because that is the transfer the outcome is about.
+
+    A race (`LosslessMixin._race`) runs two picks at once, so their events interleave: the pick that lost
+    the race is never "the last pick", and only the chosen pick's own events are read after its enqueue."""
+    lost = {e["detail"].get("pick") for e in timeline if e["event"] == "race_lost"}
+    idx = max((i for i, e in enumerate(timeline) if e["event"] == "enqueue" and e["detail"].get("pick") not in lost),
+              default=None)
     if idx is None:
         return None, None, None
-    after = timeline[idx + 1:]
+    pick = timeline[idx]["detail"].get("pick")
+    after = [e for e in timeline[idx + 1:] if e["detail"].get("pick", pick) == pick]
     byte = next((e for e in after if e["event"] == "first_byte"), None)
     left = next((e for e in after if e["event"] == "first_byte" or (
         e["event"] == "transfer_state" and not str(e["detail"].get("state") or "").startswith(QUEUED_STATES))), None)

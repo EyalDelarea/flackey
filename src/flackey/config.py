@@ -180,6 +180,13 @@ class Settings(BaseSettings):
     lossless_max_queue: int | None = None
     lossless_fingerprint_min: float = 0.79
     lossless_max_picks: int = 4
+    # A pick that has sent nothing at all this long after it was asked for -- still in the peer's queue, or
+    # never acknowledged -- gets the next copy started beside it, and whichever lands first is kept; the
+    # other is cancelled in slskd. The next copy has to be the same song, version and length on a free slot
+    # from another peer, and only one such race runs per attempt, so at most two transfers are ever in
+    # flight for a request. Bytes arriving, however slowly, is not a stall: that is the too-slow rule's job.
+    # 0 turns racing off. (2026-11-20: 13 % of downloads waited over a minute for their first byte.)
+    lossless_race_after_s: float = Field(45, ge=0)
     lossless_keep_raw_days: int = 30
     verification_rule: str = "tiers"
 

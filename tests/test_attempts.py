@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from flackey.attempts import AttemptRecorder, prune_raw, raw_size_bytes
+from flackey.attempts import AttemptRecorder, prune_raw, raw_size_bytes, transfer_marks
 from flackey.models import RequestKind
 from flackey.store import Store
 
@@ -153,3 +153,21 @@ def test_queue_wait_and_first_byte_are_two_different_waits_on_the_last_pick(stor
     (ev,) = [e for e in t.snapshot()["pending"] if e["event"] == "lossless_attempt_finished"]
     assert ev["queue_wait"] == "1-5m" and ev["first_byte"] == "1-5s" and ev["picks_tried"] == 2
     assert "first" not in str(ev.values()) and "a.flac" not in str(ev)
+
+
+def test_transfer_marks_follow_the_kept_pick_of_a_race():
+    """Two picks run at once in a race and their events interleave. The waits are the kept pick's own,
+    never the cancelled one's, even when the cancelled one was enqueued last."""
+    def ev(event, **detail):
+        return {"event": event, "detail": detail}
+
+    timeline = [
+        ev("enqueue", pick=1, peer="slow"), ev("transfer_state", pick=1, state="Queued, Remotely"),
+        ev("race", pick=2, peer="fast", stalled_pick=1),
+        ev("enqueue", pick=2, peer="fast"), ev("transfer_state", pick=2, state="Queued, Remotely"),
+        ev("transfer_state", pick=1, state="InProgress"), ev("first_byte", pick=1, ms=50_000),
+        ev("race_lost", pick=2, peer="fast", had_bytes=False),
+    ]
+    enqueue, left, byte = transfer_marks(timeline)
+    assert enqueue["detail"]["peer"] == "slow"
+    assert left["detail"] == {"pick": 1, "state": "InProgress"} and byte["detail"]["ms"] == 50_000
