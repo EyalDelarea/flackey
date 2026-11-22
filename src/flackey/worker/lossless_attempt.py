@@ -425,7 +425,10 @@ class LosslessMixin:
             won, landed, _ = race.landed
             if race.lost is not None and not race.lost_moved:
                 stuck_peers.add(race.lost.username)   # its queue held us while the other copy came in whole
-                self._never_sent(rec, req, race.lost.username)
+                # Booked across requests only when the loser is the stalled first pick, which sat the whole
+                # race delay and more: a racer cancelled seconds after it was asked had no time to send.
+                if race.lost is file and race.lost.username != won.username:
+                    self._never_sent(rec, req, race.lost.username)
             hit, outcome = await self._check_landed(rec, req, ref, won, landed, acoustic)
             if hit is not None:
                 return self._filed(rec, hit)

@@ -3563,6 +3563,14 @@ async def test_a_race_lost_without_a_byte_books_the_peer(lenv):
     assert a.outcome == "filed" and set(store.cooling_peers()) == {"stuck"}
 
 
+async def test_a_racer_cancelled_because_the_first_pick_landed_is_not_booked(lenv):
+    _, store, _, _, _, _ = lenv
+    _, a, _ = await _race_case(lenv, _race_files("slowq", "stuck"),
+                               {"slowq": ("quick", 0.15), "stuck": ("stuck", 0)})
+    assert _events(a, "race_lost")[0]["peer"] == "stuck"
+    assert store.cooling_peers() == {}                         # asked moments before: no chance to send
+
+
 @pytest.mark.parametrize(("outcome", "state", "had_bytes", "booked"), [
     ("queued", "Queued, Remotely", False, True),
     ("first_byte_timeout", None, False, True),
