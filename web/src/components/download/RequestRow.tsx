@@ -87,6 +87,9 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
               the rail of a failed row already holds the one that is. */}
           {/* Where else to get it, beside the report: both are about a track Flackey could not get. Plain
               links, opened in the browser -- nothing is searched or fetched by the app (idea 8). */}
+          {v.stopLink && <div className="row-links">
+            <button className="btn-link muted" onClick={() => onAction(v.stopLink!.kind, v.id, undefined)}>{v.stopLink.label}</button>
+          </div>}
           {(v.storeLinks || v.reportable) && <div className="row-links">
             {v.storeLinks && <span className="store-links">Look for it on{' '}
               {v.storeLinks.map((l, i) => <span key={l.label}>{i > 0 && ' · '}

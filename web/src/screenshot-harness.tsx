@@ -197,6 +197,8 @@ const layoutRows = (): Bundle[] => {
     stageRow('Afgin', 'Echoes', 'queued'),
     stageRow('Afgin', 'Spirit Valley', 'verifying'),
     stageRow('Afgin', 'Lost In Time', 'queued', { attempts: 2, retry_after: inSeconds(870), flag_reason: NO_MATCH }),
+    stageRow('Afgin', 'Inner Peace', 'queued', { attempts: 1, retry_after: inSeconds(21590),
+      flag_reason: 'waiting for Soulseek — nobody sharing it came online; 3 of 4 looks left' }),
     done,
     stageRow('Afgin', 'Deep Space', 'error', { attempts: 5, failed_stage: 'download',
       error_message: 'gave up after 5 tries — every peer refused the transfer' }),

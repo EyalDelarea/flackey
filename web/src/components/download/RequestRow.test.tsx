@@ -430,3 +430,25 @@ it('draws the same status and action cells on every row, so Stop and Remove line
     unmount()
   }
 })
+
+it('puts Try now in the button slot of a waiting row, with Stop as a link under the status', () => {
+  const onAction = vi.fn()
+  const view: RowView = { ...base, status: 'Waiting for Soulseek: nobody sharing it is online', statusTone: 'amber',
+    tag: null, dimmed: false, retryInSeconds: 21540, removable: true, stage: 'waiting',
+    action: { label: 'Try now', kind: 'tryNow', tip: 'Skip the wait and look for it again now' },
+    stopLink: { label: 'Stop', kind: 'cancel' } }
+  render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} {...preview} />)
+  expect(screen.getByText('Waiting · 5h 59m')).toBeInTheDocument()
+  const tryNow = screen.getByRole('button', { name: 'Try now' })
+  // In the rail's button slot, styled like every other row action, so it sits where Try again does.
+  expect(tryNow).toHaveClass('btn-secondary')
+  expect(tryNow.closest('.row-action')).not.toBeNull()
+  fireEvent.click(tryNow)
+  expect(onAction).toHaveBeenCalledWith('tryNow', 1, undefined)
+  const stop = screen.getByRole('button', { name: 'Stop' })
+  expect(stop.closest('.row-text')).not.toBeNull()
+  fireEvent.click(stop)
+  expect(onAction).toHaveBeenCalledWith('cancel', 1, undefined)
+  // Remove keeps its own slot.
+  expect(screen.getByRole('button', { name: 'Remove' }).closest('.row-remove')).not.toBeNull()
+})

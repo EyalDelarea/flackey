@@ -1521,6 +1521,38 @@ async def test_a_request_already_running_is_never_started_a_second_time(env):
     assert store.get_request(rid).state == RequestState.DONE
 
 
+async def test_try_now_on_a_waiting_row_starts_it_once_and_keeps_its_place_on_the_ladder(env):
+    """The waiting row's Try now: the press only clears the wait, so the next tick starts it -- once, however
+    many ticks land before it runs -- with the attempts and the long-wait flag it already had. A press that
+    arrives after the row has started is refused and changes nothing."""
+    _, store, _ = env
+    src = SlowSource()
+    w = make_worker(env, src)
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    store.update_request(rid, retry_after="2999-01-01T00:00:00+00:00", attempts=2, lossless_retry=1,
+                         flag_reason="waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h")
+    w._start_due()
+    assert w._tasks == {}               # still waiting
+
+    r = await w.retry(rid)
+    assert r.state == RequestState.QUEUED and r.retry_after is None
+    assert r.attempts == 2 and r.lossless_retry == 1
+
+    w._start_due()
+    w._start_due()                      # the timer's own tick in the same moment
+    assert list(w._tasks) == [rid]
+    await src.started.wait()
+    with pytest.raises(ValueError, match="nothing to retry"):
+        await w.retry(rid)              # a second press, now that it is running
+    assert store.get_request(rid).state != RequestState.QUEUED
+    w._start_due()
+    assert list(w._tasks) == [rid]
+    src.release.set()
+    await asyncio.gather(*w._tasks.values())
+    assert src.fetched == ["dz_track:1754956977:send"]
+    assert store.get_request(rid).state == RequestState.DONE
+
+
 async def test_the_owner_can_cap_how_many_run_at_once(env):
     settings, store, _ = env
     settings.max_concurrent_requests = 2

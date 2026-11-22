@@ -855,13 +855,23 @@ describe('a queued track', () => {
     expect(presentRow(bundle({ id: 2 }), opts).action).toEqual({ label: 'Stop', kind: 'cancel' })
   })
 
-  it('keeps its countdown when it is on a retry backoff, and can be stopped there', () => {
+  it('keeps its countdown when it is on a retry backoff, offers Try now, and can be stopped there', () => {
     const v = presentRow(bundle({ id: 4, retry_after: '2026-09-06T10:01:00Z',
       flag_reason: 'video audio unavailable, will retry' }), opts)
     expect(v.status).toBe('Previous attempt: video audio unavailable')
     expect(v.retryInSeconds).toBe(60)
-    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.action).toMatchObject({ label: 'Try now', kind: 'tryNow' })
+    expect(v.stopLink).toEqual({ label: 'Stop', kind: 'cancel' })
     expect(v.removable).toBe(true)
+  })
+
+  it('drops Try now and the countdown once the wait is cleared, and shows Up next instead', () => {
+    // What the row turns into right after a press: the server nulls retry_after and the refresh redraws.
+    const v = presentRow(bundle({ id: 4, retry_after: null, flag_reason: 'video audio unavailable, will retry' }), opts)
+    expect(v.retryInSeconds).toBeNull()
+    expect(v.pill).toEqual({ kind: 'upnext', label: 'Up next' })
+    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.stopLink).toBeUndefined()
   })
 
   it('shortens the verbose Soulseek fallback warning without losing its meaning', () => {
@@ -887,8 +897,10 @@ describe('a queued track', () => {
     expect(v.status).toBe('Waiting for Soulseek: nothing on Soulseek matched this track closely enough; 11 more looks, one every 6 h')
     expect(v.statusTone).toBe('amber')
     expect(v.retryInSeconds).toBe(21600)
-    // A user had four of these, six hours each, with no Stop and no Remove anywhere on the row.
-    expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    // A user had four of these, six hours each, with no Stop and no Remove anywhere on the row. Try now is
+    // the rail's button; Stop is still on the row, as a link.
+    expect(v.action).toMatchObject({ label: 'Try now', kind: 'tryNow' })
+    expect(v.stopLink).toEqual({ label: 'Stop', kind: 'cancel' })
     expect(v.removable).toBe(true)
   })
 
@@ -897,6 +909,9 @@ describe('a queued track', () => {
       { ...opts, telegramAuthorized: false, soulseekConnected: false })
     expect(v.status).toBe('Paused — connect a source to start')
     expect(v.action).toEqual({ label: 'Stop', kind: 'cancel' })
+    // Nothing to try with: no source is connected, so there is no Try now and no countdown.
+    expect(v.retryInSeconds).toBeNull()
+    expect(v.stopLink).toBeUndefined()
   })
 })
 

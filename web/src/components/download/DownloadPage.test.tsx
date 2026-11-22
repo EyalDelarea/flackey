@@ -1058,3 +1058,45 @@ it("keeps the shelf header from naming a reason the rows contradict (0.8 QA bug 
   expect(shelf).toHaveTextContent('No copy of this one yet')
   expect(shelf).not.toHaveTextContent(/online/)
 })
+
+describe('Try now on a waiting row', () => {
+  const waitingRow = (over: Partial<Request> = {}): Bundle => ({
+    request: { ...baseRequest, id: 9, state: 'queued', error_message: null, attempts: 2, query_title: 'Waiting Track',
+      retry_after: '2099-01-01T00:00:00+00:00',
+      flag_reason: 'waiting for Soulseek: nobody sharing it came online; 3 more looks, one every 6 h', ...over },
+    candidates: [], catalog: null, track: null, rejection: null,
+  })
+
+  it('calls the retry route and refreshes, and the redrawn row has lost its wait', async () => {
+    vi.mocked(api.retry).mockResolvedValueOnce({ ...baseRequest, id: 9, state: 'queued', retry_after: null } as any)
+    const refresh = vi.fn(async () => undefined)
+    const { rerender } = render(<DownloadPage live={makeLive([waitingRow()], { refresh })} />)
+    expect(screen.getByText('Waiting for a copy · 1')).toBeInTheDocument()
+    expect(screen.getByText(/^Waiting · /)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Try now' }))
+    expect(api.retry).toHaveBeenCalledWith(9)
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    // What the refresh brings back: the same row, due now.
+    rerender(<DownloadPage live={makeLive([waitingRow({ retry_after: null })], { refresh })} />)
+    expect(screen.queryByText(/^Waiting · /)).not.toBeInTheDocument()
+    expect(screen.getByText('Up next')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try now' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Waiting for a copy · 1')).not.toBeInTheDocument()
+  })
+
+  it('stays quiet when the wait had already ended on its own, and refreshes instead', async () => {
+    vi.mocked(api.retry).mockRejectedValueOnce(new ApiError(400, 'request 9 is identifying; nothing to retry'))
+    const refresh = vi.fn(async () => undefined)
+    render(<DownloadPage live={makeLive([waitingRow()], { refresh })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Try now' }))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    expect(screen.queryByText(/nothing to retry/)).not.toBeInTheDocument()
+  })
+
+  it('still reports a real failure', async () => {
+    vi.mocked(api.retry).mockRejectedValueOnce(new ApiError(500, 'Something broke.'))
+    render(<DownloadPage live={makeLive([waitingRow()])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Try now' }))
+    await waitFor(() => expect(screen.getByText('Something broke.')).toBeInTheDocument())
+  })
+})
