@@ -353,6 +353,10 @@ function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): Progres
   // as a wait, so it says so in words and shows an indeterminate bar instead. "On their side" because the
   // queue is the other person's, not anything Flackey is holding up.
   if (p.state.startsWith('Queued')) return { pct: null, label: `Queued on ${peer}'s side · waiting for them to start` }
+  // Before the peer's queue or a single byte: slskd's "Requested" and "Initializing" (and a poll that has no
+  // state yet). "0.0 MB of 93.0 MB" there reads as a frozen download, so it says what is happening instead.
+  if (p.bytes === 0 && !p.state.startsWith('InProgress') && !p.state.startsWith('Completed'))
+    return { pct: null, label: `Asking ${peer} to send it` }
   if (!p.size) return { pct: null, label: `Downloading from ${peer}` }
   return { pct: Math.min(100, p.pct),
     label: `${mb(p.bytes)} of ${mb(p.size)} from ${peer}${p.speed_bps > 0 ? ` · ${kbps(p.speed_bps)}` : ''}` }
