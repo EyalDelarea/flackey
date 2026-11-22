@@ -8,6 +8,8 @@ import { usePlatform } from '../../platform'
 import Banner from '../Banner'
 import BatchFinished from './BatchFinished'
 import WaitingShelf from './WaitingShelf'
+import { useWatchedPlaylists } from './watchedPlaylists'
+import type { WatchedPlaylists } from './watchedPlaylists'
 import EmptyDownloads from './EmptyDownloads'
 import FilterBar from './FilterBar'
 import { selectionKeys } from './selectionKeys'
@@ -46,7 +48,9 @@ function useNow(ms: number) {
 
 /** `onReport` opens the bug report for one failed row (issue #165). The dialog lives in `App`, which already
  *  owns the general one; without the callback the rows offer no report at all rather than a dead link. */
-export default function DownloadPage({ live, onReport }: { live: Live; onReport?: (requestId: number) => void }) {
+export default function DownloadPage({ live, onReport, watching }: {
+  live: Live; onReport?: (requestId: number) => void; watching?: WatchedPlaylists
+}) {
   const now = useNow(1000)
   const platform = usePlatform()
   const [whyOpen, setWhyOpen] = useState<Set<number>>(new Set())
@@ -103,24 +107,13 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
     seededHistory.current = true
     setSeenHistoryIds(new Set(historyIds))
   }, [bundles.length])
-  // Playlists seen moving since the page opened (idea 9). One of these that has stopped moving gets its
-  // finish card on the Downloads tab until the owner dismisses it; a batch that was already finished when
-  // the app opened is old news and gets none.
-  // Each with when it was first seen moving, which is where its finish card starts timing the run.
-  const [watched, setWatched] = useState<Map<number, number>>(new Map())
-  const moving = [...new Set(bundles.filter(b => b.request.playlist_id != null && !isFinished(b))
-    .map(b => b.request.playlist_id!))].sort((a, c) => a - c)
-  useEffect(() => {
-    if (moving.some(id => !watched.has(id))) {
-      const seen = Date.now()
-      setWatched(w => new Map([...moving.map(id => [id, seen] as const), ...w]))
-    }
-  }, [moving.join(',')])
+  // Kept by App when it passes one in, so the finish card outlives a visit to another tab.
+  const own = useWatchedPlaylists(bundles)
+  const { watched, dismiss: dismissBatch } = watching ?? own
   const finished = live.playlists.filter(p => watched.has(p.id))
     .map(p => batchFinishOf(bundles, p, watched.get(p.id))).filter(f => f != null)
   const [retryingBatch, setRetryingBatch] = useState<number | null>(null)
   const shelf = waitingShelfOf(bundles, now)
-  const dismissBatch = (id: number) => setWatched(w => { const n = new Map(w); n.delete(id); return n })
   const newInHistory = view === 'history' ? 0 : historyIds.filter(id => !seenHistoryIds.has(id)).length
   const openHistory = () => { setView('history'); setFilter('all'); setSeenHistoryIds(new Set(historyIds)) }
   const counts = bucketCounts(scoped)

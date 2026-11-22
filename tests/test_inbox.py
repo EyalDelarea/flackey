@@ -8,6 +8,7 @@ from flackey.inbox import (
     SPOTIFY_FAIL,
     SPOTIFY_UNREACHABLE,
     YT_FAIL,
+    YT_PLAYLIST_GONE,
     YT_UNAVAILABLE,
     YT_UNREACHABLE,
     BadLink,
@@ -32,6 +33,9 @@ def inbox(tmp_path: Path):
             raise YouTubeError("Connection refused", network=True)
         if "removed" in url:
             raise YouTubeError("ERROR: [youtube] removed: Video unavailable", unavailable=True)
+        if "list=PLdeleted" in url:
+            raise YouTubeError("ERROR: [youtube:tab] PLdeleted: YouTube said: The playlist does not exist.",
+                               unavailable=True)
         if "gone" in url:
             return "Deleted video", []
         if "list=" in url:
@@ -251,6 +255,14 @@ async def test_a_video_youtube_says_is_gone_is_called_unavailable_not_a_yt_dlp_p
     with pytest.raises(BadLink) as e:
         await ib.submit("https://www.youtube.com/watch?v=removed")
     assert str(e.value) == YT_UNAVAILABLE and "yt-dlp" not in str(e.value)
+    assert store.list_requests() == []
+
+
+async def test_a_playlist_youtube_says_is_gone_is_called_gone_or_private_not_a_yt_dlp_problem(inbox):
+    ib, store = inbox
+    with pytest.raises(BadLink) as e:
+        await ib.submit("https://www.youtube.com/playlist?list=PLdeleted")
+    assert str(e.value) == YT_PLAYLIST_GONE and "yt-dlp" not in str(e.value)
     assert store.list_requests() == []
 
 
