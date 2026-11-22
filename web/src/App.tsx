@@ -168,6 +168,14 @@ function AppBody({ live }: { live: Live }) {
   }
   const update = live.update
   const banners: ReactNode[] = []
+  // First and on every page: once the stream from Flackey drops, everything on screen is as it was at the
+  // last update, and a button pressed on Library or Settings fails with its own puzzling error. Only after
+  // a first update (`lastSeen`): before that the page is still loading, not losing anything.
+  const appConnected = live.connected || !live.lastSeen
+  if (!appConnected && live.lastSeen) {
+    const at = live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    banners.push(<Banner key="reconnecting" tone="amber" text={`Reconnecting to Flackey… Last update ${at}. What you see is from then.`} />)
+  }
   // Only the bot stops: Soulseek has nothing to do with Telegram and keeps downloading. The old line,
   // "Reconnect to keep digging", was true when the whole worker waited on Telegram, which it no longer does.
   // Not "signed out" when Telegram simply did not answer: telling a signed-in owner to sign in sends them
@@ -204,7 +212,7 @@ function AppBody({ live }: { live: Live }) {
   }
   const banner = banners.length ? banners : undefined
   return (
-    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} sharing={live.health?.sharing} banner={banner} inset={inset} sourceEnabled={sourceOn}
+    <Shell tab={tab} onTab={setTab} telegramAuthorized={authorized} lossless={live.health?.lossless} sharing={live.health?.sharing} appConnected={appConnected} banner={banner} inset={inset} sourceEnabled={sourceOn}
       updateWaiting={!!update?.available} onReport={() => setReporting({})}
       sidebarExtra={tab === 'library' ? <PlaylistNav playlists={live.playlists} selected={selectedPlaylist} onSelect={setSelectedPlaylist} /> : undefined}>
       {tab === 'download' && <DownloadPage live={live} onReport={requestId => setReporting({ requestId })} />}

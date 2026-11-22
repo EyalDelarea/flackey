@@ -319,7 +319,6 @@ export default function DownloadPage({ live, onReport }: { live: Live; onReport?
         await refreshAfter()
         return submission.summary
       }} />
-      {!live.connected && live.lastSeen && <Banner tone="amber" text={`Reconnecting to Flackey… Last update ${live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Showing the last known queue.`} />}
       <div className="download-views" role="tablist" aria-label="Download view" onKeyDown={selectionKeys}>
         {(['active', 'history', 'failed'] as const).map(v => (
           <button key={v} className="download-tab" role="tab" id={`download-tab-${v}`} aria-controls="download-panel"
