@@ -350,11 +350,12 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
    prefix for the same reason: the words are ordinary enough to collide again. */
 .group-seg.tone-filed, .legend-dot.tone-filed { background: var(--green); }
 .group-seg.tone-working, .legend-dot.tone-working { background: var(--accent); }
-.group-seg.tone-needs, .legend-dot.tone-needs { background: var(--orange); }
+/* Waiting for the music drive is the owner's to fix (plug it in), so it is amber like a choice to make */
+.group-seg.tone-needs, .legend-dot.tone-needs, .group-seg.tone-drive, .legend-dot.tone-drive { background: var(--orange); }
 /* Parked and needs-you are both amber -- neither is working -- and they sit next to each other, so waiting
    is the lighter of the two. It is also the larger by far, and the softer fill keeps a 41-row band from
    shouting louder than the 8 rows that are actually moving. */
-.group-seg.tone-waiting, .legend-dot.tone-waiting, .group-seg.tone-drive, .legend-dot.tone-drive { background: color-mix(in srgb, var(--orange) 70%, var(--content)); }
+.group-seg.tone-waiting, .legend-dot.tone-waiting { background: color-mix(in srgb, var(--orange) 70%, var(--content)); }
 .group-seg.tone-failed, .legend-dot.tone-failed { background: var(--red); }
 /* Failed: the same bar asking where a run stopped. `search` and `download` keep the tone their chips have. */
 .group-seg.tone-search, .legend-dot.tone-search { background: var(--orange); }
