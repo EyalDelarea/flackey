@@ -182,7 +182,7 @@ describe('the update banner', () => {
     render(<App />)
     await screen.findByText('Flackey 0.1.3 is available.')
     expect(document.querySelector('.nav-badge')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Dismiss'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     await waitFor(() => expect(screen.queryByText('Flackey 0.1.3 is available.')).not.toBeInTheDocument())
     expect(document.querySelector('.nav-badge')).toBeInTheDocument()
   })

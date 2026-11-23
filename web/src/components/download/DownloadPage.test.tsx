@@ -1134,3 +1134,13 @@ describe('Try now on a waiting row', () => {
     await waitFor(() => expect(screen.getByText('Something broke.')).toBeInTheDocument())
   })
 })
+
+it('hides the zero-count chips and "Remove these 0" when nothing is running, and shows the welcome card instead', () => {
+  render(<DownloadPage live={makeLive([mk(1, 'done'), mk(2, 'not_found')])} />)
+  expect(screen.queryByRole('radio', { name: /^Searching/ })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /Remove these/ })).not.toBeInTheDocument()
+  expect(screen.getByText('Nothing downloading yet')).toBeInTheDocument()
+  // History has rows, so its bar is still there
+  fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  expect(screen.getByRole('radio', { name: /^All/ })).toBeInTheDocument()
+})

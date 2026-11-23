@@ -331,7 +331,8 @@ export default function DownloadPage({ live, onReport, watching }: {
       </div>
       <div className="download-panel" role="tabpanel" id="download-panel" aria-labelledby={`download-tab-${view}`} tabIndex={0}>
       {live.upgradeActivity && <Banner tone="amber" text={live.upgradeActivity} />}
-      {bundles.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={askClear} view={view}
+      {/* Only over rows: a bar of zeros and a disabled "Remove these 0" said nothing an empty list did not */}
+      {scoped.length > 0 && view !== 'failed' && <FilterBar filter={filter} counts={counts} onFilter={setFilter} onClearFailed={askClear} view={view}
         removeCount={removable.ids.length} onRemoveThese={askRemove} confirming={confirmRemove != null || confirmClear != null} />}
       {/* Shown for the whole tab, not only when something is retryable: a tab badged "Failed 45" whose
           rows are all rejected needs a disabled "Retry all 0" to answer why, where an absent button
@@ -378,12 +379,14 @@ export default function DownloadPage({ live, onReport, watching }: {
         </div>
       )}
       <div className="scroll">
-        {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
+        {actionError && <Banner tone="red" text={actionError} onDismiss={() => setActionError(null)} />}
         {view === 'active' && shelf.length > 0 && <WaitingShelf items={shelf} />}
         {view === 'active' && finished.map(f => <BatchFinished key={f.playlistId} f={f} busy={retryingBatch === f.playlistId}
           onRetry={ids => retryMissing(f.playlistId, ids)} onDismiss={() => dismissBatch(f.playlistId)} />)}
-        {groups.length === 0 && bundles.length === 0 && <EmptyDownloads />}
-        {groups.length === 0 && bundles.length > 0 && <div className="empty">{filter !== 'all' ? 'No tracks match this filter.' : view === 'failed' ? 'No failed downloads.' : view === 'history' ? 'No completed downloads yet.' : 'No downloads in progress. Finished tracks and failures move to History.'}</div>}
+        {/* The welcome card whenever nothing is running, not only before the first link ever */}
+        {groups.length === 0 && (bundles.length === 0 || (view === 'active' && scoped.length === 0)) && <EmptyDownloads />}
+        {groups.length === 0 && scoped.length > 0 && <div className="empty">No tracks match this filter.</div>}
+        {groups.length === 0 && bundles.length > 0 && scoped.length === 0 && view !== 'active' && <div className="empty">{view === 'failed' ? 'No failed downloads.' : 'No completed downloads yet.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
         {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); once(`choose:${rid}`, () => api.choose(rid, cid)) }}

@@ -4,13 +4,21 @@ import type { NewSinceImport } from '../../api'
 import { plural } from '../../presentation'
 import Icon from '../Icon'
 
-/** The "Flackey - New" playlist: everything filed since the owner last said they imported into Rekordbox.
-    Flackey cannot see inside Rekordbox, so the button is the only way it learns the import happened. */
-export default function NewSinceImportCard({ version, onShowFile, onError }: {
+/** The first-time tip that shares the card: Flackey does not do the Rekordbox import itself, and a new
+ *  owner has nowhere else to learn that dragging the folder in works too. Shown until dismissed. */
+export interface RekordboxGuide { revealLabel: string; onReveal: () => void; onDismiss: () => void }
+
+/** The one Rekordbox card on the Library: the "Flackey - New" playlist -- everything filed since the owner
+    last said they imported -- and, until dismissed, the first-time tip. It used to be two stacked cards that
+    both said "get these into Rekordbox", with four buttons between them before the first track.
+    Flackey cannot see inside Rekordbox, so "I've imported these" is the only way it learns the import
+    happened. */
+export default function NewSinceImportCard({ version, onShowFile, onError, guide }: {
   /** Bumped whenever the library changes, so the count follows new filings. */
   version: number
   onShowFile: (path: string) => void
   onError: (message: string) => void
+  guide?: RekordboxGuide | null
 }) {
   const [state, setState] = useState<NewSinceImport | null>(null)
   const [busy, setBusy] = useState(false)
@@ -21,9 +29,10 @@ export default function NewSinceImportCard({ version, onShowFile, onError }: {
     return () => { current = false }
   }, [version])
 
-  if (!state) return null
+  // The tip stands on its own while the count has not loaded, or could not be.
+  if (!state && !guide) return null
   const markImported = async () => {
-    if (!state.through) return
+    if (!state?.through) return
     setBusy(true)
     try { setState(await api.markImported(state.through)) }
     catch (err) { onError(err instanceof ApiError ? err.message : "Couldn't save that. Try again.") }
@@ -32,14 +41,20 @@ export default function NewSinceImportCard({ version, onShowFile, onError }: {
   return (<div className="group pl-card new-since-import">
     <span className="pl-icon"><Icon name="playlist" size={22} /></span>
     <div className="how">
-      <h2>New since your last Rekordbox import <span>· {plural(state.count, 'track')}</span></h2>
-      {state.count
-        ? <>In Rekordbox: File → Import → Playlist, then choose “Flackey - New”. When it’s in, press
-          “I’ve imported these” and the list starts fresh.</>
-        : <>Nothing new since your last import. Tracks you download collect here until you import them.</>}
+      {state && <>
+        <h2>{state.count ? `${plural(state.count, 'new track')} for Rekordbox` : 'Nothing new for Rekordbox'}</h2>
+        {state.count
+          ? <>File → Import → Playlist → “Flackey - New”.</>
+          : <>Nothing new since your last import. Tracks you download collect here until you import them.</>}
+      </>}
+      {guide && <p className="rekordbox-tip">First time? Drag the library folder into Rekordbox’s collection instead.{' '}
+        <button className="btn-link" onClick={guide.onReveal}>{guide.revealLabel}</button>
+        {/* Waves away the tip, not the card: so it sits on the tip's own line */}
+        <span className="sep" aria-hidden="true"> · </span>
+        <button className="btn-link muted" onClick={guide.onDismiss}>Dismiss</button></p>}
     </div>
-    <button className="btn-secondary" onClick={() => onShowFile(state.file)}>Show playlist file</button>
-    {state.count > 0 && <button className="btn-secondary" onClick={markImported} disabled={busy}>
+    {state && state.count > 0 && <button className="btn-primary" onClick={markImported} disabled={busy}>
       {busy ? 'Saving…' : 'I’ve imported these'}</button>}
+    {state && <button className="btn-secondary" onClick={() => onShowFile(state.file)}>Show playlist file</button>}
   </div>)
 }
