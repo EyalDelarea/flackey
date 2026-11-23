@@ -1144,3 +1144,34 @@ it('hides the zero-count chips and "Remove these 0" when nothing is running, and
   fireEvent.click(screen.getByRole('tab', { name: 'History' }))
   expect(screen.getByRole('radio', { name: /^All/ })).toBeInTheDocument()
 })
+
+describe('the folded "up next" line', () => {
+  it('folds the rows that have not started into one line, with Show and Stop all, and lets a row back out when it starts', async () => {
+    const cancel = vi.spyOn(api, 'cancel').mockResolvedValue({} as Request)
+    const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'queued'), mk(3, 'queued'), mk(4, 'fetching')])} />)
+    expect(screen.getByText(/Track 4$/)).toBeInTheDocument()
+    expect(screen.queryByText(/Track 1$/)).not.toBeInTheDocument()
+    expect(screen.getByText('3 more up next')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    expect(screen.getByText(/Track 1$/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(screen.queryByText(/Track 1$/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop all' }))
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(3))
+    expect(cancel.mock.calls.map(c => c[0]).sort()).toEqual([1, 2, 3])
+
+    // Track 1 starts: it is a row again, and the line counts the two still waiting.
+    rerender(<DownloadPage live={makeLive([mk(1, 'fetching'), mk(2, 'queued'), mk(3, 'queued'), mk(4, 'fetching')])} />)
+    expect(screen.getByText(/Track 1$/)).toBeInTheDocument()
+    expect(screen.getByText('2 more up next')).toBeInTheDocument()
+    cancel.mockRestore()
+  })
+
+  it('leaves a lone unstarted track as a row, and never folds History', () => {
+    render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'fetching')])} />)
+    expect(screen.getByText(/Track 1$/)).toBeInTheDocument()
+    expect(screen.queryByText(/more up next/)).not.toBeInTheDocument()
+  })
+})

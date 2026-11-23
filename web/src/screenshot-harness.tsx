@@ -378,7 +378,8 @@ function scenarioSetup() {
     if (b?.track) b.track = { ...b.track, evidence: [{ kind: 'extended_offer', value: { status: 'kept' } }] }
     return { ok: true }
   })
-  vi_spy(api, 'uploads', async () => ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
+  vi_spy(api, 'uploads', async () => scenario === 'uploads' ? uploadFeed
+    : ({ enabled: false, provider: null, uploads: [], summary: { total: 0, active: 0, completed: 0, peers: 0, bytes: 0 }, error: null }))
   usageStats()
   // The "Flackey - New" playlist: three tracks waiting, until "I've imported these" empties it
   let fresh = { count: 3, file: '/lib/Playlists/Flackey - New.m3u8', through: '2026-11-20T10:00:00+00:00' as string | null }
@@ -398,6 +399,12 @@ function scenarioSetup() {
   vi_spy(api, 'recheckStatus', async () => ({ state: 'running' as const, done: 41, total: 312, flagged: 2 }))
 
   switch (scenario) {
+    /* `uploads`: two people pulling from the library -- one with a file sending, one with a long finished
+       run -- so the page shows both the live bar and the "+ N more" fold. Open the Uploads tab. */
+    case 'uploads':
+      vi_spy(api, 'health', async () => health())
+      vi_spy(api, 'library', async () => [])
+      break
     case 'library-narrow':
     case 'library-normal':
       vi_spy(api, 'health', async () => health())
@@ -610,6 +617,21 @@ const manyPlaylists: Playlist[] = [
   ...albumNames.map((name, i) => ({ ...playlist, id: 200 + i, name: `Album - ${name}`, source_url: `https://open.spotify.com/album/${i}`,
     created_at: `2026-09-${String(i + 1).padStart(2, '0')}T12:00:00`, file: `/lib/Playlists/Album - ${name}.m3u8` })),
 ]
+
+const sent = (peer: string, file: string, mb: number, state = 'Completed, Succeeded') => ({ id: `${peer}-${file}`, peer, file,
+  folder: 'DJ Library', size: mb * 1e6, bytes: mb * 1e6, pct: 100, state, speed_bps: 0, started_at: null, ended_at: null })
+const robsono = ['Dynamix - The Rezistor.aiff', 'Mindsphere - Back To The Roots.aiff', 'Afgin - Astral Experience.aiff',
+  'Afgin - Electric Outburst.aiff', 'Afgin - Inner Peace.aiff', 'Afgin - Spirit Valley.aiff', 'Afgin - Echoes.aiff',
+  'Afgin - Lost In Time.aiff', 'Afgin - Moon Disco.aiff']
+const uploadFeed = { enabled: true, provider: 'soulseek', error: null,
+  uploads: [
+    { id: 'p1', peer: 'kalimba_77', file: 'Hallucinogen - Orphic Thrench.aiff', folder: 'Hallucinogen', size: 51.2e6, bytes: 25.6e6,
+      pct: 50, state: 'InProgress', speed_bps: 3.4e6, started_at: null, ended_at: null },
+    sent('kalimba_77', 'Hallucinogen - LSD.aiff', 88),
+    ...robsono.map((f, i) => sent('robsono', f, 72 + i * 7)),
+    sent('robsono', 'Afgin - Sun Of The Sun.aiff', 91, 'Completed, Errored'),
+  ],
+  summary: { total: 12, active: 1, completed: 11, peers: 2, bytes: 1.02e9 } }
 
 function vi_spy<T extends object, K extends keyof T>(obj: T, key: K, impl: T[K]) {
   ;(obj as any)[key] = impl

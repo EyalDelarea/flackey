@@ -389,7 +389,8 @@ export default function DownloadPage({ live, onReport, watching }: {
         {groups.length === 0 && bundles.length > 0 && scoped.length === 0 && view !== 'active' && <div className="empty">{view === 'failed' ? 'No failed downloads.' : 'No completed downloads yet.'}</div>}
         {/* Choosing unmounts the whole row, candidates and Stop button with it, so the clip has to be
             stopped at press time or it plays on with nothing on screen able to end it. */}
-        {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction} onChoose={(rid, cid) => { stop(); once(`choose:${rid}`, () => api.choose(rid, cid)) }}
+        {groups.map(g => <Group key={g.key} g={g} view={view} whyOpen={whyOpen} onAction={onAction}
+          onStopAll={ids => ids.forEach(id => onAction('cancel', id))} onChoose={(rid, cid) => { stop(); once(`choose:${rid}`, () => api.choose(rid, cid)) }}
           onGetAllExtended={ids => void getExtended(ids)}
           player={{ playing, clock, slow, failed }} onPlay={onPlay} />)}
       </div>
