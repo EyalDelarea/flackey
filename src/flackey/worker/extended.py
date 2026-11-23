@@ -128,11 +128,17 @@ class ExtendedMixin:
             raise ValueError("there is no extended mix on offer for this track")
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to download it from")
-        await self._drive_refused()
-        # Two windows, or a second press that went straight to the API, must not swap the same file twice
+        # Two windows, or a second press that went straight to the API, must not swap the same file twice.
+        # Taken before the first await: the drive check yields, and a second press arriving in that gap
+        # must already find the first one's claim.
         if track_id in self._extending:
             raise ValueError("a copy of this track is already being fetched")
         self._extending.add(track_id)
+        try:
+            await self._drive_refused()
+        except BaseException:
+            self._extending.discard(track_id)
+            raise
         result = "failed"
         try:
             said = await self._get_extended(t, offer)

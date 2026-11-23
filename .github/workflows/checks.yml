@@ -74,6 +74,8 @@ jobs:
     # get their own job because running them inside the job above added about 55s to it, and the
     # installer builds wait on that one. Here they run alongside the rest, off the critical path.
     runs-on: ubuntu-latest
+    # Passing runs take 17 to 48 minutes; the cap is for a hang, which otherwise holds the job for six hours.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

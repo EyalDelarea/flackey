@@ -31,6 +31,7 @@ dev = [
     "import-linter>=2.0",
     "pytest>=8",
     "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
     "respx>=0.21",
     "ruff>=0.6",
 ]
@@ -49,6 +50,9 @@ packages = ["src/flackey"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# A test that hangs fails with its stack after this long, instead of holding a CI job until its timeout.
+# The slowest test (the audio checks) takes about a minute on a laptop.
+timeout = 300
 testpaths = ["tests"]
 
 [tool.ruff]
