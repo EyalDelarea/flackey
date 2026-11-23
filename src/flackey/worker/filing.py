@@ -15,7 +15,7 @@ from ..catalog import DURATION_SLACK_S, is_remaster, with_original_date
 from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
-from ..library import DriveMissing, file_track, final_path, missing_drive, refile_path
+from ..library import file_track, final_path, missing_drive, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
@@ -426,8 +426,12 @@ class FilingMixin:
             return
         try:
             await self._file_now(req, filing, tmp)
-        except DriveMissing:
-            # Unplugged between the check above and the move: the file is still in hand, so it waits too
+        except OSError:
+            # Unplugged between the check above and the move, or part-way through copying onto it: the
+            # file is still in hand (a cross-drive move deletes the source only once the copy is whole), so
+            # it waits too. Anything else is a real failure and goes on up as it always did.
+            if missing_drive(self.settings.library_root) is None or not tmp.is_file():
+                raise
             self._wait_for_drive(req, tmp, filing)
 
     def _filing_for(self, req: Request, cand: Candidate, catalog: CatalogTrack, verdict: Verdict,
@@ -560,13 +564,14 @@ class FilingMixin:
                     continue
                 try:
                     await self._file_now(req, Filing.from_dict(raw), path)
-                except DriveMissing:
-                    break
                 except Exception as e:
-                    # One bad record must not keep the rest waiting for ever
-                    log.exception("req#%d: could not file the track that waited for the drive", req.id)
+                    if isinstance(e, OSError) and missing_drive(self.settings.library_root) is not None:
+                        break         # unplugged again, mid-copy or before it: everything left keeps waiting
+                    # One bad record must not keep the rest waiting for ever. The file stays where it is: it
+                    # is the one checked copy, and the log says where.
+                    log.exception("req#%d: could not file the track that waited for the drive (kept at %s)",
+                                  req.id, path)
                     self._set_state(req, RequestState.ERROR, error_message=str(e)[:500])
-                    path.unlink(missing_ok=True)
                     self.store.clear_drive_wait(req.id)
                     continue
                 path.unlink(missing_ok=True)      # gone already when it was filed; a duplicate's copy otherwise

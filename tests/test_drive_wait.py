@@ -12,6 +12,7 @@ from flackey.library import DriveMissing, library_reachable, make_dirs, missing_
 from flackey.models import RequestKind, RequestState
 from flackey.notify import drive_missing_note
 from flackey.worker import Worker
+from flackey.worker import filing as filing_mod
 from tests.appclient import AppClient
 from tests.conftest import requires_ffmpeg
 from tests.test_worker import TEXT, FakeSource, env, good_cand, make_worker, no_art  # noqa: F401 -- env is a fixture
@@ -25,7 +26,6 @@ def volumes(tmp_path: Path, monkeypatch):
     """A fake /Volumes, and the set of its drives that count as plugged in."""
     root = tmp_path / "Volumes"
     root.mkdir()
-    monkeypatch.setattr(library.sys, "platform", "darwin")
     monkeypatch.setattr(library, "VOLUMES", root)
     mounted: set[str] = set()
     real = os.path.ismount
@@ -268,3 +268,23 @@ def test_choosing_a_new_folder_on_an_unplugged_drive_is_refused_without_creating
     r = AppClient(app).put("/api/settings", json={"library_root": str(root / "WD" / "DJ Library")})
     assert r.status_code == 400 and "The drive WD isn't connected" in r.json()["detail"]
     assert not (root / "WD").exists()
+
+
+@posix_only
+@requires_ffmpeg
+async def test_a_drive_pulled_out_mid_copy_leaves_the_track_waiting(unplugged, monkeypatch):
+    settings, store, notifier, _, plug, unplug = unplugged
+    w = make_worker((settings, store, notifier), FakeSource([good_cand()]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    [(_, held, _)] = store.waiting_for_drive()
+    plug("WD")
+
+    def yanked(tmp, dest):
+        unplug("WD")
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(filing_mod, "file_track", yanked)
+    await w._watch_drive()
+
+    assert store.get_request(rid).state == RequestState.WAITING_FOR_DRIVE
+    assert held.is_file() and store.list_tracks() == []
