@@ -425,8 +425,9 @@ async def test_a_drive_that_does_not_answer_counts_as_not_connected(monkeypatch)
     import threading
     release = threading.Event()
     monkeypatch.setattr(library, "missing_drive", lambda p: release.wait(5) and None)
+    lib = Path("E:/DJ Library") if sys.platform == "win32" else Path("/Volumes/NAS/DJ Library")
     try:
-        drive = await library.missing_drive_soon(Path("/Volumes/NAS/DJ Library"), timeout=0.05)
+        drive = await library.missing_drive_soon(lib, timeout=0.05)
     finally:
         release.set()
-    assert drive == ("NAS" if sys.platform != "win32" else "/Volumes/NAS/DJ Library")
+    assert drive == ("E:" if sys.platform == "win32" else "NAS")
