@@ -32,7 +32,7 @@ from ..export import (
     write_new_playlist,
     write_playlists,
 )
-from ..library import library_reachable, missing_tracks, prune_missing_tracks
+from ..library import library_reachable, missing_drive, missing_tracks, prune_missing_tracks
 from ..logsetup import LOG_FILE
 from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
 from ..slskd_binary import install as install_slskd
@@ -227,7 +227,8 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             write_playlists(store, root)
         reachable = library_reachable(root)
         missing = len(missing_tracks(store, root)[0]) if reachable and not removed else 0
-        return {"removed": len(removed), "missing": missing, "reachable": reachable}
+        # `drive` names the drive when the folder is unreachable because that drive is unplugged
+        return {"removed": len(removed), "missing": missing, "reachable": reachable, "drive": missing_drive(root)}
 
     def new_out() -> dict:
         tracks = new_tracks(store)
@@ -414,7 +415,12 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
             reason = unsafe_share_reason(path, settings.data_dir)
             if reason:
                 raise HTTPException(400, reason)
-        if not is_network_path(raw):
+        drive = None if is_network_path(raw) else missing_drive(path)
+        if drive is not None and not unchanged:
+            # Never created: on an unplugged drive that would make its mount point on the boot disk
+            raise HTTPException(400, f"The drive {drive} isn't connected. Plug it in and choose the folder again.")
+        if not is_network_path(raw) and drive is None:
+            # The saved folder on an unplugged drive is let through untouched, so an unrelated toggle still saves
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except OSError as e:

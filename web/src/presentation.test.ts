@@ -83,6 +83,22 @@ describe('presentRow', () => {
       { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'done' },
       { name: 'Verify', state: 'current' }, { name: 'Done', state: 'pending' }])
   })
+  it('counts tracks waiting for the music drive apart from the retry waits', () => {
+    const rows = [bundle({ id: 1, state: 'waiting_for_drive' }), bundle({ id: 2, state: 'queued', retry_after: '2999-01-01T00:00:00Z' }),
+      bundle({ id: 3, state: 'done', track_id: 3 })]
+    const [g] = groupRows(rows, [], opts)
+    expect(g.summary).toMatchObject({ total: 3, filed: 1, waiting: 1, forDrive: 1, inFlight: 0 })
+  })
+  it('shows a track waiting for the music drive as checked, parked, and not stoppable', () => {
+    const r = bundle({ state: 'waiting_for_drive', reviewed: 1 })
+    const v = presentRow(r, opts)
+    expect(v.status).toBe('Downloaded and checked · waiting for your music drive to be plugged in')
+    expect(v.action).toBeNull()
+    expect(v.steps!.map(s => s.state)).toEqual(['done', 'done', 'done', 'done', 'paused'])
+    expect(bucketOf('waiting_for_drive')).toBe('progress')
+    expect(stageOf(r.request)).toBe('waiting')
+    expect(canRetry('waiting_for_drive')).toBe(false)
+  })
   it('leaves Choose off a track that was never stopped for one', () => {
     // Most tracks are matched outright and never wait on anybody. A green Choose rung on those claims a
     // step that never happened -- the same false completion the all-green duplicate row used to tell.
@@ -476,7 +492,7 @@ describe('groupRows', () => {
     expect(g.map(x => x.name)).toEqual(['Progressive Psy Set 2026', 'Single tracks'])
     // Row 6 is queued with a retry_after -- parked on a backoff, doing nothing. It used to be counted as
     // in progress, which is the claim the segmented bar exists to correct, so it is `waiting` now.
-    expect(g[0].summary).toEqual({ filed: 1, total: 4, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 1,
+    expect(g[0].summary).toEqual({ filed: 1, total: 4, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 1, forDrive: 0,
       failed: 1, pct: 25, failedStages: { search: 0, choose: 0, download: 0, verify: 1, waiting: 0, stopped: 0, unknown: 0 } })
     expect(g[0].rows.map(r => r.id)).toEqual([6, 5, 4, 3])          // newest first with 'all' filter
     expect(g[0]).not.toHaveProperty('beatportDown')   // Beatport was removed, and its banner with it
@@ -492,7 +508,7 @@ describe('groupRows', () => {
     const failedOnly = groupRows(bundles, playlists, opts, 'failed')
     expect(failedOnly.map(g => g.name)).toEqual(['Progressive Psy Set 2026'])   // Single tracks group is empty, dropped
     expect(failedOnly[0].rows.map(r => r.id)).toEqual([5])
-    expect(failedOnly[0].summary).toEqual({ filed: 1, total: 3, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 0,
+    expect(failedOnly[0].summary).toEqual({ filed: 1, total: 3, needsChoice: 1, rejected: 1, inFlight: 0, waiting: 0, forDrive: 0,
       failed: 1, pct: 33, failedStages: { search: 0, choose: 0, download: 0, verify: 1, waiting: 0, stopped: 0, unknown: 0 } })  // summary unaffected by the filter
 
     const progressOnly = groupRows(bundles, playlists, opts, 'progress')

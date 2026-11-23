@@ -13,7 +13,8 @@ import httpx
 from ..attempts import prune_raw
 from ..config import Settings
 from ..deezer import DeezerTrack
-from ..library import library_reachable, prune_missing_tracks, sweep_tmp
+from ..export import write_playlists
+from ..library import library_reachable, missing_drive_soon, prune_missing_tracks, sweep_tmp
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
 from ..source import (
@@ -127,6 +128,15 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         self._scan: asyncio.Task | None = None
         self._scan_after = 0.0
         self._extending: set[int] = set()   # tracks with a Get extended or Find lossless under way
+        # Told the drive's name the first time the library's drive is found unplugged, once per time it goes
+        # (`_watch_drive`): the app shows a system notification. None (tests, the CLI) tells no one.
+        self.on_drive_missing: Callable[[str], None] | None = None
+        # The drive `_watch_drive` last found missing, or None while it was there
+        self._drive_missing: str | None = None
+        self._filing_waiting = False         # `file_waiting` under way: one at a time
+        # Waiting tracks that failed to file for a reason other than the drive (a full disk, a permission):
+        # request id -> clock time of the next try. Forgotten when the drive comes back and on restart.
+        self._drive_wait_retry_at: dict[int, float] = {}
 
 
     def _bot_ready(self) -> bool:
@@ -134,6 +144,56 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         lives in signed in. Asked at each use, because the flag can flip under a pass in flight."""
         return self.settings.source_enabled and bool(self.status.get("telegram_authorized", True))
 
+
+    async def _drive_refused(self) -> None:
+        """Raise the owner-facing reason when the library's drive is unplugged. For the buttons that put a
+        new file in place of a filed one (Find lossless, Get extended): with the drive gone there is no
+        filed file to replace, and the download would only be thrown away."""
+        drive = await missing_drive_soon(self.settings.library_root)
+        if drive is not None:
+            raise ValueError(f"Your music drive ({drive}) isn't connected. Plug it in and try again.")
+
+    def _drive_changed(self, drive: str | None | type[Ellipsis] = ...) -> None:
+        """Publish whether the library's drive is plugged in and how many tracks wait for it, for the
+        page's banner. Only when it changed: every assignment to `status` is an event to every page.
+        `drive` is what the caller just found; by default the watcher's last look, so this never waits on
+        the drive itself."""
+        if drive is ...:
+            drive = self._drive_missing
+        now = {"connected": drive is None, "name": drive, "waiting": self.store.count_waiting_for_drive()}
+        if self.status.get("library_drive") != now:
+            self.status["library_drive"] = now
+
+    async def _watch_drive(self) -> None:
+        """On the loop's tick: notice the library's drive going and coming back. Going, the owner is told
+        once; coming back, whatever waited for it is filed. Searching and downloading carry on either way --
+        only filing waits."""
+        # Off the loop and time-limited: a network share under /Volumes that stopped answering would
+        # otherwise freeze the page along with it
+        drive = await missing_drive_soon(self.settings.library_root)
+        back = drive is None and self._drive_missing is not None
+        if drive is not None and drive != self._drive_missing:
+            log.warning("the library's drive %s is not connected; checked tracks will wait for it", drive)
+            if self.on_drive_missing is not None:
+                try:
+                    self.on_drive_missing(drive)
+                except Exception as e:  # noqa: BLE001 -- a notification is never worth the loop
+                    log.debug("drive notification failed: %s", e)
+        self._drive_missing = drive
+        if back:
+            self._drive_wait_retry_at.clear()     # a drive plugged back in is a fresh chance for every one
+        if drive is None and self.store.count_waiting_for_drive():
+            await self.file_waiting()
+        if back:
+            log.info("the library's drive is connected again")
+            # Playlist files the drive could not take while it was gone are brought up to date, and the
+            # share rescanned: one done while it was gone shared nothing from it
+            try:
+                write_playlists(self.store, self.settings.library_root)
+            except OSError as e:
+                log.warning("could not rewrite the playlist files: %s", e)
+            self._unscanned = list(self.providers)
+        self._drive_changed()
 
     def _set_state(self, req: Request, state: RequestState, **kw) -> None:
         """Every state change goes through here so a remote log shows the full path of a request. `update_request`
@@ -274,6 +334,10 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             self._last_maintenance = now
             await asyncio.to_thread(prune_raw, self.settings.lossless_raw_dir, self.settings.lossless_keep_raw_days)
             self._unscanned = list(self.providers)
+        if self._unscanned and self._drive_missing is not None:
+            # A rescan now would find the library gone and share nothing until the next one. Owed instead:
+            # `_watch_drive` asks for it again when the drive is back.
+            return
         for p in list(self._unscanned):
             # A sidecar still starting owes the rescan rather than failing it; the next tick asks again
             try:
@@ -326,6 +390,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         try:
             while True:
                 await self._requeue_for_the_bot()
+                await self._watch_drive()
                 await self._cancel_leftovers()
                 await self._maintenance()
                 self._start_due()

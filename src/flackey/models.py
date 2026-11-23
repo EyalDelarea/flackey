@@ -21,6 +21,10 @@ class RequestState(StrEnum):
     FETCHING = "fetching"
     VERIFYING = "verifying"
     FILING = "filing"
+    # Checked and tagged, and held in the app's data folder because the library's drive is not plugged in.
+    # Filed by the worker as soon as the drive is back. Neither in flight (a restart must not send it back
+    # to the queue to be downloaded again) nor terminal (the row cannot be removed while its file is held).
+    WAITING_FOR_DRIVE = "waiting_for_drive"
     DONE = "done"
     DUPLICATE = "duplicate"
     REJECTED = "rejected"

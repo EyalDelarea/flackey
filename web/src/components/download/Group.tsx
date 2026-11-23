@@ -69,6 +69,8 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onStopAll,
       { key: 'working', n: s.inFlight, label: 'searching / downloading / verifying' },
       { key: 'needs', n: s.needsChoice, label: s.needsChoice === 1 ? 'needs you' : 'need you' },
       { key: 'waiting', n: s.waiting, label: 'waiting to retry' },
+      // Not a retry: downloaded and checked, and waiting on the owner to plug the drive in -- amber, as `needs`
+      { key: 'drive', n: s.forDrive, label: 'waiting for your music drive' },
       { key: 'failed', n: s.failed, label: 'failed' },
     ])
   // Proportional, never rounded: five rounded percentages do not add up to 100 and the error shows as a

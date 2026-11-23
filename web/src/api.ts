@@ -1,6 +1,6 @@
 import { apiToken } from './session'
 
-export type RequestState = 'queued'|'identifying'|'awaiting_review'|'fetching'|'verifying'|'filing'|'done'|'duplicate'|'rejected'|'cancelled'|'not_found'|'error'
+export type RequestState = 'queued'|'identifying'|'awaiting_review'|'fetching'|'verifying'|'filing'|'waiting_for_drive'|'done'|'duplicate'|'rejected'|'cancelled'|'not_found'|'error'
 export interface Request { id:number; created_at:string; updated_at:string; raw_text:string; kind:string; state:RequestState;
   playlist_id:number|null; playlist_position:number|null; source_url:string|null; query_artist:string|null; query_title:string|null;
   query_version:string|null; query_duration_s:number|null; chosen_candidate_id:number|null; catalog_track_id:number|null;
@@ -101,7 +101,11 @@ export interface Health { ok:boolean; version:string; telegram_authorized:boolea
   sharing?:SharingState|null
   /** Which OS the server runs on. Optional so a fixture written before it existed still type-checks; the
       page treats an absent one as a Mac, which is what every copy before Windows was. */
-  platform?:Platform }
+  platform?:Platform
+  /** Whether the library's drive is plugged in (`name` is the drive while it is not), and how many checked
+      tracks wait for it. Null before the worker's first look, absent from an older server. */
+  library_drive?:LibraryDrive|null }
+export interface LibraryDrive { connected:boolean; name:string|null; waiting:number }
 export interface FetchProgress { request_id:number; bytes:number; size:number; peer:string; pct:number
   speed_bps:number; pick:number; state:string
   /** Set only after the transfer, while the file is being checked, fingerprinted or converted. */
@@ -239,7 +243,7 @@ export const api = {
   },
   /** `missing`: files gone but kept, because too many went at once to forget them without asking;
       `forgetMissing` forgets them. `reachable` is false while the library folder is missing (a drive unplugged). */
-  refreshLibrary: (forgetMissing = false) => post<{ removed: number; missing: number; reachable: boolean }>(
+  refreshLibrary: (forgetMissing = false) => post<{ removed: number; missing: number; reachable: boolean; drive?: string | null }>(
     '/api/library/refresh', forgetMissing ? { forget_missing: true } : undefined),
   receipt: (trackId: number) => call<Receipt>(`/api/library/${trackId}/receipt`),
   recheckTrack: (trackId: number) => post<Receipt>(`/api/library/${trackId}/recheck`),

@@ -46,6 +46,7 @@ STAGE_OF_STATE = {
     RequestState.AWAITING_REVIEW: "choose",
     RequestState.FETCHING: "download",
     RequestState.VERIFYING: "verify", RequestState.FILING: "verify",
+    RequestState.WAITING_FOR_DRIVE: "verify",
 }
 # spec §5: only these let a request try again on its own. "queued" belongs with them because it is a wait,
 # not an answer -- the peers had the file and simply had not reached us in their queue, so the next pass is

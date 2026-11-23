@@ -109,6 +109,14 @@ it('does not call an unplugged library drive up to date', async () => {
   expect(screen.queryByText('Library is up to date.')).not.toBeInTheDocument()
 })
 
+it('says the music drive is not connected, in the words of the banner, when that is why', async () => {
+  vi.mocked(api.library).mockResolvedValue([])
+  vi.spyOn(api, 'refreshLibrary').mockResolvedValue({ removed: 0, missing: 0, reachable: false, drive: 'WD' })
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh library' }))
+  expect(await screen.findByText("Your music drive (WD) isn't connected, so nothing was changed. Plug it in and refresh again.")).toBeInTheDocument()
+})
+
 it('leaves the toolbar free of drag layers, and search still works', async () => {
   vi.mocked(api.library).mockResolvedValue([])
   const { container } = render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)

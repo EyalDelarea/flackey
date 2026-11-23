@@ -85,7 +85,7 @@ def test_health(client):
                                           "telegram_authorized": True, "telegram_unreachable": False,
                                           "worker_running": False, "setup_done": False,
                                           "telegram_configured": True, "source_enabled": True,
-                                          "sharing": None,
+                                          "sharing": None, "library_drive": None,
                                           "lossless": {"enabled": False, "provider": None, "fpcalc": fpcalc_available(),
                                                        "attempts_24h": {}, "raw_mb": 0.0}}
 
@@ -1947,7 +1947,7 @@ def test_refresh_library_forgets_files_removed_in_finder(client, tmp_path):
                           duration_s=100, isrc=None, catalog_track_id=None, request_id=None)
     assert any(t["id"] == tid for t in c.get("/api/library").json())
     file.unlink()
-    assert c.post("/api/library/refresh").json() == {"removed": 1, "missing": 0, "reachable": False}
+    assert c.post("/api/library/refresh").json() == {"removed": 1, "missing": 0, "reachable": False, "drive": None}
     assert c.get("/api/library").json() == []
     assert c.get("/api/stats").json()["tracks"] == 0
 
@@ -1965,10 +1965,10 @@ def test_refresh_asks_before_forgetting_a_library_deleted_on_purpose(client, tmp
                               duration_s=100, isrc=None, catalog_track_id=None, request_id=rid)
         store.add_playlist_track(pid, tid, i + 1)
     store.update_request(rid, track_id=tid, state=RequestState.DONE)
-    assert c.post("/api/library/refresh").json() == {"removed": 0, "missing": 12, "reachable": True}
+    assert c.post("/api/library/refresh").json() == {"removed": 0, "missing": 12, "reachable": True, "drive": None}
     assert len(c.get("/api/library").json()) == 12
     assert c.post("/api/library/refresh", json={"forget_missing": True}).json() == {
-        "removed": 12, "missing": 0, "reachable": True}
+        "removed": 12, "missing": 0, "reachable": True, "drive": None}
     assert c.get("/api/library").json() == []
     playlist = settings.library_root / "Playlists" / "Set.m3u8"
     assert "A - " not in playlist.read_text()
@@ -1982,7 +1982,7 @@ def test_refresh_says_when_the_library_folder_is_not_there(client):
                     file_size=5, artist="A", title="T", mix_name="Original Mix", duration_s=100, isrc=None,
                     catalog_track_id=None, request_id=None)
     assert c.post("/api/library/refresh", json={"forget_missing": True}).json() == {
-        "removed": 0, "missing": 0, "reachable": False}
+        "removed": 0, "missing": 0, "reachable": False, "drive": None}
     assert len(c.get("/api/library").json()) == 1
 
 

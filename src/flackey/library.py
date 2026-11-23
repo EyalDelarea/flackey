@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import ntpath
 import os
 import re
 import shutil
@@ -170,14 +172,48 @@ def refile_path(folder: Path, catalog: CatalogTrack, ext: str) -> Path:
     return folder / _fit_name_bytes(artist, title, ext)
 
 
+class DriveMissing(OSError):
+    """The folder a file was going to is on a drive that is not plugged in (`missing_drive`)."""
+
+    def __init__(self, drive: str):
+        super().__init__(f"the drive {drive} is not connected")
+        self.drive = drive
+
+
+def make_dirs(folder: Path) -> None:
+    """`folder.mkdir(parents=True)`, except on a drive that is not plugged in: there it would create the
+    drive's mount point on the boot disk (or fail on a /Volumes the owner cannot write), so it raises
+    DriveMissing instead and creates nothing."""
+    drive = missing_drive(folder)
+    if drive is not None:
+        raise DriveMissing(drive)
+    folder.mkdir(parents=True, exist_ok=True)
+
+
 def file_track(tmp_path: Path, dest: Path) -> Path:
     if dest.exists():
         raise FileExistsError(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(dest.parent)
     try:
         os.replace(tmp_path, dest)
+        return dest
     except OSError:
-        shutil.move(str(tmp_path), str(dest))
+        pass
+    # Another drive: copied in beside the destination under a temporary name, and renamed onto it only once
+    # the copy is whole. A copy cut short -- the drive pulled out, the disk full -- must never leave a
+    # truncated file at `dest`: the next attempt would take it for the track already filed and throw the
+    # good copy away.
+    part = dest.with_name(dest.name + ".part")
+    try:
+        shutil.copy2(tmp_path, part)
+        os.replace(part, dest)
+    except BaseException:
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    tmp_path.unlink(missing_ok=True)
     return dest
 
 
@@ -232,11 +268,73 @@ PRUNE_MAX_SHARE = 0.5
 _PLAYLIST_DIR = "Playlists"
 
 
+# Where macOS mounts every drive but the boot disk. A module constant so tests can point it at a folder of
+# their own; nothing on Windows or Linux mounts here.
+VOLUMES = Path("/Volumes")
+
+
+def _drive_present(drive: str) -> bool:
+    """Whether a Windows drive letter ("E:") has a disk behind it right now."""
+    return os.path.exists(drive + "\\")
+
+
+def drive_of(path: Path) -> str | None:
+    """The removable drive `path` is on, plugged in or not: the volume's name under /Volumes on a Mac, the
+    drive letter on Windows, None for the boot disk. Only string work, so it never waits on a drive."""
+    if sys.platform == "win32":
+        drive = ntpath.splitdrive(str(path))[0]
+        return drive.upper() if len(drive) == 2 else None
+    try:
+        return Path(path).relative_to(VOLUMES).parts[0]
+    except (ValueError, IndexError):
+        return None
+
+
+# How long a look at the drive may take before the drive counts as not there. A network share mounted under
+# /Volumes that has stopped answering can hold `realpath` and `ismount` for minutes.
+DRIVE_PROBE_TIMEOUT_S = 5.0
+
+
+async def missing_drive_soon(path: Path, timeout: float = DRIVE_PROBE_TIMEOUT_S) -> str | None:
+    """`missing_drive` off the event loop, for callers on it. A look that takes longer than `timeout` answers
+    the drive's name: a drive that does not answer cannot be filed onto either."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(missing_drive, path), timeout)
+    except TimeoutError:
+        log.warning("the drive under %s did not answer within %.0f s; treating it as not connected", path, timeout)
+        return drive_of(path) or str(path)
+
+
+def missing_drive(path: Path) -> str | None:
+    """The name of the drive `path` is on, when that drive is not plugged in; None when it is, and for a
+    folder on the boot disk.
+
+    On a Mac that is a folder under /Volumes/<name> with nothing mounted at /Volumes/<name>. An empty folder
+    standing there is not the drive: it is a mount point left behind on the boot disk, and anything written
+    into it would land on the boot disk and later hide the real drive, which macOS then mounts as
+    "<name> 1". On Windows it is a drive letter with no disk behind it. Nothing here creates anything, so
+    asking is always safe -- which is the point: every `mkdir` of the library asks this first."""
+    if sys.platform == "win32":
+        drive = ntpath.splitdrive(str(path))[0]
+        if len(drive) != 2:          # no drive letter, or a \\server\share path (refused as a library anyway)
+            return None
+        return None if _drive_present(drive) else drive.upper()
+    # Resolved, so a symlink into /Volumes counts and /Volumes/Macintosh HD (a symlink to /) does not
+    real, volumes = Path(os.path.realpath(path)), Path(os.path.realpath(VOLUMES))
+    try:
+        name = real.relative_to(volumes).parts[0]
+    except (ValueError, IndexError):
+        return None
+    return None if os.path.ismount(volumes / name) else name
+
+
 def library_reachable(library_root: Path) -> bool:
     """Whether the library folder is there to be looked in. A drive that is unplugged or a share that is
     offline has no folder at all, or -- when something recreated the mount point on the boot disk -- an
     empty one, holding at most a `Playlists` folder an export put there. Either way a missing file then
     says nothing about whether the owner deleted it."""
+    if missing_drive(library_root) is not None:
+        return False
     try:
         if not library_root.is_dir():
             return False

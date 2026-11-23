@@ -28,8 +28,9 @@ from .config import Settings, save_settings, secure_private_files
 from .deezer import DeezerApi
 from .events import EventBus, Status
 from .inbox import Inbox
+from .library import DriveMissing, make_dirs
 from .logsetup import log_startup_banner
-from .notify import LogNotifier, desktop_notify
+from .notify import LogNotifier, desktop_notify, drive_missing_note
 from .sharing import Sharing
 from .single_instance import DataDirInUse, claim_data_dir
 from .slskd_binary import SlskdBinaryError
@@ -494,8 +495,14 @@ async def _run(settings: Settings, handle: ServerHandle) -> None:
 
 async def _run_app(settings: Settings, handle: ServerHandle) -> None:
     for d in (settings.data_dir, settings.tmp_dir, settings.spectrogram_dir, settings.rejected_dir,
-              settings.library_root, settings.lossless_raw_dir):
+              settings.lossless_raw_dir):
         d.mkdir(parents=True, exist_ok=True)
+    # Not on a drive that is unplugged: that would put its mount point on the boot disk, or on a Mac fail and
+    # stop the app from opening at all. The worker files nothing there until it is back (`_watch_drive`).
+    try:
+        make_dirs(settings.library_root)
+    except DriveMissing as e:
+        log.warning("library folder %s: %s; tracks will wait for it", settings.library_root, e)
     # Before anything that touches the database or the sidecar. The window claims this already; this is
     # for `flackey start` in a terminal, which would otherwise fail on the port beside a running app and
     # stop that app's slskd on its way out (the exit guard below finds it by pid file).
@@ -568,6 +575,7 @@ async def _run_app(settings: Settings, handle: ServerHandle) -> None:
                     providers=providers, http=http, tag_lookup=default_lookup(http, settings.data_dir))
     worker.on_found = lambda track: desktop_notify("Flackey found a track you were waiting for",
                                                    f"{track} is in your library now.")
+    worker.on_drive_missing = lambda drive: desktop_notify(*drive_missing_note(drive))
     inbox = Inbox(store, prefer_extended=lambda: settings.prefer_extended,
                   library_root=lambda: settings.library_root)
 

@@ -53,6 +53,13 @@ $id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.
 """
 
 
+def drive_missing_note(drive: str) -> tuple[str, str]:
+    """The system notification for a library drive found unplugged: its title and its body. Shown once
+    each time the drive goes; the banner in the app says the rest for as long as it stays gone."""
+    return (f"Your music drive ({drive}) isn't connected",
+            "Flackey keeps downloading. New tracks will wait and be filed when you plug it in.")
+
+
 def desktop_notify(title: str, body: str) -> None:
     """One system notification, best effort: Notification Centre on macOS, a toast on Windows, `notify-send`
     elsewhere. Never raises -- a notification that cannot be shown is not worth failing a filing over.
