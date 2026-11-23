@@ -99,10 +99,11 @@ def status() -> None:
 def export() -> None:
     """Rewrite the M3U8 playlist files (one per YouTube playlist) for Rekordbox import."""
     from .export import write_playlists
+    from .library import make_dirs
     from .store import Store
 
     s = _settings()
-    s.library_root.mkdir(parents=True, exist_ok=True)
+    make_dirs(s.library_root)
     for p in write_playlists(Store(s.db_path), s.library_root):
         typer.echo(str(p))
 

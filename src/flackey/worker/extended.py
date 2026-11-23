@@ -128,6 +128,7 @@ class ExtendedMixin:
             raise ValueError("there is no extended mix on offer for this track")
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to download it from")
+        self._drive_refused()
         # Two windows, or a second press that went straight to the API, must not swap the same file twice
         if track_id in self._extending:
             raise ValueError("a copy of this track is already being fetched")

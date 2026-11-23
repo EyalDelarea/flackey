@@ -207,6 +207,9 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
                 # the setting is the fallback for a process that never puts the flag in `status`.
                 "source_enabled": bool(status.get("source_enabled", settings.source_enabled)),
                 "sharing": status.get("sharing"),
+                # Whether the library's drive is plugged in, and how many tracks wait for it (the worker's
+                # `_drive_changed`). None before the worker's first look.
+                "library_drive": status.get("library_drive"),
                 "lossless": {"enabled": settings.lossless_enabled, "provider": status.get("lossless_provider"),
                              "fpcalc": fpcalc_available(), "attempts_24h": store.attempt_counts(24),
                              "raw_mb": round(raw_size_bytes(settings.lossless_raw_dir) / 1e6, 1)}}

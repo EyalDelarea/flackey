@@ -83,6 +83,16 @@ describe('presentRow', () => {
       { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'done' },
       { name: 'Verify', state: 'current' }, { name: 'Done', state: 'pending' }])
   })
+  it('shows a track waiting for the music drive as checked, parked, and not stoppable', () => {
+    const r = bundle({ state: 'waiting_for_drive', reviewed: 1 })
+    const v = presentRow(r, opts)
+    expect(v.status).toBe('Downloaded and checked · waiting for your music drive to be plugged in')
+    expect(v.action).toBeNull()
+    expect(v.steps!.map(s => s.state)).toEqual(['done', 'done', 'done', 'done', 'paused'])
+    expect(bucketOf('waiting_for_drive')).toBe('progress')
+    expect(stageOf(r.request)).toBe('waiting')
+    expect(canRetry('waiting_for_drive')).toBe(false)
+  })
   it('leaves Choose off a track that was never stopped for one', () => {
     // Most tracks are matched outright and never wait on anybody. A green Choose rung on those claims a
     // step that never happened -- the same false completion the all-green duplicate row used to tell.

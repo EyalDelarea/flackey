@@ -15,7 +15,7 @@ from ..catalog import DURATION_SLACK_S, is_remaster, with_original_date
 from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
-from ..library import file_track, final_path, refile_path
+from ..library import DriveMissing, file_track, final_path, missing_drive, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
@@ -57,6 +57,46 @@ def as_filed(catalog: CatalogTrack, hit: LosslessHit | None) -> CatalogTrack:
     probed = round(hit.duration_s) if hit.duration_s else None
     return dataclasses.replace(catalog, mix_name=hit.cut_name or extended_mix_name(catalog.mix_name), isrc=None,
                                duration_ms=probed * 1000 if probed else None)
+
+
+@dataclasses.dataclass
+class Filing:
+    """What filing a checked, tagged file still has to write once the file is in the library: everything
+    `_file_now` does. Plain data, so a track kept while the library's drive is unplugged is filed after a
+    restart exactly as it would have been at once."""
+    catalog: dict             # the CatalogTrack the file is tagged with; its name and folder come from it
+    ext: str
+    track: dict               # `Store.add_track`'s fields, less the path, the size and the request
+    evidence: list            # [kind, value] pairs, in the order they are written
+    found: str | None         # "artist – title" for the owner's found-notification, or None
+    message: str              # the Done line
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Filing:
+        return cls(catalog=d["catalog"], ext=d["ext"], track=d["track"], evidence=d.get("evidence") or [],
+                   found=d.get("found"), message=d.get("message") or "")
+
+    def catalog_track(self) -> CatalogTrack:
+        names = {f.name for f in dataclasses.fields(CatalogTrack)}
+        return CatalogTrack(**{k: v for k, v in self.catalog.items() if k in names})
+
+
+def _evidence_pairs(fp: FingerprintResult, hit: LosslessHit | None) -> list[tuple[str, dict]]:
+    """What the filed file was checked against. `source` names the peer and the attempt behind it, so it
+    only exists for a lossless hit; the recording check is recorded for the lossy copy too, because since
+    issue #68 that copy is fingerprinted as well and the owner should be able to see it."""
+    out: list[tuple[str, dict]] = []
+    if hit is not None:
+        out.append(("source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
+                               "attempt_id": hit.attempt_id}))
+    out.append(("recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
+                                    "reference": fp.reference, "reason": fp.reason}))
+    if fp.track:
+        out.append(("fingerprint", {"frames": fp.track, "fps": FPS}))
+    return out
 
 
 class FilingMixin:
@@ -364,7 +404,10 @@ class FilingMixin:
         check; `accept_rejection` gets here because the owner listened to a file the fingerprint refused and
         said keep it anyway (issue #92). One tail, so a track filed by hand is tagged, named, counted,
         added to its playlist and announced exactly like every other track -- the alternative was a second
-        copy of this drifting away from the first."""
+        copy of this drifting away from the first.
+
+        With the library's drive unplugged the tagged file is kept in the data folder instead, and filed by
+        `file_waiting` once the drive is back."""
         self._set_state(req, RequestState.FILING)
         # Read before `write_tags` replaces the file's own tags; a lossless hit read them before converting
         version = hit.version_check if hit is not None else await self._lossy_version(req, cand, tmp)
@@ -376,61 +419,60 @@ class FilingMixin:
         extended = split_version(catalog.mix_name).cut == EXTENDED
         artwork = await self.artwork_fetch(catalog.artwork_url) if catalog.artwork_url else None
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
-        dest = final_path(self.settings.library_root, catalog, tmp.suffix.lstrip("."),
-                          layout=self.settings.library_layout)
-        if dest.exists():
-            existing = self.store.find_track_by_path(dest)  # None if the file was put there by hand
-            await self._mark_duplicate(req, existing.id if existing else None, dest)
+        filing = self._filing_for(req, cand, catalog, verdict, fp, hit, version, source, source_fmt,
+                                  sought=sought, extended=extended, renamed=renamed, ext=tmp.suffix.lstrip("."))
+        if missing_drive(self.settings.library_root) is not None:
+            self._wait_for_drive(req, tmp, filing)
             return
-        file_track(tmp, dest)
-        log.info("req#%d filed %s -> %s", req.id, f"{catalog.artist} – {catalog.title}",
-                dest.relative_to(self.settings.library_root))
-        track_id = self.store.add_track(
-            path=dest, fmt=verdict.fmt, bitrate_kbps=verdict.bitrate_kbps, cutoff_hz=verdict.cutoff_hz,
-            file_size=dest.stat().st_size, artist=catalog.artist, title=catalog.title, mix_name=catalog.mix_name,
-            duration_s=catalog.duration_s or cand.duration_s,
-            isrc=catalog.isrc if renamed else catalog.isrc or cand.isrc,
-            catalog_track_id=catalog.id, request_id=req.id, spectrogram_path=verdict.spectrogram_path,
-            source=source, source_fmt=source_fmt, bit_depth=verdict.bit_depth, sample_rate=verdict.sample_rate,
-            tag_date=catalog.tag_date)
-        if req.attempts >= MAX_ATTEMPTS and self.on_found is not None:
-            # Only a request that ran out the quick ladder reaches the long wait for Soulseek, so this is the
-            # track the owner was told "it will come" about (idea 1) -- and now it has. After the track row
-            # exists, and guarded: a notification is never worth a filing.
-            try:
-                self.on_found(f"{catalog.artist} – {catalog.title}")
-            except Exception as e:  # noqa: BLE001 -- whatever the callback raises, the track is filed
-                log.debug("req#%d found-notification failed: %s", req.id, e)
+        try:
+            await self._file_now(req, filing, tmp)
+        except DriveMissing:
+            # Unplugged between the check above and the move: the file is still in hand, so it waits too
+            self._wait_for_drive(req, tmp, filing)
+
+    def _filing_for(self, req: Request, cand: Candidate, catalog: CatalogTrack, verdict: Verdict,
+                    fp: FingerprintResult | None, hit: LosslessHit | None, version: VersionCheck | None,
+                    source: str, source_fmt: str | None, *, sought: bool, extended: bool, renamed: bool,
+                    ext: str) -> Filing:
+        """Everything `_file_now` has to write once the tagged file is in hand, worked out now: a track that
+        waits for the drive is then filed later exactly as it would have been at once, restart or not."""
+        track = {
+            "fmt": verdict.fmt, "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz,
+            "artist": catalog.artist, "title": catalog.title, "mix_name": catalog.mix_name,
+            "duration_s": catalog.duration_s or cand.duration_s,
+            "isrc": catalog.isrc if renamed else catalog.isrc or cand.isrc,
+            "catalog_track_id": catalog.id,
+            "spectrogram_path": str(verdict.spectrogram_path) if verdict.spectrogram_path else None,
+            "source": source, "source_fmt": source_fmt, "bit_depth": verdict.bit_depth,
+            "sample_rate": verdict.sample_rate, "tag_date": catalog.tag_date}
+        # Only a request that ran out the quick ladder reaches the long wait for Soulseek, so this is the
+        # track the owner was told "it will come" about (idea 1)
+        found = f"{catalog.artist} – {catalog.title}" if req.attempts >= MAX_ATTEMPTS else None
+        evidence: list[tuple[str, dict]] = []
         # None only when the check could not be run at all at accept time -- no stored reference, no fpcalc.
         # A track with no recording_match row says "not checked", which is true; a fabricated passing one
         # would not be.
         if fp is not None:
-            self._record_evidence(track_id, fp, hit)
+            evidence += _evidence_pairs(fp, hit)
         if version is not None:
-            self.store.add_evidence(track_id, "version_check", version.to_dict())
+            evidence.append(("version_check", version.to_dict()))
         if sought:
             # What the row says under the track: the extended mix it got, or that there was none
-            self.store.add_evidence(track_id, "extended", {"sought": True, "found": extended,
-                                                           "mix_name": catalog.mix_name})
+            evidence.append(("extended", {"sought": True, "found": extended, "mix_name": catalog.mix_name}))
         elif not extended and self._offers_extended(req, catalog.mix_name):
             # Looked for once the queue is empty (`ExtendedMixin`); only tracks filed from now on
-            self.store.add_evidence(track_id, OFFER, {"status": "pending"})
-        evidence = summary(verdict.analysis)
-        if evidence is not None:
+            evidence.append((OFFER, {"status": "pending"}))
+        checked = summary(verdict.analysis)
+        if checked is not None:
             # What each evidence family said about the filed copy (issue #97): the page reads the tier, and
             # an unverified track says so rather than passing for a clear one.
-            self.store.add_evidence(track_id, "verification", evidence)
+            evidence.append(("verification", checked))
         if not verdict.passed:
             # Only `accept_rejection` files a failed verdict: the owner overruled the quality check (issue
             # #97). Recorded beside the fingerprint so the library says so, and the page can too.
-            self.store.add_evidence(track_id, "quality_check", {
+            evidence.append(("quality_check", {
                 "status": "failed", "kept_by": "owner", "reason": verdict.reason,
-                "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz})
-        if req.playlist_id is not None:
-            self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
-            self._export_playlist(req.playlist_id)
-        self._export_new()
-        self._set_state(req, RequestState.DONE, track_id=track_id)
+                "bitrate_kbps": verdict.bitrate_kbps, "cutoff_hz": verdict.cutoff_hz}))
         conf = self.store.get_request(req.id).confidence
         parts = [f"Done: {catalog.artist} – {catalog.title} ({catalog.mix_name})", _mmss(catalog.duration_s or cand.duration_s),
                  format_line(verdict, source, source_fmt), edge_text(verdict.cutoff_hz),
@@ -450,7 +492,93 @@ class FilingMixin:
         miss = self._lossless_miss_line(req)
         if miss:
             msg += f"\n{miss}"
-        await self.notifier.send(msg)
+        return Filing(catalog=dataclasses.asdict(catalog), ext=ext, track=track,
+                      evidence=[[k, v] for k, v in evidence], found=found, message=msg)
+
+    async def _file_now(self, req: Request, filing: Filing, tmp: Path) -> None:
+        """Move the tagged file into the library and write everything that goes with it: the track row, its
+        evidence, its playlist, the New playlist, and the Done line. Raises DriveMissing, having written
+        nothing, when the library's drive is not plugged in."""
+        catalog = filing.catalog_track()
+        dest = final_path(self.settings.library_root, catalog, filing.ext, layout=self.settings.library_layout)
+        if dest.exists():
+            existing = self.store.find_track_by_path(dest)  # None if the file was put there by hand
+            await self._mark_duplicate(req, existing.id if existing else None, dest)
+            return
+        # On the loop, as it always was: nothing may interleave between the `exists` above and the move, or
+        # two requests for one track could both get past it
+        file_track(tmp, dest)
+        log.info("req#%d filed %s -> %s", req.id, f"{catalog.artist} – {catalog.title}",
+                 dest.relative_to(self.settings.library_root))
+        track_id = self.store.add_track(path=dest, file_size=dest.stat().st_size, request_id=req.id,
+                                        **filing.track)
+        if filing.found and self.on_found is not None:
+            # After the track row exists, and guarded: a notification is never worth a filing.
+            try:
+                self.on_found(filing.found)
+            except Exception as e:  # noqa: BLE001 -- whatever the callback raises, the track is filed
+                log.debug("req#%d found-notification failed: %s", req.id, e)
+        for kind, value in filing.evidence:
+            self.store.add_evidence(track_id, kind, value)
+        if req.playlist_id is not None:
+            self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
+            self._export_playlist(req.playlist_id)
+        self._export_new()
+        self._set_state(req, RequestState.DONE, track_id=track_id)
+        await self.notifier.send(filing.message)
+
+    def _wait_for_drive(self, req: Request, tmp: Path, filing: Filing) -> None:
+        """Keep the checked, tagged file in the data folder and mark the request as waiting for the
+        library's drive. Never filed anywhere else in the meantime: Rekordbox knows the library by its
+        paths, and a track filed onto the boot disk would be one it later loses. `file_waiting` files it
+        when the drive is back."""
+        self.settings.drive_wait_dir.mkdir(parents=True, exist_ok=True)
+        kept = self.settings.drive_wait_dir / f"req{req.id}.{filing.ext}"
+        shutil.move(str(tmp), str(kept))
+        self.store.wait_for_drive(req.id, kept, filing.to_dict())
+        log.info("req#%d checked and tagged; waiting for the library's drive to be plugged in", req.id)
+        self._drive_changed()
+
+    async def file_waiting(self) -> int:
+        """File every track that waited for the drive, now that it is back. Returns how many were filed.
+        One at a time and in the order they arrived; a drive unplugged again part-way leaves the rest
+        waiting rather than failing them."""
+        if self._filing_waiting:
+            return 0
+        self._filing_waiting = True
+        n = 0
+        try:
+            for req, path, raw in self.store.waiting_for_drive():
+                if missing_drive(self.settings.library_root) is not None:
+                    break
+                if not path.is_file():
+                    # Deleted from the data folder by hand: nothing to file, and nothing a retry cannot fetch
+                    log.warning("req#%d: the file waiting for the drive is gone (%s)", req.id, path)
+                    self.store.clear_drive_wait(req.id)
+                    self._set_state(req, RequestState.ERROR, error_message="The downloaded file that was "
+                                    "waiting for your music drive is gone. Try again to download it again.")
+                    continue
+                try:
+                    await self._file_now(req, Filing.from_dict(raw), path)
+                except DriveMissing:
+                    break
+                except Exception as e:
+                    # One bad record must not keep the rest waiting for ever
+                    log.exception("req#%d: could not file the track that waited for the drive", req.id)
+                    self._set_state(req, RequestState.ERROR, error_message=str(e)[:500])
+                    path.unlink(missing_ok=True)
+                    self.store.clear_drive_wait(req.id)
+                    continue
+                path.unlink(missing_ok=True)      # gone already when it was filed; a duplicate's copy otherwise
+                self.store.clear_drive_wait(req.id)
+                n += 1
+                await asyncio.sleep(0)            # each one is a copy onto the drive: let the page breathe
+        finally:
+            self._filing_waiting = False
+        if n:
+            log.info("filed %d tracks that were waiting for the library's drive", n)
+        self._drive_changed()
+        return n
 
 
     async def upgrade(self, track_id: int) -> str:
@@ -469,6 +597,7 @@ class FilingMixin:
         t = self.store.get_track(track_id)
         if t.source_fmt:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
+        self._drive_refused()
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
         # The same guard Get extended has, and the same set (ENG-9): a double click or a second window would
@@ -522,6 +651,7 @@ class FilingMixin:
         membership and the fingerprint evidence follow it across the swap for free -- the .m3u8 files on
         disk are the only things holding the old path, and they are rewritten from the row.
         """
+        self._drive_refused()   # before anything is written: the file to replace is on that drive
         catalog = await self._tags_for(req, cand, catalog)
         # Get extended brings the record's extended mix: filed under its own name and length (issue #187)
         filed = as_filed(catalog, hit)
@@ -584,13 +714,6 @@ class FilingMixin:
 
 
     def _record_evidence(self, track_id: int, fp: FingerprintResult, hit: LosslessHit | None) -> None:
-        """What the filed file was checked against. `source` names the peer and the attempt behind it, so
-        it only exists for a lossless hit; the recording check is recorded for the lossy copy too, because
-        since issue #68 that copy is fingerprinted as well and the owner should be able to see it."""
-        if hit is not None:
-            self.store.add_evidence(track_id, "source", {"provider": hit.provider, "source_fmt": hit.source_fmt,
-                                                         "attempt_id": hit.attempt_id})
-        self.store.add_evidence(track_id, "recording_match", {"status": fp.status, "score": fp.score, "offset_s": fp.offset_s,
-                                                              "reference": fp.reference, "reason": fp.reason})
-        if fp.track:
-            self.store.add_evidence(track_id, "fingerprint", {"frames": fp.track, "fps": FPS})
+        """What the filed file was checked against; see `_evidence_pairs`."""
+        for kind, value in _evidence_pairs(fp, hit):
+            self.store.add_evidence(track_id, kind, value)

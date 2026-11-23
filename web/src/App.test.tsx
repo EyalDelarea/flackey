@@ -87,6 +87,23 @@ describe('reconnect and a live Soulseek connection', () => {
   })
 })
 
+describe('the music drive banner', () => {
+  it('stays up while the drive is unplugged, with no dismiss, and goes when it is back', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: true,
+      library_drive: { connected: false, name: 'WD', waiting: 2 } }))
+    render(<App />)
+    const text = "Your music drive (WD) isn't connected. 2 tracks are waiting and will be filed when you plug it in."
+    const banner = (await screen.findByText(text)).closest('.banner') as HTMLElement
+    expect(banner).toHaveClass('amber')
+    expect(within(banner).queryByRole('button')).not.toBeInTheDocument()
+
+    act(() => FakeEventSource.last!.emit('status', { library_drive: { connected: false, name: 'WD', waiting: 3 } }))
+    expect(await screen.findByText(/3 tracks are waiting/)).toBeInTheDocument()
+    act(() => FakeEventSource.last!.emit('status', { library_drive: { connected: true, name: null, waiting: 0 } }))
+    await waitFor(() => expect(screen.queryByText(/music drive/)).not.toBeInTheDocument())
+  })
+})
+
 describe('the Telegram banner', () => {
   it('says only the Deezer bot is paused, and that Soulseek keeps going, while Telegram is signed out', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health({ telegram_authorized: false, source_enabled: true }))

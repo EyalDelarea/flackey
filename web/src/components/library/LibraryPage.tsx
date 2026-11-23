@@ -134,6 +134,8 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       await live.refreshLibrary().catch(() => undefined)
       if (result.removed) setNote(`Removed ${plural(result.removed, 'missing file')} from the library.`)
       else if (result.missing) { setNote(null); setMissing(result.missing) }
+      // The same words as the banner, when it is the drive that is gone rather than the folder on it
+      else if (!result.reachable && result.drive) setNote(`Your music drive (${result.drive}) isn't connected, so nothing was changed. Plug it in and refresh again.`)
       else if (!result.reachable) setNote("Your library folder is missing or empty, so nothing was changed. If it is on a drive, plug the drive in and refresh again.")
       else setNote('Library is up to date.')
     } catch (err) {

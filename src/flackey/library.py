@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import ntpath
 import os
 import re
 import shutil
@@ -170,10 +171,28 @@ def refile_path(folder: Path, catalog: CatalogTrack, ext: str) -> Path:
     return folder / _fit_name_bytes(artist, title, ext)
 
 
+class DriveMissing(OSError):
+    """The folder a file was going to is on a drive that is not plugged in (`missing_drive`)."""
+
+    def __init__(self, drive: str):
+        super().__init__(f"the drive {drive} is not connected")
+        self.drive = drive
+
+
+def make_dirs(folder: Path) -> None:
+    """`folder.mkdir(parents=True)`, except on a drive that is not plugged in: there it would create the
+    drive's mount point on the boot disk (or fail on a /Volumes the owner cannot write), so it raises
+    DriveMissing instead and creates nothing."""
+    drive = missing_drive(folder)
+    if drive is not None:
+        raise DriveMissing(drive)
+    folder.mkdir(parents=True, exist_ok=True)
+
+
 def file_track(tmp_path: Path, dest: Path) -> Path:
     if dest.exists():
         raise FileExistsError(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(dest.parent)
     try:
         os.replace(tmp_path, dest)
     except OSError:
@@ -232,11 +251,46 @@ PRUNE_MAX_SHARE = 0.5
 _PLAYLIST_DIR = "Playlists"
 
 
+# Where macOS mounts every drive but the boot disk. A module constant so tests can point it at a folder of
+# their own; nothing on Windows or Linux mounts here.
+VOLUMES = Path("/Volumes")
+
+
+def _drive_present(drive: str) -> bool:
+    """Whether a Windows drive letter ("E:") has a disk behind it right now."""
+    return os.path.exists(drive + "\\")
+
+
+def missing_drive(path: Path) -> str | None:
+    """The name of the drive `path` is on, when that drive is not plugged in; None when it is, and for a
+    folder on the boot disk.
+
+    On a Mac that is a folder under /Volumes/<name> with nothing mounted at /Volumes/<name>. An empty folder
+    standing there is not the drive: it is a mount point left behind on the boot disk, and anything written
+    into it would land on the boot disk and later hide the real drive, which macOS then mounts as
+    "<name> 1". On Windows it is a drive letter with no disk behind it. Nothing here creates anything, so
+    asking is always safe -- which is the point: every `mkdir` of the library asks this first."""
+    if sys.platform == "win32":
+        drive = ntpath.splitdrive(str(path))[0]
+        if len(drive) != 2:          # no drive letter, or a \\server\share path (refused as a library anyway)
+            return None
+        return None if _drive_present(drive) else drive.upper()
+    # Resolved, so a symlink into /Volumes counts and /Volumes/Macintosh HD (a symlink to /) does not
+    real, volumes = Path(os.path.realpath(path)), Path(os.path.realpath(VOLUMES))
+    try:
+        name = real.relative_to(volumes).parts[0]
+    except (ValueError, IndexError):
+        return None
+    return None if os.path.ismount(volumes / name) else name
+
+
 def library_reachable(library_root: Path) -> bool:
     """Whether the library folder is there to be looked in. A drive that is unplugged or a share that is
     offline has no folder at all, or -- when something recreated the mount point on the boot disk -- an
     empty one, holding at most a `Playlists` folder an export put there. Either way a missing file then
     says nothing about whether the owner deleted it."""
+    if missing_drive(library_root) is not None:
+        return False
     try:
         if not library_root.is_dir():
             return False

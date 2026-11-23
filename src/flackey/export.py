@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .library import sanitize
+from .library import make_dirs, sanitize
 from .models import Playlist, Track
 from .store import Store
 
@@ -48,7 +48,7 @@ def build_m3u8(playlist: Playlist, tracks: dict[int, Track]) -> str:
 
 
 def _write_text(out: Path, text: str) -> Path:
-    out.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(out.parent)
     tmp = out.with_name(out.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(out)  # a reader (Rekordbox import) never sees a half-written file

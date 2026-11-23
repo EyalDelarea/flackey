@@ -24,6 +24,7 @@ import type { UsageStatsChoice } from './components/UsageStatsAsk'
 import { useLive } from './live'
 import type { Live } from './live'
 import { insetTitlebar, PlatformContext } from './platform'
+import { driveBannerText } from './presentation'
 import { durationBucket, optIn, SETUP_STEPS, track } from './telemetry'
 import type { SetupStepName, StepAction } from './telemetry'
 
@@ -179,6 +180,10 @@ function AppBody({ live }: { live: Live }) {
     const at = live.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     banners.push(<Banner key="reconnecting" tone="amber" text={`Reconnecting to Flackey… Last update ${at}. What you see is from then.`} />)
   }
+  // No dismiss: it stays for as long as the drive is unplugged, because until then nothing new reaches the
+  // library. Searching and downloading carry on; only filing waits.
+  const driveText = driveBannerText(h?.library_drive)
+  if (driveText) banners.push(<Banner key="drive" tone="amber" text={driveText} />)
   // Only the bot stops: Soulseek has nothing to do with Telegram and keeps downloading. The old line,
   // "Reconnect to keep digging", was true when the whole worker waited on Telegram, which it no longer does.
   // Not "signed out" when Telegram simply did not answer: telling a signed-in owner to sign in sends them

@@ -1,4 +1,4 @@
-import type { Bundle, Candidate, FetchProgress, Platform, Playlist, Request, RequestState } from './api'
+import type { Bundle, Candidate, FetchProgress, LibraryDrive, Platform, Playlist, Request, RequestState } from './api'
 import { candidatePreviewUrl, referenceAudioUrl, rejectedAudioUrl, spectrogramUrl } from './api'
 import { revealLabel } from './platform'
 
@@ -121,6 +121,14 @@ export interface PresentOpts {
 /** "1 track", "3 tracks": every count the page prints beside a noun goes through here, so none of them
  *  reads "1 tracks". `many` for the nouns that do not just take an s. */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
+/** The banner while the library's drive is unplugged, or null while it is plugged in (or not known yet).
+ *  Says how many checked tracks are waiting, since those are what the owner gets back by plugging it in. */
+export function driveBannerText(d: LibraryDrive | null | undefined): string | null {
+  if (!d || d.connected) return null
+  const head = `Your music drive (${d.name ?? 'external drive'}) isn't connected.`
+  if (!d.waiting) return `${head} New tracks will wait and be filed when you plug it in.`
+  return `${head} ${plural(d.waiting, 'track')} ${d.waiting === 1 ? 'is' : 'are'} waiting and will be filed when you plug it in.`
+}
 export const mmss = (s: number | null | undefined) => s == null ? '?:??' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
 // `done` is the last index, not one past it: the old value indexed past STEPS, so the Done rung could never
@@ -129,13 +137,14 @@ export const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)}
 // So on a Soulseek row -- which skips VERIFYING outright, having verified inside the attempt -- Verify is
 // amber for the seconds the file is being tagged and moved. The row's own words say "Tagging and filing"
 // while it is, and the rung behind it has been reached; the alternative reads as finished when it is not.
-const STEP_OF: Partial<Record<RequestState, number>> = { queued: 0, identifying: 0, awaiting_review: 1, fetching: 2, verifying: 3, filing: 3, done: 4, duplicate: 4 }
+const STEP_OF: Partial<Record<RequestState, number>> = { queued: 0, identifying: 0, awaiting_review: 1, fetching: 2, verifying: 3, filing: 3, waiting_for_drive: 3, done: 4, duplicate: 4 }
 const COMPLETE: RequestState[] = ['done', 'duplicate']
 const SOURCE_LABEL: Record<string, string> = { soulseek: 'Soulseek', deezer: 'Deezer', deezer_bot: 'Deezer' }
 const sourceLabel = (s: string | null | undefined) => s ? SOURCE_LABEL[s] ?? s : null
 export const stepIndex = (state: RequestState): number | null => STEP_OF[state] ?? null
 const BUCKET_OF: Record<RequestState, Bucket> = {
   queued: 'progress', identifying: 'progress', fetching: 'progress', verifying: 'progress', filing: 'progress',
+  waiting_for_drive: 'progress',
   awaiting_review: 'needs',
   done: 'done', duplicate: 'done',
   rejected: 'failed', not_found: 'failed', error: 'failed', cancelled: 'failed',
@@ -156,7 +165,7 @@ const STAGE_OF: Record<RequestState, Stage | null> = {
   queued: 'search', identifying: 'search',
   awaiting_review: 'choose',
   fetching: 'download',
-  verifying: 'verify', filing: 'verify',
+  verifying: 'verify', filing: 'verify', waiting_for_drive: 'verify',
   done: null, duplicate: null,
   not_found: 'search', rejected: 'verify', cancelled: 'stopped',
   error: 'unknown',          // the failed_stage column overrides this whenever it has an answer
@@ -168,10 +177,11 @@ const isStage = (s: string | null | undefined): s is Stage => s != null && (STAG
 /** The one answer to "where is this track". Both tabs and all three widgets ask it here.
  *  A freshly queued request is about to search; a re-queued one is parked, and calling that "searching" is
  *  the claim this whole axis exists to correct -- both the quick RETRY_BACKOFF_S ladder and the 6 h
- *  `_wait_for_soulseek` park land in `waiting`, because neither is doing anything. */
+ *  `_wait_for_soulseek` park land in `waiting`, because neither is doing anything. So does a checked track
+ *  waiting for the library's drive to be plugged in. */
 export const stageOf = (r: Request): Stage | null =>
   r.state === 'error' ? (isStage(r.failed_stage) ? r.failed_stage : 'unknown')
-    : r.state === 'queued' && r.retry_after ? 'waiting'
+    : (r.state === 'queued' && r.retry_after) || r.state === 'waiting_for_drive' ? 'waiting'
       : STAGE_OF[r.state]
 
 /** What the list is narrowed to. `Bucket` and `Stage` share no value, so one predicate picks the right
@@ -199,6 +209,7 @@ export const matchesFilter = (r: Request, filter: Filter): boolean =>
 export type Finality = 'open' | 'retryable' | 'stopped' | 'final'
 const FINALITY_OF: Record<RequestState, Finality> = {
   queued: 'open', identifying: 'open', awaiting_review: 'open', fetching: 'open', verifying: 'open', filing: 'open',
+  waiting_for_drive: 'open',
   done: 'final', duplicate: 'final',
   error: 'retryable', not_found: 'retryable',
   rejected: 'final', cancelled: 'stopped',
@@ -407,6 +418,8 @@ function stepsFor(r: Request): StepView[] | null {
   const dot = (n: number): Dot =>
     COMPLETE.includes(state) ? 'done'
       : state === 'queued' ? (parked && n === 0 ? 'paused' : 'pending')
+        // Checked and tagged: only the move into the library is left, and it waits for the drive
+        : state === 'waiting_for_drive' ? (n <= i ? 'done' : 'paused')
         : n < i ? 'done' : n === i ? 'current' : 'pending'
   const rungs = STEPS.map((name, n) => ({ name, state: dot(n) }))
   return skipsChoice(r) ? rungs.filter(s => s.name !== 'Choose') : rungs
@@ -766,6 +779,11 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
       }
       break
     }
+    case 'waiting_for_drive':
+      // No Stop: the file is downloaded and checked, and it is filed the moment the drive is back
+      v.status = 'Downloaded and checked · waiting for your music drive to be plugged in'
+      v.statusTone = 'amber'
+      break
     case 'awaiting_review': {
       v.status = `Needs your choice — ${r.flag_reason || 'more than one version matches'}. Pick the version you want.`
       v.statusTone = 'amber'; v.washed = true

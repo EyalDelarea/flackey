@@ -192,6 +192,11 @@ class Store:
         # With a `no_pick` verdict, whether every search in the pass came back empty (`set_lossless_verdict`).
         # NULL with any other verdict, and on rows from before the column until first read.
         self._ensure_column("requests", "lossless_no_results", "INTEGER")
+        # A checked, tagged track kept in the data folder while the library's drive is unplugged
+        # (`RequestState.WAITING_FOR_DRIVE`): where the file is, and what filing it still has to write, as
+        # JSON. NULL on every other row, and cleared once the track is filed.
+        self._ensure_column("requests", "drive_wait_path", "TEXT")
+        self._ensure_column("requests", "drive_wait_filing", "TEXT")
         # The column was added with a DEFAULT of 0, which is a lie about any request that is parked right
         # now: being in awaiting_review *is* the record that it was sent for review. Without this the rung
         # would disappear from under the owner the moment they answered the question they came back to.
@@ -241,7 +246,7 @@ class Store:
     # Columns `Request` does not carry. The queue endpoint sends every field of every Request to the page on
     # each refresh, and these are worker-only: read them through their own methods below.
     _WORKER_COLUMNS = ("interpretations", "interpret_class", "interpret_reading", "lossless_verdict",
-                       "lossless_no_results")
+                       "lossless_no_results", "drive_wait_path", "drive_wait_filing")
 
     def _row_to_request(self, r: sqlite3.Row) -> Request:
         d = dict(r)
@@ -317,6 +322,28 @@ class Store:
         if flag_reason is not None:
             fields["flag_reason"] = flag_reason
         self.update_request(request_id, **fields)
+
+    def wait_for_drive(self, request_id: int, path: Path, filing: dict) -> None:
+        """Park a checked track until the library's drive is back: the file at `path`, and `filing`, what
+        filing it still has to do (`worker.filing.Filing`)."""
+        self.update_request(request_id, state=RequestState.WAITING_FOR_DRIVE, drive_wait_path=str(path),
+                            drive_wait_filing=json.dumps(filing))
+
+    def waiting_for_drive(self) -> list[tuple[Request, Path, dict]]:
+        """Every request waiting for the drive, oldest first, with its waiting file and what filing it needs."""
+        rows = self.conn.execute("SELECT * FROM requests WHERE state=? ORDER BY id ASC",
+                                 (str(RequestState.WAITING_FOR_DRIVE),)).fetchall()
+        return [(self._row_to_request(r), Path(r["drive_wait_path"] or ""), json.loads(r["drive_wait_filing"] or "{}"))
+                for r in rows]
+
+    def count_waiting_for_drive(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) FROM requests WHERE state=?",
+                                     (str(RequestState.WAITING_FOR_DRIVE),)).fetchone()[0])
+
+    def clear_drive_wait(self, request_id: int) -> None:
+        """Forget the waiting file and its filing record, once the track is filed (or found a duplicate)."""
+        self.conn.execute("UPDATE requests SET drive_wait_path=NULL, drive_wait_filing=NULL WHERE id=?", (request_id,))
+        self.conn.commit()
 
     def reset_inflight(self) -> int:
         marks = ",".join("?" * len(INFLIGHT_STATES))

@@ -288,6 +288,12 @@ class Settings(BaseSettings):
         one is emptied on every pass by design, and these have to survive until the owner has listened."""
         return self.data_dir / "rejected"
 
+    @property
+    def drive_wait_dir(self) -> Path:
+        """Checked, tagged tracks waiting for the library's drive to be plugged back in. Not under
+        `tmp_dir`, which is emptied on every pass and at startup."""
+        return self.data_dir / "waiting-for-drive"
+
 
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 
