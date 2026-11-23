@@ -1,3 +1,4 @@
+import HelpTag from '../HelpTag'
 import { selectionKeys } from './selectionKeys'
 import { plural, type Filter } from '../../presentation'
 
@@ -10,23 +11,37 @@ interface Chip {
   /** Left out at zero. On a fresh database `Unknown` and `Choose` are always zero, and a permanent
    *  `Unknown 0` is noise in a bar whose whole job is saying where things went. */
   hideAtZero?: boolean
+  /** What the chip counts, on the app's own help tag (the Mac window shows no `title`). Per chip, not per
+   *  key: `search` is a track doing something on one tab and where it stopped on the other. */
+  tip?: string
 }
 /* One table, both tabs, one vocabulary -- the same `Stage` keys read at two points in time. Only the words
    differ: on the active tab a stage is what a track is doing ("Searching"), on the Failed tab it is where
    it stopped ("Search"). Active order is pipeline order, so the chips read as the ladder the rows draw. */
 const CHIPS: Chip[] = [
   { key: 'all', label: 'All', views: ['active', 'history', 'failed'] },
-  { key: 'search', label: 'Searching', views: ['active'] },
-  { key: 'choose', label: 'Needs you', tone: 'amber', views: ['active'] },
-  { key: 'download', label: 'Downloading', views: ['active'] },
-  { key: 'verify', label: 'Verifying', views: ['active'] },
-  { key: 'waiting', label: 'Waiting', tone: 'amber', views: ['active'], divided: true },
-  { key: 'search', label: 'Search', tone: 'amber', views: ['failed'] },
-  { key: 'choose', label: 'Choose', tone: 'amber', views: ['failed'], hideAtZero: true },
-  { key: 'download', label: 'Download', tone: 'red', views: ['failed'] },
-  { key: 'verify', label: 'Verify', tone: 'purple', views: ['failed'] },
-  { key: 'stopped', label: 'Stopped', views: ['failed'] },
-  { key: 'unknown', label: 'Unknown', views: ['failed'], hideAtZero: true },
+  { key: 'search', label: 'Searching', views: ['active'],
+    tip: 'Working out which track this is.' },
+  { key: 'choose', label: 'Needs you', tone: 'amber', views: ['active'],
+    tip: 'More than one copy could fit. Waiting for you to pick.' },
+  { key: 'download', label: 'Downloading', views: ['active'],
+    tip: 'Getting a copy, from Soulseek first, then Deezer.' },
+  { key: 'verify', label: 'Verifying', views: ['active'],
+    tip: 'Checking the file, then filing it in your library.' },
+  { key: 'waiting', label: 'Waiting', tone: 'amber', views: ['active'], divided: true,
+    tip: 'Not working right now: waiting to try again.' },
+  { key: 'search', label: 'Search', tone: 'amber', views: ['failed'],
+    tip: 'Nothing to download turned up, or it stopped while searching.' },
+  { key: 'choose', label: 'Choose', tone: 'amber', views: ['failed'], hideAtZero: true,
+    tip: 'Stopped with an error while waiting for your pick.' },
+  { key: 'download', label: 'Download', tone: 'red', views: ['failed'],
+    tip: 'Stopped with an error while getting a copy.' },
+  { key: 'verify', label: 'Verify', tone: 'purple', views: ['failed'],
+    tip: 'Failed the quality check, or stopped while checking or filing.' },
+  { key: 'stopped', label: 'Stopped', views: ['failed'],
+    tip: 'You stopped these. Retry all leaves them alone.' },
+  { key: 'unknown', label: 'Unknown', views: ['failed'], hideAtZero: true,
+    tip: "Stopped with an error at a step Flackey didn't record." },
   { key: 'done', label: 'Done', views: ['history'] },
   { key: 'failed', label: 'Failed', tone: 'red', views: ['history'] },
 ]
@@ -57,12 +72,13 @@ export default function FilterBar({ filter, counts, onFilter, onClearFailed, vie
       {chips.map(c => {
         const count = counts[c.key]
         const toned = c.tone && count > 0 ? ` ${c.tone}` : ''
+        const chip = <button className="chip" role="radio" aria-checked={filter === c.key} tabIndex={filter === c.key ? 0 : -1} onClick={() => onFilter(c.key)}>
+          {c.label} <span className={`count${toned}`}>{count}</span>
+        </button>
         return (
           <span className="stage-option" key={c.label}>
             {c.divided && <span className="chip-divider" aria-hidden="true" />}
-            <button className="chip" role="radio" aria-checked={filter === c.key} tabIndex={filter === c.key ? 0 : -1} onClick={() => onFilter(c.key)}>
-              {c.label} <span className={`count${toned}`}>{count}</span>
-            </button>
+            {c.tip ? <HelpTag text={c.tip}>{chip}</HelpTag> : chip}
           </span>
         )
       })}
