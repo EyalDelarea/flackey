@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import RequestRow from './RequestRow'
 import { plural, type GroupView, type RowAction, type Stage } from '../../presentation'
 import type { PlayerState } from './DownloadPage'
@@ -31,14 +32,28 @@ interface Props {
   whyOpen: Set<number>
   onAction: (kind: RowAction['kind'], rowId: number, path?: string) => void
   onChoose: (rowId: number, cid: number) => void
+  /** Stop every row that has not started yet: the folded "N more up next" line's Stop all. */
+  onStopAll?: (ids: number[]) => void
   /** Get extended for every row of the batch with one on offer, one after another (issue #187). */
   onGetAllExtended?: (ids: number[]) => void
   /** Passed straight through to the rows: the page owns the one audio element, the group only
    *  hands it down. */
   player: PlayerState; onPlay: (key: string, url: string) => void
 }
-export default function Group({ g, view, whyOpen, onAction, onChoose, onGetAllExtended, player, onPlay }: Props) {
+export default function Group({ g, view, whyOpen, onAction, onChoose, onStopAll, onGetAllExtended, player, onPlay }: Props) {
   const s = g.summary
+  const [showUpNext, setShowUpNext] = useState(false)
+  /* A 21-track album used to open as 21 identical "Next in line" rows, and the first screen showed none of
+     the tracks actually doing something. The ones that have not started fold into one line at the bottom;
+     each comes back in its place the moment it starts, because it then stops being "up next". One alone
+     stays a row: a line saying "1 more up next" takes the same room and says less. */
+  const upNext = view === 'active' ? g.rows.filter(r => r.pill?.kind === 'upnext') : []
+  const fold = upNext.length > 1
+  // Once the fold goes (one or none left to start) it is closed, so a later fold comes back folded.
+  if (!fold && showUpNext) setShowUpNext(false)
+  const rows = fold ? g.rows.filter(r => r.pill?.kind !== 'upnext') : g.rows
+  const row = (r: GroupView['rows'][number]) => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction}
+    onChoose={onChoose} player={player} onPlay={onPlay} />
   // Offered, and not already being fetched: a press while some are running takes only the rest.
   const offered = g.rows.filter(r => r.extendedOffer?.state === 'offer')
   const waiting = offered.filter(r => !r.extendedOffer!.busy)
@@ -86,8 +101,16 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onGetAllEx
         <span className="group-shown" aria-hidden="true">{g.rows.length.toLocaleString()} shown</span>
       </div>
       <p className="group-scope visually-hidden">Showing {view === 'active' ? plural(g.rows.length, 'download') : plural(g.rows.length, view === 'failed' ? 'failed track' : 'history track')} matching this filter</p>
-      <div className="group">{g.rows.map(r => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction} onChoose={onChoose}
-        player={player} onPlay={onPlay} />)}</div>
+      <div className="group">
+        {rows.map(row)}
+        {fold && <div className="row upnext-fold">
+          <span className="upnext-count" aria-hidden="true">{upNext.length}</span>
+          <span className="upnext-text"><b>{upNext.length} more up next</b> · they start as slots free up</span>
+          <button className="btn-link" aria-expanded={showUpNext} onClick={() => setShowUpNext(o => !o)}>{showUpNext ? 'Hide' : 'Show'}</button>
+          {onStopAll && <button className="btn-link" onClick={() => onStopAll(upNext.map(r => r.id))}>Stop all</button>}
+        </div>}
+        {fold && showUpNext && upNext.map(row)}
+      </div>
     </section>
   )
 }

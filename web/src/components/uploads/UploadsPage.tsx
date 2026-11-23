@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api'
-import type { SharingState, UploadFeed } from '../../api'
+import type { SharingState, Upload, UploadFeed } from '../../api'
 import Banner from '../Banner'
+import Icon from '../Icon'
 import Toolbar from '../Toolbar'
 
 
@@ -10,6 +11,67 @@ const size = (b: number) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ?
   : b >= 1e3 ? `${Math.round(b / 1e3)} kB` : `${b} B`
 const rate = (bps: number) => bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} kB/s`
 const POLL_MS = 4000
+/** Rows a person's group shows before "+ N more": enough to see what they took, short enough that a second
+ *  person is still on the first screen. */
+const FIRST = 4
+
+const finished = (u: Upload) => u.state.includes('Completed')
+const succeeded = (u: Upload) => u.state.includes('Succeeded')
+interface Person { peer: string; uploads: Upload[]; size: number; sending: boolean }
+/** One group per person, in the order the feed first names them -- except that anyone with a file sending
+ *  right now comes first, since that is the only part of the page that is moving. */
+function byPerson(uploads: Upload[]): Person[] {
+  const map = new Map<string, Person>()
+  for (const u of uploads) {
+    const p = map.get(u.peer) ?? { peer: u.peer, uploads: [], size: 0, sending: false }
+    p.uploads.push(u); p.size += u.size; p.sending ||= !finished(u)
+    map.set(u.peer, p)
+  }
+  const all = [...map.values()]
+  return [...all.filter(p => p.sending), ...all.filter(p => !p.sending)]
+}
+
+/* A person and what they took (polish idea B). The rows used to repeat the name, draw a full green bar and
+   say "Succeeded" on every line, about 72px each, so nine uploads filled the window. Now a finished file is
+   one line -- name, size, a tick -- and the bar is drawn only while a file is actually sending. A finished
+   transfer that did not succeed says how it ended (Errored, Cancelled, ...) where the tick would be. */
+function PersonGroup({ person }: { person: Person }) {
+  const [all, setAll] = useState(false)
+  // Sending files first inside the group too, so a live bar is never hidden behind "+ N more".
+  const live = person.uploads.filter(u => !finished(u))
+  const ordered = [...live, ...person.uploads.filter(finished)]
+  // Every unfinished file is shown however many there are: only finished ones fold behind "+ N more".
+  const limit = Math.max(FIRST, live.length)
+  const shownRows = all ? ordered : ordered.slice(0, limit)
+  const more = ordered.length - shownRows.length
+  const n = person.uploads.length
+  return (<section className="up-person">
+    <div className="up-head"><span className="who">{person.peer}</span>
+      <span className="up-meta">{n} {n === 1 ? 'file' : 'files'} · {size(person.size)}</span></div>
+    <div className="group">
+      {shownRows.map((u, i) => {
+        const done = finished(u)
+        return (<div key={u.id ?? `${u.peer}-${i}`} className={`up-row${done ? ' done' : ' sending'}`}>
+          <div className="what">
+            <span className="f">{u.file}</span>
+            {!done && u.folder && <span className="d">{u.folder}</span>}
+          </div>
+          {!done && <>
+            <div className="up-bar"><span style={{ width: `${u.pct}%` }} /></div>
+            <span className="hd">{`${u.pct}% · ${rate(u.speed_bps)}`}</span>
+          </>}
+          <span className="hs">{size(u.size)}</span>
+          {/* The tick's slot is kept on a sending row too, so every size lines up down the group */}
+          {!done ? <span className="ok" aria-hidden="true" />
+            : succeeded(u) ? <span className="ok" aria-label="Sent"><Icon name="check" size={12} /></span>
+            : <span className="end">{u.state.replace('Completed, ', '')}</span>}
+        </div>)
+      })}
+      {ordered.length > limit && <button className="btn-link up-more" onClick={() => setAll(a => !a)}>
+        {all ? 'Show fewer' : `+ ${more} more`}</button>}
+    </div>
+  </section>)
+}
 
 /** Who is pulling from the shared library. Every string on this page - peer names, file and folder names -
  *  was chosen by a peer or by whoever named the file on disk. It is rendered as text and never acted on. */
@@ -43,6 +105,7 @@ export default function UploadsPage() {
   }, [load])
 
   const s = feed?.summary
+  const people = byPerson(feed?.uploads ?? [])
   return (<>
     <Toolbar><h1>Uploads</h1></Toolbar>
     {error && <Banner tone="red" text={error} />}
@@ -62,23 +125,7 @@ export default function UploadsPage() {
       {feed && feed.enabled && feed.uploads.length === 0 && !feed.error && (
         <p className="empty">Nobody has downloaded from you yet. Soulseek works both ways — leave the app running
           and peers can pull from your library, which is what keeps you in good standing.</p>)}
-      {feed?.uploads.map((u, i) => {
-        const done = u.state.includes('Completed')
-        return (
-          <div key={u.id ?? `${u.peer}-${i}`} className={`up-row${done ? ' done' : ''}`}>
-            <div className="who">{u.peer}</div>
-            <div className="what">
-              <div className="f">{u.file}</div>
-              {u.folder && <div className="d">{u.folder}</div>}
-            </div>
-            <div className="up-bar"><span style={{ width: `${u.pct}%` }} /></div>
-            <div className="how">
-              <span className="hd">{done ? u.state.replace('Completed, ', '') : `${u.pct}% · ${rate(u.speed_bps)}`}</span>
-              <span className="hs">{size(u.size)}</span>
-            </div>
-          </div>
-        )
-      })}
+      {people.map(p => <PersonGroup key={p.peer} person={p} />)}
     </div>
   </>)
 }

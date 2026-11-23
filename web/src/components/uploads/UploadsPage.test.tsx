@@ -100,3 +100,45 @@ it('does not let a slow, older answer replace a newer one, or land after the pag
     unmount()
   } finally { vi.useRealTimers() }
 })
+
+const up = (over: Partial<import('../../api').Upload>) => ({ id: null, peer: 'robsono', file: 'x.aiff', folder: 'DJ Library', size: 72_000_000,
+  bytes: 72_000_000, pct: 100, state: 'Completed, Succeeded', speed_bps: 0, started_at: null, ended_at: null, ...over })
+
+it('groups uploads by person: one header with the count and total, compact finished rows, a bar only while sending', async () => {
+  const uploads = [
+    ...Array.from({ length: 6 }, (_, i) => up({ id: `r${i}`, file: `Track ${i}.aiff` })),
+    up({ id: 'r6', file: 'Rezonate.aiff', state: 'Completed, Errored' }),
+    up({ id: 'p1', peer: 'peer-alpha', file: 'Orphic Thrench.aiff', folder: 'Hallucinogen', size: 51_000_000, bytes: 25_500_000,
+         pct: 50, state: 'InProgress', speed_bps: 3_400_000 }),
+  ]
+  serve(feed({ uploads, summary: { total: 8, active: 1, completed: 7, peers: 2, bytes: 0 } }))
+  const { container } = render(<UploadsPage />)
+  await waitFor(() => expect(screen.getByText('robsono')).toBeInTheDocument())
+  // Named once per person, not on every row, and whoever is sending right now comes first.
+  expect(screen.getAllByText('robsono')).toHaveLength(1)
+  const heads = [...container.querySelectorAll('.up-head .who')].map(e => e.textContent)
+  expect(heads).toEqual(['peer-alpha', 'robsono'])
+  expect(screen.getByText('7 files · 504 MB')).toBeInTheDocument()
+  // Only the sending file draws a bar; finished ones get a tick, and a failed one says how it ended.
+  expect(container.querySelectorAll('.up-bar')).toHaveLength(1)
+  expect(screen.queryByText('Succeeded')).not.toBeInTheDocument()
+  // Four rows, then the rest behind "+ N more".
+  expect(screen.queryByText('Track 4.aiff')).not.toBeInTheDocument()
+  screen.getByRole('button', { name: '+ 3 more' }).click()
+  await waitFor(() => expect(screen.getByText('Track 4.aiff')).toBeInTheDocument())
+  expect(screen.getAllByLabelText('Sent')).toHaveLength(6)
+  expect(screen.getByText('Errored')).toBeInTheDocument()
+})
+
+it('never hides a live upload behind "+ N more", however many one person has going', async () => {
+  const uploads = [
+    ...Array.from({ length: 6 }, (_, i) => up({ id: `s${i}`, file: `Live ${i}.aiff`, pct: 10 * i, bytes: 1, state: 'InProgress', speed_bps: 1e6 })),
+    ...Array.from({ length: 3 }, (_, i) => up({ id: `d${i}`, file: `Done ${i}.aiff` })),
+  ]
+  serve(feed({ uploads, summary: { total: 9, active: 6, completed: 3, peers: 1, bytes: 0 } }))
+  const { container } = render(<UploadsPage />)
+  await waitFor(() => expect(screen.getByText('Live 5.aiff')).toBeInTheDocument())
+  expect(container.querySelectorAll('.up-bar')).toHaveLength(6)
+  expect(screen.queryByText('Done 0.aiff')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '+ 3 more' })).toBeInTheDocument()
+})

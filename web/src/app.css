@@ -396,16 +396,23 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .up-stat { display: flex; flex-direction: column; gap: 2px; }
 .up-stat .n { font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
 .up-stat .k { font-size: 11px; color: var(--secondary); }
-.up-row { display: flex; align-items: center; gap: 12px; padding: 9px 20px; border-top: .5px solid var(--sep); }
-.up-row .who { flex: none; width: 150px; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.up-row .what { flex: 1; min-width: 0; }
-.up-row .what .f { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.up-row .what .d { font-size: 11px; color: var(--tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.up-row .how { flex: none; width: 130px; display: flex; flex-direction: column; align-items: flex-end; text-align: right; font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
-.up-row .how .hs { color: var(--tertiary); }
+.up-person { display: flex; flex-direction: column; gap: 6px; }
+.up-head { display: flex; align-items: baseline; gap: 8px; padding: 0 2px; }
+.up-head .who { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-head .up-meta { flex: none; font-size: 11.5px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.up-row { display: flex; align-items: center; gap: 12px; min-height: 34px; padding: 6px 12px; border-top: .5px solid var(--sep);
+  font-size: 12px; font-variant-numeric: tabular-nums; }
+.up-row:first-child { border-top: 0; }
+.up-row .what { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.up-row .what .f { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-row .what .d { flex: none; max-width: 40%; font-size: 11px; color: var(--tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-row .hd { flex: none; font-size: 11px; color: var(--secondary); }
+.up-row .hs { flex: none; width: 56px; text-align: right; font-size: 11px; color: var(--tertiary); }
+.up-row .ok { flex: none; width: 14px; display: inline-flex; color: var(--green); }
+.up-row .end { flex: none; font-size: 11px; color: var(--secondary); }
 .up-bar { flex: none; width: 90px; height: 3px; border-radius: 2px; background: var(--selection); overflow: hidden; }
 .up-bar span { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-.up-row.done .up-bar span { background: var(--green); }
+.btn-link.up-more { display: block; padding: 7px 12px; font-size: 12px; border-top: .5px solid var(--sep); width: 100%; text-align: left; }
 .artwork { width: 36px; height: 36px; flex: none; border-radius: 4px; object-fit: cover; background: linear-gradient(135deg, #47608A, #1C2536); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15); }
 .artwork.sm { width: 28px; height: 28px; }
 .artwork.rejected { display: grid; place-items: center; color: var(--red); background: var(--red-wash); font-size: 16px; }
@@ -1014,3 +1021,13 @@ button.sidebar-footer:hover { background: color-mix(in srgb, var(--selection) 50
 .rekordbox-tip .btn-link { font-size: 11.5px; }
 .rekordbox-tip .sep { color: var(--tertiary); }
 .banner .dismiss:hover, .rekordbox-tip .btn-link.muted:hover { color: var(--text); }
+
+/* The tracks of a group that have not started, folded into one line at its foot (polish idea A). It lines
+   up with the rows above it: the count sits in the artwork column, the words where a title would be. */
+.row.upnext-fold { flex-direction: row; align-items: center; gap: 12px; padding: 10px 12px; background: var(--alt);
+  font-size: 12px; color: var(--secondary); }
+.upnext-fold .upnext-count { flex: none; width: 36px; text-align: center; font-size: 13px; font-weight: 600; color: var(--secondary);
+  font-variant-numeric: tabular-nums; }
+.upnext-fold .upnext-text { flex: 1; min-width: 0; }
+.upnext-fold .upnext-text b { font-weight: 500; color: var(--text); }
+.upnext-fold .btn-link { font-size: 12px; }
