@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
     paths: ["site/**", ".github/workflows/pages.yml"]
+  # Daily, so the download count baked into the page never drifts far behind.
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -26,6 +29,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Bakes the current "Over N downloads" total into the page so it shows without
+      # JavaScript or when the browser's API lookup fails. Counts the same assets as
+      # site.js (.pkg, .exe, .zip). Any failure keeps the number already in the HTML.
+      - name: Bake download count
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          total=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '[.[].assets[] | select(.name | test("\\.(pkg|exe|zip)$"; "i")) | .download_count] | add // 0' \
+            | awk '{ s += $1 } END { print s + 0 }') || { echo "::warning::count lookup failed, keeping the baked number"; exit 0; }
+          rounded=$(( total / 10 * 10 ))
+          echo "Download total $total, showing $rounded"
+          if [ "$rounded" -ge 10 ]; then
+            sed -i -E "s/(id=\"download-count\">Over )[0-9]+( downloads)/\1${rounded}\2/" site/index.html
+            grep -q "Over ${rounded} downloads" site/index.html || echo "::warning::download count line not found"
+          fi
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: site

@@ -1454,3 +1454,62 @@ if (trackWave) {
     }).observe(trackWave);
   }
 }
+
+// "Over N downloads": every installer and in-app update package ever served (.pkg, .exe,
+// .zip), rounded down to a ten. Checksums, signatures and latest.json are background
+// fetches, not downloads. The HTML already holds a number baked in at deploy time, so this
+// only refreshes it; a failed or odd lookup leaves that line as it is. The total is cached
+// for six hours so repeat visits stay well inside the API's 60 unauthenticated requests an hour.
+{
+  const countLine = document.querySelector("#download-count");
+  const CACHE_KEY = "flackey-download-count";
+  const CACHE_MS = 6 * 60 * 60 * 1000;
+  const PAGE_SIZE = 100;
+  const COUNTED = /\.(pkg|exe|zip)$/i;
+
+  const show = (total) => {
+    const rounded = Math.floor(total / 10) * 10;
+    if (countLine && Number.isFinite(rounded) && rounded >= 10)
+      countLine.textContent = `Over ${rounded} downloads`;
+  };
+
+  const readCache = () => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
+      if (cached && Date.now() - cached.at < CACHE_MS && Number.isFinite(cached.total))
+        return cached.total;
+    } catch {}
+    return null;
+  };
+
+  const fetchTotal = async () => {
+    let total = 0;
+    for (let page = 1; page <= 20; page++) {
+      const response = await fetch(
+        `https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=${PAGE_SIZE}&page=${page}`,
+      );
+      if (!response.ok) throw new Error(`Download count lookup failed: ${response.status}`);
+      const releases = await response.json();
+      if (!Array.isArray(releases)) throw new Error("Unexpected releases response");
+      for (const item of releases)
+        for (const asset of item.assets || [])
+          if (COUNTED.test(asset.name || "")) total += Number(asset.download_count) || 0;
+      if (releases.length < PAGE_SIZE) break;
+    }
+    return total;
+  };
+
+  if (countLine) {
+    const cached = readCache();
+    if (cached !== null) show(cached);
+    else
+      fetchTotal()
+        .then((total) => {
+          show(total);
+          try {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), total }));
+          } catch {}
+        })
+        .catch(() => {});
+  }
+}

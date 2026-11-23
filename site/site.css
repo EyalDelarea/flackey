@@ -2395,6 +2395,10 @@ h2 {
 .release {
   font-size: 13px;
 }
+/* Sits tight under the version line, as its second half. */
+.download-section .download-count {
+  margin-top: 4px;
+}
 .download-section .download-req strong {
   color: var(--ink);
   font-weight: 600;
