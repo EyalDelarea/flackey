@@ -1,0 +1,45 @@
+# Re-runs a `checks` run whose jobs never got a runner. GitHub cancels a job that waits 15 minutes for a
+# hosted runner ("The job was not acquired by Runner of type hosted even after multiple attempts"); the
+# macOS arm64 pool is short of capacity at times, so pytest (macOS) and the Apple Silicon installer die
+# in the queue without running a line. The run ends red or cancelled although nothing failed. This
+# re-runs those jobs (and what waits on them), twice at most. A job cancelled any other way -- by a
+# person, or by a newer push to a PR -- carries no such message and is left alone.
+name: rerun-unacquired
+
+on:
+  workflow_run:
+    workflows: [checks]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  rerun:
+    name: re-run jobs that never got a runner
+    if: github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+    steps:
+      - name: Re-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          unacquired=0
+          for job in $(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+                         --jq '.jobs[] | select(.conclusion == "cancelled") | .id'); do
+            if gh api "repos/$GH_REPO/check-runs/$job/annotations" --jq '.[].message' \
+                 | grep -q 'was not acquired by Runner'; then
+              echo "job $job never got a runner"
+              unacquired=1
+            fi
+          done
+          if (( unacquired )); then
+            gh run rerun "$RUN_ID" --failed
+          else
+            echo "No job was cancelled in the runner queue; nothing to re-run."
+          fi
