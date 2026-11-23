@@ -458,7 +458,7 @@ it('puts Try now in the button slot of a waiting row, with Stop as a link under 
   const view: RowView = { ...base, status: 'Waiting for Soulseek: nobody sharing it is online', statusTone: 'amber',
     tag: null, dimmed: false, retryInSeconds: 21540, removable: true, stage: 'waiting',
     action: { label: 'Try now', kind: 'tryNow', tip: 'Skip the wait and look for it again now' },
-    stopLink: { label: 'Stop', kind: 'cancel' } }
+    stopLink: { label: 'Stop looking', kind: 'cancel' } }
   render(<RequestRow view={view} onAction={onAction} onChoose={() => {}} {...preview} />)
   expect(screen.getByText('Waiting · 5h 59m')).toBeInTheDocument()
   const tryNow = screen.getByRole('button', { name: 'Try now' })
@@ -467,9 +467,12 @@ it('puts Try now in the button slot of a waiting row, with Stop as a link under 
   expect(tryNow.closest('.row-action')).not.toBeNull()
   fireEvent.click(tryNow)
   expect(onAction).toHaveBeenCalledWith('tryNow', 1, undefined)
-  const stop = screen.getByRole('button', { name: 'Stop Ace Ventura – Rezonate' })
-  expect(stop).toHaveTextContent('Stop')
+  const stop = screen.getByRole('button', { name: 'Stop looking Ace Ventura – Rezonate' })
+  expect(stop).toHaveTextContent('Stop looking')
   expect(stop.closest('.row-text')).not.toBeNull()
+  // A real link (blue), not grey text that does not look pressable
+  expect(stop).toHaveClass('btn-link')
+  expect(stop).not.toHaveClass('muted')
   fireEvent.click(stop)
   expect(onAction).toHaveBeenCalledWith('cancel', 1, undefined)
   // Remove keeps its own slot.

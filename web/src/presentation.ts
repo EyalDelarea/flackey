@@ -367,6 +367,8 @@ function progressOf(b: Bundle, all: FetchProgress[] | null | undefined): Progres
 const IN_FLIGHT: RequestState[] = ['identifying', 'fetching', 'verifying', 'filing']
 /** "Stop", not "Cancel": the button beside a running download, where Cancel reads as "leave this dialog". */
 const STOP: RowAction = { label: 'Stop', kind: 'cancel' }
+/** The same stop, as the link under a waiting row: that row is not downloading, it is looking again later. */
+const STOP_LOOKING: RowAction = { label: 'Stop looking', kind: 'cancel' }
 /** Skips the rest of a backoff wait (`/try-now`): only the wait is cleared -- the attempts already spent and
  *  the looks left stay as they were -- and a row that is no longer waiting is left alone. */
 const TRY_NOW: RowAction = { label: 'Try now', kind: 'tryNow', tip: 'Skip the wait and look for it again now' }
@@ -717,7 +719,7 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
         // been able to stop a parked row, the row just never offered it. It is also the last place to be
         // made to sit, so the rail's button skips the wait and Stop moves to a link under the status.
         v.action = TRY_NOW
-        v.stopLink = STOP
+        v.stopLink = STOP_LOOKING
         const secs = Math.max(0, Math.round((new Date(r.retry_after).getTime() - opts.now.getTime()) / 1000))
         v.retryInSeconds = secs
         const waiting = soulseekWait(r.flag_reason)
@@ -749,7 +751,9 @@ export function presentRow(b: Bundle, opts: PresentOpts): RowView {
     case 'identifying': case 'fetching': case 'verifying': case 'filing': {
       const from = r.state === 'fetching' ? sourceLabel(r.fetch_source) : null
       v.status = PROGRESS_TEXT[r.state]! + (from ? ` from ${from}` : '')
-      v.statusTone = 'amber'
+      // Grey, not amber: amber is kept for the rows that need something -- waiting, parked, a choice to
+      // make. With every healthy row amber too, the two waiting ones in a list of nine disappeared.
+      v.statusTone = 'muted'
       // Verify and file move the finished file into the library; there is no safe moment to stop those,
       // and they are over in seconds. Everything before them can be stopped, which is the point: a
       // download crawling at 100 kB/s from one peer is exactly what an owner wants to be rid of.

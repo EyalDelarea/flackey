@@ -69,7 +69,7 @@ describe('presentRow', () => {
   it('in-progress row carries one ladder: each step names itself and holds its own state', () => {
     // Reviewed, so the whole five-rung ladder is on show and every rung's state can be read at once.
     const v = presentRow(bundle({ state: 'fetching', reviewed: 1 }), opts)
-    expect(v.status).toBe('Downloading the file'); expect(v.statusTone).toBe('amber')
+    expect(v.status).toBe('Downloading the file'); expect(v.statusTone).toBe('muted')
     expect(v.steps).toEqual([
       { name: 'Search', state: 'done' }, { name: 'Choose', state: 'done' }, { name: 'Download', state: 'current' },
       { name: 'Verify', state: 'pending' }, { name: 'Done', state: 'pending' }])
@@ -881,7 +881,7 @@ describe('a queued track', () => {
     expect(v.status).toBe('Previous attempt: video audio unavailable')
     expect(v.retryInSeconds).toBe(60)
     expect(v.action).toMatchObject({ label: 'Try now', kind: 'tryNow' })
-    expect(v.stopLink).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.stopLink).toEqual({ label: 'Stop looking', kind: 'cancel' })
     expect(v.removable).toBe(true)
   })
 
@@ -920,7 +920,7 @@ describe('a queued track', () => {
     // A user had four of these, six hours each, with no Stop and no Remove anywhere on the row. Try now is
     // the rail's button; Stop is still on the row, as a link.
     expect(v.action).toMatchObject({ label: 'Try now', kind: 'tryNow' })
-    expect(v.stopLink).toEqual({ label: 'Stop', kind: 'cancel' })
+    expect(v.stopLink).toEqual({ label: 'Stop looking', kind: 'cancel' })
     expect(v.removable).toBe(true)
   })
 

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import LibraryPage from './LibraryPage'
 import { ApiError, api } from '../../api'
 import type { Bundle, Playlist, Stats } from '../../api'
@@ -53,7 +53,8 @@ it('shows a red banner when api.library fails', async () => {
   render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
   await waitFor(() => expect(screen.getByText('Server error')).toBeInTheDocument())
   expect(screen.getByText('Server error')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('Dismiss'))
+  // The banner's own quiet Dismiss, at its right edge (the Rekordbox tip has one of its own)
+  fireEvent.click(within(screen.getByText('Server error').closest('.banner') as HTMLElement).getByText('Dismiss'))
   expect(screen.queryByText('Server error')).not.toBeInTheDocument()
 })
 
@@ -154,17 +155,17 @@ it('offers Clear filters and explains an empty first library differently from an
   expect(screen.getByLabelText('search library')).toHaveValue('')
 })
 
-it('offers a Rekordbox import guide once tracks exist, pointing at the library folder', async () => {
+it('offers the first-time Rekordbox tip once tracks exist, pointing at the library folder', async () => {
   vi.mocked(api.library).mockResolvedValueOnce([])
   render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
-  await screen.findByText('Ready for Rekordbox')
+  await screen.findByText(/First time\? Drag the library folder/)
 
   vi.mocked(api.reveal).mockResolvedValue({ ok: true })
   fireEvent.click(screen.getByText('Show in Finder'))
   await waitFor(() => expect(api.reveal).toHaveBeenCalledWith('/lib'))
 
-  fireEvent.click(screen.getByText('Got it'))
-  expect(screen.queryByText('Ready for Rekordbox')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByText('Dismiss'))
+  expect(screen.queryByText(/First time\?/)).not.toBeInTheDocument()
 })
 
 it('shows failed and in-progress playlist entries beside the filed tracks', async () => {
@@ -262,4 +263,12 @@ it('says a folder heading count as "3 tracks", with one column header over the f
   // One header, so one actions width: the all-lossless folder makes room for the other's Find lossless too
   const widths = [...container.querySelectorAll<HTMLElement>('.library-folder .table')].map(e => e.style.getPropertyValue('--actions'))
   expect(widths).toEqual(['210px', '210px'])
+})
+
+it('draws no Folder and Format filters over an empty library', async () => {
+  vi.mocked(api.library).mockResolvedValueOnce([])
+  render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await screen.findByText(/Your finished tracks will appear here/)
+  expect(screen.queryByLabelText('Library filters')).not.toBeInTheDocument()
+  expect(screen.queryByText('0 shown')).not.toBeInTheDocument()
 })

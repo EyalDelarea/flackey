@@ -174,12 +174,13 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       {s && <button className="btn-secondary" onClick={() => reveal(s.library_root)}>Open library folder</button>}
     </Toolbar>
     <div className="scroll">
-      {queryError && <Banner tone="red" text={queryError} action={{ label: 'Dismiss', onClick: () => setQueryError(null) }} />}
-      {actionError && <Banner tone="red" text={actionError} action={{ label: 'Dismiss', onClick: () => setActionError(null) }} />}
-      {recheck.error && <Banner tone="red" text={recheck.error} action={{ label: 'Dismiss', onClick: recheck.clearError }} />}
+      {queryError && <Banner tone="red" text={queryError} onDismiss={() => setQueryError(null)} />}
+      {actionError && <Banner tone="red" text={actionError} onDismiss={() => setActionError(null)} />}
+      {recheck.error && <Banner tone="red" text={recheck.error} onDismiss={recheck.clearError} />}
       {recheck.text && <Banner tone="amber" text={recheck.text}
-        action={recheck.running ? { label: 'Stop', onClick: recheck.stop } : { label: 'Dismiss', onClick: recheck.dismiss }} />}
-      {note && <Banner tone="amber" text={note} action={{ label: 'Dismiss', onClick: () => setNote(null) }} />}
+        action={recheck.running ? { label: 'Stop', onClick: recheck.stop } : undefined}
+        onDismiss={recheck.running ? undefined : recheck.dismiss} />}
+      {note && <Banner tone="amber" text={note} onDismiss={() => setNote(null)} />}
       {missing > 0 && !confirmForget && <Banner tone="amber"
         text={`${plural(missing, 'track')} ${missing === 1 ? 'is' : 'are'} no longer in your library folder. Forget them so they can be downloaded again? No files are deleted.`}
         action={{ label: 'Forget them', onClick: () => setConfirmForget(true) }} onDismiss={() => setMissing(0)} />}
@@ -194,24 +195,15 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
       {pl && <PlaylistImportStatus bundles={[...live.bundles.values()]} playlistId={pl.id} filedPositions={pl.track_positions} onRetry={id => {
         api.retry(id).then(() => live.refresh()).catch(err => setActionError(err instanceof ApiError ? err.message : "Couldn't retry this track. Try again."))
       }} />}
-      {!pl && s && s.tracks > 0 && <NewSinceImportCard version={live.libraryVersion} onShowFile={reveal} onError={setActionError} />}
-      {!pl && s && s.tracks > 0 && showRekordboxGuide && (
-        <div className="group pl-card">
-          <span className="pl-icon"><Icon name="folder" size={22} /></span>
-          <div className="how"><h2>Ready for Rekordbox</h2>
-            Drag your library folder into the Rekordbox collection to bring tracks in — Rekordbox skips
-            tracks it already knows, so this is safe to repeat, and it handles BPM and key analysis for you.
-          </div>
-          <button className="btn-secondary" onClick={() => reveal(s.library_root)}>{revealLabel(platform)}</button>
-          <button className="btn-link muted" onClick={dismissRekordboxGuide}>Got it</button>
-        </div>
-      )}
-      <div className="library-filters" aria-label="Library filters">
+      {!pl && s && s.tracks > 0 && <NewSinceImportCard version={live.libraryVersion} onShowFile={reveal} onError={setActionError}
+        guide={showRekordboxGuide ? { revealLabel: revealLabel(platform), onReveal: () => reveal(s.library_root), onDismiss: dismissRekordboxGuide } : null} />}
+      {/* Not over an empty library: "All folders", "All formats" and "0 shown" had nothing to narrow */}
+      {(tracks.length > 0 || filtered) && <div className="library-filters" aria-label="Library filters">
         <label>Folder <span className="picker"><select value={folder} onChange={e => setFolder(e.target.value)}><option value="all">All folders</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
         <label>Format <span className="picker"><select value={format} onChange={e => setFormat(e.target.value)}><option value="all">All formats</option>{formats.map(f => <option key={f} value={f}>{f}</option>)}</select></span></label>
         <span className="counts">{visible.length} shown</span>
         {filtered && <button className="btn-link" onClick={clearFilters}>Clear filters</button>}
-      </div>
+      </div>}
       {tracks.length === 0
         ? <div className="empty">{filtered
             ? <>No tracks match these filters. <button className="btn-link" onClick={clearFilters}>Clear filters</button></>

@@ -334,9 +334,9 @@ export default function SettingsPage({ live, onReconnect, focusUpdate, onReport 
   const showTech = !!s.ports || !!(lossless?.enabled && s.ranking) || !!s.soulseek_enabled
   return (
     <div className="scroll settings">
-      {revealError && <Banner tone="red" text={revealError} action={{ label: 'Dismiss', onClick: () => setRevealError(null) }} />}
-      {tgError && <Banner tone="red" text={tgError} action={{ label: 'Dismiss', onClick: () => setTgError(null) }} />}
-      {setupResetError && <Banner tone="red" text={setupResetError} action={{ label: 'Dismiss', onClick: () => setSetupResetError(null) }} />}
+      {revealError && <Banner tone="red" text={revealError} onDismiss={() => setRevealError(null)} />}
+      {tgError && <Banner tone="red" text={tgError} onDismiss={() => setTgError(null)} />}
+      {setupResetError && <Banner tone="red" text={setupResetError} onDismiss={() => setSetupResetError(null)} />}
       <h1>Settings</h1>
       {/* One row per account, one column of dots, status only. Everything an account needs less often --
           passwords, keys, sharing -- waits under Advanced, so this box answers "is it connected" and
