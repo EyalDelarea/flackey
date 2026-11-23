@@ -72,7 +72,7 @@ describe('a button the pointer clicked', () => {
 
 it('falls back to the track tags when there is no catalog record', () => {
   render(<TrackTable tracks={[{ ...t, catalog: null }]} onReveal={() => {}} />)
-  expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(2)
+  expect(screen.getAllByLabelText('Unknown').map(e => e.textContent)).toEqual(['—', '—'])
 })
 
 it('shows a bare kbps number with no checkmark when the track is not verified', () => {

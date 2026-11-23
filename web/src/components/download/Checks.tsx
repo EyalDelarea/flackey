@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import HelpTag from '../HelpTag'
 import Icon from '../Icon'
 import type { CheckView } from '../../presentation'
@@ -5,8 +6,10 @@ import type { CheckView } from '../../presentation'
 /** The evidence about the file. The fingerprint score answers "is this actually the
  *  recording we asked for"; the spectrum says where the content stops, which is evidence about the source rather
  *  than proof of it (issue #97). Both already ride in the bundle. */
-export default function Checks({ checks }: { checks: CheckView[] }) {
-  if (!checks.length) return null
+export default function Checks({ checks, after }: { checks: CheckView[]
+  /** The rest of the line after the checks: a History row's file format, in grey. */
+  after?: ReactNode }) {
+  if (!checks.length && !after) return null
   return (
     <div className="checks">
       {checks.map(c => {
@@ -17,6 +20,7 @@ export default function Checks({ checks }: { checks: CheckView[] }) {
         </span>
         return c.title ? <HelpTag key={c.label} text={c.title}>{check}</HelpTag> : check
       })}
+      {after}
     </div>
   )
 }

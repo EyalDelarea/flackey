@@ -1,4 +1,5 @@
-import { STEP_TIPS, asSentence, batchFinishOf, waitingShelfOf, batchFinishText, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
+import type { BatchFinishView } from './presentation'
+import { STEP_TIPS, asSentence, compactFormat, batchFinishOf, waitingShelfOf, batchFinishText, bucketCounts, clearConfirmText, cutoffKhz, bucketOf, bulkRemoveOf, canRetry, failedSummary, gb, groupRows, matchesFilter, mmss, peerName, plural, presentRow, removeConfirmText, stageOf, stepIndex, sweptByRetryAll } from './presentation'
 import type { Bundle, Playlist, Request } from './api'
 
 const base: Request = { id: 1, created_at: '', updated_at: '', raw_text: 'Ace Ventura - Rezonate', kind: 'yt_track', state: 'queued',
@@ -10,6 +11,14 @@ const bundle = (r: Partial<Request>, rest: Partial<Bundle> = {}): Bundle =>
   ({ request: { ...base, ...r }, candidates: [], catalog: null, track: null, rejection: null, ...rest })
 
 describe('formatting', () => {
+  it('shortens the format line to one quiet line, and leaves a shape it does not know alone', () => {
+    expect(compactFormat('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')).toBe('AIFF 16/44.1 · from FLAC via Soulseek')
+    expect(compactFormat('FLAC 24-bit/48 kHz via Soulseek')).toBe('FLAC 24/48 · via Soulseek')
+    expect(compactFormat('MP3 320 kbps via Deezer')).toBe('MP3 320 kbps · via Deezer')
+    expect(compactFormat('WAV 16-bit, from FLAC via Soulseek')).toBe('WAV 16-bit · from FLAC via Soulseek')
+    expect(compactFormat('Something else entirely')).toBe('Something else entirely')
+  })
+
   it('cutoffKhz rounds the same way everywhere, on the 50 Hz steps cutoffs come in', () => {
     expect(cutoffKhz(15450)).toBe(15.5); expect(cutoffKhz(19950)).toBe(20); expect(cutoffKhz(16000)).toBe(16)
     for (const hz of [15450, 19950]) {
@@ -115,7 +124,7 @@ describe('presentRow', () => {
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track }), opts)
     // No status line on a filed row: it used to repeat the title as a library-relative path.
     expect(v.status).toBe('')
-    expect(v.formatLabel).toBe('MP3 320 kbps via Deezer')
+    expect(v.formatLabel).toBe('MP3 320 kbps · via Deezer')
     expect(v.version).toBe('Original Mix')
     // Four rungs, not five: nobody was ever asked to choose this one. See the Choose tests above.
     expect(v.steps).toEqual(['Search', 'Download', 'Verify', 'Done'].map(name => ({ name, state: 'done' })))
@@ -137,7 +146,7 @@ describe('presentRow', () => {
       fingerprint: { status: 'ok', score: 0.985, offset_s: 0, reason: null },
       spectrogram_path: null, first_byte_ms: 2002, total_ms: 26990 }
     const v = presentRow(bundle({ state: 'done', track_id: 9 }, { track, attempt }), opts)
-    expect(v.formatLabel).toBe('AIFF 16-bit/44.1 kHz, from FLAC via Soulseek')
+    expect(v.formatLabel).toBe('AIFF 16/44.1 · from FLAC via Soulseek')
     expect(v.checks).toEqual([
       { label: 'Same recording', value: '98.5% match', ok: true },
       { label: 'Spectrum', value: 'no edge found', ok: true }])
@@ -1070,6 +1079,16 @@ describe('batchFinishOf', () => {
     expect(batchFinishOf(rows, pl)!.minutes).toBeGreaterThan(60 * 1000)
     const f = batchFinishOf(rows, pl, Date.parse('2026-11-21T21:20:00Z'))!
     expect(batchFinishText(f)).toBe('1 of 2 tracks filed in 7 min · 1 missing')
+  })
+
+  it('says a long run in hours, and one over two days in days rather than "1088 h"', () => {
+    const view = (minutes: number): BatchFinishView =>
+      ({ playlistId: 7, name: 'Goa', filed: 13, total: 14, missing: [{ id: 1, title: 'x' }], retryIds: [], minutes })
+    expect(batchFinishText(view(119))).toBe('13 of 14 tracks filed in 119 min · 1 missing')
+    expect(batchFinishText(view(120))).toBe('13 of 14 tracks filed in 2 h · 1 missing')
+    expect(batchFinishText(view(47 * 60))).toBe('13 of 14 tracks filed in 47 h · 1 missing')
+    expect(batchFinishText(view(48 * 60))).toBe('13 of 14 tracks filed in 2 days · 1 missing')
+    expect(batchFinishText(view(1088 * 60))).toBe('13 of 14 tracks filed in 45 days · 1 missing')
   })
 })
 

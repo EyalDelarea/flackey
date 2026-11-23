@@ -60,6 +60,8 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
   // A file the quality check did not vouch for (unverified, or kept anyway) names its format without the
   // green tick: the tick would read as the pass the check row beside it says it is not (issue #97)
   const vouched = !v.checks.some(c => c.label === 'Quality check')
+  // A lossy fallback keeps its amber tag on the rail instead: that one is a problem, not a fact
+  const formatLine = v.fallback ? null : v.formatLabel
   return (
     <div className={cls}>
       <div className="row-main">
@@ -99,7 +101,12 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
             {v.reportable && <button className="btn-link muted report-failure" onClick={() => onAction('report', v.id, undefined)}>
               Report this failure</button>}
           </div>}
-          <Checks checks={v.checks} />
+          {/* The filed format, on the checks' line in grey rather than in green on the rail: down a History
+              list of identical rows the green block was the loudest thing on the page. Only the tick is green,
+              and only where the quality check vouched for the file and no check above already carries one. */}
+          <Checks checks={v.checks} after={formatLine && <span className="format-line">
+            {v.checks.length > 0 ? <span className="sep" aria-hidden="true">·</span>
+              : vouched && <Icon name="check" size={11} stroke={2.4} />}{formatLine}</span>} />
         </div>
         {showSteps && <div className="row-steps"><Stepper steps={v.steps!} /></div>}
         {/* The right rail is two fixed cells, drawn on every row whether or not they have anything in them,
@@ -112,8 +119,6 @@ export default function RequestRow({ view: v, whyOpen, onAction, onChoose, playe
           {v.progress && <Platter pct={v.progress.pct} label={v.progress.label} />}
           {v.pill && <span className={`row-pill ${v.pill.kind}`}>{v.pill.kind === 'connecting' && <span className="row-pill-dot" aria-hidden="true" />}{v.pill.label}</span>}
           {v.fallback ? <span className="tag amber">{v.fallback.label}</span>
-            : v.formatLabel ? <span className={`verified${vouched ? '' : ' plain'}`}>
-                {vouched && <Icon name="check" size={13} stroke={2.2} />}{v.formatLabel}</span>
             : v.tag ? <span className="tag">{v.tag}</span> : null}
         </div>
         <div className="row-actions">

@@ -210,6 +210,26 @@ it('names the delivered format on a filed row instead of a bare bitrate', () => 
   expect(document.querySelector('.status')).toBeNull()
 })
 
+it('puts the filed format on the checks line in grey, not in green on the rail', () => {
+  const view: RowView = { ...base, status: '', dimmed: false, tag: null, steps: null, bucket: 'done',
+    formatLabel: 'AIFF 16/44.1 · from FLAC via Soulseek',
+    checks: [{ label: 'Same recording', value: '98.3% match', ok: true }] }
+  const { rerender } = render(<RequestRow view={view} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  const line = screen.getByText(/AIFF 16\/44\.1/).closest('.format-line')!
+  expect(line.closest('.checks')).not.toBeNull()
+  expect(line.closest('.row-status')).toBeNull()
+  // The check before it already carries the one green tick
+  expect(line.querySelector('svg')).toBeNull()
+  // With no check on the line, the format itself carries it
+  rerender(<RequestRow view={{ ...view, checks: [] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(screen.getByText(/AIFF 16\/44\.1/).closest('.format-line')!.querySelector('svg')).not.toBeNull()
+  // A lossy fallback keeps its amber tag on the rail and no format line
+  rerender(<RequestRow view={{ ...view, fallback: { label: 'MP3 320 kbps — lossless unavailable', reason: 'why' } }}
+    onAction={() => {}} onChoose={() => {}} {...preview} />)
+  expect(document.querySelector('.format-line')).toBeNull()
+  expect(screen.getByText('MP3 320 kbps — lossless unavailable')).toHaveClass('tag', 'amber')
+})
+
 it('puts Stop beside a running download, where there are no choices to skip past', () => {
   // The cancel action used to render only under a list of candidates, so a downloading row -- the one
   // place the owner actually wants a way out -- had a Stop that appeared nowhere.
@@ -380,13 +400,13 @@ it('offers the extended mix in its own strip, with both answers and a help tag t
 it('an unverified track names its format without the green tick, and gives the reason on hover (issue #97)', () => {
   const done = { ...base, bucket: 'done' as const, steps: null, tag: null, dimmed: false, status: 'Done',
     formatLabel: 'AIFF 16-bit/44.1 kHz, from FLAC via Soulseek' }
-  const { rerender } = render(<RequestRow view={{ ...done, checks: [{ label: 'Spectrum', value: 'no edge found', ok: true }] }}
+  const { rerender } = render(<RequestRow view={{ ...done, checks: [] }}
     onAction={() => {}} onChoose={() => {}} {...preview} />)
-  expect(screen.getByText(/AIFF 16-bit/)).not.toHaveClass('plain')
+  expect(screen.getByText(/AIFF 16-bit/).closest('.format-line')!.querySelector('svg')).not.toBeNull()
   rerender(<RequestRow view={{ ...done, checks: [
     { label: 'Quality check', value: 'unverified', ok: false, title: 'Lossless, but nothing above 20.4 kHz' },
     { label: 'Content to', value: '20.4 kHz', ok: null }] }} onAction={() => {}} onChoose={() => {}} {...preview} />)
-  expect(screen.getByText(/AIFF 16-bit/)).toHaveClass('plain')
+  expect(screen.getByText(/AIFF 16-bit/).closest('.format-line')!.querySelector('svg')).toBeNull()
   // On the app's own help tag: the Mac window shows no `title` tooltip
   fireEvent.mouseEnter(screen.getByText('unverified').closest('.help-tag-target')!)
   expect(screen.getByRole('tooltip')).toHaveTextContent('Lossless, but nothing above 20.4 kHz')

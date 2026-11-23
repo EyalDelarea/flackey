@@ -219,7 +219,14 @@ export default function LibraryPage({ live, selectedPlaylist }: { live: Live; se
         : visible.length === 0
         ? <div className="empty">No tracks match these filters. <button className="btn-link" onClick={clearFilters}>Clear filters</button></div>
         : folder === 'all' && !pl && !q
-        ? folders.map(f => <section key={f} className="library-folder"><h2>{f} <span className="counts">{visible.filter(t => relativeFolder(t) === f).length}</span></h2><TrackTable tracks={visible.filter(t => relativeFolder(t) === f)} onReveal={reveal} onUpgrade={upgrade} recheckRunning={recheck.running} /></section>)
+        // One column header, over the first folder: repeated above every one-track folder it was most of
+        // the page. The tables then share one actions width, or their columns would not line up under it.
+        ? folders.map((f, i) => {
+            const inFolder = visible.filter(t => relativeFolder(t) === f)
+            return <section key={f} className="library-folder"><h2>{f} <span className="counts">{plural(inFolder.length, 'track')}</span></h2>
+              <TrackTable tracks={inFolder} onReveal={reveal} onUpgrade={upgrade} recheckRunning={recheck.running}
+                header={i === 0} wideActions={visible.some(t => !t.source_fmt)} /></section>
+          })
         : <TrackTable tracks={visible} onReveal={reveal} onUpgrade={upgrade} recheckRunning={recheck.running} />}
     </div>
   </>)
