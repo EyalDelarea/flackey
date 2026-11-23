@@ -806,6 +806,17 @@ describe('a running transfer shows where it has got to', () => {
     expect(v.progress).toEqual({ pct: null, label: "Queued on someone's side · waiting for them to start" })
   })
 
+  it('says it is asking for the file while the peer has not answered yet', () => {
+    // slskd's "Requested" and "Initializing": no queue and no bytes yet. "0.0 MB of 93.0 MB" there looked frozen.
+    for (const state of ['Requested', 'Initializing', '']) {
+      const v = presentRow(fetching, { ...opts, fetchProgress: [p({ peer: 'https://rawzik.com', state, bytes: 0, pct: 0 })] as never })
+      expect(v.progress).toEqual({ pct: null, label: 'Asking rawzik.com to send it' })
+    }
+    // Once the transfer is under way the bar fills, even before its first byte lands.
+    const started = presentRow(fetching, { ...opts, fetchProgress: [p({ state: 'InProgress', bytes: 0, pct: 0, speed_bps: 0 })] as never })
+    expect(started.progress).toEqual({ pct: 0, label: '0.0 MB of 42.0 MB from someone' })
+  })
+
   it('shows a peer named after a website as a plain name, not a link', () => {
     const v = presentRow(fetching, { ...opts, fetchProgress: [p({ peer: 'https://www.rawzik.com/' })] as never })
     expect(v.progress?.label).toBe('21.0 MB of 42.0 MB from rawzik.com · 1.4 MB/s')
