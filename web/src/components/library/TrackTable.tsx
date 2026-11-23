@@ -37,11 +37,16 @@ function releaseOf(c: Track['catalog']): string | undefined {
   return parts.length ? parts.join(' · ') : undefined
 }
 
-export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning }: {
+export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning, header = true, wideActions }: {
   tracks: Track[]; onReveal: (path: string) => void
   onUpgrade?: (t: Track) => Promise<void>
   /** The whole library is being checked again; a single "Check again" waits for it. */
   recheckRunning?: boolean
+  /** Off for every folder but the first, which carries the one column header for the page. */
+  header?: boolean
+  /** Whether any table on the page has a "Find lossless" row: folder tables share one header, so they share
+   *  one actions width. Worked out from this table's own rows when absent. */
+  wideActions?: boolean
 }) {
   const platform = usePlatform()
   const [selected, setSelected] = useState<number | null>(null)
@@ -56,9 +61,9 @@ export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning
   // measured per row and the columns would stop lining up. It does not have to be the *same* length in
   // every table, though: "Find lossless" only exists while some row is still on the lossy copy, and a
   // library that is entirely lossless can hand those ~100px back to the track and genre names.
-  const width = tracks.some(isLossy) && onUpgrade ? '210px' : '110px'
+  const width = (wideActions ?? tracks.some(isLossy)) && onUpgrade ? '210px' : '110px'
   return (<div className="group table" style={{ '--actions': width } as React.CSSProperties}>
-    <div className="thead"><span /><span>Track</span><span className="col-optional">Genre</span><span className="col-optional">Label</span><span className="col-optional">Year</span><span>Kbps</span><span>Format</span><span /></div>
+    {header && <div className="thead"><span /><span>Track</span><span className="col-optional">Genre</span><span className="col-optional">Label</span><span className="col-optional">Year</span><span>Kbps</span><span>Format</span><span /></div>}
     {tracks.map(t => {
       const c = t.catalog
       const lossy = isLossy(t)
@@ -74,8 +79,9 @@ export default function TrackTable({ tracks, onReveal, onUpgrade, recheckRunning
         <Artwork url={c?.artwork_url ?? null} title={releaseOf(c)} small />
         <div className="cell"><div className="t" title={`${t.artist} – ${t.title}`}>{t.artist} – {t.title}</div><div className="v">{t.mix_name}{badge && <span className={`trust-badge ${badge.tone}`}>{badge.text}</span>}</div>
           {compactMeta && <div className="v compact-meta">{compactMeta}</div>}</div>
-        <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? 'Unknown'}</span>
-        <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? 'Unknown'}</span><span className="col-optional">{year}</span>
+        {/* A faint dash where there is no value, so the real genres and labels stand out down the column */}
+        <span className="ellipsis col-optional" title={c?.genre ?? undefined}>{c?.genre ?? <span className="missing" aria-label="Unknown">—</span>}</span>
+        <span className="ellipsis col-optional" title={c?.label ?? undefined}>{c?.label ?? <span className="missing" aria-label="Unknown">—</span>}</span><span className="col-optional">{year}</span>
         {/* The app's own help tag, not `title`: the Mac window (WKWebView) shows no `title` tooltip */}
         <span className={lossy ? 'kbps lossy' : 'kbps'}>
           {lossy ? <HelpTag text="Filed from Deezer — no lossless copy was found">{t.bitrate_kbps}</HelpTag> : t.bitrate_kbps}

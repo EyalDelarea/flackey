@@ -463,13 +463,22 @@ function checksFor(b: Bundle): CheckView[] {
   return out
 }
 
-/** `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` - the API already builds this; older payloads get a fallback. */
+/** The API's format line as a History row prints it: one quiet line under the title, so it is shortened.
+ *  `AIFF 16-bit/44.1 kHz, from FLAC via Soulseek` reads `AIFF 16/44.1 · from FLAC via Soulseek`, and
+ *  `MP3 320 kbps via Deezer` reads `MP3 320 kbps · via Deezer`. A shape this does not know (`format_line` in
+ *  src/flackey/worker/records.py writes them) is left as it is, never cut short. */
+export const compactFormat = (label: string): string => {
+  const t = label.replace(/\b(\d+)-bit\/(\d+(?:\.\d+)?) kHz\b/, '$1/$2')
+  return t.includes(', from ') ? t.replace(', from ', ' · from ') : t.replace(/ via (?!.* via )/, ' · via ')
+}
+
+/** `AIFF 16/44.1 · from FLAC via Soulseek` - the API already builds the long form; older payloads get a fallback. */
 function formatLabelOf(b: Bundle): string | null {
   const t = b.track
   if (!t) return null
-  if (t.format?.label) return t.format.label
+  if (t.format?.label) return compactFormat(t.format.label)
   const head = t.fmt === 'mp3' ? `MP3 ${t.bitrate_kbps} kbps` : t.fmt.toUpperCase()
-  return `${head} via ${sourceLabel(t.source) ?? 'Deezer'}`
+  return `${head} · via ${sourceLabel(t.source) ?? 'Deezer'}`
 }
 
 function lengthNote(c: Candidate, videoS: number | null): string {
@@ -966,10 +975,16 @@ export function batchFinishOf(all: Bundle[], playlist: Playlist, since?: number)
   }
 }
 
-/** The card's one line: "38 of 40 filed in 14 min · 2 missing". */
+/** Seconds as the shelf and the finish card say them: rough on purpose, because the looks are hours apart
+ *  and a playlist retried over weeks is read in days. Two days and up is days: "1088 h" read as a bug. */
+const roughly = (secs: number): string => secs < 60 ? 'under a minute'
+  : secs < 3600 ? `${Math.round(secs / 60)} min` : secs < 172800 ? `${Math.round(secs / 3600)} h` : `${Math.round(secs / 86400)} days`
+
+/** The card's one line: "38 of 40 filed in 14 min · 2 missing". Minutes up to two hours, then the shelf's
+ *  own hours and days. */
 export function batchFinishText(f: BatchFinishView): string {
   const took = f.minutes == null ? '' : f.minutes < 1 ? ' in under a minute'
-    : f.minutes < 120 ? ` in ${f.minutes} min` : ` in ${Math.round(f.minutes / 60)} h`
+    : f.minutes < 120 ? ` in ${f.minutes} min` : ` in ${roughly(f.minutes * 60)}`
   const missing = f.missing.length === 0 ? ' · nothing missing' : ` · ${f.missing.length} missing`
   return `${f.filed} of ${plural(f.total, 'track')} filed${took}${missing}`
 }
@@ -977,10 +992,6 @@ export function batchFinishText(f: BatchFinishView): string {
 /** One track on the "Waiting for a copy" shelf (idea 1): parked on the long wait for Soulseek, when it was
  *  last looked for, when it will be next, and why it is waiting. */
 export interface WaitingItem { id: number; title: string; why: string; lastLook: string; nextLook: string }
-
-/** Seconds as the shelf says them: rough on purpose, because the looks are hours apart. */
-const roughly = (secs: number): string => secs < 60 ? 'under a minute'
-  : secs < 3600 ? `${Math.round(secs / 60)} min` : secs < 172800 ? `${Math.round(secs / 3600)} h` : `${Math.round(secs / 86400)} days`
 
 /** The tracks Flackey has not found yet and is still looking for: the rows on the long wait for Soulseek
  *  (`soulseekWait`), oldest look first. The quick ladder's minutes-long backoff is not here -- those rows

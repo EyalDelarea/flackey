@@ -246,3 +246,20 @@ describe('after a lossless upgrade', () => {
     expect(screen.queryByText("Couldn't refresh library. Try again.")).not.toBeInTheDocument()
   })
 })
+
+it('says a folder heading count as "3 tracks", with one column header over the first folder only', async () => {
+  const tr = (id: number, folder: string, lossless = true) => ({ id, path: `/lib/${folder}/T${id}.aiff`, fmt: 'aiff', bitrate_kbps: 1411,
+    cutoff_hz: 22050, file_size: 1, artist: folder, title: `T${id}`, mix_name: 'Original Mix', duration_s: 300, isrc: null,
+    catalog_track_id: null, request_id: null, added_at: '', verified_at: null, spectrogram_path: null, catalog: null,
+    source: 'soulseek', source_fmt: lossless ? 'flac' : null })
+  vi.mocked(api.library).mockResolvedValueOnce([tr(1, 'Astral Projection'), tr(2, 'Astral Projection'), tr(3, 'Astral Projection'),
+    tr(4, 'Celestial Intelligence', false)] as any)
+  const { container } = render(<LibraryPage live={makeLive()} selectedPlaylist={null} />)
+  await waitFor(() => expect(screen.getByText('3 tracks')).toBeInTheDocument())
+  expect(screen.getByText('1 track')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: /Astral Projection/ })).toHaveTextContent('Astral Projection 3 tracks')
+  expect(container.querySelectorAll('.library-folder .thead')).toHaveLength(1)
+  // One header, so one actions width: the all-lossless folder makes room for the other's Find lossless too
+  const widths = [...container.querySelectorAll<HTMLElement>('.library-folder .table')].map(e => e.style.getPropertyValue('--actions'))
+  expect(widths).toEqual(['210px', '210px'])
+})
