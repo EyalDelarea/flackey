@@ -21,8 +21,10 @@ export default function HelpTag({ text, children }: { text: string; children: Re
     setTip({ x, y: below ? r.bottom : r.top, below })
   }
   const hide = () => setTip(null)
+  // Closes on a press too: a button that disables itself on press ("Retrying…") gets no blur, so a tip opened
+  // by keyboard focus would otherwise stay up for good. Enter and Space on a button arrive as a click.
   return (
-    <span className="help-tag-target" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+    <span className="help-tag-target" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide} onClick={hide}>
       {children}
       {tip && createPortal(
         <div className={`step-tip help-tag${tip.below ? ' below' : ''}`} role="tooltip"

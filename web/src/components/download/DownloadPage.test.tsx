@@ -425,6 +425,39 @@ describe('stage chips and the batch bar', () => {
     expect(document.querySelector('.failed-summary')).toHaveTextContent('2 failed the quality check')
   })
 
+  // Help tags, not `title`: the Mac window (WKWebView) shows no `title` tooltip.
+  const tipOf = (el: HTMLElement) => {
+    fireEvent.mouseEnter(el.closest('.help-tag-target')!)
+    return screen.getByRole('tooltip').textContent
+  }
+
+  it('says what a stage chip counts, in the words of the tab it is on', () => {
+    render(<DownloadPage live={makeLive([parked(5), inPlaylist(1, 'error', { failed_stage: null })], { playlists })} />)
+    expect(tipOf(screen.getByRole('radio', { name: 'Waiting 1' }))).toBe('Not working right now: waiting to try again.')
+    fireEvent.mouseLeave(screen.getByRole('radio', { name: 'Waiting 1' }).closest('.help-tag-target')!)
+    openFailed()
+    expect(tipOf(screen.getByRole('radio', { name: 'Unknown 1' }))).toBe("Stopped with an error at a step Flackey didn't record.")
+    expect(screen.getByRole('radio', { name: 'All 1' }).closest('.help-tag-target')).toBeNull()
+  })
+
+  it('tells Export missing list and Retry all apart: every failed track, or the ones shown', () => {
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'error', { failed_stage: 'download' })], { playlists })} />)
+    openFailed()
+    expect(tipOf(screen.getByRole('button', { name: 'Export missing list' })))
+      .toBe('Saves every failed track as a text list in Downloads.')
+    fireEvent.mouseLeave(screen.getByRole('button', { name: 'Export missing list' }).closest('.help-tag-target')!)
+    expect(tipOf(screen.getByRole('button', { name: 'Retry all 1' })))
+      .toBe('Tries the tracks shown again. Skips stopped ones and failed quality checks.')
+  })
+
+  it('still explains Retry all when it is disabled at zero, which is when the question comes up', () => {
+    render(<DownloadPage live={makeLive([inPlaylist(1, 'rejected')], { playlists })} />)
+    openFailed()
+    const retry = screen.getByRole('button', { name: 'Retry all 0' })
+    expect(retry).toBeDisabled()
+    expect(tipOf(retry)).toMatch(/^Tries the tracks shown again/)
+  })
+
   it('draws one filter bar on the Failed tab, not two stacked on each other', () => {
     render(<DownloadPage live={makeLive([inPlaylist(1, 'rejected')], { playlists })} />)
     openFailed()

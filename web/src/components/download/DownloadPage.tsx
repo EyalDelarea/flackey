@@ -6,6 +6,7 @@ import type { Filter, RowAction } from '../../presentation'
 import type { Bundle } from '../../api'
 import { usePlatform } from '../../platform'
 import Banner from '../Banner'
+import HelpTag from '../HelpTag'
 import BatchFinished from './BatchFinished'
 import WaitingShelf from './WaitingShelf'
 import { useWatchedPlaylists } from './watchedPlaylists'
@@ -346,11 +347,17 @@ export default function DownloadPage({ live, onReport, watching }: {
             removeCount={removable.ids.length} onRemoveThese={askRemove} confirming={confirmRemove != null || confirmClear != null} />
           <div className="filterbar-row">
           {summary && <p className="failed-summary">{summary}</p>}
-          <button className="btn-secondary export-missing" disabled={exporting} onClick={exportMissing}>
-            {exporting ? 'Exporting…' : 'Export missing list'}</button>
-          <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
-            {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
-          </button>
+          {/* Help tags, not `title`: the Mac window shows no `title` tooltip. Export takes every failed track
+              whatever the chip says; Retry all takes only the sweepable rows on screen. */}
+          <HelpTag text="Saves every failed track as a text list in Downloads.">
+            <button className="btn-secondary export-missing" disabled={exporting} onClick={exportMissing}>
+              {exporting ? 'Exporting…' : 'Export missing list'}</button>
+          </HelpTag>
+          <HelpTag text="Tries the tracks shown again. Skips stopped ones and failed quality checks.">
+            <button className="btn-secondary" disabled={retryingAll || retryableIds.length === 0} onClick={retryAll}>
+              {retryingAll ? 'Retrying…' : `Retry all ${retryableIds.length}`}
+            </button>
+          </HelpTag>
           </div>
         </div>
       )}
