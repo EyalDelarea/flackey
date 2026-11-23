@@ -15,7 +15,7 @@ from ..catalog import DURATION_SLACK_S, is_remaster, with_original_date
 from ..deezer import DeezerTrack, track_by_isrc
 from ..export import write_playlist
 from ..fingerprint import FPS, AcousticReference, FingerprintResult
-from ..library import file_track, final_path, missing_drive, refile_path
+from ..library import file_track, final_path, missing_drive_soon, refile_path
 from ..models import Candidate, CatalogTrack, Request, RequestState, Track, Verdict, edge_text
 from ..tag import tags_as_arrived, write_tags
 from ..tag_lookup import fill_missing
@@ -36,6 +36,8 @@ from .records import Acoustic, LosslessHit, _fallback_catalog, _mmss, format_lin
 log = logging.getLogger(__name__)
 # How long a failed Deezer ISRC lookup stands before the next track with that ISRC asks again.
 ISRC_RETRY_AFTER_S = 600
+# A track waiting for the drive that failed to file for another reason (a full disk) is tried again after this
+DRIVE_WAIT_RETRY_S = 600
 
 
 def _same_length(duration_s: int | None, catalog: CatalogTrack) -> bool:
@@ -421,18 +423,20 @@ class FilingMixin:
         await asyncio.to_thread(write_tags, tmp, catalog, verdict, artwork, source=source)
         filing = self._filing_for(req, cand, catalog, verdict, fp, hit, version, source, source_fmt,
                                   sought=sought, extended=extended, renamed=renamed, ext=tmp.suffix.lstrip("."))
-        if missing_drive(self.settings.library_root) is not None:
-            self._wait_for_drive(req, tmp, filing)
+        drive = await missing_drive_soon(self.settings.library_root)
+        if drive is not None:
+            self._wait_for_drive(req, tmp, filing, drive)
             return
         try:
             await self._file_now(req, filing, tmp)
         except OSError:
             # Unplugged between the check above and the move, or part-way through copying onto it: the
-            # file is still in hand (a cross-drive move deletes the source only once the copy is whole), so
-            # it waits too. Anything else is a real failure and goes on up as it always did.
-            if missing_drive(self.settings.library_root) is None or not tmp.is_file():
+            # file is still in hand (`file_track` deletes the source only once the copy is whole), so it
+            # waits too. Anything else is a real failure and goes on up as it always did.
+            drive = await missing_drive_soon(self.settings.library_root)
+            if drive is None or not tmp.is_file():
                 raise
-            self._wait_for_drive(req, tmp, filing)
+            self._wait_for_drive(req, tmp, filing, drive)
 
     def _filing_for(self, req: Request, cand: Candidate, catalog: CatalogTrack, verdict: Verdict,
                     fp: FingerprintResult | None, hit: LosslessHit | None, version: VersionCheck | None,
@@ -502,7 +506,8 @@ class FilingMixin:
     async def _file_now(self, req: Request, filing: Filing, tmp: Path) -> None:
         """Move the tagged file into the library and write everything that goes with it: the track row, its
         evidence, its playlist, the New playlist, and the Done line. Raises DriveMissing, having written
-        nothing, when the library's drive is not plugged in."""
+        nothing, when the library's drive is not plugged in. Once the file is in the library the track is
+        filed: a playlist file the drive cannot take any more is written when the drive is back."""
         catalog = filing.catalog_track()
         dest = final_path(self.settings.library_root, catalog, filing.ext, layout=self.settings.library_layout)
         if dest.exists():
@@ -511,11 +516,11 @@ class FilingMixin:
             return
         # On the loop, as it always was: nothing may interleave between the `exists` above and the move, or
         # two requests for one track could both get past it
+        size = tmp.stat().st_size   # from the copy in hand: after the move, nothing below may need the drive
         file_track(tmp, dest)
         log.info("req#%d filed %s -> %s", req.id, f"{catalog.artist} – {catalog.title}",
                  dest.relative_to(self.settings.library_root))
-        track_id = self.store.add_track(path=dest, file_size=dest.stat().st_size, request_id=req.id,
-                                        **filing.track)
+        track_id = self.store.add_track(path=dest, file_size=size, request_id=req.id, **filing.track)
         if filing.found and self.on_found is not None:
             # After the track row exists, and guarded: a notification is never worth a filing.
             try:
@@ -526,12 +531,16 @@ class FilingMixin:
             self.store.add_evidence(track_id, kind, value)
         if req.playlist_id is not None:
             self.store.add_playlist_track(req.playlist_id, track_id, req.playlist_position or 0)
+        # Both best effort (`_export_playlist`, `_export_new` swallow OSError, DriveMissing included): the
+        # drive pulled out after the file landed leaves the track filed, and `_watch_drive` rewrites every
+        # playlist file when the drive is back.
+        if req.playlist_id is not None:
             self._export_playlist(req.playlist_id)
         self._export_new()
         self._set_state(req, RequestState.DONE, track_id=track_id)
         await self.notifier.send(filing.message)
 
-    def _wait_for_drive(self, req: Request, tmp: Path, filing: Filing) -> None:
+    def _wait_for_drive(self, req: Request, tmp: Path, filing: Filing, drive: str) -> None:
         """Keep the checked, tagged file in the data folder and mark the request as waiting for the
         library's drive. Never filed anywhere else in the meantime: Rekordbox knows the library by its
         paths, and a track filed onto the boot disk would be one it later loses. `file_waiting` files it
@@ -541,7 +550,7 @@ class FilingMixin:
         shutil.move(str(tmp), str(kept))
         self.store.wait_for_drive(req.id, kept, filing.to_dict())
         log.info("req#%d checked and tagged; waiting for the library's drive to be plugged in", req.id)
-        self._drive_changed()
+        self._drive_changed(drive)
 
     async def file_waiting(self) -> int:
         """File every track that waited for the drive, now that it is back. Returns how many were filed.
@@ -553,7 +562,10 @@ class FilingMixin:
         n = 0
         try:
             for req, path, raw in self.store.waiting_for_drive():
-                if missing_drive(self.settings.library_root) is not None:
+                retry_at = self._drive_wait_retry_at.get(req.id)
+                if retry_at is not None and self.clock() < retry_at:
+                    continue          # failed for another reason a moment ago (below): not every tick
+                if await missing_drive_soon(self.settings.library_root) is not None:
                     break
                 if not path.is_file():
                     # Deleted from the data folder by hand: nothing to file, and nothing a retry cannot fetch
@@ -565,17 +577,20 @@ class FilingMixin:
                 try:
                     await self._file_now(req, Filing.from_dict(raw), path)
                 except Exception as e:
-                    if isinstance(e, OSError) and missing_drive(self.settings.library_root) is not None:
+                    if isinstance(e, OSError) and await missing_drive_soon(self.settings.library_root) is not None:
                         break         # unplugged again, mid-copy or before it: everything left keeps waiting
-                    # One bad record must not keep the rest waiting for ever. The file stays where it is: it
-                    # is the one checked copy, and the log says where.
+                    # Something else -- the drive full, a folder it may not write to. The track keeps
+                    # waiting, with the reason on its row, and is tried again in a while, at the next
+                    # plug-in, or at the next start: the waiting file is the one checked copy, and failing
+                    # the request would strand it. The rest are not held up by it.
                     log.exception("req#%d: could not file the track that waited for the drive (kept at %s)",
                                   req.id, path)
-                    self._set_state(req, RequestState.ERROR, error_message=str(e)[:500])
-                    self.store.clear_drive_wait(req.id)
+                    self.store.update_request(req.id, error_message=f"Could not file it yet: {e}"[:500])
+                    self._drive_wait_retry_at[req.id] = self.clock() + DRIVE_WAIT_RETRY_S
                     continue
                 path.unlink(missing_ok=True)      # gone already when it was filed; a duplicate's copy otherwise
                 self.store.clear_drive_wait(req.id)
+                self._drive_wait_retry_at.pop(req.id, None)
                 n += 1
                 await asyncio.sleep(0)            # each one is a copy onto the drive: let the page breathe
         finally:
@@ -602,7 +617,7 @@ class FilingMixin:
         t = self.store.get_track(track_id)
         if t.source_fmt:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
-        self._drive_refused()
+        await self._drive_refused()
         if not self.providers or not self.settings.lossless_enabled:
             raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
         # The same guard Get extended has, and the same set (ENG-9): a double click or a second window would
@@ -656,7 +671,7 @@ class FilingMixin:
         membership and the fingerprint evidence follow it across the swap for free -- the .m3u8 files on
         disk are the only things holding the old path, and they are rewritten from the row.
         """
-        self._drive_refused()   # before anything is written: the file to replace is on that drive
+        await self._drive_refused()   # before anything is written: the file to replace is on that drive
         catalog = await self._tags_for(req, cand, catalog)
         # Get extended brings the record's extended mix: filed under its own name and length (issue #187)
         filed = as_filed(catalog, hit)

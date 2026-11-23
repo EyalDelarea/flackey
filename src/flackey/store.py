@@ -341,8 +341,10 @@ class Store:
                                      (str(RequestState.WAITING_FOR_DRIVE),)).fetchone()[0])
 
     def clear_drive_wait(self, request_id: int) -> None:
-        """Forget the waiting file and its filing record, once the track is filed (or found a duplicate)."""
-        self.conn.execute("UPDATE requests SET drive_wait_path=NULL, drive_wait_filing=NULL WHERE id=?", (request_id,))
+        """Forget the waiting file and its filing record, once the track is filed (or found a duplicate),
+        and the reason an earlier try to file it gave (`Worker.file_waiting`)."""
+        self.conn.execute("UPDATE requests SET drive_wait_path=NULL, drive_wait_filing=NULL, error_message=NULL "
+                          "WHERE id=?", (request_id,))
         self.conn.commit()
 
     def reset_inflight(self) -> int:

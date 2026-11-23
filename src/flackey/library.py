@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import ntpath
@@ -195,8 +196,24 @@ def file_track(tmp_path: Path, dest: Path) -> Path:
     make_dirs(dest.parent)
     try:
         os.replace(tmp_path, dest)
+        return dest
     except OSError:
-        shutil.move(str(tmp_path), str(dest))
+        pass
+    # Another drive: copied in beside the destination under a temporary name, and renamed onto it only once
+    # the copy is whole. A copy cut short -- the drive pulled out, the disk full -- must never leave a
+    # truncated file at `dest`: the next attempt would take it for the track already filed and throw the
+    # good copy away.
+    part = dest.with_name(dest.name + ".part")
+    try:
+        shutil.copy2(tmp_path, part)
+        os.replace(part, dest)
+    except BaseException:
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    tmp_path.unlink(missing_ok=True)
     return dest
 
 
@@ -259,6 +276,33 @@ VOLUMES = Path("/Volumes")
 def _drive_present(drive: str) -> bool:
     """Whether a Windows drive letter ("E:") has a disk behind it right now."""
     return os.path.exists(drive + "\\")
+
+
+def drive_of(path: Path) -> str | None:
+    """The removable drive `path` is on, plugged in or not: the volume's name under /Volumes on a Mac, the
+    drive letter on Windows, None for the boot disk. Only string work, so it never waits on a drive."""
+    if sys.platform == "win32":
+        drive = ntpath.splitdrive(str(path))[0]
+        return drive.upper() if len(drive) == 2 else None
+    try:
+        return Path(path).relative_to(VOLUMES).parts[0]
+    except (ValueError, IndexError):
+        return None
+
+
+# How long a look at the drive may take before the drive counts as not there. A network share mounted under
+# /Volumes that has stopped answering can hold `realpath` and `ismount` for minutes.
+DRIVE_PROBE_TIMEOUT_S = 5.0
+
+
+async def missing_drive_soon(path: Path, timeout: float = DRIVE_PROBE_TIMEOUT_S) -> str | None:
+    """`missing_drive` off the event loop, for callers on it. A look that takes longer than `timeout` answers
+    the drive's name: a drive that does not answer cannot be filed onto either."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(missing_drive, path), timeout)
+    except TimeoutError:
+        log.warning("the drive under %s did not answer within %.0f s; treating it as not connected", path, timeout)
+        return drive_of(path) or str(path)
 
 
 def missing_drive(path: Path) -> str | None:

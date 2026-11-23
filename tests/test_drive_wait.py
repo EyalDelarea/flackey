@@ -288,3 +288,145 @@ async def test_a_drive_pulled_out_mid_copy_leaves_the_track_waiting(unplugged, m
 
     assert store.get_request(rid).state == RequestState.WAITING_FOR_DRIVE
     assert held.is_file() and store.list_tracks() == []
+
+
+def _cross_drive(monkeypatch, held_dir: Path):
+    """Make the move out of `held_dir` a copy between drives, as it is from the data folder to a USB drive."""
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if Path(src).parent == held_dir:
+            raise OSError(18, "Cross-device link")
+        return real_replace(src, dst)
+    monkeypatch.setattr(library.os, "replace", replace)
+
+
+def _copy_cut_short(monkeypatch, then=lambda: None, times: int = 1):
+    """`copy2` writes half the file, runs `then` (the drive pulled out, say) and fails: `times` times."""
+    real_copy2 = library.shutil.copy2
+    left = [times]
+
+    def copy2(src, dst, **kw):
+        if left[0] <= 0:
+            return real_copy2(src, dst, **kw)
+        left[0] -= 1
+        data = Path(src).read_bytes()
+        Path(dst).write_bytes(data[: len(data) // 2])
+        then()
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(library.shutil, "copy2", copy2)
+
+
+def test_a_cross_drive_copy_cut_short_leaves_no_file_at_the_destination(tmp_path, monkeypatch):
+    src = tmp_path / "held" / "req1.mp3"
+    src.parent.mkdir()
+    src.write_bytes(b"x" * 1000)
+    dest = tmp_path / "lib" / "Artist" / "Artist - Title.mp3"
+    _cross_drive(monkeypatch, src.parent)
+    _copy_cut_short(monkeypatch)
+
+    with pytest.raises(OSError):
+        library.file_track(src, dest)
+
+    assert not dest.exists() and not dest.with_name(dest.name + ".part").exists()
+    assert src.read_bytes() == b"x" * 1000
+
+    library.file_track(src, dest)
+    assert dest.read_bytes() == b"x" * 1000 and not src.exists()
+    assert list(dest.parent.iterdir()) == [dest]
+
+
+@posix_only
+@requires_ffmpeg
+async def test_a_drive_pulled_out_mid_copy_keeps_the_waiting_copy_and_files_it_on_the_next_pass(unplugged, monkeypatch):
+    settings, store, notifier, _, plug, unplug = unplugged
+    w = make_worker((settings, store, notifier), FakeSource([good_cand()]))
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    [(_, held, _)] = store.waiting_for_drive()
+    whole = held.read_bytes()
+    _cross_drive(monkeypatch, settings.drive_wait_dir)
+    _copy_cut_short(monkeypatch, then=lambda: unplug("WD"))
+    plug("WD")
+
+    await w._watch_drive()          # the copy is cut short and the drive is gone
+
+    assert store.get_request(rid).state == RequestState.WAITING_FOR_DRIVE
+    assert held.read_bytes() == whole and store.list_tracks() == []
+    artist = settings.library_root / "Astral Projection"
+    assert not any(artist.iterdir()), "no truncated file and no .part may be left behind"
+
+    plug("WD")
+    await w._watch_drive()          # the next pass files it, whole
+
+    r = store.get_request(rid)
+    assert r.state == RequestState.DONE
+    assert store.get_track(r.track_id).path.read_bytes() == whole and not held.exists()
+
+
+@posix_only
+@requires_ffmpeg
+async def test_a_waiting_track_that_cannot_be_filed_for_another_reason_keeps_waiting_and_is_tried_again(
+        unplugged, monkeypatch):
+    settings, store, notifier, _, plug, _ = unplugged
+    now = [1000.0]
+    w = make_worker((settings, store, notifier), FakeSource([good_cand()]))
+    w.clock = lambda: now[0]
+    rid = store.add_request(TEXT, RequestKind.TEXT)
+    await w.process(rid)
+    [(_, held, _)] = store.waiting_for_drive()
+    _cross_drive(monkeypatch, settings.drive_wait_dir)
+    _copy_cut_short(monkeypatch)   # a full disk, say: the drive stays plugged in
+    plug("WD")
+
+    await w._watch_drive()
+
+    r = store.get_request(rid)
+    assert r.state == RequestState.WAITING_FOR_DRIVE and "Could not file it yet" in r.error_message
+    assert held.is_file() and store.list_tracks() == []
+    assert w.status["library_drive"] == {"connected": True, "name": None, "waiting": 1}
+
+    now[0] += filing_mod.DRIVE_WAIT_RETRY_S + 1
+    await w._watch_drive()
+
+    r = store.get_request(rid)
+    assert r.state == RequestState.DONE and r.error_message is None and not held.exists()
+
+
+@posix_only
+@requires_ffmpeg
+async def test_a_track_whose_file_landed_is_filed_even_if_the_playlist_file_cannot_be_written(
+        unplugged, monkeypatch):
+    from flackey.worker import pipeline
+    settings, store, notifier, _, plug, unplug = unplugged
+    w = make_worker((settings, store, notifier), FakeSource([good_cand()]))
+    plug("WD")
+    real = pipeline.write_new_playlist
+
+    def pulled(store_, root):
+        unplug("WD")
+        return real(store_, root)     # make_dirs refuses: DriveMissing
+    monkeypatch.setattr(pipeline, "write_new_playlist", pulled)
+
+    r = await w.process(store.add_request(TEXT, RequestKind.TEXT))
+
+    assert r.state == RequestState.DONE and store.get_track(r.track_id).path.exists()
+    assert store.waiting_for_drive() == []
+
+    monkeypatch.setattr(pipeline, "write_new_playlist", real)
+    await w._watch_drive()          # gone
+    plug("WD")
+    await w._watch_drive()          # back: every playlist file is written again
+    new = settings.library_root / "Playlists" / "Flackey - New.m3u8"
+    assert "Astral Projection - Into the Void.mp3" in new.read_text()
+
+
+async def test_a_drive_that_does_not_answer_counts_as_not_connected(monkeypatch):
+    import threading
+    release = threading.Event()
+    monkeypatch.setattr(library, "missing_drive", lambda p: release.wait(5) and None)
+    try:
+        drive = await library.missing_drive_soon(Path("/Volumes/NAS/DJ Library"), timeout=0.05)
+    finally:
+        release.set()
+    assert drive == ("NAS" if sys.platform != "win32" else "/Volumes/NAS/DJ Library")

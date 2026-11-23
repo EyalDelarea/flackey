@@ -103,11 +103,13 @@ export interface FallbackView { label: string; reason: string }
 /** What the batch bar above a group draws. `inFlight` is working *right now*: a row parked on a backoff is
  *  `queued`, so it sits in the `progress` bucket while doing nothing, and counting it as in progress is the
  *  exact claim the segmented bar exists to correct. It gets its own `waiting` count instead.
- *  `filed + inFlight + needsChoice + waiting + failed === total`, which is what lets the bar fill the width
+ *  `filed + inFlight + needsChoice + waiting + forDrive + failed === total`, which is what lets the bar fill the width
  *  without an unexplained gap. `failedStages` splits the failures by where they stopped, for the Failed
  *  tab's own bar. */
 export interface GroupSummary { filed: number; total: number; needsChoice: number; rejected: number; inFlight: number
-  waiting: number; failed: number; pct: number; failedStages: Record<Stage, number> }
+  waiting: number; failed: number; pct: number
+  /** Checked and tagged, waiting for the library's drive to be plugged in: not a retry, so not `waiting`. */
+  forDrive: number; failedStages: Record<Stage, number> }
 export interface GroupView { key: string; name: string; summary: GroupSummary; rows: RowView[] }
 export interface PresentOpts {
   libraryRoot: string; telegramAuthorized: boolean; now: Date; whyOpen: boolean
@@ -875,7 +877,8 @@ function summaryOf(list: Bundle[]): GroupSummary {
     rejected: list.filter(b => b.request.state === 'rejected').length,
     // Working right now, which is not the same as "in the progress bucket": the parked rows are queued.
     inFlight: list.filter(b => bucketOf(b.request.state) === 'progress' && stageOf(b.request) !== 'waiting').length,
-    waiting: list.filter(b => stageOf(b.request) === 'waiting').length,
+    waiting: list.filter(b => stageOf(b.request) === 'waiting' && b.request.state !== 'waiting_for_drive').length,
+    forDrive: list.filter(b => b.request.state === 'waiting_for_drive').length,
     failed: list.filter(b => bucketOf(b.request.state) === 'failed').length,
     pct: total ? Math.round((filed / total) * 100) : 0,
     failedStages,

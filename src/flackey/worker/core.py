@@ -14,7 +14,7 @@ from ..attempts import prune_raw
 from ..config import Settings
 from ..deezer import DeezerTrack
 from ..export import write_playlists
-from ..library import library_reachable, missing_drive, prune_missing_tracks, sweep_tmp
+from ..library import library_reachable, missing_drive_soon, prune_missing_tracks, sweep_tmp
 from ..models import RETRYABLE_STATES, SWEEPABLE_STATES, Request, RequestState
 from ..notify import Notifier
 from ..source import (
@@ -134,6 +134,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         # The drive `_watch_drive` last found missing, or None while it was there
         self._drive_missing: str | None = None
         self._filing_waiting = False         # `file_waiting` under way: one at a time
+        # Waiting tracks that failed to file for a reason other than the drive (a full disk, a permission):
+        # request id -> clock time of the next try. Forgotten when the drive comes back and on restart.
+        self._drive_wait_retry_at: dict[int, float] = {}
 
 
     def _bot_ready(self) -> bool:
@@ -142,18 +145,21 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         return self.settings.source_enabled and bool(self.status.get("telegram_authorized", True))
 
 
-    def _drive_refused(self) -> None:
+    async def _drive_refused(self) -> None:
         """Raise the owner-facing reason when the library's drive is unplugged. For the buttons that put a
         new file in place of a filed one (Find lossless, Get extended): with the drive gone there is no
         filed file to replace, and the download would only be thrown away."""
-        drive = missing_drive(self.settings.library_root)
+        drive = await missing_drive_soon(self.settings.library_root)
         if drive is not None:
             raise ValueError(f"Your music drive ({drive}) isn't connected. Plug it in and try again.")
 
-    def _drive_changed(self) -> None:
+    def _drive_changed(self, drive: str | None | type[Ellipsis] = ...) -> None:
         """Publish whether the library's drive is plugged in and how many tracks wait for it, for the
-        page's banner. Only when it changed: every assignment to `status` is an event to every page."""
-        drive = missing_drive(self.settings.library_root)
+        page's banner. Only when it changed: every assignment to `status` is an event to every page.
+        `drive` is what the caller just found; by default the watcher's last look, so this never waits on
+        the drive itself."""
+        if drive is ...:
+            drive = self._drive_missing
         now = {"connected": drive is None, "name": drive, "waiting": self.store.count_waiting_for_drive()}
         if self.status.get("library_drive") != now:
             self.status["library_drive"] = now
@@ -162,7 +168,9 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
         """On the loop's tick: notice the library's drive going and coming back. Going, the owner is told
         once; coming back, whatever waited for it is filed. Searching and downloading carry on either way --
         only filing waits."""
-        drive = missing_drive(self.settings.library_root)
+        # Off the loop and time-limited: a network share under /Volumes that stopped answering would
+        # otherwise freeze the page along with it
+        drive = await missing_drive_soon(self.settings.library_root)
         back = drive is None and self._drive_missing is not None
         if drive is not None and drive != self._drive_missing:
             log.warning("the library's drive %s is not connected; checked tracks will wait for it", drive)
@@ -172,6 +180,8 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
                 except Exception as e:  # noqa: BLE001 -- a notification is never worth the loop
                     log.debug("drive notification failed: %s", e)
         self._drive_missing = drive
+        if back:
+            self._drive_wait_retry_at.clear()     # a drive plugged back in is a fresh chance for every one
         if drive is None and self.store.count_waiting_for_drive():
             await self.file_waiting()
         if back:
@@ -324,7 +334,7 @@ class Worker(PipelineMixin, RecoveryMixin, FilingMixin, LosslessMixin, AcousticM
             self._last_maintenance = now
             await asyncio.to_thread(prune_raw, self.settings.lossless_raw_dir, self.settings.lossless_keep_raw_days)
             self._unscanned = list(self.providers)
-        if self._unscanned and missing_drive(self.settings.library_root) is not None:
+        if self._unscanned and self._drive_missing is not None:
             # A rescan now would find the library gone and share nothing until the next one. Owed instead:
             # `_watch_drive` asks for it again when the drive is back.
             return
