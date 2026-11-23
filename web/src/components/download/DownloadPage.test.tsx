@@ -1175,3 +1175,15 @@ describe('the folded "up next" line', () => {
     expect(screen.queryByText(/more up next/)).not.toBeInTheDocument()
   })
 })
+
+it('closes the fold when it goes, so the next one comes back folded', () => {
+  const { rerender } = render(<DownloadPage live={makeLive([mk(1, 'queued'), mk(2, 'queued'), mk(4, 'fetching')])} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+  expect(screen.getByText(/Track 1$/)).toBeInTheDocument()
+  rerender(<DownloadPage live={makeLive([mk(1, 'fetching'), mk(2, 'queued'), mk(4, 'fetching')])} />)
+  expect(screen.queryByText(/more up next/)).not.toBeInTheDocument()
+  rerender(<DownloadPage live={makeLive([mk(1, 'fetching'), mk(2, 'queued'), mk(3, 'queued'), mk(4, 'fetching')])} />)
+  expect(screen.getByText('2 more up next')).toBeInTheDocument()
+  expect(screen.queryByText(/Track 2$/)).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Show' })).toBeInTheDocument()
+})

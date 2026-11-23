@@ -38,8 +38,11 @@ function byPerson(uploads: Upload[]): Person[] {
 function PersonGroup({ person }: { person: Person }) {
   const [all, setAll] = useState(false)
   // Sending files first inside the group too, so a live bar is never hidden behind "+ N more".
-  const ordered = [...person.uploads.filter(u => !finished(u)), ...person.uploads.filter(finished)]
-  const shownRows = all ? ordered : ordered.slice(0, FIRST)
+  const live = person.uploads.filter(u => !finished(u))
+  const ordered = [...live, ...person.uploads.filter(finished)]
+  // Every unfinished file is shown however many there are: only finished ones fold behind "+ N more".
+  const limit = Math.max(FIRST, live.length)
+  const shownRows = all ? ordered : ordered.slice(0, limit)
   const more = ordered.length - shownRows.length
   const n = person.uploads.length
   return (<section className="up-person">
@@ -64,7 +67,7 @@ function PersonGroup({ person }: { person: Person }) {
             : <span className="end">{u.state.replace('Completed, ', '')}</span>}
         </div>)
       })}
-      {ordered.length > FIRST && <button className="btn-link up-more" onClick={() => setAll(a => !a)}>
+      {ordered.length > limit && <button className="btn-link up-more" onClick={() => setAll(a => !a)}>
         {all ? 'Show fewer' : `+ ${more} more`}</button>}
     </div>
   </section>)

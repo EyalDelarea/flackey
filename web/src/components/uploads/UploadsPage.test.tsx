@@ -129,3 +129,16 @@ it('groups uploads by person: one header with the count and total, compact finis
   expect(screen.getAllByLabelText('Sent')).toHaveLength(6)
   expect(screen.getByText('Errored')).toBeInTheDocument()
 })
+
+it('never hides a live upload behind "+ N more", however many one person has going', async () => {
+  const uploads = [
+    ...Array.from({ length: 6 }, (_, i) => up({ id: `s${i}`, file: `Live ${i}.aiff`, pct: 10 * i, bytes: 1, state: 'InProgress', speed_bps: 1e6 })),
+    ...Array.from({ length: 3 }, (_, i) => up({ id: `d${i}`, file: `Done ${i}.aiff` })),
+  ]
+  serve(feed({ uploads, summary: { total: 9, active: 6, completed: 3, peers: 1, bytes: 0 } }))
+  const { container } = render(<UploadsPage />)
+  await waitFor(() => expect(screen.getByText('Live 5.aiff')).toBeInTheDocument())
+  expect(container.querySelectorAll('.up-bar')).toHaveLength(6)
+  expect(screen.queryByText('Done 0.aiff')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '+ 3 more' })).toBeInTheDocument()
+})

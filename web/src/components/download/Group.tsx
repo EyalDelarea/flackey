@@ -49,6 +49,8 @@ export default function Group({ g, view, whyOpen, onAction, onChoose, onStopAll,
      stays a row: a line saying "1 more up next" takes the same room and says less. */
   const upNext = view === 'active' ? g.rows.filter(r => r.pill?.kind === 'upnext') : []
   const fold = upNext.length > 1
+  // Once the fold goes (one or none left to start) it is closed, so a later fold comes back folded.
+  if (!fold && showUpNext) setShowUpNext(false)
   const rows = fold ? g.rows.filter(r => r.pill?.kind !== 'upnext') : g.rows
   const row = (r: GroupView['rows'][number]) => <RequestRow key={r.id} view={r} whyOpen={whyOpen.has(r.id)} onAction={onAction}
     onChoose={onChoose} player={player} onPlay={onPlay} />
