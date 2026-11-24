@@ -963,7 +963,8 @@ def test_relaunch_bundled_execs_through_the_bundle(monkeypatch, tmp_path):
     desktop.relaunch_bundled(types.SimpleNamespace(data_dir=tmp_path / "data"))
     (path, argv, env), = calls
     assert path.endswith("Flackey.app/Contents/MacOS/Flackey")
-    assert argv == [path, "-c", "from flackey.cli import app; app()", "--env", "x.env", "start"]
+    # `-P`: the folder it was started from is not put first on the import path (review 2026-11-24, S14).
+    assert argv == [path, "-P", "-c", "from flackey.cli import app; app()", "--env", "x.env", "start"]
     assert env[desktop.BUNDLED_ENV] == "1"
 
 

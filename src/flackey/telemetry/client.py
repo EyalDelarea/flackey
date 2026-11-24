@@ -329,6 +329,7 @@ class Telemetry:
             self.install_id = str(uuid.uuid4())
             self.install_secret = new_secret()
             self.opted_in = self.today().isoformat()
+            self._new_session()
             self._enabled = True
         self.persist(telemetry_enabled=True, telemetry_install_id=self.install_id,
                      telemetry_install_secret=self.install_secret, telemetry_opted_in=self.opted_in)
@@ -381,10 +382,24 @@ class Telemetry:
             (self.data_dir / OUTBOX).unlink(missing_ok=True)
             self.install_id = str(uuid.uuid4())
             self.install_secret = new_secret()
+            self._new_session()
+            marker = self.data_dir / MARKER
+            if marker.exists():           # still this launch, under the new session's name
+                try:
+                    marker.write_text(self.session_id, encoding="utf-8")
+                except OSError:
+                    log.debug("usage stats: could not rename the session marker", exc_info=True)
         if old and old_secret:
             self._queue_delete(old, old_secret)   # the OLD pair: the collector knows the old ID by the old secret
         self.persist(telemetry_install_id=self.install_id, telemetry_install_secret=self.install_secret)
         self._next_send = 0.0
+
+    def _new_session(self) -> None:
+        """A new ID gets a new session ID and sequence too: the old ones would link its rows to the old ID's
+        until those are erased. Called under _io."""
+        with self._lock:
+            self.session_id = str(uuid.uuid4())
+            self._seq = 0
 
     def _queue_delete(self, install_id: str, install_secret: str) -> None:
         # Under _io, as _send_deletes settles the owed list under it: neither can overwrite the other's write.
@@ -789,7 +804,8 @@ class Telemetry:
                 await asyncio.sleep(TICK_S)
 
     async def tick(self, http: httpx.AsyncClient) -> None:
-        if (self.url is not None and self.mode == "on" and self._pending_deletes()
+        # Off included: a delete owed from before FLACKEY_TELEMETRY=off is still owed. Local never sends.
+        if (self.url is not None and self.mode != "local" and self._pending_deletes()
                 and self.clock() >= self._delete_due()):
             await self._send_deletes(http)
         if not self.enabled:

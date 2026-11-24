@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -158,6 +159,24 @@ async def test_run_wakes_a_waiting_thread_even_when_startup_fails_before_the_ser
 
     # The guarantee: even though the server was never created, the waiting thread wakes up
     assert handle.started.is_set()
+
+
+async def test_a_fixed_token_is_not_handed_down_to_child_processes(tmp_path, monkeypatch):
+    """Security review 2026-11-24: slskd, ffmpeg and PowerShell inherit the environment, and none of them
+    has any use for the key to the app's API. It is read once at start and then taken out."""
+    from unittest.mock import patch
+
+    from flackey.app import ServerHandle, run
+    from flackey.config import Settings
+
+    monkeypatch.setenv("FLACKEY_API_TOKEN", "k" * 40)
+    handle = ServerHandle()
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=tmp_path / "lib")
+    with patch("flackey.app.log_startup_banner", side_effect=RuntimeError("stop here")), \
+            pytest.raises(RuntimeError):
+        await run(settings, handle=handle)
+    assert handle.token == "k" * 40
+    assert "FLACKEY_API_TOKEN" not in os.environ
 
 
 def test_build_providers_follows_the_api_key_and_never_logs_it(tmp_path, caplog):

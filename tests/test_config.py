@@ -359,3 +359,102 @@ def test_the_data_folder_and_telegram_session_are_owner_only(tmp_path: Path):
     assert s.data_dir.stat().st_mode & 0o777 == 0o700
     assert (s.data_dir / "owner.session").stat().st_mode & 0o777 == 0o600
     assert journal.stat().st_mode & 0o777 == 0o600
+
+
+# ---- Security review 2026-11-24 (L4/S1): what a folder the app is started from may change ----------
+
+def test_a_dot_env_in_the_current_folder_is_not_read(tmp_path: Path, monkeypatch):
+    """Starting `flackey` from inside a folder must not let that folder's `.env` re-point the data folder,
+    the bind address or the slskd address. Only the checkout's own `.env` (REPO_ENV) is read."""
+    from flackey import config
+
+    here = tmp_path / "somewhere"
+    here.mkdir()
+    (here / ".env").write_text("WEB_HOST=0.0.0.0\nDATA_DIR=planted\nSLSKD_URL=https://evil.example\n")
+    monkeypatch.chdir(here)
+    monkeypatch.setattr(config, "REPO_ENV", tmp_path / "no-such-repo" / ".env")
+    for name in ("WEB_HOST", "DATA_DIR", "SLSKD_URL"):
+        monkeypatch.delenv(name, raising=False)
+    s = load_settings()
+    assert s.web_host == "127.0.0.1"
+    assert s.slskd_url == "http://127.0.0.1:5030"
+    assert s.data_dir != here / "planted" and s.data_dir.name != "planted"
+    # ...and a Settings built without naming a file reads none either.
+    assert Settings().web_host == "127.0.0.1"
+
+
+def test_the_checkouts_own_dot_env_is_still_read(tmp_path: Path, monkeypatch):
+    from flackey import config
+
+    repo_env = _env(tmp_path, "WEB_PORT=9001\n")
+    monkeypatch.setattr(config, "REPO_ENV", repo_env)
+    monkeypatch.chdir(tmp_path.parent)
+    assert load_settings().web_port == 9001
+
+
+def test_relative_folders_are_made_absolute_at_load(tmp_path: Path, monkeypatch):
+    """A relative DATA_DIR would follow whatever folder the app was started from, and the slskd sidecar
+    is launched out of it."""
+    monkeypatch.chdir(tmp_path)
+    env = tmp_path / "x.env"
+    env.write_text("DATA_DIR=data\nLIBRARY_ROOT=lib\nSLSKD_DOWNLOADS_DIR=dl\n")
+    s = load_settings(env)
+    assert s.data_dir.is_absolute() and s.data_dir == tmp_path / "data"
+    assert s.library_root.is_absolute() and s.library_root == tmp_path / "lib"
+    assert s.slskd_downloads_dir is not None and s.slskd_downloads_dir == tmp_path / "dl"
+
+
+@pytest.mark.parametrize("url", ["ftp://127.0.0.1:5030", "not a url", "http://[::1", "http://:5030"])
+def test_a_malformed_slskd_url_from_the_environment_falls_back_to_the_managed_sidecar(tmp_path: Path, url,
+                                                                                      caplog):
+    """An address that cannot be used at all would leave Soulseek dead. Startup goes on, on the built-in
+    address."""
+    env = _env(tmp_path)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("SLSKD_URL", url)
+        s = load_settings(env)
+    assert s.slskd_url == "http://127.0.0.1:5030"
+    assert "slskd address" in caplog.text and url not in caplog.text
+
+
+@pytest.mark.parametrize("url", ["http://slskd:5030", "http://user:secret@192.168.1.20:5030"])
+def test_a_plain_http_slskd_url_to_another_host_is_kept_with_one_warning(tmp_path: Path, url, caplog):
+    """Flackey in Docker reaches a separate slskd container over plain http (`http://slskd:5030`). The
+    environment, the checkout's .env and settings.json are the owner's, so the address is kept; the owner is
+    warned once that the key travels unencrypted, without the address (it may carry credentials)."""
+    env = _env(tmp_path)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("SLSKD_URL", url)
+        s = load_settings(env)
+    assert s.slskd_url == url
+    warnings = [r for r in caplog.records if r.levelname == "WARNING" and "unencrypted" in r.getMessage()]
+    assert len(warnings) == 1 and "https" in warnings[0].getMessage()
+    assert url not in caplog.text and "secret" not in caplog.text
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:5031", "http://localhost:5030", "https://nas.example:5031"])
+def test_a_safe_slskd_url_from_the_environment_is_kept_quietly(tmp_path: Path, url, monkeypatch, caplog):
+    monkeypatch.setenv("SLSKD_URL", url)
+    assert load_settings(_env(tmp_path)).slskd_url == url
+    assert "slskd" not in caplog.text
+
+
+def test_a_malformed_slskd_url_in_the_settings_file_falls_back_too(tmp_path: Path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "settings.json").write_text(json.dumps({"slskd_url": "ftp://10.0.0.5:5030"}))
+    assert load_settings(_env(tmp_path)).slskd_url == "http://127.0.0.1:5030"
+
+
+def test_a_plain_http_slskd_url_in_the_settings_file_is_kept(tmp_path: Path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "settings.json").write_text(json.dumps({"slskd_url": "http://10.0.0.5:5030"}))
+    assert load_settings(_env(tmp_path)).slskd_url == "http://10.0.0.5:5030"
+
+
+def test_a_packaged_app_reads_no_dot_env_at_all(tmp_path: Path, monkeypatch):
+    from flackey import config
+
+    repo_env = _env(tmp_path, "WEB_PORT=9002\n")
+    monkeypatch.setattr(config, "REPO_ENV", repo_env)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert load_settings().web_port == 8765

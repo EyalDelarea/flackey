@@ -7,6 +7,8 @@ import type { AppSettings, Bundle, Health, Stats } from './api'
 class FakeEventSource {
   static last: FakeEventSource | null = null
   onopen: (() => void) | null = null
+  onerror: (() => void) | null = null
+  readyState = 1
   handlers: Record<string, (e: { data: string }) => void> = {}
   addEventListener(name: string, fn: (e: { data: string }) => void) { this.handlers[name] = fn }
   emit(name: string, data: unknown) { this.handlers[name]?.({ data: JSON.stringify(data) }) }
@@ -242,5 +244,63 @@ describe('a malformed stream frame (WEB-16)', () => {
     expect(() => act(() => es.handlers.request({ data: '{not json' }))).not.toThrow()
     expect(() => act(() => es.handlers.status({ data: '{not json' }))).not.toThrow()
     expect(screen.getByText('has-health')).toBeInTheDocument()
+  })
+})
+
+
+describe('a stream the server refuses after a restart', () => {
+  it('asks for a fresh media cookie and opens the stream again', async () => {
+    // The cookie is made from a salt drawn at each launch (security review 2026-11-24, S13), so after a
+    // restart the old one is refused and EventSource gives up for good; the token still works.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.spyOn(api, 'health').mockResolvedValue(health)
+      const session = vi.spyOn(api, 'session').mockResolvedValue({ ok: true })
+      render(<Harness />)
+      await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+      const first = FakeEventSource.last!
+      first.readyState = 2   // CLOSED: refused, not dropped
+      act(() => first.onerror?.())
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      await waitFor(() => expect(FakeEventSource.last).not.toBe(first))
+      expect(session).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps asking when the server is not back yet', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.spyOn(api, 'health').mockResolvedValue(health)
+      const session = vi.spyOn(api, 'session')
+        .mockRejectedValueOnce(new ApiError(502, 'Bad Gateway'))
+        .mockResolvedValue({ ok: true })
+      render(<Harness />)
+      await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+      const first = FakeEventSource.last!
+      first.readyState = 2   // CLOSED: refused, not dropped
+      act(() => first.onerror?.())
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      expect(session).toHaveBeenCalledTimes(1)
+      expect(FakeEventSource.last).toBe(first)
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      await waitFor(() => expect(FakeEventSource.last).not.toBe(first))
+      expect(session).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves a stream that only dropped to reconnect by itself', async () => {
+    vi.spyOn(api, 'health').mockResolvedValue(health)
+    const session = vi.spyOn(api, 'session').mockResolvedValue({ ok: true })
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+    const first = FakeEventSource.last!
+    first.readyState = 0   // CONNECTING: EventSource is already retrying
+    act(() => first.onerror?.())
+    expect(session).not.toHaveBeenCalled()
+    expect(FakeEventSource.last).toBe(first)
   })
 })

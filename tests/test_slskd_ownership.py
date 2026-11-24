@@ -179,6 +179,7 @@ async def test_a_stale_slskd_of_ours_that_does_not_answer_is_replaced(tmp_path, 
 
     monkeypatch.setattr(SlskdProcess, "_check", check)
     monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process, "binary_problem", lambda _: None)
     monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
     clock = Clock()
     proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.asleep)

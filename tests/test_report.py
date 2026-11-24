@@ -262,6 +262,101 @@ def test_what_makes_a_log_useful_is_left_alone():
     assert r(line) == line
 
 
+# ---- Security review 2026-11-24 (L3/S15): more of what a log can carry ----------------------------
+
+def test_the_api_token_and_the_usage_stats_id_are_known_secrets(tmp_path):
+    settings = settings_for(tmp_path)
+    settings.telemetry_install_id = "3f2b8c1e-7d4a-4e2b-9c1d-5a6b7c8d9e0f"
+    token = "T" * 20 + "okenValue_-1234567890"
+    out = Redactor(report.known_secrets(settings, api_token=token), home=HOME)(
+        f"GET /#t={token} for install 3f2b8c1e-7d4a-4e2b-9c1d-5a6b7c8d9e0f")
+    assert token not in out and "3f2b8c1e" not in out
+
+
+def test_the_report_route_redacts_this_launchs_api_token(app):
+    client, settings, _, _ = app
+    token = client.app.state.api_token
+    (settings.data_dir / "flackey.log").write_text(f"2026-11-24 INFO opened http://127.0.0.1:8765/#t={token}\n")
+    body = client.post("/api/bug-report/preview", json={}).text
+    assert token not in body and "<redacted>" in body
+
+
+@pytest.mark.parametrize("line, gone", [
+    ("flackey_session=abc123def456ghi", "abc123def456ghi"),
+    ("flackey_session_8765=abc123def456ghi; Path=/api", "abc123def456ghi"),
+    ("csrf_session=zz99yy88xx77", "zz99yy88xx77"),
+])
+def test_a_named_session_cookie_value_goes(line, gone):
+    assert gone not in Redactor([], home=HOME)(line)
+
+
+@pytest.mark.parametrize("line, gone", [
+    ("secret_key=s3kr1tvalue", "s3kr1tvalue"),
+    ('"private_key": "abcdef123456"', "abcdef123456"),
+    ("ACCESS-KEY: AKIA1234567890", "AKIA1234567890"),
+    ("sent Bearer eyJhbGciOiJIUzI1NiJ9.abc.def upstream", "eyJhbGciOiJIUzI1NiJ9"),
+])
+def test_more_key_value_and_bearer_shapes_go(line, gone):
+    assert gone not in Redactor([], home=HOME)(line)
+
+
+def test_a_camelot_key_is_not_a_secret():
+    line = "tagged key=8A bpm=128 (Original Mix)"
+    assert Redactor([], home=HOME)(line) == line
+
+
+@pytest.mark.parametrize("spelling", ["/users/someone/Music/DJ", "/USERS/SOMEONE/Music/DJ"])
+def test_the_mac_home_in_another_case_is_still_the_home(spelling):
+    """APFS ignores case, so a typed path can name the home folder in any case."""
+    out = Redactor([], home=HOME)(f"library root: {spelling}")
+    assert out == "library root: ~/Music/DJ"
+
+
+def test_the_mac_user_name_goes_in_any_case_and_only_as_a_whole_name():
+    r = Redactor([], home=HOME)
+    assert r("owner SomeOne opened it") == "owner <user> opened it"
+    assert r("/Users/someonex/a") == "/Users/<user>/a"
+    assert r("/users/another/x") == "/Users/<user>/x"
+
+
+@pytest.mark.parametrize("path, want", [
+    ("/home/bob/Music/x.flac", "/home/<user>/Music/x.flac"),
+    ("/Volumes/My Drive/Music/x.flac", "/Volumes/<drive>/Music/x.flac"),
+    ("PosixPath('/Volumes/DJ SSD/Music')", "PosixPath('/Volumes/<drive>/Music')"),
+    ("drive /Volumes/Samsung_T7 is gone", "drive /Volumes/<drive> is gone"),
+    (r"\\nas-01\music\x.flac", r"\\<server>\music\x.flac"),
+    (r'"\\\\nas-01\\music"', r'"\\\\<server>\\music"'),
+    (r"C:\Users\<user>\OneDrive - Contoso Ltd\Music", r"C:\Users\<user>\OneDrive - <org>\Music"),
+])
+def test_drive_server_and_company_names_in_paths_go(path, want):
+    assert Redactor([], home=HOME)(path) == want
+
+
+@pytest.mark.parametrize("line, want", [
+    ("connected to Eyals-MacBook-Pro.local:5030", "connected to <host>.local:5030"),
+    ("http://nas.local/music", "http://<host>.local/music"),
+    ("~/.local/share/flackey stays", "~/.local/share/flackey stays"),
+    ("module flackey.localfile stays", "module flackey.localfile stays"),
+    ("mail bob.smith@Bobs-MacBook-Pro.local now", "mail <email> now"),
+    ("http://bob:hunter2@Bobs-MacBook-Pro.local/x", "http://<redacted>@<host>.local/x"),
+])
+def test_a_local_network_host_name_goes(line, want):
+    """A Mac's Bonjour name is usually its owner's name: `Eyals-MacBook-Pro.local`."""
+    assert Redactor([], home=HOME)(line) == want
+
+
+@pytest.mark.parametrize("phone", ["054-123-4567", "054.123.4567", "054 123 4567", "(555) 123-4567"])
+def test_a_phone_number_without_a_plus_goes_in_its_usual_shapes(phone):
+    assert Redactor([], home=HOME)(f"call {phone} now") == "call <phone> now"
+
+
+def test_numbers_that_are_not_phones_are_left_alone():
+    """Timestamps, Deezer ids, durations, sizes, an ISRC and a version: none of them may become <phone>."""
+    line = ("2026-11-24 12:00:00,123 deezer 3135556 isrc USRC17607839 took 1234 ms, 58309223 bytes, "
+            "2026-11-24T12:00:00Z v0.8.1 1/2/2026 req#42 12345678901 3 of 10")
+    assert Redactor([], home=HOME)(line) == line
+
+
 # ---- ClientContext ----------------------------------------------------------------------------
 
 def test_client_context_keeps_known_values_and_drops_anything_else():

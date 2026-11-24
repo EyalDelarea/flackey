@@ -107,7 +107,9 @@ def relaunch_bundled(settings: Settings) -> bool:
     if exe is None:
         return False
     env = {**os.environ, BUNDLED_ENV: "1"}
-    os.execve(str(exe), [str(exe), "-c", "from flackey.cli import app; app()", *sys.argv[1:]], env)
+    # `-P`: without it `-c` puts the current folder first on the import path, so a folder the app was
+    # started from could stand in for any module. flackey itself comes from the venv's site-packages.
+    os.execve(str(exe), [str(exe), "-P", "-c", "from flackey.cli import app; app()", *sys.argv[1:]], env)
     return True  # pragma: no cover - execve does not return
 
 

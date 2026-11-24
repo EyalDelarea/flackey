@@ -33,7 +33,7 @@ from pathlib import Path
 
 import httpx
 
-from .slskd_binary import SlskdBinaryError, binary_path, install_dir, is_installed
+from .slskd_binary import SlskdBinaryError, binary_path, binary_problem, install_dir, is_installed
 
 log = logging.getLogger(__name__)
 
@@ -427,6 +427,11 @@ class SlskdProcess:
 
         if not is_installed(self._data_dir):
             raise SlskdBinaryError("slskd is not installed; run the setup install step first")
+        # The pinned digest, checked every launch and not only at download: whatever sits where the
+        # sidecar lives is what gets run. In a thread, since it reads the whole 100+ MB file.
+        problem = await asyncio.to_thread(binary_problem, self._data_dir)
+        if problem is not None:
+            raise SlskdBinaryError(problem)
 
         app_dir = self._data_dir / "slskd"
         app_dir.mkdir(parents=True, exist_ok=True)

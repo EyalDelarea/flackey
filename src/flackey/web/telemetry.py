@@ -9,6 +9,8 @@ from ..telemetry.schema import schema
 
 # Only what the page itself knows: which wizard step it showed and how the owner left it.
 UI_EVENTS = ("setup_step", "setup_finished")
+# `emit`'s own parameters and the fields it sets on every event; never taken from the page.
+_RESERVED = frozenset({"self", "event", "event_date", "session_id", "seq"})
 
 
 def _client() -> telemetry.Telemetry:
@@ -74,6 +76,10 @@ def router() -> APIRouter:
         event, fields = body.get("event"), body.get("fields")
         if event not in UI_EVENTS or not isinstance(fields, dict):
             raise HTTPException(400, "not an event the page may send")
+        # The envelope is the app's to fill: `event_date` would skip the schema (a bad one gets the whole
+        # batch refused), and `event` or `self` would collide with `emit`'s own parameters.
+        if any(str(k) in _RESERVED or str(k) in schema().common for k in fields):
+            raise HTTPException(400, "not a field the page may send")
         telemetry.emit(event, **{str(k): v for k, v in fields.items()})
         return {"ok": True}
 

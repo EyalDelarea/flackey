@@ -10,6 +10,7 @@ from flackey import slskd_binary
 from flackey.slskd_binary import (
     SlskdBinaryError,
     binary_path,
+    binary_problem,
     download_url,
     install,
     install_dir,
@@ -53,6 +54,11 @@ def _pin(monkeypatch, zip_path: Path, *, sha256: str | None = None, size: int | 
     total = size if size is not None else len(data)
     monkeypatch.setattr(slskd_binary.platform, "machine", lambda: arch)
     monkeypatch.setitem(slskd_binary.ASSETS, slskd_binary._arch_key(), (zip_path.name, digest, total))
+    # The executable inside this synthetic zip is what gets launched, so it is the one pinned for launch.
+    with zipfile.ZipFile(zip_path) as zf:
+        if slskd_binary.binary_name() in zf.namelist():
+            exe = hashlib.sha256(zf.read(slskd_binary.binary_name())).hexdigest()
+            monkeypatch.setitem(slskd_binary.BINARY_SHA256, slskd_binary._arch_key(), exe)
 
 
 def _fetch_from(zip_path: Path, chunk_size: int = 7):
@@ -220,3 +226,56 @@ def test_on_the_mac_a_file_without_the_executable_bit_is_not_installed(tmp_path:
     path.write_bytes(b"x")
     os.chmod(path, 0o644)
     assert not is_installed(tmp_path)
+
+
+# ---- Security review 2026-11-24 (S1): the executable is checked before every launch -------------------
+
+def test_the_launch_pins_are_the_executables_inside_the_pinned_archives():
+    """Hashed on 2026-11-24 from the three 0.26.0 archives after each matched its `ASSETS` digest. The
+    archive pin only covers the download; these cover the file that is run, every time it is run."""
+    assert slskd_binary.BINARY_SHA256 == {
+        "arm64": "9e28174d77a87c3fa4f7b3f45309f8f50fd2ef4185387caf173d164c10badd73",
+        "x86_64": "858191887c52d89aa5b1c192c8fae9e91af8da605bc07363093cf8e60f1dd165",
+        "win-x64": "63bf536d6e1ed3830707d71d04b9f9e80ec7b45111c23aa7deba5498ef9afa4b",
+    }
+
+
+def test_an_installed_executable_that_matches_its_pin_has_no_problem(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    zip_path = _make_zip(tmp_path)
+    _pin(monkeypatch, zip_path)
+    install(data_dir, fetch=_fetch_from(zip_path))
+    assert binary_problem(data_dir) is None
+
+
+def test_a_changed_or_missing_executable_is_a_problem(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    assert binary_problem(data_dir) is not None          # nothing there
+    zip_path = _make_zip(tmp_path)
+    _pin(monkeypatch, zip_path)
+    install(data_dir, fetch=_fetch_from(zip_path))
+    binary_path(data_dir).write_bytes(b"#!/bin/sh\necho planted\n")
+    assert "does not match" in binary_problem(data_dir)
+
+
+def test_either_mac_build_is_accepted_on_a_mac(tmp_path: Path, monkeypatch):
+    """An Intel copy carried over to Apple silicon (or the other way) is still the pinned release."""
+    monkeypatch.setattr(slskd_binary.sys, "platform", "darwin")
+    path = binary_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"intel")
+    monkeypatch.setitem(slskd_binary.BINARY_SHA256, "x86_64", hashlib.sha256(b"intel").hexdigest())
+    monkeypatch.setattr(slskd_binary.platform, "machine", lambda: "arm64")
+    assert binary_problem(tmp_path) is None
+
+
+def test_install_replaces_an_executable_that_fails_its_pin(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    zip_path = _make_zip(tmp_path)
+    _pin(monkeypatch, zip_path)
+    install(data_dir, fetch=_fetch_from(zip_path))
+    binary_path(data_dir).write_bytes(b"#!/bin/sh\necho planted\n")
+
+    install(data_dir, fetch=_fetch_from(zip_path))
+
+    assert binary_problem(data_dir) is None

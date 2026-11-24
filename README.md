@@ -106,6 +106,8 @@ npm --prefix web install
 npm --prefix web run build   # builds web/dist, which flackey start serves
 ```
 
+Flackey reads the `.env` at the top of the checkout, never one in the folder you start it from.
+
 ### 🎚️ Usage
 
 ```bash

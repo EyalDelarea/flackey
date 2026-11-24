@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from .config import Settings, load_settings
+from .config import Settings, load_settings, secure_private_files
 from .logsetup import configure_logging
 
 app = typer.Typer(name="flackey", help="Flackey: paste Deezer links, get verified, tagged tracks for Rekordbox",
@@ -21,7 +21,7 @@ def _settings() -> Settings:
 
 
 @app.callback()
-def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (default ./.env)"),  # noqa: B008
+def main(env: Path | None = typer.Option(None, "--env", help="Path to .env (default: the one at the top of this checkout)"),  # noqa: B008
          verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
     _state["env"] = env
     configure_logging(_settings().data_dir, verbose=verbose)
@@ -128,6 +128,9 @@ def login() -> None:
 
     s = _settings()
     s.data_dir.mkdir(parents=True, exist_ok=True)
+    # Before Telethon opens it: the session file is created owner-only, not left at the umask's 0644 for
+    # however long the interactive login takes.
+    secure_private_files(s)
 
     async def _login() -> None:
         client = TelegramClient(str(s.session_path), s.telegram_api_id, s.telegram_api_hash)

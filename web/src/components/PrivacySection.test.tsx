@@ -110,3 +110,31 @@ it('keeps the description short and links to the website privacy page', async ()
   expect(link).toHaveAttribute('href', 'https://eyaldelarea.github.io/flackey/privacy.html')
   expect(link).toHaveAttribute('target', '_blank')
 })
+
+
+describe('stats switched off on this computer while an ID is still held (security review 2026-11-24, L11)', () => {
+  const held: TelemetryState = { ...on, available: false, enabled: false, mode: 'off', sending: false }
+
+  it('still shows the switch on, so the owner can turn it off and delete what was sent', async () => {
+    vi.spyOn(api, 'telemetry').mockResolvedValue(held)
+    const put = vi.spyOn(api, 'setTelemetry').mockResolvedValue({ ...held, id_prefix: null, pending_delete: true })
+    render(<PrivacySection />)
+    const sw = await screen.findByRole('switch', { name: 'Share usage stats' })
+    expect(sw).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText(/Switched off on this computer/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New ID' })).toBeNull()
+    fireEvent.click(sw)
+    await waitFor(() => expect(put).toHaveBeenCalledWith(false))
+    expect(await screen.findByText('Turned off. What was sent is being deleted.')).toBeInTheDocument()
+  })
+
+  it('stays up while a delete is still owed, but cannot be turned back on', async () => {
+    vi.spyOn(api, 'telemetry').mockResolvedValue({ ...held, id_prefix: null, pending_delete: true })
+    const put = vi.spyOn(api, 'setTelemetry')
+    render(<PrivacySection />)
+    const sw = await screen.findByRole('switch', { name: 'Share usage stats' })
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(sw)
+    expect(put).not.toHaveBeenCalled()
+  })
+})

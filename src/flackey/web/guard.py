@@ -8,7 +8,11 @@ closed here:
   (`TOKEN_HEADER`): random per launch, handed to the app's own window in the URL fragment it opens and
   printed to the terminal in browser mode, never served to a request that does not already have it.
   Elements that cannot send a header (`<audio>`, `<img>`, `EventSource`) ride on a session cookie that
-  only a request with the token can set, and that opens reads: no state change, no saved secret.
+  only a request with the token can set, and that opens reads: no state change, no saved secret, and none
+  of the reads that reach out to another service (`TOKEN_ONLY_READS`). The cookie is named for the port
+  and made from a salt drawn at each launch, so it dies with the launch even under a fixed token. A
+  browser still sends it to every server on the same host whatever the port -- cookies are not scoped
+  by port -- so the port in the name keeps two copies of Flackey apart rather than hiding the cookie.
 * DNS rebinding. A page on evil.example re-points its own name at 127.0.0.1 and is then same-origin with
   Flackey, so CORS never applies. The browser still sends `Host: evil.example`, so a request whose Host
   is a *name* other than localhost (or one the owner allowed) is refused. An IP literal cannot be
@@ -33,10 +37,14 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 APP_HEADER = "x-flackey-app"
 TOKEN_HEADER = "x-flackey-token"
-SESSION_COOKIE = "flackey_session"
+SESSION_COOKIE = "flackey_session"   # the prefix: `session_cookie_name` adds the port
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # What the cookie opens: reads only, and never OPTIONS, which no media element sends.
 COOKIE_METHODS = frozenset({"GET", "HEAD"})
+# Reads that reach out (GitHub, the slskd API key, Telegram) and that no media element needs: the page
+# calls them with the token, so the cookie alone does not open them.
+TOKEN_ONLY_READS = frozenset({"/api/update", "/api/setup/slskd", "/api/telegram/status"})
+SALT_BYTES = 16
 LOOPBACK_NAMES = frozenset({"localhost"})
 TOKEN_BYTES = 32
 # A fixed token from the environment (Docker) is held to roughly the strength of a generated one.
@@ -61,10 +69,18 @@ def same_secret(given: str | None, expected: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8", "surrogateescape"), expected.encode("utf-8"))
 
 
-def session_cookie_value(token: str) -> str:
+def new_salt() -> bytes:
+    return secrets.token_bytes(SALT_BYTES)
+
+
+def session_cookie_name(port: int) -> str:
+    return f"{SESSION_COOKIE}_{port}"
+
+
+def session_cookie_value(token: str, salt: bytes) -> str:
     """Derived from the token rather than the token itself, so the cookie jar never holds the key that
-    opens state changes."""
-    mac = hmac.new(token.encode(), b"flackey-session-cookie-v1", hashlib.sha256).digest()
+    opens state changes; and from this launch's salt, so a fixed token does not make it permanent."""
+    mac = hmac.new(token.encode(), b"flackey-session-cookie-v2" + salt, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
 
 
@@ -116,17 +132,20 @@ class GuardMiddleware:
     read, the session cookie it set) and an unsafe method without `APP_HEADER`. Every answer, refusals
     included, says it may not be framed."""
 
-    def __init__(self, app: ASGIApp, token: str, allowed_hosts: frozenset[str] = frozenset()) -> None:
+    def __init__(self, app: ASGIApp, token: str, allowed_hosts: frozenset[str] = frozenset(), *,
+                 port: int, salt: bytes) -> None:
         self.app = app
         self.token = token
-        self.cookie = session_cookie_value(token)
+        self.cookie_name = session_cookie_name(port)
+        self.cookie = session_cookie_value(token, salt)
         self.allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
 
     def auth(self, scope: Scope, headers: dict[str, str]) -> str | None:
         if same_secret(headers.get(TOKEN_HEADER), self.token):
             return "token"
         if (scope["type"] == "http" and scope.get("method", "GET") in COOKIE_METHODS
-                and same_secret(_cookie(headers.get("cookie"), SESSION_COOKIE), self.cookie)):
+                and scope.get("path", "").rstrip("/") not in TOKEN_ONLY_READS
+                and same_secret(_cookie(headers.get("cookie"), self.cookie_name), self.cookie)):
             return "cookie"
         return None
 
