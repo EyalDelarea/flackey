@@ -617,8 +617,6 @@ class FilingMixin:
         t = self.store.get_track(track_id)
         if t.source_fmt:
             raise ValueError(f"{t.artist} - {t.title} is already the lossless copy")
-        if not self.providers or not self.settings.lossless_enabled:
-            raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
         # The same guard Get extended has, and the same set (ENG-9): a double click or a second window would
         # otherwise run two searches into one tmp file name and swap the track's file twice. Taken before
         # the first await: the drive check below yields, and a second press arriving in that gap must
@@ -628,6 +626,9 @@ class FilingMixin:
         self._extending.add(track_id)
         try:
             await self._drive_refused()
+            # After the drive check, as before: an unplugged drive is the more useful thing to be told
+            if not self.providers or not self.settings.lossless_enabled:
+                raise ValueError("Soulseek isn't set up, so there is nothing to upgrade from")
             return await self._upgrade(t)
         finally:
             self._extending.discard(track_id)
