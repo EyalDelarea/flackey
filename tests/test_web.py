@@ -887,9 +887,9 @@ def test_the_session_cookie_lets_media_elements_read_but_not_act(client):
     r = c.post("/api/session")
     assert r.status_code == 200
     cookie = r.headers["set-cookie"]
-    assert "flackey_session=" in cookie and "HttpOnly" in cookie and "samesite=strict" in cookie.lower()
+    assert "flackey_session_8765=" in cookie and "HttpOnly" in cookie and "samesite=strict" in cookie.lower()
     assert "Path=/api" in cookie
-    value = c.cookies.get("flackey_session")
+    value = c.cookies.get("flackey_session_8765")
     assert value and c.app.state.api_token not in value
     # The cookie alone, as the media elements send it.
     assert c.get("/api/health", headers=NO_TOKEN).status_code == 200
@@ -901,8 +901,49 @@ def test_the_session_cookie_lets_media_elements_read_but_not_act(client):
 
 def test_a_forged_session_cookie_is_refused(client):
     c, _, _ = client
-    c.cookies.set("flackey_session", "forged")
+    c.cookies.set("flackey_session_8765", "forged")
     assert c.get("/api/health", headers=NO_TOKEN).status_code == 401
+
+
+# Security review 2026-11-24 (S13): the cookie is named for the port and made from a per-launch salt.
+
+def test_a_session_cookie_dies_with_the_launch_even_under_a_fixed_token(tmp_path):
+    """A fixed FLACKEY_API_TOKEN (Docker) used to give the same cookie on every launch, so one copied
+    once kept working for good. A restart is a new app with the same token."""
+    first, _, _ = make(tmp_path, api_token="t" * 40)
+    c = AppClient(first)
+    assert c.post("/api/session").status_code == 200
+    old = c.cookies.get("flackey_session_8765")
+    again, _, _ = make(tmp_path / "again", api_token="t" * 40)
+    c2 = AppClient(again, headers=NO_TOKEN)
+    c2.cookies.set("flackey_session_8765", old)
+    assert c2.get("/api/health").status_code == 401
+
+
+def test_a_session_cookie_set_for_one_port_is_not_taken_on_another(tmp_path):
+    settings = Settings(_env_file=None, telegram_api_id=1, telegram_api_hash="h", web_port=9876,
+                        library_root=tmp_path / "lib", data_dir=tmp_path / "data")
+    store = Store(settings.db_path)
+    app = create_app(store, Worker(store, DummySource(), MemoryNotifier(), settings),
+                     Inbox(store, youtube=fake_youtube), settings, api_token="t" * 40)
+    c = AppClient(app)
+    assert "flackey_session_9876=" in c.post("/api/session").headers["set-cookie"]
+    value = c.cookies.get("flackey_session_9876")
+    c.cookies.clear()
+    c.cookies.set("flackey_session_8765", value)        # the same value under another port's name
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 401
+    c.cookies.set("flackey_session_9876", value)
+    assert c.get("/api/health", headers=NO_TOKEN).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/api/update", "/api/setup/slskd", "/api/telegram/status"])
+def test_the_session_cookie_does_not_open_reads_that_reach_out(client, path):
+    """Security review 2026-11-24 (S20): these GETs call GitHub, send the slskd key, or dial Telegram. The
+    page calls them with the token; no media element needs them, so the cookie alone is refused."""
+    c, _, _ = client
+    as_media = _cookie_only(c)
+    for method in ("GET", "HEAD"):
+        assert as_media(method, path).status_code == 401, (method, path)
 
 
 def _cookie_only(c):
@@ -1881,9 +1922,12 @@ def test_reveal_on_windows_selects_a_file_in_explorer_and_opens_a_folder(tmp_pat
     f.parent.mkdir()
     f.write_bytes(b"x")
     monkeypatch.setattr("flackey.web.library.sys.platform", "win32")
+    monkeypatch.setenv("SystemRoot", "C:\\Windows")
     reveal_path(f)
     reveal_path(f.parent)
-    assert [c for c, _ in calls] == [f'explorer /select,"{f}"']
+    # By its full path (security review 2026-11-24, S14): a bare `explorer` is looked up in the current
+    # folder first.
+    assert [c for c, _ in calls] == [f'"C:\\Windows\\explorer.exe" /select,"{f}"']
     assert calls[0][1]["creationflags"] == 0x08000000
     assert started == [f.parent]
 
@@ -1925,6 +1969,16 @@ def test_setup_soulseek_password_is_404_until_one_is_saved_and_then_hands_it_bac
     assert c.get("/api/setup/soulseek/password").json() == {"username": "digger",
                                                             "password": "not-a-real-password"}
     assert "password" not in c.get("/api/setup/soulseek").json()
+
+
+@pytest.mark.parametrize("path", ["/api/setup/soulseek/password", "/api/setup/slskd/credentials"])
+def test_a_route_that_hands_back_a_secret_says_not_to_store_it(client, path):
+    """Security review 2026-11-24: neither the webview nor a browser may keep these answers on disk."""
+    c, _, settings = client
+    from flackey.slskd_config import write_credentials
+    write_credentials(settings.data_dir, "digger", "soulseek-secret")
+    r = c.get(path)
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
 
 
 def test_helper_web_login_is_separate_and_only_returned_on_demand(client):
@@ -2147,10 +2201,29 @@ def test_post_setup_slskd_does_not_download_again_when_it_is_already_installed(s
     binary.chmod(0o755)
     fake = _FakeInstall()
     monkeypatch.setattr("flackey.web.library.install_slskd", fake)
+    monkeypatch.setattr("flackey.web.library.binary_problem", lambda _: None)
 
     assert c.post("/api/setup/slskd").json() == {"state": "done"}
     assert fake.calls == []
     assert c.get("/api/setup/slskd").json()["installed"] is True
+
+
+def test_an_installed_slskd_that_fails_its_pin_reads_as_not_installed_and_is_installed_again(
+        slskd_client, monkeypatch):
+    """Security review 2026-11-24 (S1): the sidecar refuses to launch a program that is not the pinned
+    release, so setup must offer the install again rather than call it done."""
+    c, _, settings = slskd_client
+    from flackey.slskd_binary import binary_path
+    binary = binary_path(settings.data_dir)
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text("#!/bin/sh\necho planted\n")
+    binary.chmod(0o755)
+    fake = _FakeInstall()
+    monkeypatch.setattr("flackey.web.library.install_slskd", fake)
+
+    assert c.get("/api/setup/slskd").json()["installed"] is False
+    assert c.post("/api/setup/slskd").json() == {"state": "downloading"}
+    assert fake.calls == [settings.data_dir]
 
 
 class FakeLogin:
@@ -2971,6 +3044,28 @@ def test_usage_stats_routes(client, tmp_path):
         telemetry.uninstall()
 
 
+@pytest.mark.parametrize("key", ["event_date", "event", "session_id", "seq", "app_version", "self"])
+def test_the_page_may_not_set_an_envelope_field_of_its_event(client, tmp_path, key):
+    """Security review 2026-11-24 (L11): `event_date` is a parameter of `emit`, so a page-sent one skipped the
+    schema and could get a whole batch refused; `event` or `self` were a 500."""
+    from flackey import telemetry
+    from flackey.telemetry import Telemetry
+
+    c = client[0]
+    t = Telemetry(tmp_path / "usage", version="0.6.1", url="http://127.0.0.1:9", channel="checkout",
+                  platform_fields={"os": "macos", "os_major": "26", "arch": "arm64"})
+    telemetry.install(t)
+    try:
+        c.put("/api/telemetry", json={"enabled": True})
+        r = c.post("/api/telemetry/ui", json={"event": "setup_step", "fields": {
+            "step": "welcome", "action": "completed", key: "2026-13-45"}})
+        assert r.status_code == 400
+        t._flush()
+        assert t.snapshot()["pending"] == []
+    finally:
+        telemetry.uninstall()
+
+
 def test_not_now_marks_the_question_answered_and_leaves_stats_off(client, tmp_path):
     """The Welcome step left without a choice, "Not now", or the one-time prompt dismissed: all post
     /asked, which never turns stats on and stops the prompt from being shown again."""
@@ -3029,11 +3124,29 @@ def test_keep_it_anyway_reports_which_refusal_was_overruled_in_codes_only(client
 DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
-def test_api_docs_are_served_when_running_from_source_on_this_machine(tmp_path: Path):
+def test_api_docs_are_served_when_running_from_source_on_this_machine(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FLACKEY_API_DOCS", "1")
     app, _, _ = make(tmp_path)
     c = AppClient(app)
     for path in DOCS_PATHS:
         assert c.get(path).status_code == 200, path
+
+
+def test_api_docs_are_off_from_source_unless_asked_for(tmp_path: Path, monkeypatch):
+    """Security review 2026-11-24: the map is for a developer who asks for it, not every source run."""
+    monkeypatch.delenv("FLACKEY_API_DOCS", raising=False)
+    app, _, _ = make(tmp_path)
+    c = AppClient(app)
+    for path in DOCS_PATHS:
+        assert c.get(path).status_code == 404, path
+
+
+def test_api_docs_stay_off_on_the_network_even_when_asked_for(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FLACKEY_API_DOCS", "1")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    app, _, _ = make(tmp_path)
+    for path in DOCS_PATHS:
+        assert AppClient(app).get(path).status_code == 404, path
 
 
 def test_api_docs_are_not_served_by_the_packaged_app(tmp_path: Path, monkeypatch):

@@ -1,6 +1,6 @@
 """Download, verify and extract the slskd sidecar binary.
 
-Nothing here executes anything. `install()` streams the pinned release archive to a temp file,
+Nothing here executes anything; `binary_problem` is what `slskd_process` asks before every launch. `install()` streams the pinned release archive to a temp file,
 verifies its size and SHA-256 against the constants below *before* touching the zip's contents,
 extracts to a temp sibling directory, and only then moves the result into place. A verification
 failure deletes what was downloaded and raises; it never leaves a half-installed tree behind.
@@ -40,6 +40,15 @@ ASSETS: dict[str, tuple[str, str, int]] = {
         60777709,
     ),
 }
+# SHA-256 of the executable inside each archive above: what is actually run, checked before every launch
+# (`binary_problem`), where the archive digest is only checked at download. Hashed on 2026-11-24 from the
+# three archives after each matched its digest above. A 122 MB binary hashes in about 55 ms on an M-series
+# Mac, so it is hashed every time rather than cached.
+BINARY_SHA256: dict[str, str] = {
+    "arm64": "9e28174d77a87c3fa4f7b3f45309f8f50fd2ef4185387caf173d164c10badd73",
+    "x86_64": "858191887c52d89aa5b1c192c8fae9e91af8da605bc07363093cf8e60f1dd165",
+    "win-x64": "63bf536d6e1ed3830707d71d04b9f9e80ec7b45111c23aa7deba5498ef9afa4b",
+}
 # The one Windows build Flackey ships is x64, and it runs on ARM Windows under emulation. The sidecar
 # follows the app rather than the machine: an x64 slskd is what the x64 installer was tested with.
 WINDOWS_ASSET = "win-x64"
@@ -76,6 +85,30 @@ def is_installed(data_dir: Path) -> bool:
     if sys.platform == "win32":
         return path.is_file()
     return path.is_file() and os.access(path, os.X_OK)
+
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(_CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def binary_problem(data_dir: Path) -> str | None:
+    """Why the installed executable must not be run, or None when it is one of the pinned builds.
+
+    Either Mac build is accepted on a Mac: a copy installed on an Intel Mac and carried over to Apple
+    silicon (or run under Rosetta) is still the release that was pinned. Never raises."""
+    path = binary_path(data_dir)
+    keys = (WINDOWS_ASSET,) if sys.platform == "win32" else ("arm64", "x86_64")
+    try:
+        actual = _sha256_of(path)
+    except OSError as exc:
+        return f"slskd could not be read for its check: {exc.strerror or type(exc).__name__}"
+    if actual not in {BINARY_SHA256[k] for k in keys}:
+        return "slskd's program file does not match the pinned release; install it again from setup"
+    return None
 
 
 def _arch_key() -> str:
@@ -173,8 +206,9 @@ def install(
     executable. Raises SlskdBinaryError on an unsupported architecture, a network failure, a size or
     hash mismatch, or an unwritable path. Never executes anything.
 
-    If already installed, returns the existing path without downloading."""
-    if is_installed(data_dir):
+    If already installed and matching its pin, returns the existing path without downloading; an
+    executable that fails its pin (`binary_problem`) is replaced."""
+    if is_installed(data_dir) and binary_problem(data_dir) is None:
         return binary_path(data_dir)
 
     arch = _arch_key()

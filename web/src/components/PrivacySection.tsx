@@ -11,7 +11,14 @@ const when = (iso: string) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
 
+// Stats switched off on this computer (FLACKEY_TELEMETRY=off) after the owner opted in: the ID is still held,
+// so what was sent under it can still be deleted by turning the switch off.
+const heldWhileOff = (t: TelemetryState) => !t.available && !!t.id_prefix
+
 function statusLine(t: TelemetryState): string {
+  if (!t.available) return heldWhileOff(t)
+    ? 'Switched off on this computer, so nothing is collected or sent. Turn this off to delete what was sent.'
+    : 'Switched off on this computer. Nothing is collected or sent.'
   if (!t.enabled) return 'Off. Nothing is collected or sent.'
   if (!t.collector) return 'Not sending: this copy of Flackey has no stats server, so reports stay on this computer.'
   const last = t.last_send
@@ -29,7 +36,8 @@ function deletePending(r: NonNullable<TelemetryState['delete_retry']>): string {
 }
 
 /** Settings > Privacy: the usage-stats switch, the ID, and every event exactly as it leaves.
- *  Hidden entirely when the server says usage stats cannot run here (or does not answer). */
+ *  Hidden entirely when the server says usage stats cannot run here (or does not answer), unless an ID
+ *  from before is still held or its delete is still owed: then it stays, so it can be turned off. */
 export default function PrivacySection({ onReport }: { onReport?: () => void } = {}) {
   const [t, setT] = useState<TelemetryState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -51,7 +59,8 @@ export default function PrivacySection({ onReport }: { onReport?: () => void } =
   }
   useEffect(() => { if (logOpen) loadLog() }, [logOpen, t?.enabled, t?.id_prefix])
 
-  if (!t?.available) return null
+  if (!t || !(t.available || t.pending_delete || heldWhileOff(t))) return null
+  const held = heldWhileOff(t)
 
   const run = (call: () => Promise<TelemetryState>, fallback: string) => {
     setBusy(true); setError(null)
@@ -71,12 +80,13 @@ export default function PrivacySection({ onReport }: { onReport?: () => void } =
           everything that was sent.{' '}
           <button type="button" className="btn-link" onClick={() => setCatalogOpen(true)}>See exactly what's sent</button>{' '}
           <a className="btn-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy details</a></div>
-        {t.enabled ? null
+        {t.enabled || held ? null
         : t.pending_delete ? <div className="v">Turned off. What was sent is being deleted.</div>
           : t.last_delete_confirmed ? <div className="v">Turned off. The delete was received: what was sent is
             erased within the hour.</div> : null}
         {error && <div className="err">{error}</div>}</div>
-        <div className="actions"><Switch label="Share usage stats" checked={t.enabled} onChange={toggle} busy={busy} /></div></div>
+        <div className="actions"><Switch label="Share usage stats" checked={t.enabled || held} onChange={toggle} busy={busy}
+          disabled={!t.available && !held} /></div></div>
       {t.enabled && t.id_prefix && <div className="srow"><div className="srow-body"><div className="k">Your ID</div>
         <div className="v mono">{t.id_prefix}…</div>
         <div className="v">A new ID deletes what was sent under this one.</div></div>

@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from typing import Protocol
 
-from .tools import no_window
+from .tools import no_window, windows_system_exe
 
 
 @dataclass
@@ -71,7 +71,9 @@ def desktop_notify(title: str, body: str) -> None:
         cmd = ["osascript", "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
                "-e", "end run", title, body]
     elif sys.platform == "win32":
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _TOAST]
+        # By its full path: a bare `powershell` is looked up in the current folder first.
+        cmd = [windows_system_exe("System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile",
+               "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _TOAST]
         env = {**os.environ, "FLACKEY_NOTE_TITLE": title, "FLACKEY_NOTE_BODY": body}
     else:
         cmd = ["notify-send", "--", title, body]   # "--": a title like "-Rezz" is not an option

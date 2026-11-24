@@ -200,6 +200,17 @@ def test_desktop_notify_hands_the_text_over_as_arguments_and_never_raises(monkey
     notify.desktop_notify("Flackey", "x")     # swallowed
 
 
+def test_desktop_notify_on_windows_runs_powershell_by_its_full_path(monkeypatch):
+    """Security review 2026-11-24 (S14): a bare `powershell` is looked up in the current folder first."""
+    from flackey import notify
+    calls: list[list[str]] = []
+    monkeypatch.setattr(notify.sys, "platform", "win32")
+    monkeypatch.setenv("SystemRoot", "C:\\Windows")
+    monkeypatch.setattr(notify.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    notify.desktop_notify("Flackey", "x")
+    assert calls[0][0] == "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
 @pytest.mark.parametrize("layout", ["month", "day", "flat"])
 async def test_a_new_track_is_filed_by_the_library_layout(env, layout):
     settings, store, _ = env

@@ -21,6 +21,7 @@ from flackey.telemetry.client import (
     DELETE_RETRY,
     DRAIN_GAP_S,
     FILES,
+    MARKER,
     MAX_BACKOFF_S,
     MAX_OUTBOX_EVENTS,
     OUTBOX,
@@ -1310,3 +1311,89 @@ def test_a_refused_batch_does_not_take_events_flushed_during_the_send_with_it(tm
     run_tick(t, httpx.MockTransport(answer))
     pending = [e.get("filing_format") for e in t.snapshot()["pending"] if e["event"] == "app_started"]
     assert pending == ["flac"]
+
+
+
+# ---- Security review 2026-11-24 -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind, value", [
+    ("uuid4", "5b0e2c1a-0000-4000-8000-000000000000\n"),
+    ("date", "2026-11-24\n"),
+])
+def test_the_schema_matches_the_whole_value(kind, value):
+    """Security review 2026-11-24 (S4, the app's half): an ID or a date is the whole string, nothing after it."""
+    from flackey.telemetry.schema import Field
+    field = Field({"type": kind}, {}, set())
+    assert field.ok(value) is False
+    assert field.ok(value.rstrip("\n")) is True
+
+
+def test_a_new_id_starts_a_new_session_too(tmp_path):
+    """S19: the session ID and sequence linked the old ID's rows to the new one's until the old were erased."""
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started")
+    before = t.session_id
+    t.reset_id()
+    assert t.session_id != before
+    assert (tmp_path / MARKER).read_text(encoding="utf-8") == t.session_id
+    t.emit("app_started")
+    t._flush()
+    first = t.snapshot()["pending"][0]
+    assert first["session_id"] == t.session_id and first["seq"] == 0
+
+
+def test_opting_in_again_starts_a_new_session(tmp_path):
+    t, _ = make(tmp_path)
+    t.opt_in()
+    t.emit("app_started")
+    first = t.session_id
+    t.opt_out()
+    t.opt_in()
+    assert t.session_id != first
+    assert (tmp_path / MARKER).read_text(encoding="utf-8") == t.session_id
+    t.emit("app_started")
+    t._flush()
+    assert [(e["session_id"], e["seq"]) for e in t.snapshot()["pending"] if e["event"] == "app_started"] == [
+        (t.session_id, 0)]
+
+
+def test_an_owed_delete_is_sent_even_after_stats_are_switched_off_here(tmp_path):
+    """L11: opted in, then FLACKEY_TELEMETRY=off. Turning stats off must still delete what was sent."""
+    collector = Collector()
+    on, _ = make(tmp_path)
+    on.opt_in()
+    held = on.install_id
+    t, _ = make(tmp_path, enabled=True, install_id=held, install_secret=on.install_secret, mode="off")
+    assert not t.available
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == [held]
+
+
+def test_the_local_demo_still_sends_no_delete(tmp_path):
+    collector = Collector()
+    t, _ = make(tmp_path, mode="local")
+    t.opt_in()
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == [] and collector.batches == []
+
+
+def test_switched_off_here_the_held_id_is_still_described_so_the_page_can_offer_turning_it_off(tmp_path):
+    """The app builds the client through `from_settings`; under FLACKEY_TELEMETRY=off it must still say which
+    ID is held, or Settings > Privacy has nothing to turn off."""
+    from flackey.config import Settings
+
+    held = "5b0e2c1a-0000-4000-8000-000000000000"
+    s = Settings(_env_file=None, data_dir=tmp_path, library_root=tmp_path / "lib", telemetry_enabled=True,
+                 telemetry_install_id=held, telemetry_install_secret="s" * 43, telemetry_opted_in="2026-11-01",
+                 telemetry_asked=True)
+    t = telemetry.from_settings(s, "0.6.1", environ={"FLACKEY_TELEMETRY": "off",
+                                                      "FLACKEY_TELEMETRY_URL": "http://127.0.0.1:8790"})
+    d = t.describe()
+    assert (d["available"], d["enabled"], d["id_prefix"]) == (False, False, held[:8])
+    collector = Collector()
+    t.opt_out()
+    run_tick(t, httpx.MockTransport(collector))
+    assert collector.deletes == [held] and t.describe()["id_prefix"] is None

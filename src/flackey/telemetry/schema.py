@@ -16,8 +16,9 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "assets" / f"telemetry_schema_v{SCHEMA_VERSION}.json"
 MAX_STRING = 50
-_UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+# Used with `fullmatch`, so the whole value must match.
+_UUID4 = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 class Field:
@@ -45,9 +46,9 @@ class Field:
         if k == "int":
             return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= self.max
         if k == "uuid4":
-            return isinstance(value, str) and bool(_UUID4.match(value))
+            return isinstance(value, str) and bool(_UUID4.fullmatch(value))
         if k == "date":
-            if not isinstance(value, str) or not _DATE.match(value):
+            if not isinstance(value, str) or not _DATE.fullmatch(value):
                 return False
             try:
                 dt.date.fromisoformat(value)

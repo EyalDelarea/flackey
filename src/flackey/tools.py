@@ -16,6 +16,7 @@ assumptions is branched on below rather than papered over.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import shutil
 import subprocess
@@ -58,6 +59,29 @@ def _executable_name(name: str) -> str:
     return name + ".exe" if sys.platform == "win32" else name
 
 
+def windows_system_exe(*parts: str) -> str:
+    """The full path of a program that ships with Windows, under `%SystemRoot%` (`C:\\Windows` when that is
+    unset or not a full path). A bare name such as `explorer` or `powershell` is looked up in the current
+    folder before the system folders, so a folder the app was started from could supply its own."""
+    root = os.environ.get("SystemRoot") or ""
+    if not ntpath.isabs(root):
+        root = "C:\\Windows"
+    return ntpath.join(root, *parts)
+
+
+def _on_windows_path(name: str) -> str | None:
+    """`name`.exe from the absolute PATH entries only. Not `shutil.which`, which on Windows tries the
+    current folder first; and a relative entry (`.`, or an empty one) is the current folder again."""
+    for entry in (os.environ.get("PATH") or "").split(os.pathsep):
+        entry = entry.strip().strip('"')
+        if not entry or not os.path.isabs(entry):
+            continue
+        candidate = Path(entry) / _executable_name(name)
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _is_executable(candidate: Path) -> bool:
     """A file that can be run. On Windows `os.access(X_OK)` says nothing -- it answers True for any file
     that exists, a README included -- so the `.exe` name built by `_executable_name` is what carries
@@ -96,11 +120,11 @@ def tool_path(name: str) -> str | None:
         candidate = bundled / _executable_name(name)
         if _is_executable(candidate):
             return str(candidate)
+    if sys.platform == "win32":
+        return _on_windows_path(name)  # no Homebrew there
     found = shutil.which(name)
     if found:
         return found
-    if sys.platform == "win32":
-        return None  # no Homebrew there, and `which` has already searched the PATH
     # Only reached in a GUI launch, where Finder's PATH omits the Homebrew prefixes.
     for prefix in BREW_BINS:
         candidate = Path(prefix) / name

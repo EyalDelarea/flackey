@@ -49,6 +49,8 @@ export function useLive(): Live {
   const updateChecked = useRef(false)
   const firstOpen = useRef(true)
   const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Bumped to open the event stream again after the server refused it (see `onerror` below).
+  const [streamEpoch, setStreamEpoch] = useState(0)
   // Every write of a whole queue snapshot takes a ticket when its fetch starts, and only the newest ticket
   // may land: an older /api/queue answer arriving last would otherwise put rows back to a stage they have
   // already left. Row events that arrive while a snapshot is in flight are newer than it, so they are kept
@@ -151,12 +153,25 @@ export function useLive(): Live {
     es.onopen = () => { markAlive(); if (firstOpen.current) { firstOpen.current = false; return } refresh().catch(() => undefined) }
     // EventSource fires `error` on every transient retry attempt, not just real outages, so a short
     // grace period keeps the reconnecting banner from flashing during routine reconnects.
+    // A stream the server *refused* is closed for good -- EventSource retries only one that dropped. That
+    // is what a restart looks like: the media cookie is made from a salt each launch draws, so the old
+    // one is turned away while the token still works. Ask for a fresh cookie, then open the stream again.
+    let reopen: ReturnType<typeof setTimeout> | null = null
     es.onerror = () => {
+      if (es.readyState === 2 /* CLOSED */ && !reopen) {
+        reopen = setTimeout(() => {
+          api.session().then(() => setStreamEpoch(n => n + 1)).catch(() => undefined)
+        }, 2000)
+      }
       if (staleTimer.current) return
       staleTimer.current = setTimeout(() => { setConnected(false); staleTimer.current = null }, 5000)
     }
-    return () => { if (staleTimer.current) clearTimeout(staleTimer.current); es.close() }
-  }, [refresh, refreshLibrary, applySnapshot])
+    return () => {
+      if (staleTimer.current) { clearTimeout(staleTimer.current); staleTimer.current = null }
+      if (reopen) clearTimeout(reopen)
+      es.close()
+    }
+  }, [refresh, refreshLibrary, applySnapshot, streamEpoch])
 
   return { health, bundles, playlists, stats, settings, fetchProgress, libraryVersion, loadError, loading, connected, lastSeen, upgradeActivity, setUpgradeActivity, update, updateDownload, refresh, refreshLibrary, retry, setHealth, setSettings, dropBundle }
 }

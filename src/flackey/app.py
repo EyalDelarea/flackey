@@ -642,6 +642,8 @@ async def run(settings: Settings, open_browser: bool = True, handle: ServerHandl
     try:
         if handle.token is None:
             handle.token = api_token_from_env()
+        # Read once; slskd, ffmpeg and PowerShell inherit the environment and have no use for the API's key.
+        os.environ.pop(TOKEN_ENV, None)
         await _run(settings, handle)
     finally:
         handle.started.set()  # wakes a waiting thread even when startup died before the server existed

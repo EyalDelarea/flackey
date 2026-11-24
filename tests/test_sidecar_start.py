@@ -51,6 +51,7 @@ def _spawning(monkeypatch, proc: FakeProc, answers=None):
         return next(seq, "ConnectError: refused")
 
     monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process, "binary_problem", lambda _: None)
     monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(SlskdProcess, "_check", check)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import sys
 from enum import Enum
 from pathlib import Path
@@ -21,10 +22,19 @@ from ..models import Verdict
 from ..store import Store
 from ..telegram import TelegramLogin
 from ..worker import Worker, format_line
-from .guard import SESSION_COOKIE, GuardMiddleware, from_the_app, new_token, session_cookie_value
+from .guard import (
+    GuardMiddleware,
+    from_the_app,
+    new_salt,
+    new_token,
+    session_cookie_name,
+    session_cookie_value,
+)
 
 log = logging.getLogger(__name__)
 SETUP_DONE_KEY = "setup_done"
+# Serves /docs, /redoc and /openapi.json from a source run on this machine when set to "1".
+DOCS_ENV = "FLACKEY_API_DOCS"
 NO_UI = ("<h1>flackey</h1><p>The UI is not built. Run <code>npm --prefix web install &amp;&amp; "
          "npm --prefix web run build</code>, then reload. API at <a href='/api/health'>/api/health</a>.</p>")
 # Every route is `async def` on purpose: FastAPI runs plain `def` routes in a threadpool, and the Store's
@@ -158,16 +168,20 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
 
     store.listeners.append(on_change)
 
-    # The API map is for a developer running from source. The packaged app has no use for it, and a server
-    # listening beyond this machine (Docker) would hand it to the network without the token.
-    docs = not getattr(sys, "frozen", False) and settings.web_host in library.LOOPBACK
+    # The API map is for a developer running from source who asks for it (FLACKEY_API_DOCS=1). The packaged
+    # app has no use for it, and a server listening beyond this machine (Docker) would hand it to the
+    # network without the token.
+    docs = (os.environ.get(DOCS_ENV) == "1" and not getattr(sys, "frozen", False)
+            and settings.web_host in library.LOOPBACK)
     app = FastAPI(title="flackey", version=__version__, **({} if docs else
                   {"docs_url": None, "redoc_url": None, "openapi_url": None}))
     token = api_token or new_token()
     app.state.api_token = token
+    salt = new_salt()        # this launch's: the media cookie from an earlier one is not taken
     # No CORS middleware on purpose: the UI is served from this origin, and the Vite dev server proxies
     # `/api`, so no other origin has a reason to read or drive the API.
-    app.add_middleware(GuardMiddleware, token=token, allowed_hosts=settings.allowed_hosts)
+    app.add_middleware(GuardMiddleware, token=token, allowed_hosts=settings.allowed_hosts,
+                       port=settings.web_port, salt=salt)
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
@@ -186,8 +200,8 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
         token header, so the page calls this once with it and they ride on the cookie it sets. Strict and
         HttpOnly, so no other site sends it and no script reads it; the guard lets it open reads only."""
         from_the_app(request)
-        response.set_cookie(SESSION_COOKIE, session_cookie_value(token), httponly=True, samesite="strict",
-                            path="/api")
+        response.set_cookie(session_cookie_name(settings.web_port), session_cookie_value(token, salt),
+                            httponly=True, samesite="strict", path="/api")
         return {"ok": True}
 
     @app.get("/api/health")
@@ -225,7 +239,8 @@ def create_app(store: Store, worker: Worker, inbox: Inbox, settings: Settings, u
     app.include_router(sharing_web.router(sharing))
     app.include_router(update.router(status, settings, quit_app=quit_app))
     app.include_router(telemetry_web.router())
-    app.include_router(report.router(settings, status, store=store, **({"opener": opener} if opener else {})))
+    app.include_router(report.router(settings, status, store=store, api_token=token,
+                                     **({"opener": opener} if opener else {})))
 
     if ui_dir is not None and ui_dir.exists():
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")

@@ -78,6 +78,39 @@ def test_a_helper_is_found_where_brew_put_it_even_with_finder_s_bare_path(monkey
     assert tools.tool_path("ffmpeg") == str(exe)
 
 
+def test_on_windows_a_helper_is_never_taken_from_the_current_folder(monkeypatch, tmp_path: Path):
+    """Security review 2026-11-24 (S14): Windows' own lookup (and `shutil.which` there) tries the current
+    folder before the PATH, and a relative PATH entry is the current folder too. Only absolute PATH
+    entries count."""
+    monkeypatch.setattr(tools.sys, "platform", "win32")
+    monkeypatch.setattr(tools, "bundled_bin_dir", lambda: None)
+    here = tmp_path / "untrusted"
+    (here / "rel").mkdir(parents=True)
+    (here / "ffmpeg.exe").write_text("planted")
+    (here / "rel" / "ffmpeg.exe").write_text("planted")
+    monkeypatch.chdir(here)
+    real = tmp_path / "real"
+    real.mkdir()
+    monkeypatch.setenv("PATH", os.pathsep.join([".", "rel", "", str(real)]))
+
+    assert tools.tool_path("ffmpeg") is None
+    (real / "ffmpeg.exe").write_text("real")
+    assert _same(tools.tool_path("ffmpeg"), real / "ffmpeg.exe")
+
+
+def test_a_windows_system_program_is_named_by_its_full_path(monkeypatch):
+    """`explorer` and `powershell` by bare name are looked up in the current folder first on Windows."""
+    monkeypatch.setenv("SystemRoot", "D:\\Win")
+    assert tools.windows_system_exe("explorer.exe") == "D:\\Win\\explorer.exe"
+    assert tools.windows_system_exe("System32", "WindowsPowerShell", "v1.0", "powershell.exe") == \
+        "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    for unusable in ("", "Win"):           # unset, or not a full path: the standard location
+        monkeypatch.setenv("SystemRoot", unusable)
+        assert tools.windows_system_exe("explorer.exe") == "C:\\Windows\\explorer.exe"
+    monkeypatch.delenv("SystemRoot")
+    assert tools.windows_system_exe("explorer.exe") == "C:\\Windows\\explorer.exe"
+
+
 def test_a_checkout_has_no_bundled_folder(monkeypatch):
     """`bundled_bin_dir` is the only part that inspects the freeze, so it is the part worth pinning."""
     monkeypatch.delattr("sys.frozen", raising=False)

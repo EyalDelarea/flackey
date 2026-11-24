@@ -180,3 +180,34 @@ def test_a_term_stops_a_windowless_start_cleanly(tmp_path: Path, monkeypatch):
     r = runner.invoke(app, ["--env", str(_env(tmp_path)), "start", "--no-browser"])
     assert r.exit_code == 0 and "stopped" in r.output and cleaned == [True]
     assert signal.getsignal(signal.SIGTERM) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_login_never_lets_telegram_open_a_readable_session_file(tmp_path: Path, monkeypatch):
+    """Security review 2026-11-24: Telethon created owner.session with the umask's 0644, and it was made
+    0600 only after the interactive login finished. It must already be private when Telethon opens it."""
+    import telethon
+
+    seen: dict[str, int] = {}
+
+    class FakeClient:
+        def __init__(self, session: str, *_a) -> None:
+            path = Path(session + ".session")
+            seen["file"] = path.stat().st_mode & 0o777
+            seen["dir"] = path.parent.stat().st_mode & 0o777
+
+        async def start(self) -> None:
+            return None
+
+        async def get_me(self):
+            class Me:
+                first_name, username, id = "A", "a", 1
+            return Me()
+
+        async def disconnect(self) -> None:
+            return None
+
+    monkeypatch.setattr(telethon, "TelegramClient", FakeClient)
+    r = runner.invoke(app, ["--env", str(_env(tmp_path)), "login"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"file": 0o600, "dir": 0o700}

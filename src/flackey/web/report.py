@@ -82,6 +82,10 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # A leading `+` is required: a bare run of digits is a Deezer track id or a timestamp far more often than
 # it is a phone number. The second form is what `telegram.mask_phone` prints.
 _PHONE = re.compile(r"\+\d[\d ().-]{6,}\d|\+\d{1,3} •+ •*\d{2}")
+# Without the `+`, only the shapes a person writes a number in: 2-4 digits (or an area code in brackets),
+# then 3, then 4, split the same way each time. A timestamp, a Deezer id, a size or a bare run of digits
+# never has that shape; a ten-digit run with no separators is left alone for the same reason.
+_LOCAL_PHONE = re.compile(r"(?<![\w.:/-])(?:\(\d{2,4}\) ?\d{3}-\d{4}|\d{2,4}([-. ])\d{3}\1\d{4})(?![\w.:/-])")
 # A trailing `.` is allowed when no digit follows it, so an address that ends a sentence is still one.
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
 # Three colons at least, so a log timestamp's `12:00:00` is never one; `::` shortening is allowed, and the
@@ -92,7 +96,7 @@ _KEEP_IPS = {"127.0.0.1", "0.0.0.0"}
 # Any name that *ends* in one of these, so `telegram_api_hash=` and `access_token:` count too. The value is
 # a whole quoted string when it is quoted, and an auth scheme word takes the credential after it along.
 _KEY_VALUE = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:api[_-]?hash|api[_-]?key|password|passwd|token|secret|"
-                        r"authorization))([\"']?\s*[:=]\s*)(\"[^\"\n]*\"|'[^'\n]*'|"
+                        r"(?:secret|private|access)[_-]?key|authorization))([\"']?\s*[:=]\s*)(\"[^\"\n]*\"|'[^'\n]*'|"
                         r"(?:(?:bearer|basic|digest|token)\s+)?[^\s\"',;}]+)")
 # A password is the one value that may hold spaces unquoted (`password: my pass phrase`), so after one of
 # these names the rest of the clause goes, not just its first word.
@@ -100,7 +104,20 @@ _PASSWORD_REST = re.compile(r"(?i)(?<![A-Za-z0-9])([\w-]*(?:password|passwd|pass
                             r"(?![\"'])([^\n,;}]+)")
 # `scheme://user:pass@host`: the whole userinfo goes, before `_EMAIL` would take only `pass@host`.
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
-_OTHER_HOME = re.compile(r"/Users/[^/\s]+")
+# A bare `Bearer <credential>`, with nothing in front of it saying "authorization".
+_BEARER = re.compile(r"(?i)(?<![\w-])(bearer)(\s+)([A-Za-z0-9._~+/=-]{8,})")
+# Any case: APFS ignores it, so `/users/bob` is the same folder.
+_OTHER_HOME = re.compile(r"(?i)/Users/[^/\s]+")
+_OTHER_LINUX_HOME = re.compile(r"(?<![\w.])/home/[^/\s\"'<>|]+")
+# A drive's name, which may hold spaces: up to the next `/` when one follows soon on the same line, or
+# else only its first word -- the rest of the line is the message, not the name.
+_VOLUME = re.compile(r"(?i)(?<![\w.])/Volumes/(?:[^/\n\"'<>|;:,()]{1,64}(?=/)|[^/\s\"'<>|;:,()]+)")
+# A Windows network share's server, as `\\server\share` or, inside a repr or JSON, `\\\\server\\share`.
+_UNC_SERVER = re.compile(r"(?<![\w\\:])(\\{4}|\\{2})[A-Za-z0-9][\w.$-]*(?=\\)")
+# A Bonjour host name, which on a Mac is usually its owner's: `Eyals-MacBook-Pro.local`.
+_LOCAL_HOST = re.compile(r"(?i)(?<![\w.-])[A-Za-z0-9][\w-]*(?:\.[\w-]+)*\.local(?![\w.-])")
+# A work OneDrive is named for the company: `OneDrive - Contoso Ltd`.
+_ONEDRIVE_ORG = re.compile(r"(?i)(OneDrive - )[^\\/\n\"'<>|:*?]+")
 # Somebody's Windows home, in each spelling a log can hold it: `C:\Users\bob` as Windows prints it,
 # `C:/Users/bob` as Python sometimes does, and `C:\\Users\\bob` inside a repr or a JSON string. Any
 # drive and any case, because Windows paths are case-insensitive and nothing normalises them first.
@@ -114,6 +131,10 @@ _COOKIE = re.compile(r"(?i)(?<![\w-])((?:set-)?cookie)(\s*:\s*)([^\n]+)")
 # A bare `session=` / `sessionid=` / `sid=` value, as a query string or a cookie carries it. Only the bare
 # name: `telegram_session=` names a file, not a secret.
 _SESSION = re.compile(r"(?i)(?<![\w-])(session(?:[_-]?id)?|sid)(\s*=\s*)([^\s&;,\"']+)")
+# A named session cookie -- `flackey_session_8765=`, `csrf_session=` -- unless its value is a path or a
+# `.session` file name: `telegram_session=/data/owner.session` names a file, not a secret.
+_NAMED_SESSION = re.compile(r"(?i)(?<![\w-])([\w-]+_session(?:[_-]?id)?(?:_\d+)?)(\s*=\s*)"
+                            r"(?![^\s&;,\"']*(?:[/\\]|\.session\b))([^\s&;,\"']+)")
 
 
 def _spellings(secret: str) -> set[str]:
@@ -160,26 +181,30 @@ class Redactor:
                                       re.MULTILINE | (0 if s in known else re.IGNORECASE)), s, s not in known)
                           for s in sorted(spellings, key=len, reverse=True) if len(s) > PARTIAL_SECRET_CHARS]
         names = sorted({u.strip() for u in users if u and len(u.strip()) >= 3}, key=len, reverse=True)
-        # Windows account names are case-insensitive, and a log prints whichever case the API returned.
-        flags = re.IGNORECASE if self._windows else 0
-        self._users = [re.compile(r"(?<![\w])" + re.escape(u) + r"(?![\w])", flags) for u in names]
-        self._home_pattern = self._windows_home_pattern(self.home) if self._windows else None
+        # Account names are case-insensitive on Windows and the Mac alike, and a log prints whichever case
+        # it was handed -- a typed path included.
+        self._users = [re.compile(r"(?<![\w])" + re.escape(u) + r"(?![\w])", re.IGNORECASE) for u in names]
+        self._home_pattern = self._home_regex(self.home, windows=self._windows)
 
     @staticmethod
-    def _windows_home_pattern(home: str) -> re.Pattern:
+    def _home_regex(home: str, *, windows: bool) -> re.Pattern:
         """This machine's home in any of the separators and cases `_OTHER_WINDOWS_HOME` accepts, and
-        only as a whole folder name: `C:\\Users\\eyal` must not take the front off `C:\\Users\\eyalx`."""
+        only as a whole folder name: `C:\\Users\\eyal` must not take the front off `C:\\Users\\eyalx`.
+        A Mac home the same way, in any case (APFS ignores it), starting at its leading `/`."""
         parts = [re.escape(p) for p in re.split(r"[\\/]+", home) if p]
-        return re.compile(r"(?i)(?<![\w])" + _ANY_SEPARATOR.join(parts) + r"(?![^\\/\s\"'<>|:*?])")
+        lead = "" if windows else _ANY_SEPARATOR
+        return re.compile(r"(?i)(?<![\w])" + lead + _ANY_SEPARATOR.join(parts) + r"(?![^\\/\s\"'<>|:*?])")
 
     def __call__(self, text: str) -> str:
         # The home folder before the known values: a Soulseek name that equals the macOS user name would
         # otherwise turn `/Users/eyal/Music` into `/Users/<redacted>/Music` instead of the tidier `~/Music`.
-        if self._home_pattern is not None:
-            text = self._home_pattern.sub("~", text)
-        else:
-            text = text.replace(self.home, "~")
+        text = self._home_pattern.sub("~", text)
         text = _OTHER_HOME.sub("/Users/<user>", text)
+        text = _OTHER_LINUX_HOME.sub("/home/<user>", text)
+        text = _VOLUME.sub("/Volumes/<drive>", text)
+        text = _UNC_SERVER.sub(lambda m: f"{m.group(1)}<server>", text)
+        text = _ONEDRIVE_ORG.sub(r"\1<org>", text)
+        text = _LOCAL_HOST.sub("<host>.local", text)
         text = _OTHER_WINDOWS_HOME.sub(lambda m: f"{m.group(1)}{m.group(2)}Users{m.group(2)}<user>", text)
         for pattern in self._known:
             text = pattern.sub("<redacted>", text)
@@ -190,11 +215,14 @@ class Redactor:
         text = _BOT_TOKEN.sub(lambda m: f"{m.group(1) or ''}<redacted>", text)
         text = _COOKIE.sub(_redact_value, text)
         text = _SESSION.sub(_redact_value, text)
+        text = _NAMED_SESSION.sub(_redact_value, text)
+        text = _BEARER.sub(_redact_value, text)
         text = _URL_USERINFO.sub(r"\1<redacted>@", text)
         text = _PASSWORD_REST.sub(_redact_value, text)
         text = _KEY_VALUE.sub(_redact_value, text)
         text = _EMAIL.sub("<email>", text)
         text = _PHONE.sub("<phone>", text)
+        text = _LOCAL_PHONE.sub("<phone>", text)
         text = _IPV4.sub(lambda m: m.group(0) if m.group(0) in _KEEP_IPS else "<ip>", text)
         text = _IPV6.sub("<ip>", text)
         return text
@@ -214,8 +242,9 @@ def _redact_value(m: re.Match) -> str:
     return f"{m.group(1)}{m.group(2)}{quote}<redacted>{quote}"
 
 
-def known_secrets(settings: Settings) -> list[str | None]:
-    """Every credential flackey itself holds. `read_*` never raise, so a missing slskd.yml is just fewer
+def known_secrets(settings: Settings, api_token: str | None = None) -> list[str | None]:
+    """Every credential flackey itself holds, this launch's API token among them, and the usage-stats
+    install ID (which identifies the install to the collector). `read_*` never raise, so a missing slskd.yml is just fewer
     values here rather than a report that cannot be built.
 
     The password of slskd's web login, never its username: that is the constant flackey writes
@@ -225,7 +254,7 @@ def known_secrets(settings: Settings) -> list[str | None]:
     return [str(settings.telegram_api_id) if settings.telegram_api_id else None,
             settings.telegram_api_hash, settings.slskd_api_key, read_api_key(settings.data_dir),
             read_username(settings.data_dir), read_password(settings.data_dir), web[1] if web else None,
-            settings.telemetry_install_secret]
+            settings.telemetry_install_secret, settings.telemetry_install_id, api_token]
 
 
 def display_summary() -> str:
@@ -551,7 +580,7 @@ def latest_zip(folder: Path) -> Path | None:
 
 
 def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_path,
-           store: Store | None = None) -> APIRouter:
+           store: Store | None = None, api_token: str | None = None) -> APIRouter:
     r = APIRouter(prefix="/api/bug-report")
     folder = settings.data_dir / REPORT_DIR
 
@@ -572,7 +601,7 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
     def build(body: dict, failure: FailureRecord | None) -> tuple[Report, Redactor, str, str]:
         description = str(body.get("description") or "")
         steps = str(body.get("steps") or "")
-        redact = Redactor(known_secrets(settings))
+        redact = Redactor(known_secrets(settings, api_token))
         report = build_report(settings, status, ClientContext.parse(body), description, steps, redact,
                               failure=failure)
         return report, redact, description, steps

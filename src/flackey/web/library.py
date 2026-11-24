@@ -8,19 +8,20 @@ import sys
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .. import __version__
 from ..config import (
     EXTENDED_MIXES,
     FILING_FORMATS,
     LIBRARY_LAYOUTS,
+    LOOPBACK,
     Settings,
     default_filing_format,
     save_settings,
+    slskd_url_problem,
 )
 from ..export import (
     PLAYLIST_DIR,
@@ -34,7 +35,7 @@ from ..export import (
 )
 from ..library import library_reachable, missing_drive, missing_tracks, prune_missing_tracks
 from ..logsetup import LOG_FILE
-from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, is_installed
+from ..slskd_binary import SLSKD_VERSION, SlskdBinaryError, binary_problem, is_installed
 from ..slskd_binary import install as install_slskd
 from ..slskd_config import (
     SlskdConfigError,
@@ -49,7 +50,7 @@ from ..slskd_config import (
 )
 from ..slskd_process import SlskdProcess
 from ..store import Store
-from ..tools import no_window, tool_path
+from ..tools import no_window, tool_path, windows_system_exe
 from ..trust import flagged, measure, receipt, record, spectrogram_of
 from ..youtube import ytdlp_available
 from . import SETUP_DONE_KEY, Bundles, to_dict
@@ -80,7 +81,8 @@ def reveal_path(path: Path) -> None:
         # (`"/select,C:\a b\x.flac"`) at the first space, which Explorer answers by opening Documents.
         # A Windows path cannot contain `"`, so nothing in it can close the quote early. Explorer
         # answers 1 even when it worked, so the exit code says nothing and is not read.
-        cmd = f'explorer /select,"{path}"'
+        # Explorer by its full path: a bare `explorer` is looked up in the current folder first.
+        cmd = f'"{windows_system_exe("explorer.exe")}" /select,"{path}"'
     elif sys.platform == "darwin":
         # `-R` reveals the path in a Finder window, selected; a bare `open` on a directory instead
         # *launches* it, which is wrong for a `.app`/`.rbxml`/other bundle directory.
@@ -117,9 +119,6 @@ def _contained(stored: str | Path | None, directory: Path) -> Path | None:
     return path
 
 
-LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
-
-
 def _host_port(url: str) -> tuple[str, int]:
     """The sidecar's host and port off its own URL rather than assumed, so this stays true for an owner
     who moved it -- including one pointing flackey at slskd on another machine."""
@@ -128,20 +127,6 @@ def _host_port(url: str) -> tuple[str, int]:
     if not host:
         host, tail = rest, ""
     return (host or "127.0.0.1"), (int(tail) if tail.isdigit() else (443 if url.startswith("https") else 80))
-
-
-def slskd_url_problem(url: str) -> str | None:
-    """Why the slskd address must not be saved, or None. Every request to it carries the slskd API key,
-    so plain http is allowed only to this machine; another machine must be reached over https."""
-    try:
-        parts = urlsplit(url)
-    except ValueError:  # an unclosed `[` in the host
-        parts = None
-    if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
-        return "Enter the slskd address in full, for example http://127.0.0.1:5030."
-    if parts.scheme == "http" and parts.hostname not in LOOPBACK:
-        return "slskd on another computer must be reached over https, so its key is not sent in the clear."
-    return None
 
 
 def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
@@ -506,7 +491,7 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         return {"configured": username is not None, "username": username}
 
     @r.get("/setup/soulseek/password")
-    async def get_soulseek_password(request: Request) -> dict:
+    async def get_soulseek_password(request: Request, response: Response) -> dict:
         """Hand the owner back the Soulseek password flackey generated for them.
 
         The only route in flackey that returns a secret, and it is here because Soulseek has no password
@@ -519,15 +504,17 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         password = read_password(settings.data_dir)
         if password is None:
             raise HTTPException(404, "No Soulseek password is saved.")
+        response.headers["Cache-Control"] = "no-store"     # a secret: never kept in any cache
         return {"username": read_username(settings.data_dir), "password": password}
 
     @r.get("/setup/slskd/credentials")
-    async def get_slskd_credentials(request: Request) -> dict:
+    async def get_slskd_credentials(request: Request, response: Response) -> dict:
         """Expose the local helper's web-login secret only on an explicit owner request."""
         from_the_app(request)
         credentials = read_web_credentials(settings.data_dir)
         if credentials is None:
             raise HTTPException(404, "No Soulseek helper login is saved.")
+        response.headers["Cache-Control"] = "no-store"
         return {"username": credentials[0], "password": credentials[1]}
 
     @r.post("/setup/soulseek")
@@ -580,13 +567,18 @@ def router(store: Store, settings: Settings, status: dict, bundles: Bundles,
         # question from SlskdProcess.running (which means "I own a live subprocess").
         process = SlskdProcess(settings.data_dir, settings.slskd_url, settings.slskd_api_key or "")
         running = await process.probe()
-        return {"installed": is_installed(settings.data_dir), "running": running, "version": SLSKD_VERSION}
+        return {"installed": await _slskd_ready(), "running": running, "version": SLSKD_VERSION}
+
+    async def _slskd_ready() -> bool:
+        """Installed, and the pinned release: one that fails its pin is refused at launch, so setup has to
+        offer the install again (which replaces it). In a thread: it hashes the whole program."""
+        return is_installed(settings.data_dir) and await asyncio.to_thread(binary_problem, settings.data_dir) is None
 
     @r.post("/setup/slskd")
     async def post_slskd_setup(background_tasks: BackgroundTasks) -> dict:
         """Starts the install and returns immediately -- the download+extract takes tens of seconds, so
         it never runs on the request; poll GET /setup/slskd/progress for status."""
-        if is_installed(settings.data_dir):
+        if await _slskd_ready():
             slskd_install_state.update(state="done", done=0, total=0, error=None)
             return {"state": slskd_install_state["state"]}
         slskd_install_state.update(state="downloading", done=0, total=0, error=None)

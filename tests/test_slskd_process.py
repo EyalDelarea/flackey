@@ -6,7 +6,7 @@ import pytest
 import respx
 
 from flackey import slskd_process
-from flackey.slskd_binary import SlskdBinaryError
+from flackey.slskd_binary import SlskdBinaryError, binary_path
 from flackey.slskd_process import SlskdProcess, SlskdStartTimeout
 
 BASE = "http://slskd.test/api/v0"
@@ -217,6 +217,7 @@ async def test_start_hides_the_slskd_console_only_on_windows(tmp_path: Path, mon
         return next(answers)
 
     monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process, "binary_problem", lambda _: None)
     monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(SlskdProcess, "_check", check)
     monkeypatch.setattr(slskd_process.sys, "platform", platform)
@@ -240,6 +241,7 @@ async def test_start_that_never_answers_raises_a_timeout_and_leaves_no_orphan(tm
         return "ReadTimeout: timed out"
 
     monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process, "binary_problem", lambda _: None)
     monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(SlskdProcess, "_check", check)
     clock = Clock()
@@ -256,3 +258,29 @@ async def test_start_that_never_answers_raises_a_timeout_and_leaves_no_orphan(tm
     assert fake.terminated == 1 and proc.running is False
     # Why the last try failed is logged, so a report from a slow PC says what slskd was doing.
     assert "ReadTimeout: timed out" in caplog.text
+
+
+async def test_start_refuses_to_launch_an_executable_that_fails_its_pin(tmp_path: Path, monkeypatch):
+    """Security review 2026-11-24 (S1): the pinned digest was only checked at download, so anything put
+    where the sidecar lives later was run as it. Now it is checked before every launch, and refused."""
+    spawned = []
+
+    async def spawn(*args, **kwargs):
+        spawned.append(args)
+        return FakeProc()
+
+    async def check(self, client=None) -> str | None:
+        return "ConnectError: refused"
+
+    monkeypatch.setattr(slskd_process, "is_installed", lambda _: True)
+    monkeypatch.setattr(slskd_process.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(SlskdProcess, "_check", check)
+    planted = binary_path(tmp_path)
+    planted.parent.mkdir(parents=True)
+    planted.write_bytes(b"#!/bin/sh\necho planted\n")
+    clock = Clock()
+    proc = SlskdProcess(tmp_path, "http://slskd.test", "key", clock=clock, sleep=clock.sleep)
+
+    with pytest.raises(SlskdBinaryError, match="does not match"):
+        await proc.start()
+    assert spawned == []

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -74,7 +75,9 @@ def default_data_dir() -> Path:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # No `.env` unless one is named: `load_settings` names the checkout's own (REPO_ENV). A bare ".env"
+    # here would be read from whatever folder the app was started in.
+    model_config = SettingsConfigDict(env_file=None, env_file_encoding="utf-8", extra="ignore")
 
     # Identify the software, not the person. Live in settings.json (or .env for development); a packaged
     # copy ships with them prefilled. Optional so the app can start and show the setup screen without them.
@@ -131,7 +134,7 @@ class Settings(BaseSettings):
     max_concurrent_requests: int | None = 10
 
     # Lossless upgrade through the slskd sidecar (spec §10). Off until an API key is set.
-    slskd_url: str = "http://127.0.0.1:5030"
+    slskd_url: str = "http://127.0.0.1:5030"     # DEFAULT_SLSKD_URL
     slskd_api_key: str | None = None
     slskd_downloads_dir: Path | None = None       # default: <data_dir>/slskd/downloads, see `slskd_downloads`
     # AIFF by default on the Mac (FLAC on Windows, see `default_filing_format`): Rekordbox plays WAV, but
@@ -190,15 +193,18 @@ class Settings(BaseSettings):
     lossless_keep_raw_days: int = 30
     verification_rule: str = "tiers"
 
+    # Absolute at load, so a relative value cannot follow the folder the app happens to be started from
+    # (the slskd sidecar is launched out of the data folder). `absolute`, not `resolve`: a symlink or a
+    # mapped drive letter stays as the owner wrote it, which is the path Rekordbox knows the tracks by.
     @field_validator("library_root", "data_dir", mode="after")
     @classmethod
     def _expand(cls, v: Path) -> Path:
-        return v.expanduser()
+        return v.expanduser().absolute()
 
     @field_validator("slskd_downloads_dir", mode="after")
     @classmethod
     def _expand_optional(cls, v: Path | None) -> Path | None:
-        return v.expanduser() if v else v
+        return v.expanduser().absolute() if v else v
 
     @field_validator("lossless_filing_format", mode="after")
     @classmethod
@@ -295,7 +301,25 @@ class Settings(BaseSettings):
         return self.data_dir / "waiting-for-drive"
 
 
+# The checkout's own `.env`, the only one read: never one in the current folder, which may be anybody's.
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
+DEFAULT_SLSKD_URL = "http://127.0.0.1:5030"
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def slskd_url_problem(url: str) -> str | None:
+    """Why the slskd address must not be used, or None. Every request to it carries the slskd API key,
+    so plain http is allowed only to this machine; another machine must be reached over https."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:  # an unclosed `[` in the host
+        parts = host = None
+    if parts is None or parts.scheme not in ("http", "https") or not host:
+        return "Enter the slskd address in full, for example http://127.0.0.1:5030."
+    if parts.scheme == "http" and host not in LOOPBACK:
+        return "slskd on another computer must be reached over https, so its key is not sent in the clear."
+    return None
 
 # Telegram keys baked into a packaged build. packaging/build_app.sh writes this file from
 # FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before PyInstaller runs; the release workflow
@@ -401,14 +425,23 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     generated for itself in the managed slskd.yml (see slskd_config.write_credentials) -- that file is
     the key's only copy."""
     if env_file is None:
-        # `./.env` when run from the repo root; otherwise the repo's own .env, so `flackey` works from any cwd
-        env_file = Path(".env") if Path(".env").exists() else REPO_ENV
+        # The checkout's own .env, whatever the current folder is (see REPO_ENV). A packaged app has no
+        # checkout, and REPO_ENV would name a spot inside or beside its bundle: it reads none.
+        env_file = None if getattr(sys, "frozen", False) else REPO_ENV
     base = Settings(_env_file=env_file)
     from_file = _read_settings_file(base.settings_path)
     from_build = _read_build_defaults(build_defaults or BUILD_DEFAULTS_PATH)
     overrides = {k: v for k, v in from_build.items() if k not in base.model_fields_set}
     overrides.update({k: v for k, v in from_file.items() if k not in base.model_fields_set})
     result = base if not overrides else _settings_dropping_invalid(env_file, overrides, base)
+    # The settings screen refuses an address like this (`slskd_url_problem`); the environment, .env and a
+    # hand-edited settings.json did not, and the API key goes wherever it points. The built-in sidecar's
+    # address instead, so Soulseek still works and startup is never stopped by it. The value itself is not
+    # logged: it may carry a user name or password.
+    problem = slskd_url_problem(result.slskd_url)
+    if problem:
+        log.warning("ignoring the configured slskd address and using %s: %s", DEFAULT_SLSKD_URL, problem)
+        result.slskd_url = DEFAULT_SLSKD_URL
     if not result.slskd_api_key:
         result.slskd_api_key = read_api_key(result.data_dir)
     return result
