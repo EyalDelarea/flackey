@@ -58,6 +58,9 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          # Pinned rather than "latest": the same uv on every run, the release's signing step included.
+          # 0.13.9 is the version every job had been resolving to (v0.8.1 was built and signed with it).
+          version: "0.13.9"
           enable-cache: true
       - name: Install
         run: uv sync --frozen
@@ -82,6 +85,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           enable-cache: true
       - name: ffmpeg, ffprobe, fpcalc
         # Static builds from GitHub releases, checked against pinned digests: a few seconds, where apt
@@ -146,6 +150,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           enable-cache: true
       - name: Install
         run: uv sync --frozen
@@ -170,6 +175,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           enable-cache: true
       - name: Install
         run: uv sync --frozen
@@ -218,6 +224,7 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           # Never on a tag: a cache is written by every main-branch run, and a release is built from
           # scratch so nothing restored from one can reach the installer.
           enable-cache: ${{ github.ref_type != 'tag' }}
@@ -298,6 +305,7 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           # Never on a tag: a cache is written by every main-branch run, and a release is built from
           # scratch so nothing restored from one can reach the installer.
           enable-cache: ${{ github.ref_type != 'tag' }}
@@ -312,15 +320,16 @@ jobs:
         shell: bash
         run: packaging/check_version.sh "$GITHUB_REF_NAME"
       - name: Inno Setup
-        # Preinstalled on the windows-latest image (actions/runner-images lists InnoSetup 6.x); installed
-        # here only if an image update ever drops it. build_windows.ps1 finds ISCC.exe either way.
+        # Preinstalled on the windows-latest image (actions/runner-images lists InnoSetup 6.7.1); installed
+        # here only if an image update ever drops it, at that same version rather than whatever is newest.
+        # build_windows.ps1 finds ISCC.exe either way.
         run: |
           if (Get-Command ISCC.exe -ErrorAction SilentlyContinue) {
             Write-Host "Inno Setup on PATH"
           } elseif (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')) {
             Write-Host "Inno Setup in Program Files (x86)"
           } else {
-            choco install innosetup -y --no-progress
+            choco install innosetup --version 6.7.1 -y --no-progress
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Cache helper downloads
@@ -339,9 +348,10 @@ jobs:
           C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build
-        # Same gating as the mac job, and on this step only so npm, uv and choco never see them: the
-        # Telegram keys and the usage-stats collector URL and key only on a tagged release, never on a
-        # push or PR artifact. Never printed.
+        # Same gating as the mac job: the Telegram keys and the usage-stats collector URL and key only on
+        # a tagged release, never on a push or PR artifact. Set on this step only, so the steps before it
+        # (choco, MSYS2's pacman) never see them; build_windows.ps1 itself runs npm, uv and PyInstaller
+        # with them in its environment. They are baked into the app, which ships publicly. Never printed.
         env:
           FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
           FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
@@ -433,6 +443,7 @@ jobs:
           fi
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.9"
           # No cache in the job that holds the signing key: a cache is written by every other job and
           # every pull request, and nothing it restores should reach the step that signs a release.
           enable-cache: false

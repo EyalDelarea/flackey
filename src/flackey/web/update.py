@@ -45,7 +45,8 @@ MAX_REDIRECTS = 5
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 # The private folder each installer is opened from (see `private_copy`).
 INSTALLER_COPY_PREFIX = "installer-"
-_VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)", re.ASCII)
+# At most nine digits a part: far past any real version, and `int` refuses past 4300 of them.
+_VERSION = re.compile(r"v?(\d{1,9})\.(\d{1,9})\.(\d{1,9})", re.ASCII)
 INSTALLER_NAME = "Flackey.pkg"
 # The Windows installer, under the same name on every release so this lookup never has to guess a
 # version into it. Inno Setup builds it; there is no seamless path on Windows yet, so it is the only one.
@@ -101,7 +102,8 @@ def download_error(exc: BaseException) -> str:
 
 
 def parse_version(v: object) -> tuple[int, int, int] | None:
-    """`1.2.3` or `v1.2.3` and nothing else: no padding, no suffix, no digits from other scripts."""
+    """`1.2.3` or `v1.2.3` and nothing else: no surrounding space, no suffix, no digits from other
+    scripts, no part longer than nine digits. A leading zero is read as the number (`01` is 1)."""
     m = _VERSION.fullmatch(v) if isinstance(v, str) else None
     return (int(m[1]), int(m[2]), int(m[3])) if m else None
 
@@ -176,7 +178,8 @@ def open_installer(path: Path) -> None:
         # unsigned download, which is the owner's to answer, and the UAC prompt if Inno asks for one.
         os.startfile(path)
         return
-    subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # By absolute path: a bare "open" is looked up on PATH.
+    subprocess.Popen(["/usr/bin/open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def open_url(url: str) -> None:
@@ -275,12 +278,13 @@ async def check_release() -> tuple[dict, str]:
 
 
 def private_copy(root: Path, name: str, payload: bytes) -> Path:
-    """Write `payload` to a file nobody else has had a chance to touch, and return it.
+    """Write `payload` to a new file in a new folder of its own, and return it.
 
     Checking the bytes and then opening a path is two reads of that path, and anything that can write to
     it in between swaps what gets opened. So what is opened is never the download: it is a new file,
     created exclusively (`O_EXCL`, so not a file or link planted in advance) inside a folder `mkdtemp`
-    has just made for this user alone, holding the very bytes that were checked."""
+    has just made, 0700, holding the very bytes that were checked. That shuts out other users, not
+    other processes running as this one: they can still change the copy before the installer reads it."""
     root.mkdir(parents=True, exist_ok=True)
     folder = Path(tempfile.mkdtemp(prefix=INSTALLER_COPY_PREFIX, dir=root))
     path = folder / name

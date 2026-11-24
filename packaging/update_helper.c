@@ -57,7 +57,7 @@ static void logline(const char *fmt, ...) {
 enum {
     EXIT_OK = 0,
     EXIT_USAGE = 2,
-    EXIT_REFUSED = 3,      /* a validation rule said no; nothing was touched */
+    EXIT_REFUSED = 3,      /* a validation rule said no; nothing was touched, or a swap was undone */
     EXIT_SWAP_BLOCKED = 4, /* the kernel refused the swap -- App Management, most likely */
     EXIT_SWAP_FAILED = 5,
     EXIT_PARENT_ALIVE = 6,
@@ -262,6 +262,15 @@ static int manifest_matches(int stagefd, const unsigned char expected[CC_SHA256_
     return 1;
 }
 
+/* 1 when `name` in `dirfd` is, without following a link, the directory `want` describes. After the swap,
+ * this is what proves Flackey.app now holds the bundle that was hashed and not one renamed onto the
+ * staging name in the moment between the hash and the swap. */
+static int is_same_directory(int dirfd, const char *name, const struct stat *want) {
+    struct stat now;
+    if (fstatat(dirfd, name, &now, AT_SYMLINK_NOFOLLOW) != 0) return 0;
+    return S_ISDIR(now.st_mode) && now.st_dev == want->st_dev && now.st_ino == want->st_ino;
+}
+
 /* 1 once the pid is gone, 0 on timeout, measured by the clock because naps overshoot on a busy
  * machine. Refuse on timeout rather than proceed: a relaunch beside a live copy is two Flackeys
  * sharing one database, which is worse than no update. */
@@ -290,9 +299,10 @@ static void relaunch(const char *dir) {
     }
 }
 
-/* Every way out after the app has quit. A refused or failed swap leaves the installed bundle exactly as
- * it was, so it is reopened: the owner pressed Restart, and an app that quit and never came back is
- * worse than an update that did not happen. */
+/* Every way out after the app has quit, but one. A refused or failed swap leaves the installed bundle
+ * exactly as it was, so it is reopened: the owner pressed Restart, and an app that quit and never came
+ * back is worse than an update that did not happen. The exception is a swap that brought in something
+ * other than the checked bundle (see main): that exits without coming through here. */
 static int finish(const char *dir, int want_relaunch, int code) {
     if (!want_relaunch) return code;
     if (code != EXIT_OK) {
@@ -340,8 +350,11 @@ int main(int argc, char **argv) {
     }
 
     char *end = NULL;
+    errno = 0;
     long parent = strtol(argv[1], &end, 10);
-    if (end == argv[1] || *end != '\0' || parent <= 1) {
+    /* pid_t is an int: anything larger would wrap, to a negative number `kill` reads as a process group
+     * or to some other process's pid. */
+    if (end == argv[1] || *end != '\0' || errno == ERANGE || parent <= 1 || parent > INT_MAX) {
         logline("refusing: %s is not a parent pid", argv[1]);
         return EXIT_USAGE;
     }
@@ -406,11 +419,18 @@ int main(int argc, char **argv) {
         close(dirfd);
         return finish(dir, want_relaunch, EXIT_REFUSED);
     }
-    close(stagefd);
+    /* `stagefd` stays open until the swap has been checked: the swap goes by name, and holding the
+     * directory open keeps its device and inode numbers from being freed and reused by another. */
 
+#ifdef FLACKEY_TEST_BEFORE_SWAP
+    /* Tests only (tests/test_update_helper_swap_race.py): stands in for another process acting between
+     * the check above and the swap below. Never defined by the release build. */
+    FLACKEY_TEST_BEFORE_SWAP(dirfd, staging);
+#endif
     /* Compiled-in, not an argument: exactly one path this program may overwrite. */
     if (renameatx_np(dirfd, staging, dirfd, TARGET_NAME, RENAME_SWAP) != 0) {
         int err = errno;
+        close(stagefd);
         if (err == EPERM || err == EACCES) {
             logline("macOS blocked the update: grant Flackey permission under System Settings -> "
                     "Privacy & Security -> App Management (%s)", strerror(err));
@@ -421,6 +441,25 @@ int main(int argc, char **argv) {
         close(dirfd);
         return finish(dir, want_relaunch, EXIT_SWAP_FAILED);
     }
+    /* The swap moved whatever had the staging name at that instant. If that is not the directory that
+     * was hashed, put the installed app back and stop. Nothing is reopened on this path: the folder was
+     * tampered with between the check and the swap, and launching anything from it is the wrong answer. */
+    if (!is_same_directory(dirfd, TARGET_NAME, &opened_st)) {
+        close(stagefd);
+        if (renameatx_np(dirfd, staging, dirfd, TARGET_NAME, RENAME_SWAP) != 0) {
+            int err = errno;
+            logline("refusing: %s was replaced after it was checked, and swapping the installed app "
+                    "back failed (%s); %s/%s may be a bundle that was never checked",
+                    staging, strerror(err), dir, TARGET_NAME);
+            close(dirfd);
+            return EXIT_SWAP_FAILED;
+        }
+        close(dirfd);
+        logline("refusing: %s was replaced after it was checked; swapped back, and the installed app "
+                "is as it was", staging);
+        return EXIT_REFUSED;
+    }
+    close(stagefd);
     close(dirfd);
     logline("swapped %s into %s/%s", staging, dir, TARGET_NAME);
 

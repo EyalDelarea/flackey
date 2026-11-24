@@ -29,7 +29,9 @@ as what changed for them ("Added X for Y"), not the mechanism.
    - opens `release/vX.Y.Z` as a PR labeled `ignore-for-release` and turns
      on auto-merge (squash), then waits up to 20 minutes for it to merge
      once its checks pass;
-   - tags the merged commit on `main` and pushes `vX.Y.Z`.
+   - fetches `main`, checks the version again, and tags whatever `origin/main`
+     is at that moment (normally the bump it just merged, but a PR merged in
+     between would be included), then pushes `vX.Y.Z`.
    If the tree already has the version, it skips the PR and tags `main`.
 3. The tag push runs **`checks`** (`.github/workflows/checks.yml`). After the
    test jobs (ubuntu, macOS, Windows) and the web build pass:
