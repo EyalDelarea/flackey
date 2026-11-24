@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -452,8 +453,9 @@ def test_the_filters_are_forced_on_every_write_and_follow_the_library(tmp_path: 
     assert write_share(tmp_path, new, previous=old) is True
     assert write_share(tmp_path, new, previous=old) is True         # idempotent
     filters = yaml.safe_load(path.read_text())["shares"]["filters"]
-    assert len(filters) == len(set(filters)) == 4
+    assert len(filters) == len(set(filters)) == 5                   # three forced, two for the library
     assert _hidden(filters, new / "Playlists") and not _hidden(filters, old / "Playlists")
+    assert _hidden(filters, new / ".git" / "x") and not _hidden(filters, old / ".git" / "x")
 
 
 # SEC-1 (audit 2026-11-20): a whole drive, the folder that lists the drives, or a system folder is never
@@ -596,3 +598,135 @@ def test_first_soulseek_setup_on_a_whole_drive_is_refused(tmp_path: Path, fake_h
     """Setting Soulseek up is when the folder first gets shared, so the new rules apply."""
     with pytest.raises(SlskdConfigError):
         write_credentials(tmp_path / "data", "dj", "pw", library_root=Path("/Volumes/MyDrive"))
+
+
+# Security review 2026-11-24, M1: a Mac's disk ignores letter case, but `resolve` keeps the case it was
+# given, so the home folder typed in another case used to pass as an ordinary folder.
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Mac's disk ignores case")
+def test_the_real_home_folder_in_another_case_is_never_shared(tmp_path: Path):
+    home = str(Path.home())
+    for raw in (home.lower(), home.upper(), home.swapcase(), "/users", "/USERS", "/" + home.split("/")[1].lower()):
+        assert unsafe_share_reason(Path(raw), tmp_path / "data"), raw
+    assert unsafe_share_reason(Path(home.lower()) / "Music" / "DJ Library", tmp_path / "data") is None
+
+
+@pytest.mark.parametrize("spell", [str.lower, str.upper, str.swapcase])
+def test_home_and_data_folders_in_another_case_are_refused_where_the_disk_ignores_case(
+        tmp_path: Path, fake_home: Path, monkeypatch, spell):
+    """Run on every OS by telling the check the disk ignores case: where the typed spelling does not exist
+    (Linux), the case-folded parts decide; where it does (a Mac), the disk itself says it is the same."""
+    import flackey.slskd_config as sc
+    monkeypatch.setattr(sc, "CASE_INSENSITIVE_DISK", True)
+    data = fake_home / "Library" / "Flackey"
+    data.mkdir(parents=True)
+    for folder in (fake_home, fake_home.parent, data, data.parent):
+        assert unsafe_share_reason(Path(spell(str(folder))), data), spell(str(folder))
+    other = tmp_path / "elsewhere"
+    assert unsafe_share_reason(Path(spell(str(other))), Path(spell(str(other.parent)) + "-data")) is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a case-sensitive disk")
+def test_linux_does_not_treat_another_spelling_as_the_home_folder(tmp_path: Path, fake_home: Path):
+    """On a disk that counts case, `/HOME/x` is not `/home/x`: no folder by that name, no refusal for it."""
+    assert unsafe_share_reason(Path(str(fake_home).swapcase()), tmp_path / "data") is None
+
+
+# L1: a saved library folder the rules refuse stops being shared, instead of the startup repair leaving it.
+@pytest.mark.parametrize("refused", ["home", "hidden"])
+def test_a_saved_library_the_rules_refuse_is_taken_out_of_the_share(tmp_path: Path, fake_home: Path, refused):
+    data = tmp_path / "data"
+    folder = {"home": fake_home, "hidden": fake_home / ".ssh"}[refused]
+    write_credentials(data, "dj", "pw")
+    path = config_path(data)
+    config = yaml.safe_load(path.read_text())
+    config["shares"] = {"directories": ["/Volumes/Extra/Music", str(folder)], "filters": []}
+    path.write_text(yaml.safe_dump(config))     # shared by a build that let it through
+
+    with pytest.raises(SlskdConfigError):
+        write_share(data, folder, saved=True)
+
+    after = yaml.safe_load(path.read_text())
+    assert after["shares"]["directories"] == ["/Volumes/Extra/Music"]   # the owner's own entry stays
+    assert after["web"]["ip_address"] == "127.0.0.1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+def test_a_hand_added_share_the_rules_would_refuse_stays_but_is_logged(tmp_path: Path, fake_home: Path, caplog):
+    """Other entries are the owner's: the startup repair names them in the log and leaves them."""
+    data = tmp_path / "data"
+    lib = fake_home / "Music"
+    write_credentials(data, "dj", "pw")
+    path = config_path(data)
+    config = yaml.safe_load(path.read_text())
+    config["shares"] = {"directories": [str(fake_home / "Documents"), "/Volumes/Extra/Music", str(lib)]}
+    path.write_text(yaml.safe_dump(config))
+    caplog.set_level("WARNING")
+
+    assert write_share(data, lib, saved=True) is True
+
+    assert yaml.safe_load(path.read_text())["shares"]["directories"] == [
+        str(fake_home / "Documents"), "/Volumes/Extra/Music", str(lib)]
+    assert str(fake_home / "Documents") in caplog.text
+    assert "/Volumes/Extra/Music" not in caplog.text
+
+
+# L2: folders that hold more than music, including the roots of cloud drives and their Desktop and Documents.
+@pytest.mark.parametrize("inside", ["Pictures", "Movies", "Videos", "pictures",
+                                    "Library/Mobile Documents/com~apple~CloudDocs",
+                                    "Library/Mobile Documents/com~apple~CloudDocs/Desktop",
+                                    "Library/Mobile Documents/com~apple~CloudDocs/Documents",
+                                    "Library/CloudStorage/Dropbox", "Library/CloudStorage/Dropbox/Desktop",
+                                    "Library/CloudStorage/OneDrive-Personal/Documents",
+                                    "Library/CloudStorage/GoogleDrive-dj@example.com",
+                                    "Library/CloudStorage/GoogleDrive-dj@example.com/My Drive",
+                                    "Library/CloudStorage/GoogleDrive-dj@example.com/My Drive/Documents",
+                                    "OneDrive", "OneDrive/Desktop", "OneDrive/Documents",
+                                    "OneDrive - Contoso", "OneDrive - Contoso/Documents"])
+def test_cloud_drive_roots_and_everyday_folders_are_never_shared(tmp_path: Path, fake_home: Path, inside):
+    assert unsafe_share_reason(fake_home / inside, tmp_path / "data")
+
+
+@pytest.mark.parametrize("inside", ["Pictures/DJ Library", "OneDrive/Music/DJ", "OneDrive - Contoso/DJ",
+                                    "Library/CloudStorage/OneDrive-Personal/DJ",
+                                    "Library/CloudStorage/GoogleDrive-dj@example.com/My Drive/DJ",
+                                    "Library/Mobile Documents/com~apple~CloudDocs/Documents/DJ",
+                                    "OneDriveMusic"])
+def test_a_music_folder_inside_a_cloud_drive_or_pictures_is_fine(tmp_path: Path, fake_home: Path, inside):
+    assert unsafe_share_reason(fake_home / inside, tmp_path / "data") is None
+
+
+# Second pass: slskd lists every folder below a share and filters each one on its own path, so a filter that
+# matched only a dot-folder's own name left everything inside it shared.
+def test_files_inside_a_dot_folder_at_any_depth_are_never_shared(tmp_path: Path, fake_home: Path):
+    lib = tmp_path / ".drive" / "DJ Library"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=lib)
+    filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
+    for inside in [".git/objects", ".git/objects/ab/cdef", "Artist/.hidden/sub/Track.flac",
+                   ".Trashes/501/Track.flac", "Artist/.sync/x"]:
+        assert _hidden(filters, lib / inside), inside
+    assert not _hidden(filters, lib)
+    assert not _hidden(filters, lib / "Artist" / "Album" / "Artist - Track.flac")
+    assert not _hidden(filters, lib / "Artist" / "Mr. Thumbs.db.flac")
+
+
+def test_the_dot_folder_filter_reads_windows_paths():
+    """slskd on Windows hands the filters backslashed paths; the regexes are .NET's, built from
+    the same characters `re` reads here."""
+    from pathlib import PureWindowsPath
+
+    from flackey.slskd_config import _FORCED_FILTERS, hidden_folder_filter
+    lib = PureWindowsPath("D:\\.drive\\DJ Library")
+    filters = [*_FORCED_FILTERS, hidden_folder_filter(lib)]
+    for inside in [".git", ".git\\objects\\ab\\cdef", "Artist\\.hidden\\sub\\Track.flac"]:
+        assert any(re.search(f, str(lib / inside), re.IGNORECASE) for f in filters), inside
+    for fine in ["", "Artist\\Artist - Track.flac", "Artist\\Mr. Thumbs.db.flac"]:
+        assert not any(re.search(f, str(lib / fine), re.IGNORECASE) for f in filters), fine
+
+
+def test_the_dot_folder_filter_follows_the_library(tmp_path: Path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    write_credentials(tmp_path, "digger", "not-a-real-password", library_root=old)
+    assert write_share(tmp_path, new, previous=old) is True
+    filters = yaml.safe_load(config_path(tmp_path).read_text())["shares"]["filters"]
+    assert _hidden(filters, new / ".git" / "objects" / "x")
+    assert not _hidden(filters, old / "Artist" / ".x" / "y")

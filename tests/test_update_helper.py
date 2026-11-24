@@ -210,6 +210,14 @@ def test_bad_arguments_are_a_usage_error_and_touch_nothing(helper, tree):
     assert marker_of(tree / TARGET) == "old"
 
 
+@pytest.mark.parametrize("pid", [2**31, 2**32 + 1, 2**63, 10**30])
+def test_a_pid_too_large_for_pid_t_is_a_usage_error_and_touches_nothing(helper, tree, pid):
+    """Cast to pid_t such a value wraps: to a negative number, which `kill` reads as a process group, or
+    to a small pid that names some other process."""
+    assert run(helper, tree, pid=pid).returncode == 2
+    assert marker_of(tree / TARGET) == "old"
+
+
 def test_the_log_is_never_written_through_a_symlink(helper, tree, tmp_path):
     """The log path sits in a folder the app writes; a link planted there must not turn the helper into
     a way to append to some other file. The update itself still goes ahead, logging to stderr."""

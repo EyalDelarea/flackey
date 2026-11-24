@@ -21,6 +21,30 @@ _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 QUEUED_STATES = ("Requested", "Queued")
+# The longest string an event keeps. Peers choose file and user names, and a file's own text (a FLAC
+# vendor string) rides into the evidence; every event is logged, written to the attempt's row and shown on
+# its page, so none of that may grow past a bound. Real values are far shorter than this.
+MAX_RECORDED_CHARS = 1000
+
+
+def _clip(value):
+    """`value` with every string in it, keys included, cut to MAX_RECORDED_CHARS; a new object, never the
+    caller's."""
+    if isinstance(value, str):
+        return value if len(value) <= MAX_RECORDED_CHARS else value[:MAX_RECORDED_CHARS] + "…"
+    if isinstance(value, dict):
+        return {_clip(k): _clip(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clip(v) for v in value]
+    if type(value) is tuple:                   # exactly a tuple: a named one is left as it is
+        return tuple(_clip(v) for v in value)
+    return value
+
+
+def _shown(value) -> object:
+    """A value as the log line shows it: a string with a newline or another control character in it is
+    quoted, so it cannot start a line of its own."""
+    return repr(value) if isinstance(value, str) and not value.isprintable() else value
 
 
 def transfer_marks(timeline: list[dict]) -> tuple[dict | None, dict | None, dict | None]:
@@ -68,9 +92,10 @@ class AttemptRecorder:
         return int((self.clock() - self.t0) * 1000)
 
     def event(self, name: str, **detail) -> None:
+        detail = _clip(detail)
         self.timeline.append({"t_ms": self.elapsed_ms(), "event": name, "detail": detail})
         log.info("req=%d slsk=%d %s%s", self.request_id, self.id, name,
-                 "".join(f" {k}={v}" for k, v in detail.items()))
+                 "".join(f" {k}={_shown(v)}" for k, v in detail.items()))
         self.store.update_attempt(self.id, timeline=self.timeline)
 
     def raw(self, name: str, obj: object) -> None:

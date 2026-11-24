@@ -281,7 +281,10 @@ class LosslessMixin:
             rec.finish(e.outcome)
             return None
         rec.event("search_completed", files=len(files), peers=len({f.username for f in files}))
-        report = pick(files, ref, self._with_cooling(policy, rec, {f.username for f in files}))
+        cooling = self._with_cooling(policy, rec, {f.username for f in files})
+        # The pick reads every name a peer sent, and those are the peer's to choose: off the event loop,
+        # so the page and the inbox keep answering. It touches nothing but its arguments.
+        report = await asyncio.to_thread(pick, files, ref, cooling)
         self.store.update_attempt(rec.id, report=report.to_dict())
         rec.event("pick", summary=report.summary)
         if report.chosen is None:
@@ -468,19 +471,19 @@ class LosslessMixin:
         try:
             booked = self.store.peer_never_sent(peer, COOLOFF_WINDOWS_S)
         except Exception:
-            log.exception("req#%d could not book %s as sending nothing", req.id, peer)
+            log.exception("req#%d could not book %r as sending nothing", req.id, peer)
             return
         if booked is not None:
             n, until = booked
             rec.event("peer_cooloff", peer=peer, no_sends=n, until=until.isoformat(timespec="seconds"))
-            log.info("req#%d %s sent nothing (%d in a row): other copies go first until %s", req.id, peer, n,
+            log.info("req#%d %r sent nothing (%d in a row): other copies go first until %s", req.id, peer, n,
                      until.isoformat(timespec="seconds"))
 
     def _sent(self, req: Request, peer: str) -> None:
         try:
             self.store.peer_sent(peer)
         except Exception:
-            log.exception("req#%d could not clear %s's cool-off", req.id, peer)
+            log.exception("req#%d could not clear %r's cool-off", req.id, peer)
 
     @staticmethod
     def _filed(rec: AttemptRecorder, hit: LosslessHit) -> LosslessHit:
@@ -547,7 +550,7 @@ class LosslessMixin:
                     result[0].unlink(missing_ok=True)  # finished in the moment it was being cancelled
                 out.lost, out.lost_moved = f, id(f) in moved
                 rec.event("race_lost", pick=f_n, peer=f.username, had_bytes=out.lost_moved)
-                log.info("req#%d race: kept pick %d, cancelled pick %d from %s", req.id, out.landed[2], f_n,
+                log.info("req#%d race: kept pick %d, cancelled pick %d from %r", req.id, out.landed[2], f_n,
                          f.username)
         except BaseException:
             # The owner stopped the request, or something broke: neither transfer may outlive this call.

@@ -26,8 +26,14 @@ from pathlib import Path
 import numpy as np
 
 from . import opus, quant
+from .audiofile import check_layout
 
 EVIDENCE_VERSION = "2.0"
+# How far past the length its container declares a decode may run. Encoder padding is a few thousand
+# samples; a file that keeps going past this is not the file it says it is, and every frame of it would be
+# held for the spectral evidence.
+OVERRUN = 1.05
+MAX_VENDOR_CHARS = 200        # the FLAC encoder's name, kept in the evidence: "Lavf60.3.100", "reference libFLAC 1.4.3"
 BAND_HZ = 250
 ACTIVE_MS = 1e-7              # a frame quieter than -70 dBFS (mean square) says nothing about its spectrum
 EDGE_SEARCH_FROM_HZ = 8_000
@@ -55,12 +61,33 @@ def frame_length(sample_rate: int) -> int:
     return 1 << max(10, round(math.log2(4096 * sample_rate / 44_100)))
 
 
+class Overrun(Exception):
+    """The decode ran well past the length the container declares. Not a VerifyError on purpose: raised
+    from inside the decoder's output sink, it must take the path that kills the decoder."""
+
+
+def declared_samples(facts: dict) -> int | None:
+    """The length the container states, per channel, from `container_facts`; None when it states none it
+    can be held to (an MP3 without a Xing/Info header only has ffmpeg's estimate from its bitrate)."""
+    if facts.get("container") == "flac":
+        n = facts.get("total_samples")
+    elif facts.get("container") == "mp3" and not facts.get("length_header"):
+        n = None
+    else:
+        n = facts.get("expected_samples")
+    return n if isinstance(n, int) and n > 0 else None
+
+
 class Analyzer:
-    """Fed the raw little-endian PCM of one decode, in chunks of any size."""
+    """Fed the raw little-endian PCM of one decode, in chunks of any size. With `declared_samples`, a feed
+    that takes it past OVERRUN times that (and at least a second past it) raises Overrun."""
 
     def __init__(self, sample_rate: int, channels: int, bits: int, *, quant_detectors: bool,
-                 expected_samples: int | None = None):
+                 expected_samples: int | None = None, declared_samples: int | None = None):
         self.sr, self.ch, self.bits = sample_rate, channels, bits
+        self.declared = declared_samples
+        self.limit = (max(math.ceil(declared_samples * OVERRUN), declared_samples + sample_rate)
+                      if declared_samples else None)
         self.width = 2 if bits == 16 else 3
         self.md5 = hashlib.md5()
         self.samples = 0                       # per channel
@@ -110,6 +137,8 @@ class Analyzer:
         self._peak = max(self._peak, int(np.abs(ints).max()) if len(ints) else 0)
         x = (ints.astype(np.float32) / float(1 << (8 * self.width - 1))).reshape(-1, self.ch)
         self.samples += len(x)
+        if self.limit is not None and self.samples > self.limit:
+            raise Overrun(f"the decode ran past {self.limit} samples; the file declares {self.declared}")
         if self.quant:
             self._aac.feed(x)
             self._mp3.feed(x)
@@ -295,13 +324,16 @@ def summarise_channels(channels: list[dict]) -> dict:
 
 def container_facts(path: Path, fmt: str) -> dict:
     """What the file says about itself, read without decoding it. Unreadable headers are reported, not
-    raised: the decode is what judges whether the file can be read through."""
+    raised: the decode is what judges whether the file can be read through. A file with more chunks or
+    metadata than a real one has is not handed to mutagen at all (`audiofile.check_layout`)."""
     try:
+        check_layout(path, fmt)
         if fmt == "flac":
             from mutagen.flac import FLAC
             f = FLAC(path)
             i = f.info
-            vendor = f.tags.vendor if f.tags is not None else None
+            # The file's own text, recorded on every attempt: only its start is kept.
+            vendor = f.tags.vendor[:MAX_VENDOR_CHARS] if f.tags is not None else None
             return {"container": "flac", "min_blocksize": i.min_blocksize, "max_blocksize": i.max_blocksize,
                     "total_samples": i.total_samples, "md5": f"{i.md5_signature:032x}" if i.md5_signature else None,
                     "bits": i.bits_per_sample, "vendor": vendor,

@@ -276,3 +276,71 @@ def test_the_rule_setting_is_checked():
     assert Settings(_env_file=None, verification_rule="legacy").verification_rule == "legacy"
     with pytest.raises(ValueError):
         Settings(_env_file=None, verification_rule="strict")
+
+
+def _flac_with_vendor(path, vendor: bytes):
+    import struct
+    streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6 + bytes.fromhex("0ac442f0") + b"\x00\x01\x00\x00" \
+        + b"\x00" * 16
+    comment = struct.pack("<I", len(vendor)) + vendor + struct.pack("<I", 0)
+    path.write_bytes(b"fLaC" + b"\x00" + len(streaminfo).to_bytes(3, "big") + streaminfo
+                     + b"\x84" + len(comment).to_bytes(3, "big") + comment + b"\xff\xf8" + b"\x00" * 64)
+    return path
+
+
+def test_the_vendor_string_is_kept_short(tmp_path):
+    """The encoder's name is the file's own text, recorded on every attempt and rejection: a peer's file can
+    make it as long as it likes, so only its start is kept. Whether ffmpeg made it reads off that start."""
+    long = evidence.container_facts(_flac_with_vendor(tmp_path / "a.flac", b"Lavf60.3.100" + b"x" * 100_000), "flac")
+    assert len(long["vendor"]) == evidence.MAX_VENDOR_CHARS and long["ffmpeg_made"] is True
+    short = evidence.container_facts(_flac_with_vendor(tmp_path / "b.flac", b"reference libFLAC 1.4.3"), "flac")
+    assert short["vendor"] == "reference libFLAC 1.4.3" and short["ffmpeg_made"] is False
+
+
+def test_what_the_container_declares_is_the_decode_bound():
+    assert evidence.declared_samples({"container": "flac", "total_samples": 1000}) == 1000
+    assert evidence.declared_samples({"container": "flac", "total_samples": 0}) is None      # unknown: no bound
+    assert evidence.declared_samples({"container": "wav", "expected_samples": 500}) == 500
+    assert evidence.declared_samples({"container": "mp3", "expected_samples": 900, "length_header": True}) == 900
+    # without a Xing/Info header the length is ffmpeg's guess from the bitrate, not the file's own word
+    assert evidence.declared_samples({"container": "mp3", "expected_samples": 900, "length_header": False}) is None
+    assert evidence.declared_samples({"container": "flac", "unreadable": "x"}) is None
+
+
+def test_the_decode_stops_well_past_the_length_the_file_declares():
+    """A FLAC can declare a few minutes and carry hours of frames behind them. Decoding runs only a little
+    past what it declares (encoder padding fits easily), then stops."""
+    sr = 44_100
+    one_second = np.zeros(sr, dtype="<i2").tobytes()
+    an = evidence.Analyzer(sr, 1, 16, quant_detectors=False, declared_samples=10 * sr)
+    for _ in range(10):
+        an.feed(one_second)
+    with pytest.raises(evidence.Overrun):
+        for _ in range(10):
+            an.feed(one_second)
+    assert an.samples <= 10 * sr * evidence.OVERRUN + 2 * sr
+    unbounded = evidence.Analyzer(sr, 1, 16, quant_detectors=False)
+    for _ in range(30):
+        unbounded.feed(one_second)
+
+
+def test_an_overrunning_decode_is_damage(monkeypatch, tmp_path):
+    """`analyze` stops the decoder and says the file is damaged, which is what a broken promise is."""
+    from flackey import verify as verify_mod
+    sr = 44_100
+    monkeypatch.setattr(verify_mod.evidence, "container_facts",
+                        lambda path, fmt: {"container": "flac", "total_samples": sr, "bits": 16})
+    monkeypatch.setattr(verify_mod, "_channels", lambda path: 1)
+    monkeypatch.setattr(verify_mod, "_decode_args", lambda path, pr: (["ffmpeg"], 16))
+    fed = []
+
+    def stream(cmd, sink):
+        for _ in range(600):                      # ten minutes of a file that declares one second
+            fed.append(1)
+            sink(np.zeros(sr, dtype="<i2").tobytes())
+
+    monkeypatch.setattr(verify_mod, "_stream", stream)
+    pr = verify_mod.Probe("flac", 900, 1.0, sr, 16)
+    with pytest.raises(VerifyError, match="declares"):
+        verify_mod.analyze(tmp_path / "x.flac", pr)
+    assert len(fed) < 5

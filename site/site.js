@@ -15,18 +15,20 @@ const formatReleaseDate = (iso) =>
     year: "numeric",
   }).format(new Date(iso));
 
+// For anything from the API that goes into markup, text or attribute alike.
+const esc = (s) =>
+  String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
 // Turns the small Markdown subset GitHub's generated release notes use into
 // markup: headings, bullets, bold/code, markdown links, and bare PR/compare URLs.
 // Escapes first, so nothing in a PR title can inject HTML -- markdown syntax
 // is only ever matched against already-escaped text, and the whole line is
 // scanned in one replace() pass so an inserted <a>/<strong> is never rescanned.
 function renderReleaseBody(body) {
-  const esc = (s) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   const inline = (s) =>
     esc(s).replace(
       /`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+))\b|(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:compare|commits)\/(\S+))|(https?:\/\/\S+)/g,
@@ -123,9 +125,13 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10", {
     if (wnVersion && version) wnVersion.textContent = version;
 
     if (notesList) {
+      // Escaped like the notes themselves; the page link must also be one of this repo's releases.
+      const pageUrl = String(data.html_url || "").startsWith(`${RELEASES_URL}/`)
+        ? data.html_url
+        : RELEASES_URL;
       const title = `<span class="release-note-title">
-            <span>v${version}</span>
-            <time datetime="${data.published_at}">${formatReleaseDate(data.published_at)}</time>
+            <span>v${esc(version)}</span>
+            <time datetime="${esc(data.published_at)}">${esc(formatReleaseDate(data.published_at))}</time>
           </span>`;
       notesList.innerHTML = `<details class="release-note">
             <summary>
@@ -135,7 +141,7 @@ fetch("https://api.github.com/repos/EyalDelarea/flackey/releases?per_page=10", {
             <div class="release-note-body">
               ${renderReleaseBody(data.body)}
               <p class="release-note-link">
-                <a href="${data.html_url}" target="_blank" rel="noopener">View release on GitHub</a>
+                <a href="${esc(pageUrl)}" target="_blank" rel="noopener">View release on GitHub</a>
               </p>
             </div>
           </details>

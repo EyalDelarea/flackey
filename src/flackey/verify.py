@@ -299,9 +299,13 @@ def analyze(path: Path, pr: Probe | None = None, *, quant_detectors: bool = True
     channels = _channels(path)
     an = evidence.Analyzer(pr.sample_rate, channels, bits,
                            quant_detectors=quant_detectors and pr.fmt in LOSSLESS,
-                           expected_samples=round(pr.duration_s * pr.sample_rate) or None)
+                           expected_samples=round(pr.duration_s * pr.sample_rate) or None,
+                           declared_samples=evidence.declared_samples(facts))
     t0 = time.monotonic()
-    _stream(cmd, an.feed)
+    try:
+        _stream(cmd, an.feed)
+    except evidence.Overrun as e:
+        raise VerifyError(f"damaged: {e}") from e
     measured = an.finish()
     if measured["samples"] == 0:
         raise VerifyError("the file decoded to no audio")

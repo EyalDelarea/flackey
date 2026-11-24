@@ -1,5 +1,6 @@
-# What decides how Flackey is built, signed and updated. With "Require review from Code Owners" on in
-# branch protection, a change here cannot merge without the owner's review.
+# What decides how Flackey is built, signed and updated: the paths a change deserves the closest look at,
+# and who owns them. GitHub requests the owner's review on a PR that touches them. Branch protection does
+# not require that review today, so this file alone does not stop such a change from merging.
 /.github/                       @EyalDelarea
 /packaging/                     @EyalDelarea
 /src/flackey/selfupdate/        @EyalDelarea

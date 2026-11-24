@@ -7,8 +7,10 @@ Actions secret; losing it only stops updates verifying until a new public key is
 `NEXT_PUBLIC_KEY_HEX` is the rotation slot. Empty today. To retire a key: put the next key's public
 half here and ship a release signed with the current key; once that release is the oldest one people
 still update from, sign with the next key and move it up to `PUBLIC_KEY_HEX`. A copy that never got
-the release carrying the next key cannot verify anything the next key signs, so it falls back to
-opening the installer, which the owner checks by hand.
+the release carrying the next key cannot verify anything the next key signs, and it does not fall back
+to anything: a packaged copy must verify (`web/update.py` `must_verify`), so it refuses both the
+seamless update and the installer and points the owner at the release page to download it by hand.
+There is no way to revoke a key from here other than shipping a release that drops it.
 """
 
 from __future__ import annotations
