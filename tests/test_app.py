@@ -219,6 +219,32 @@ def test_boot_keeps_sharing_a_saved_whole_drive_and_warns(tmp_path, caplog):
     assert "would not be accepted" in caplog.text
 
 
+def test_boot_stops_sharing_a_saved_library_that_holds_the_home_folder(tmp_path, monkeypatch, caplog):
+    """The startup repair takes a refused library out of the share rather than leaving it shared."""
+    import yaml
+
+    from flackey.app import repair_share
+    from flackey.config import Settings
+    from flackey.slskd_config import config_path, write_credentials
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data", library_root=home, slskd_api_key="k")
+    write_credentials(settings.data_dir, "digger", "not-a-real-password")
+    path = config_path(settings.data_dir)
+    config = yaml.safe_load(path.read_text())
+    config["shares"] = {"directories": [str(home)]}       # written by a build that let it through
+    path.write_text(yaml.safe_dump(config))
+    caplog.set_level("WARNING")
+
+    repair_share(settings)
+
+    assert yaml.safe_load(path.read_text())["shares"]["directories"] == []
+    assert "Soulseek share" in caplog.text
+
+
 def test_boot_writes_no_config_when_soulseek_was_never_set_up(tmp_path, caplog):
     """Neither an install without Soulseek nor one whose slskd.yml cannot be parsed may stop a boot."""
     from flackey.app import repair_share
