@@ -269,6 +269,29 @@ describe('a stream the server refuses after a restart', () => {
     }
   })
 
+  it('keeps asking when the server is not back yet', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.spyOn(api, 'health').mockResolvedValue(health)
+      const session = vi.spyOn(api, 'session')
+        .mockRejectedValueOnce(new ApiError(502, 'Bad Gateway'))
+        .mockResolvedValue({ ok: true })
+      render(<Harness />)
+      await waitFor(() => expect(screen.getByText('has-health')).toBeInTheDocument())
+      const first = FakeEventSource.last!
+      first.readyState = 2   // CLOSED: refused, not dropped
+      act(() => first.onerror?.())
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      expect(session).toHaveBeenCalledTimes(1)
+      expect(FakeEventSource.last).toBe(first)
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      await waitFor(() => expect(FakeEventSource.last).not.toBe(first))
+      expect(session).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('leaves a stream that only dropped to reconnect by itself', async () => {
     vi.spyOn(api, 'health').mockResolvedValue(health)
     const session = vi.spyOn(api, 'session').mockResolvedValue({ ok: true })

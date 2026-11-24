@@ -204,7 +204,6 @@ class Redactor:
         text = _VOLUME.sub("/Volumes/<drive>", text)
         text = _UNC_SERVER.sub(lambda m: f"{m.group(1)}<server>", text)
         text = _ONEDRIVE_ORG.sub(r"\1<org>", text)
-        text = _LOCAL_HOST.sub("<host>.local", text)
         text = _OTHER_WINDOWS_HOME.sub(lambda m: f"{m.group(1)}{m.group(2)}Users{m.group(2)}<user>", text)
         for pattern in self._known:
             text = pattern.sub("<redacted>", text)
@@ -221,6 +220,8 @@ class Redactor:
         text = _PASSWORD_REST.sub(_redact_value, text)
         text = _KEY_VALUE.sub(_redact_value, text)
         text = _EMAIL.sub("<email>", text)
+        # After `_EMAIL`: run first, it turned `bob@Bobs-Mac.local` into `bob@<host>.local` and left `bob`.
+        text = _LOCAL_HOST.sub("<host>.local", text)
         text = _PHONE.sub("<phone>", text)
         text = _LOCAL_PHONE.sub("<phone>", text)
         text = _IPV4.sub(lambda m: m.group(0) if m.group(0) in _KEEP_IPS else "<ip>", text)

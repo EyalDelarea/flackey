@@ -156,19 +156,22 @@ export function useLive(): Live {
     // A stream the server *refused* is closed for good -- EventSource retries only one that dropped. That
     // is what a restart looks like: the media cookie is made from a salt each launch draws, so the old
     // one is turned away while the token still works. Ask for a fresh cookie, then open the stream again.
+    // If the server is still coming up (or a proxy answers 502), keep asking, backing off to 30s.
     let reopen: ReturnType<typeof setTimeout> | null = null
+    const askForSession = (delay: number) => {
+      reopen = setTimeout(() => {
+        api.session().then(() => setStreamEpoch(n => n + 1))
+          .catch(() => { if (reopen) askForSession(Math.min(delay * 2, 30000)) })
+      }, delay)
+    }
     es.onerror = () => {
-      if (es.readyState === 2 /* CLOSED */ && !reopen) {
-        reopen = setTimeout(() => {
-          api.session().then(() => setStreamEpoch(n => n + 1)).catch(() => undefined)
-        }, 2000)
-      }
+      if (es.readyState === 2 /* CLOSED */ && !reopen) askForSession(2000)
       if (staleTimer.current) return
       staleTimer.current = setTimeout(() => { setConnected(false); staleTimer.current = null }, 5000)
     }
     return () => {
       if (staleTimer.current) { clearTimeout(staleTimer.current); staleTimer.current = null }
-      if (reopen) clearTimeout(reopen)
+      if (reopen) { clearTimeout(reopen); reopen = null }
       es.close()
     }
   }, [refresh, refreshLibrary, applySnapshot, streamEpoch])

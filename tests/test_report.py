@@ -337,6 +337,8 @@ def test_drive_server_and_company_names_in_paths_go(path, want):
     ("http://nas.local/music", "http://<host>.local/music"),
     ("~/.local/share/flackey stays", "~/.local/share/flackey stays"),
     ("module flackey.localfile stays", "module flackey.localfile stays"),
+    ("mail bob.smith@Bobs-MacBook-Pro.local now", "mail <email> now"),
+    ("http://bob:hunter2@Bobs-MacBook-Pro.local/x", "http://<redacted>@<host>.local/x"),
 ])
 def test_a_local_network_host_name_goes(line, want):
     """A Mac's Bonjour name is usually its owner's name: `Eyals-MacBook-Pro.local`."""
