@@ -305,21 +305,32 @@ class Settings(BaseSettings):
 REPO_ENV = Path(__file__).resolve().parents[2] / ".env"
 DEFAULT_SLSKD_URL = "http://127.0.0.1:5030"
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+SLSKD_URL_MALFORMED = "Enter the slskd address in full, for example http://127.0.0.1:5030."
 
 
-def slskd_url_problem(url: str) -> str | None:
-    """Why the slskd address must not be used, or None. Every request to it carries the slskd API key,
-    so plain http is allowed only to this machine; another machine must be reached over https."""
+def slskd_url_malformed(url: str) -> str | None:
+    """Why the slskd address cannot be used at all (unparseable, not http/https, no host), or None."""
     try:
         parts = urlsplit(url)
         host = parts.hostname
     except ValueError:  # an unclosed `[` in the host
-        parts = host = None
-    if parts is None or parts.scheme not in ("http", "https") or not host:
-        return "Enter the slskd address in full, for example http://127.0.0.1:5030."
-    if parts.scheme == "http" and host not in LOOPBACK:
+        return SLSKD_URL_MALFORMED
+    if parts.scheme not in ("http", "https") or not host:
+        return SLSKD_URL_MALFORMED
+    return None
+
+
+def slskd_url_problem(url: str) -> str | None:
+    """Why the settings screen refuses the slskd address, or None. Every request to it carries the slskd
+    API key, so on top of a malformed address, plain http is refused unless it is to this machine."""
+    malformed = slskd_url_malformed(url)
+    if malformed:
+        return malformed
+    parts = urlsplit(url)
+    if parts.scheme == "http" and parts.hostname not in LOOPBACK:
         return "slskd on another computer must be reached over https, so its key is not sent in the clear."
     return None
+
 
 # Telegram keys baked into a packaged build. packaging/build_app.sh writes this file from
 # FLACKEY_TELEGRAM_API_ID and FLACKEY_TELEGRAM_API_HASH before PyInstaller runs; the release workflow
@@ -434,14 +445,18 @@ def load_settings(env_file: Path | None = None, build_defaults: Path | None = No
     overrides = {k: v for k, v in from_build.items() if k not in base.model_fields_set}
     overrides.update({k: v for k, v in from_file.items() if k not in base.model_fields_set})
     result = base if not overrides else _settings_dropping_invalid(env_file, overrides, base)
-    # The settings screen refuses an address like this (`slskd_url_problem`); the environment, .env and a
-    # hand-edited settings.json did not, and the API key goes wherever it points. The built-in sidecar's
-    # address instead, so Soulseek still works and startup is never stopped by it. The value itself is not
-    # logged: it may carry a user name or password.
-    problem = slskd_url_problem(result.slskd_url)
-    if problem:
-        log.warning("ignoring the configured slskd address and using %s: %s", DEFAULT_SLSKD_URL, problem)
+    # The environment, the checkout's own .env and settings.json are the owner's, so an address set there
+    # was meant. Only one that cannot be used at all is replaced, by the built-in sidecar's address, so
+    # Soulseek still works and startup is never stopped by it. Plain http to another machine (Flackey in
+    # Docker beside an slskd container, say) is kept with a warning, though the settings screen would refuse
+    # to save it (`slskd_url_problem`). The value itself is never logged: it may carry a user name or password.
+    malformed = slskd_url_malformed(result.slskd_url)
+    if malformed:
+        log.warning("ignoring the configured slskd address and using %s: %s", DEFAULT_SLSKD_URL, malformed)
         result.slskd_url = DEFAULT_SLSKD_URL
+    elif slskd_url_problem(result.slskd_url):
+        log.warning("the configured slskd address is plain http to another machine, so the slskd key is sent "
+                    "to it unencrypted; https is recommended")
     if not result.slskd_api_key:
         result.slskd_api_key = read_api_key(result.data_dir)
     return result
