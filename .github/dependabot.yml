@@ -1,9 +1,14 @@
 version: 2
+# Every ecosystem waits 7 days after a release before proposing it, so a hijacked release has time to be
+# noticed and pulled before it reaches a PR (and, for actions, the release job). Cooldown applies to
+# version updates only: security updates still open at once.
 updates:
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       python-dependencies:
         patterns: ["*"]
@@ -12,6 +17,8 @@ updates:
     directory: "/web"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       # Majors come as their own PRs. Grouping them with the safe bumps meant one
       # broken major (typescript 7 dropping implicit CSS side-effect typing) took
@@ -24,6 +31,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     ignore:
       # The python base image is pinned by pyproject.toml's requires-python
       # (">=3.12,<3.13"), not upgradable on its own -- `uv sync --frozen` refuses.
@@ -37,6 +46,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       # init and analyze must run the same version: bumped apart, each PR fails CodeQL with
       # "Loaded a configuration file for version X, but running version Y".

@@ -122,6 +122,7 @@ The invariant, adopted from the wider practice around self-updating Mac apps:
 | Staging path fails a validation rule — symlink, wrong owner, wrong name, wrong bundle id | Helper refuses and exits without touching the target |
 | `RENAME_SWAP` fails with `EPERM`/`EACCES` | Named error pointing at Privacy & Security → App Management. Both paths left as they are, old app relaunched |
 | `RENAME_SWAP` fails otherwise | Helper logs errno, leaves both paths as they are, relaunches the old app |
+| What the swap brought in is not the directory the helper hashed (renamed onto the staging name after the check) | Helper swaps back, logs it, and exits refused without relaunching anything. If the swap back fails it says so in the log and still relaunches nothing |
 | Relaunch fails | Bundle is already the new version; the user opens it from Applications |
 
 ## Quarantine
@@ -179,6 +180,7 @@ check and the call. The rules, in order:
 5. The staged bundle's `Info.plist` must declare `CFBundleIdentifier` of `com.flackey.app`, and the
    bundle must carry no `com.apple.quarantine`.
 6. Only then `renameatx_np(dirfd, staging, dirfd, "Flackey.app", RENAME_SWAP)`.
+7. The staged bundle stays open from the hash to after the swap. Then `fstatat(dirfd, "Flackey.app", AT_SYMLINK_NOFOLLOW)` must give the device and inode of the directory that was hashed; anything else is swapped back out.
 
 `EPERM` or `EACCES` from the swap is handled explicitly and reported as a named failure — "macOS blocked
 the update; grant Flackey permission under Privacy & Security → App Management" — rather than a silent

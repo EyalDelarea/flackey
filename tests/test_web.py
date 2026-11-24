@@ -634,6 +634,40 @@ def test_versions_are_read_strictly(text, parsed):
     assert flackey.web.update.parse_version(text) == parsed
 
 
+@pytest.mark.parametrize("text, parsed", [
+    # Every tag published so far is plain; leading zeros were never refused and still read as numbers,
+    # so a release tagged that way by mistake is still offered.
+    ("v0.8.1", (0, 8, 1)), ("v0.1.12", (0, 1, 12)), ("01.2.3", (1, 2, 3)),
+    ("v999999999.0.0", (999999999, 0, 0)),
+    # Past any real version, and past what `int` will read from a string at all (ValueError beyond
+    # 4300 digits): not a version, rather than an exception.
+    ("v1234567890.0.0", None), ("v1." + "9" * 5000 + ".0", None), ("9" * 100_000 + ".0.0", None),
+], ids=lambda v: f"{len(v)} chars" if isinstance(v, str) and len(v) > 20 else None)
+def test_version_parts_are_bounded(text, parsed):
+    assert flackey.web.update.parse_version(text) == parsed
+
+
+@respx.mock
+def test_a_tag_with_an_absurdly_long_number_is_skipped_not_a_crash():
+    respx.get(RELEASES_URL).mock(return_value=httpx.Response(200, json=[
+        _release("v9." + "9" * 5000 + ".0"), _release("v9.9.9"),
+    ]))
+    info = asyncio.run(flackey.web.update.latest_release())
+    assert info["ok"] is True and info["latest"] == "9.9.9"
+
+
+def test_the_mac_opens_the_installer_with_the_system_open(monkeypatch, tmp_path):
+    """By absolute path: a bare `open` is looked up on PATH, and whatever comes first there runs."""
+    ran = []
+    monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(flackey.web.update.subprocess, "Popen", lambda argv, **kw: ran.append(argv))
+    # conftest swaps `open_installer` for a tripwire; the real one runs here with Popen faked.
+    monkeypatch.setattr(flackey.web.update, "open_installer", REAL_OPEN_INSTALLER)
+    installer = tmp_path / "Flackey.pkg"
+    flackey.web.update.open_installer(installer)
+    assert ran == [["/usr/bin/open", str(installer)]]
+
+
 @respx.mock
 @pytest.mark.parametrize("url", [
     "https://github.com/EyalDelarea/flackey/releases/download/../../../evil/x/Flackey.pkg",
