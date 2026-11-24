@@ -3584,3 +3584,34 @@ async def test_a_racer_cancelled_because_the_first_pick_landed_is_not_booked(len
 ])
 def test_which_failures_say_the_peer_never_sent(outcome, state, had_bytes, booked):
     assert lossless_attempt_mod.never_sent(outcome, state, had_bytes) is booked
+
+
+async def test_the_pick_runs_off_the_event_loop(lenv, monkeypatch):
+    """`pick` reads every peer's file name, and the names are the peer's to choose: the API and the inbox
+    must not wait on it. It touches nothing but its arguments, so a worker thread is safe."""
+    import threading
+    _, store, _, _, _, _ = lenv
+    on_loop = []
+    real = lossless_attempt_mod.pick
+
+    def spy(*a, **kw):
+        on_loop.append(threading.current_thread() is threading.main_thread())
+        return real(*a, **kw)
+
+    monkeypatch.setattr(lossless_attempt_mod, "pick", spy)
+    w = make(lenv)
+    assert (await w.process(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.DONE
+    assert on_loop and not any(on_loop)
+
+
+async def test_a_peers_name_cannot_forge_a_worker_log_line(lenv, caplog):
+    settings, store, _, _, _, _ = lenv
+    good = lenv[3].audio["a"]
+    evil = "ad\nINFO flackey.worker forged"
+    files = [lf(evil, queue_length=0), lf("other", queue_length=4)]
+    provider = TimesOutProvider(settings.slskd_downloads, files, audio={evil: good, "other": good}, silent={evil})
+    w = make(lenv, provider=provider)
+    with caplog.at_level(logging.INFO):
+        assert (await w.process(store.add_request(TEXT, RequestKind.TEXT))).state == RequestState.DONE
+    named = [r.getMessage() for r in caplog.records if "forged" in r.getMessage()]
+    assert named and not any("\n" in m for m in named)

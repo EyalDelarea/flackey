@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import sys
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -34,6 +36,20 @@ SEARCH_POLL_S = 0.5
 # moment before the peer answers; the two "Queued" states are its answer -- we are in a line, behind however
 # many other people the peer is serving (127, 360 and 1866 deep on the goa FLACs this was written for).
 QUEUED_STATES = ("Requested", "Queued")
+
+
+# What one search takes from its peers. A real path is a few hundred characters and a real answer a few
+# hundred files at most; these leave room for ten times that, and keep the pick (which reads every name)
+# from being handed whatever a peer chooses to send.
+MAX_PATH_CHARS = 1024
+MAX_FILES_PER_RESPONSE = 500
+MAX_SEARCH_FILES = 5000
+# C0 and C1 control characters, NUL among them: no shared file is named with one, and a NUL makes the
+# derived download path unusable.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# Whether the disk slskd writes to treats two names that differ only in case (and, on APFS, Unicode normal
+# form) as one file: the defaults on macOS and Windows.
+CASE_INSENSITIVE_DISK = sys.platform in ("darwin", "win32")
 
 
 def is_queued(state: str) -> bool:
@@ -186,7 +202,7 @@ class SlskdClient:
             r = await self._call("DELETE", f"/transfers/downloads/{quote(username, safe='')}/{transfer_id}",
                                  params={"remove": "true"})
         except LosslessError:
-            log.debug("could not cancel transfer %s of %s", transfer_id, username)
+            log.debug("could not cancel transfer %s of %r", transfer_id, username)
             return False
         return r.status_code < 400 or r.status_code == 404
 
@@ -195,9 +211,16 @@ class SlskdClient:
 
 
 def parse_response(resp: dict) -> list[LosslessFile]:
+    """The peer's files, in its order, up to MAX_FILES_PER_RESPONSE; a path no shared file has (too long, or
+    with a control character) is left out."""
     out = []
     for f in resp.get("files", []):
+        if len(out) == MAX_FILES_PER_RESPONSE:
+            log.debug("kept the first %d files of %r's answer", MAX_FILES_PER_RESPONSE, resp.get("username"))
+            break
         name = f["filename"]
+        if len(name) > MAX_PATH_CHARS or _CONTROL.search(name):
+            continue
         ext = (f.get("extension") or (name.rsplit(".", 1)[-1] if "." in name else "")).lower()
         out.append(LosslessFile(
             provider="soulseek", username=resp["username"], path=name, extension=ext, size=int(f["size"]),
@@ -227,10 +250,21 @@ def local_path_for(downloads: Path, file: LosslessFile, *, windows: bool | None 
     if windows:
         folder, name = folder.translate(_SLSKD_WINDOWS_INVALID), name.translate(_SLSKD_WINDOWS_INVALID)
     candidate = downloads / folder / name if folder else downloads / name
-    root, resolved = downloads.resolve(), candidate.resolve()
+    try:
+        root, resolved = downloads.resolve(), candidate.resolve()
+    except (OSError, ValueError) as e:          # an embedded NUL, a name the filesystem refuses
+        raise LosslessError(f"peer path cannot be a file here: {file.path!r}", "transfer_failed") from e
     if resolved == root or not resolved.is_relative_to(root):
         raise LosslessError(f"peer path escapes the downloads folder: {file.path!r}", "transfer_failed")
     return resolved
+
+
+def _lock_key(dest: Path) -> str:
+    """The name `_path_lock` keeps `dest` under: on a disk that ignores case and normal form, the same for
+    every spelling it takes as this one file (as `same_destination` judges a finished one)."""
+    if not CASE_INSENSITIVE_DISK:
+        return str(dest)
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", str(dest)).casefold())
 
 
 def _claim(dest: Path) -> Path:
@@ -246,7 +280,7 @@ def _claim(dest: Path) -> Path:
     try:
         dest.replace(claimed)
     except OSError as e:                       # peer-chosen names: ENAMETOOLONG and friends are input, not bugs
-        log.warning("could not claim %s off the derived path: %s", dest.name, e)
+        log.warning("could not claim %r off the derived path: %s", dest.name, e)
         return dest
     return claimed
 
@@ -259,7 +293,7 @@ def _remove_stale_file(dest: Path) -> None:
     input, not a bug."""
     try:
         dest.unlink()
-        log.info("removed stale file at derived path: %s", dest.name)
+        log.info("removed stale file at derived path: %r", dest.name)
     except FileNotFoundError:
         pass  # nothing there to clean - the common case
     except IsADirectoryError as e:
@@ -292,7 +326,8 @@ class SoulseekProvider:
         # writes both to the same place; whoever gets there first owns the path from the pre-clean until
         # the file has been moved out. Without this, one download's pre-clean would delete another's
         # in-flight file. Entries are dropped when nothing is waiting, so this cannot grow unboundedly.
-        self._paths: dict[Path, asyncio.Lock] = {}
+        # Keyed by `_lock_key`, so names one disk takes for the same file share a lock.
+        self._paths: dict[str, _PathWaiters] = {}
         # (peer, remote path) of every download this run enqueued: `cancel_all` is for the previous run's
         # transfers, and must never take one of this run's -- however late it gets to run. Kept only while
         # that sweep is owed (`begin_run` until the first `cancel_all` that succeeds): afterwards nothing
@@ -315,9 +350,10 @@ class SoulseekProvider:
         """Own `dest` for the length of a download. The count is bumped before the first await, so an entry
         is only dropped once nobody holds or wants it -- pruning on `Lock.locked()` alone would discard a
         lock a waiter had already been handed."""
-        entry = self._paths.get(dest)
+        key = _lock_key(dest)
+        entry = self._paths.get(key)
         if entry is None:
-            entry = self._paths[dest] = _PathWaiters()
+            entry = self._paths[key] = _PathWaiters()
         entry.n += 1
         try:
             async with entry.lock:
@@ -325,7 +361,7 @@ class SoulseekProvider:
         finally:
             entry.n -= 1
             if entry.n == 0:
-                self._paths.pop(dest, None)
+                self._paths.pop(key, None)
 
     async def search(self, text: str, *, wait_s: float, on_raw: RawSink | None = None) -> list[LosslessFile]:
         async with self._searching:
@@ -348,7 +384,13 @@ class SoulseekProvider:
                 on_raw("responses", responses)
         finally:
             await self.client.delete_search(sid)
-        return [f for r in responses for f in parse_response(r)]
+        files: list[LosslessFile] = []
+        for r in responses:
+            files += parse_response(r)[:MAX_SEARCH_FILES - len(files)]
+            if len(files) == MAX_SEARCH_FILES:
+                log.debug("kept the first %d files of the search's answers", MAX_SEARCH_FILES)
+                break
+        return files
 
     async def _find(self, file: LosslessFile) -> dict | None:
         for t in await self.client.downloads(file.username):
@@ -461,13 +503,13 @@ class SoulseekProvider:
                         # this run's own transfers `cancel_all` would never sweep it. So the switch happens
                         # only once slskd confirms the cancel; otherwise this one is kept, to the end.
                         if not await self._cancel_twice(file.username, tr["id"]):
-                            log.warning("could not cancel the slow transfer of %s from %s; keeping it",
+                            log.warning("could not cancel the slow transfer of %r from %r; keeping it",
                                         file.name, file.username)
                             budget.slow, kept_slow = None, err
                             continue
                         # Whether slskd also deletes the partial it keeps in its own incomplete folder on a
                         # cancel is not something the spike established, so say where it would be.
-                        log.info("gave up a slow transfer of %s from %s (%s); any partial is slskd's, in its "
+                        log.info("gave up a slow transfer of %r from %r (%s); any partial is slskd's, in its "
                                  "incomplete folder", file.name, file.username, err)
                     else:
                         await self.client.cancel_download(file.username, tr["id"])

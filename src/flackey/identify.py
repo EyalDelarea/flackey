@@ -168,13 +168,42 @@ def _is_version(text: str) -> bool:
     return bool(_VERSION_WORDS.search(text) or _TAIL_VERSION_RE.search(text))
 
 
+def _trailing_bracket(s: str) -> re.Match[str] | None:
+    """`_TRAIL_RE.search(s)`, in time linear in `s`. Searched as written, the pattern is retried from every
+    position and each try runs to the end, which a peer's file name of a few thousand spaces or brackets
+    turns into seconds. The match it would find opens at the first bracket after the last closing one
+    before the end, with any spaces in front of it; only that one position is tried."""
+    end = len(s.rstrip())
+    if not end or s[end - 1] not in ")]":
+        return None
+    close = end - 1
+    after = max(s.rfind(")", 0, close), s.rfind("]", 0, close)) + 1
+    opens = [i for i in (s.find("(", after, close), s.find("[", after, close)) if i >= 0]
+    if not opens:
+        return None
+    start = min(opens)
+    while start and s[start - 1].isspace():
+        start -= 1
+    return _TRAIL_RE.match(s, start)
+
+
+def _trailing_dash_version(s: str) -> re.Match[str] | None:
+    """`_DASH_VERSION_RE.search(s)`, in time linear in `s` (see `_trailing_bracket`): the only dash it can
+    match is the last one, so only the start of the spaces in front of that one is tried."""
+    dash = max(s.rfind(c) for c in "-–—")
+    start = dash
+    while start > 0 and s[start - 1].isspace():
+        start -= 1
+    return _DASH_VERSION_RE.match(s, start) if start < dash else None
+
+
 def parse_version(title: str) -> tuple[str, str | None]:
     t = title.strip()
-    m = _TRAIL_RE.search(t)
+    m = _trailing_bracket(t)
     # "(feat. Lil Flip)", "(feat. Club Dogo)" credit someone; they are not a flip or a club mix
     if m and _is_version(m.group(1)) and not _FEAT_RE.match(m.group(1).strip()):
         return t[: m.start()].strip(), m.group(1).strip()
-    m = _DASH_VERSION_RE.search(t)
+    m = _trailing_dash_version(t)
     if m and _is_version(m.group(1)):
         return t[: m.start()].strip(), m.group(1).strip()
     return t, None
@@ -409,7 +438,7 @@ def _channel(uploader: str | None) -> str:
 
 def _strip_label_tag(s: str, uploader: str | None) -> str:
     """Drop a trailing [Label Name] / (Channel Name) that is neither a version nor a feature credit."""
-    m = _TRAIL_RE.search(s)
+    m = _trailing_bracket(s)
     if not m:
         return s
     inner = m.group(1)

@@ -171,3 +171,33 @@ def test_transfer_marks_follow_the_kept_pick_of_a_race():
     enqueue, left, byte = transfer_marks(timeline)
     assert enqueue["detail"]["peer"] == "slow"
     assert left["detail"] == {"pick": 1, "state": "InProgress"} and byte["detail"]["ms"] == 50_000
+
+
+def test_an_event_keeps_a_bounded_copy_of_every_string(store: Store, tmp_path: Path, caplog):
+    """Peers choose file names and user names, and a file's own text (a FLAC vendor string) rides into the
+    evidence: none of it may grow the row, the log or the page past a bound. Numbers and short strings are
+    kept exactly; the caller's own values are left alone."""
+    from flackey.attempts import MAX_RECORDED_CHARS
+    rec = AttemptRecorder(store, tmp_path / "raw", 1, "soulseek", "q")
+    long = "x" * (MAX_RECORDED_CHARS * 20)
+    detail = {"peer": long, "file": "short.flac", "size": 12, "evidence": {"container": {"vendor": long}},
+              "folders": [long], "peers": {long: {"no_sends": 1}}}
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
+        rec.event("enqueue", **detail)
+    [stored] = store.get_attempt(rec.id).timeline
+    got = stored["detail"]
+    assert got["file"] == "short.flac" and got["size"] == 12
+    for value in (got["peer"], got["evidence"]["container"]["vendor"], got["folders"][0], *got["peers"]):
+        assert value.startswith("xxx") and len(value) <= MAX_RECORDED_CHARS + 1
+    assert len(json.dumps(store.get_attempt(rec.id).timeline)) < 10 * MAX_RECORDED_CHARS
+    assert len(caplog.text) < 10 * MAX_RECORDED_CHARS
+    assert detail["peer"] == long                       # the caller's dict is not edited in place
+
+
+def test_a_newline_in_an_event_value_cannot_forge_a_log_line(store: Store, tmp_path: Path, caplog):
+    rec = AttemptRecorder(store, tmp_path / "raw", 1, "soulseek", "q")
+    with caplog.at_level(logging.INFO, logger="flackey.attempts"):
+        rec.event("enqueue", peer="evil\nreq=1 slsk=1 outcome=filed", file="a.flac")
+    [line] = [r.getMessage() for r in caplog.records if "enqueue" in r.getMessage()]
+    assert "\n" not in line and "file=a.flac" in line
+    assert store.get_attempt(rec.id).timeline[0]["detail"]["peer"] == "evil\nreq=1 slsk=1 outcome=filed"

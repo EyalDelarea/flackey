@@ -30,6 +30,7 @@ from mutagen.id3 import (
 )
 from mutagen.wave import WAVE
 
+from .audiofile import MAX_CHUNKS, WrongFormat, check_layout
 from .models import CatalogTrack, Verdict, edge_text, source_label
 
 
@@ -104,6 +105,20 @@ def _values(catalog: CatalogTrack, verdict: Verdict, source: str = "deezer_bot")
     }
 
 
+_LAYOUTS = {".wav": "wav", ".aif": "aiff", ".aiff": "aiff", ".flac": "flac"}
+
+
+def _check_layout(path: Path) -> None:
+    """Refuse, before mutagen reads it, a file with more chunks or metadata than a real one has: mutagen
+    holds every chunk and every FLAC block, pictures included, in memory (`audiofile.check_layout`)."""
+    fmt = _LAYOUTS.get(path.suffix.lower())
+    if fmt:
+        try:
+            check_layout(path, fmt)
+        except WrongFormat as e:
+            raise TagError(str(e)) from e
+
+
 def _id3_target(path: Path):
     """(container, tags). MP3 saves a bare ID3 block; WAV/AIFF keep ID3 inside their chunk list."""
     ext = path.suffix.lower()
@@ -113,6 +128,7 @@ def _id3_target(path: Path):
         except ID3NoHeaderError:
             pass
         return None, ID3()
+    _check_layout(path)
     f = WAVE(path) if ext == ".wav" else AIFF(path)
     if f.tags is None:
         f.add_tags()
@@ -186,9 +202,12 @@ def _is_riff_wave(head: bytes) -> bool:
 def _riff_chunks(f, total: int):
     """(kind, size, payload offset) for each chunk header that fits in the file's `total` bytes, walked by
     seeking from one header to the next. Odd-sized chunks are followed by a pad byte; the RIFF size field
-    is not trusted -- the physical end of the file is."""
-    pos = 12
+    is not trusted -- the physical end of the file is. Past MAX_CHUNKS chunks it is not a file: TagError."""
+    pos, count = 12, 0
     while pos + 8 <= total:
+        count += 1
+        if count > MAX_CHUNKS:
+            raise TagError(f"more than {MAX_CHUNKS} RIFF chunks")
         f.seek(pos)
         header = f.read(8)
         kind, size = header[:4], struct.unpack("<I", header[4:8])[0]
@@ -271,8 +290,8 @@ def _parse_info(payload: bytes) -> dict[str, str]:
 
 
 def _read_wav_info(path: Path) -> dict[str, str]:
-    """The RIFF INFO values, reading only the LIST INFO payloads. Never raises on a malformed file: a
-    truncated chunk is read as far as the file goes, as it always was."""
+    """The RIFF INFO values, reading only the LIST INFO payloads. A truncated chunk is read as far as the
+    file goes, as it always was; only a file of more than MAX_CHUNKS chunks raises (TagError)."""
     total = path.stat().st_size
     out: dict[str, str] = {}
     with open(path, "rb") as f:
@@ -291,6 +310,7 @@ def _write_wav(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) 
 
 
 def _write_flac(path: Path, v: dict[str, str], artwork: bytes | None, mime: str) -> None:
+    _check_layout(path)
     f = FLAC(path)
     f.delete()
     f.clear_pictures()
@@ -335,6 +355,7 @@ def _id3_tags(path: Path):
             return ID3(path)
         except ID3NoHeaderError:
             return ID3()
+    _check_layout(path)
     f = WAVE(path) if ext == ".wav" else AIFF(path)
     return f.tags if f.tags is not None else ID3()
 
@@ -365,6 +386,7 @@ def read_tags(path: Path) -> dict[str, str]:
                         "ICAT": "catalognumber", "IMIX": "mix"}
             out.update({dst: info[src] for src, dst in info_map.items() if info.get(src)})
     elif ext == ".flac":
+        _check_layout(path)
         f = FLAC(path)
         def g(k: str) -> str:
             return f[k][0] if k in f else ""

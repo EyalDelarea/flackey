@@ -18,8 +18,13 @@ import httpx
 
 log = logging.getLogger(__name__)
 PORT_TEST_URL = "http://tools.slsknet.org/porttest.php"
-_VERDICT = re.compile(r"IP:\s*([0-9.]+).*?Port:\s*(\d+)/tcp\s+(OPEN|CLOSED)",
-                       re.DOTALL | re.IGNORECASE)
+# The page is a few hundred bytes. It comes over plain HTTP, so anything on the way can answer instead:
+# only this much of it is read, and it is parsed in two linear steps -- the address, then the first
+# verdict after it, which is what one backtracking pattern used to find.
+MAX_BODY_BYTES = 64 * 1024
+_TAG = re.compile(r"<[^<>]+>")
+_ADDRESS = re.compile(r"IP:\s*([0-9.]+)", re.IGNORECASE)
+_VERDICT = re.compile(r"Port:\s*(\d+)/tcp\s+(OPEN|CLOSED)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -29,17 +34,36 @@ class PortCheck:
     error: str | None = None
 
 
+def read_verdict(page: str) -> tuple[str, int, bool] | None:
+    """The public address, the port and whether it is open, as the page says; None if it does not."""
+    text = _TAG.sub(" ", page)
+    address = _ADDRESS.search(text)
+    verdict = address and _VERDICT.search(text, address.end())
+    if not verdict:
+        return None
+    return address.group(1), int(verdict.group(1)), verdict.group(2).upper() == "OPEN"
+
+
+async def _read_capped(http: httpx.AsyncClient, port: int) -> str:
+    async with http.stream("GET", PORT_TEST_URL, params={"port": port}, timeout=15,
+                           headers={"User-Agent": "Flackey (port check)"}) as r:
+        r.raise_for_status()
+        body = bytearray()
+        async for chunk in r.aiter_bytes():
+            body += chunk
+            if len(body) >= MAX_BODY_BYTES:
+                break
+        return bytes(body[:MAX_BODY_BYTES]).decode(r.encoding or "utf-8", errors="replace")
+
+
 async def check_port(port: int, http: httpx.AsyncClient) -> PortCheck:
     try:
-        r = await http.get(PORT_TEST_URL, params={"port": port}, timeout=15,
-                           headers={"User-Agent": "Flackey (port check)"})
-        r.raise_for_status()
+        page = await _read_capped(http, port)
     except httpx.HTTPError as e:
         log.info("port check unavailable: %s", e.__class__.__name__)
         return PortCheck(None, None, "Could not reach the port test service.")
-    text = re.sub(r"<[^>]+>", " ", r.text)
-    m = _VERDICT.search(text)
-    if m is None or int(m.group(2)) != port:
+    found = read_verdict(page)
+    if found is None or found[1] != port:
         log.warning("port check page had no verdict for port %d", port)
         return PortCheck(None, None, "The port test gave an answer Flackey could not read.")
-    return PortCheck(m.group(3).upper() == "OPEN", m.group(1))
+    return PortCheck(found[2], found[0])

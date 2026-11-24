@@ -1,6 +1,7 @@
 """A file is checked for what its first bytes say it is before ffmpeg, ffprobe or fpcalc reads it, and
 those tools are then told which demuxer to use and which protocols they may open."""
 import json
+import struct
 import subprocess
 from pathlib import Path
 
@@ -227,3 +228,86 @@ def test_convert_bounds_the_output_and_refuses_one_that_hit_the_bound(tmp_path: 
     with pytest.raises(convert.ConvertError, match="limit"):
         convert.to_format(src, "aiff", 16)
     assert not out.exists()
+
+
+def _riff(chunks: bytes, little: bool = True) -> bytes:
+    if little:
+        fmt = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 2, 44100, 44100 * 4, 4, 16)
+        return b"RIFF" + struct.pack("<I", 4 + len(fmt) + len(chunks)) + b"WAVE" + fmt + chunks
+    comm = b"COMM" + struct.pack(">IhIh", 18, 2, 441, 16) + b"\x40\x0e\xac\x44" + b"\x00" * 6
+    return b"FORM" + struct.pack(">I", 4 + len(comm) + len(chunks)) + b"AIFF" + comm + chunks
+
+
+def _flood(n: int, little: bool = True) -> bytes:
+    empty = b"JUNK\x00\x00\x00\x00"           # a zero size reads the same either way round
+    data = b"data" + struct.pack("<I", 400) + b"\x01" * 400 if little else (
+        b"SSND" + struct.pack(">I", 408) + b"\x00" * 8 + b"\x01" * 400)
+    return _riff(empty * n + data, little)
+
+
+@pytest.mark.parametrize(("name", "little"), [("x.wav", True), ("x.aiff", False)])
+def test_a_flood_of_empty_chunks_is_not_a_valid_file_and_costs_nothing_to_refuse(tmp_path: Path, name, little):
+    """A peer's WAV or AIFF stuffed with ~200k empty chunks ahead of a small real one. A real file has a
+    handful; the parser behind the tags and the container facts holds every chunk in memory. Each way in
+    refuses it as a malformed file before that parser runs, in bounded time and memory."""
+    import time
+    import tracemalloc
+
+    from flackey import evidence, tag
+    src = put(tmp_path, name, _flood(200_000, little))
+    fmt = "wav" if little else "aiff"
+    tracemalloc.start()
+    start = time.perf_counter()
+    try:
+        with pytest.raises(WrongFormat, match=f"not a valid {fmt} file"):
+            demuxer(src)
+        facts = evidence.container_facts(src, fmt)
+        with pytest.raises(tag.TagError):
+            tag.read_tags(src)
+        assert tag.tags_as_arrived(src) == {}
+        with pytest.raises(tag.TagError):
+            tag._read_wav_info(src) if little else tag._id3_tags(src)
+        elapsed = time.perf_counter() - start
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert "unreadable" in facts and "expected_samples" not in facts
+    assert elapsed < 5 and peak < 8 * 1024 * 1024
+
+
+@pytest.mark.parametrize(("name", "little"), [("x.wav", True), ("x.aiff", False)])
+def test_a_few_extra_chunks_are_still_a_file(tmp_path: Path, name, little):
+    assert demuxer(put(tmp_path, name, _flood(50, little))) == ("wav" if little else "aiff")
+
+
+def _flac(*blocks: tuple[int, bytes]) -> bytes:
+    """"fLaC", then each (type, payload) as a metadata block, the last one flagged as last."""
+    out = b"fLaC"
+    for i, (kind, payload) in enumerate(blocks):
+        last = 0x80 if i == len(blocks) - 1 else 0
+        out += bytes([last | kind]) + len(payload).to_bytes(3, "big") + payload
+    return out
+
+
+STREAMINFO = (0, struct.pack(">HH", 4096, 4096) + b"\x00" * 6 + bytes.fromhex("0ac442f0") + b"\x00\x01\x00\x00"
+              + b"\x00" * 16)
+
+
+def test_flac_metadata_past_the_bound_is_not_a_valid_file(tmp_path: Path, monkeypatch):
+    """Tags and pictures sit ahead of the audio and are read whole by the tag parser; pictures are not what
+    any check here needs. Past MAX_FLAC_METADATA_BYTES in all, the file is refused before that parser runs,
+    as it is past MAX_CHUNKS blocks."""
+    from flackey import evidence
+    monkeypatch.setattr(audiofile, "MAX_FLAC_METADATA_BYTES", 3000)
+    fine = put(tmp_path, "a.flac", _flac(STREAMINFO, (6, b"\x00" * 1000), (6, b"\x00" * 1000)) + b"\xff\xf8")
+    assert demuxer(fine) == "flac"
+    heavy = put(tmp_path, "b.flac", _flac(STREAMINFO, *[(6, b"\x00" * 1000)] * 4) + b"\xff\xf8")
+    with pytest.raises(WrongFormat, match="not a valid flac file"):
+        demuxer(heavy)
+    assert "unreadable" in evidence.container_facts(heavy, "flac")
+    behind_id3 = put(tmp_path, "c.flac", id3(_flac(STREAMINFO, *[(6, b"\x00" * 1000)] * 4)))
+    with pytest.raises(WrongFormat, match="not a valid flac file"):
+        demuxer(behind_id3)
+    many = put(tmp_path, "d.flac", _flac(STREAMINFO, *[(1, b"")] * (audiofile.MAX_CHUNKS + 1)))
+    with pytest.raises(WrongFormat, match="not a valid flac file"):
+        demuxer(many)
