@@ -2,6 +2,7 @@ import time
 
 import pytest
 
+from flackey import identify
 from flackey.identify import (
     classify,
     parse_text,
@@ -479,3 +480,46 @@ def test_a_host_that_only_contains_youtube_is_not_youtube(url):
 def test_a_youtube_link_keeps_only_the_host_name():
     assert classify("https://user@music.youtube.com:443/watch?v=abc") == (
         RequestKind.YT_TRACK, "https://music.youtube.com/watch?v=abc")
+
+
+# The two end-anchored patterns `parse_version` reads a peer's file name with, as they were written: the
+# linear search has to find exactly what they find.
+_TRAIL_PATTERN = r"\s*[\(\[]([^\)\]]+)[\)\]]\s*$"
+_DASH_VERSION_PATTERN = r"\s+[-–—]\s+([^-–—]+)$"
+
+
+@pytest.mark.parametrize(("pattern", "linear"), [
+    (_TRAIL_PATTERN, "_trailing_bracket"), (_DASH_VERSION_PATTERN, "_trailing_dash_version")],
+    ids=["bracket", "dash"])
+def test_the_linear_version_searches_match_exactly_what_the_patterns_match(pattern, linear):
+    """Every string of up to 5 characters drawn from the ones the patterns care about, plus a seeded sample
+    of longer ones: same span, same group, or None for both."""
+    import itertools
+    import random
+    import re
+    ref, linear = re.compile(pattern), getattr(identify, linear)
+    alphabet = " \t\n()[]-–—a"
+    samples = ["".join(p) for n in range(6) for p in itertools.product(" ()]-a", repeat=n)]
+    rng = random.Random(97)
+    samples += ["".join(rng.choice(alphabet) for _ in range(rng.randint(0, 24))) for _ in range(20_000)]
+    samples += ["Song (Extended Mix)", "Song [Remix] ", "Song - Club Mix", "A - B - C", "Song (a (b)",
+                "Song (feat. X) (Remix)", "Song ()", "Song (x)\n", "Song - \n", "Song —  Edit"]
+    for s in samples:
+        want, got = ref.search(s), linear(s)
+        assert (want and (want.span(), want.groups())) == (got and (got.span(), got.groups())), repr(s)
+
+
+@pytest.mark.parametrize("body", [" " * 20_000, "(" * 20_000, "[" * 20_000, "( " * 10_000, " (" * 10_000,
+                                  "\t" * 20_000, " -" * 10_000, "x(" * 10_000],
+                         ids=["spaces", "opens", "squares", "open-space", "space-open", "tabs", "dashes", "x-open"])
+def test_a_peers_long_file_name_is_read_quickly(body):
+    """A peer chooses its file names, and `pick` reads every one. The bound is generous on purpose: what it
+    guards against took seconds per name, a linear read takes milliseconds."""
+    from flackey.lossless import LosslessFile, PickPolicy, Reference, pick
+    names = [f"{body}.flac", f"Artist - Title{body}x.flac", f"a{body}b (Remix).flac"]
+    files = [LosslessFile("soulseek", "u", f"Music\\{n}", "flac", 30_000_000, 300, None, 44100, 16, True, 1, 0)
+             for n in names]
+    start = time.perf_counter()
+    pick(files, Reference("Artist", "Title", "Extended Mix", 300), PickPolicy())
+    parse_version(body + ")")
+    assert time.perf_counter() - start < 2

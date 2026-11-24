@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from flackey.source import slskd as slskd_mod
 from flackey.source.lossless import (
     LosslessError,
     LosslessUnavailable,
@@ -16,6 +17,9 @@ from flackey.source.lossless import (
     TransferProgress,
 )
 from flackey.source.slskd import (
+    MAX_FILES_PER_RESPONSE,
+    MAX_PATH_CHARS,
+    MAX_SEARCH_FILES,
     SlskdClient,
     SoulseekProvider,
     TransferBudget,
@@ -63,6 +67,42 @@ def test_parse_response_derives_extension_and_peer_fields(fixtures: Path):
     assert queued.name == "02 Hallucinogen - Orphic Thrench.flac"
 
 
+def response(n: int, user: str = "peer", name=lambda i: f"Music\\Album\\{i:04d} Track.flac") -> dict:
+    return {"username": user, "hasFreeUploadSlot": True, "uploadSpeed": 1, "queueLength": 0,
+            "files": [{"filename": name(i), "size": 30_000_000, "length": 300} for i in range(n)]}
+
+
+def test_parse_response_drops_names_no_real_file_has():
+    """A peer chooses its paths. One past MAX_PATH_CHARS, or with a NUL or another control character in it,
+    names no file anyone shares -- and every later step (the pick's reading of the name, the derived
+    download path) would have to survive it."""
+    resp = response(0)
+    resp["files"] = [{"filename": f"Music\\{n}", "size": 30_000_000, "length": 300} for n in (
+        "fine.flac", "a" * MAX_PATH_CHARS + ".flac", "a\x00b.flac", "a\nb.flac", "a\x1bb.flac", "a\x7fb.flac",
+        "a\x85b.flac", "Café – Ünïcode.flac")]
+    assert [f.name for f in parse_response(resp)] == ["fine.flac", "Café – Ünïcode.flac"]
+
+
+def test_parse_response_takes_a_bounded_number_of_files_from_one_peer():
+    files = parse_response(response(MAX_FILES_PER_RESPONSE + 50))
+    assert len(files) == MAX_FILES_PER_RESPONSE
+    assert files[0].name == "0000 Track.flac"         # in the peer's order: the first ones are kept
+
+
+@respx.mock
+async def test_a_search_takes_a_bounded_number_of_files_in_total(provider):
+    p, _, _ = provider
+    peers = MAX_SEARCH_FILES // MAX_FILES_PER_RESPONSE + 2
+    respx.post(f"{BASE}/searches").mock(return_value=httpx.Response(200, json={"id": "s"}))
+    respx.get(f"{BASE}/searches/s").mock(return_value=httpx.Response(200, json={"state": "Completed"}))
+    respx.get(f"{BASE}/searches/s/responses").mock(return_value=httpx.Response(200, json=[
+        response(MAX_FILES_PER_RESPONSE, f"peer{i}") for i in range(peers)]))
+    respx.delete(f"{BASE}/searches/s").mock(return_value=httpx.Response(204))
+    files = await p.search("x", wait_s=5)
+    assert len(files) == MAX_SEARCH_FILES
+    assert files[0].username == "peer0"
+
+
 def test_local_path_is_derived_and_contained(tmp_path: Path):
     from flackey.lossless import LosslessFile
     base = {"provider": "soulseek", "username": "u", "extension": "flac", "size": 1, "length_s": 1,
@@ -79,6 +119,15 @@ def test_local_path_is_derived_and_contained(tmp_path: Path):
         local_path_for(tmp_path, LosslessFile(path="C:\\Music\\..\\..\\x.flac", **base))
     with pytest.raises(LosslessError):
         local_path_for(tmp_path, LosslessFile(path="a\\..", **base))                    # name ".." resolves to the root
+
+
+def test_a_path_the_disk_cannot_take_fails_that_pick_not_the_attempt(tmp_path: Path):
+    """`resolve` raises ValueError on a NUL; out of here only the provider's own error may come, which ends
+    this one candidate and lets the next be tried."""
+    f = replace(flac_file(), path="Music\\Album\\a\x00b.flac")
+    with pytest.raises(LosslessError) as e:
+        local_path_for(tmp_path, f, windows=False)
+    assert e.value.outcome == "transfer_failed"
 
 
 def test_local_path_mirrors_slskd_sanitizing_on_windows(tmp_path: Path):
@@ -515,6 +564,51 @@ async def test_two_downloads_deriving_the_same_path_take_it_in_turns(provider):
     await asyncio.gather(hold("a"), hold("b"))
     assert order == ["a in", "a out", "b in", "b out"]
     assert p._paths == {}, "the lock is dropped once nobody holds or wants it"
+
+
+@pytest.mark.parametrize("other", ["twisted/02. HALLUCINOGEN - ORPHIC THR\u00c9NCH.flac",
+                                   "Twisted/02. Hallucinogen - Orphic Thre\u0301nch.flac"])
+async def test_paths_one_disk_takes_for_the_same_file_share_a_lock(provider, monkeypatch, other: str):
+    """APFS and NTFS ignore case and APFS the Unicode normal form, so two peers' names that differ only in
+    those are written to one file there: the lock must be one too, as `same_destination` already judges."""
+    p, _clock, downloads = provider
+    monkeypatch.setattr(slskd_mod, "CASE_INSENSITIVE_DISK", True)
+    order = []
+
+    async def hold(tag: str, rel: str):
+        async with p._path_lock(downloads / rel):
+            order.append(f"{tag} in")
+            await asyncio.sleep(0)
+            order.append(f"{tag} out")
+
+    await asyncio.gather(hold("a", "Twisted/02. Hallucinogen - Orphic Thr\u00e9nch.flac"), hold("b", other))
+    assert order == ["a in", "a out", "b in", "b out"]
+    assert p._paths == {}
+
+
+async def test_a_case_sensitive_disk_keeps_names_that_differ_in_case_apart(provider, monkeypatch):
+    p, _clock, downloads = provider
+    monkeypatch.setattr(slskd_mod, "CASE_INSENSITIVE_DISK", False)
+    order = []
+
+    async def hold(tag: str, rel: str):
+        async with p._path_lock(downloads / rel):
+            order.append(f"{tag} in")
+            await asyncio.sleep(0)
+            order.append(f"{tag} out")
+
+    await asyncio.gather(hold("a", "T/a.flac"), hold("b", "T/A.flac"))
+    assert order == ["a in", "b in", "a out", "b out"]
+
+
+@respx.mock
+async def test_a_peers_name_cannot_forge_a_log_line(provider, caplog):
+    p, _, _ = provider
+    respx.delete(url__startswith=f"{BASE}/transfers/downloads/").mock(side_effect=httpx.ConnectError("down"))
+    with caplog.at_level("DEBUG", logger="flackey.source.slskd"):
+        await p.client.cancel_download("evil\nINFO forged line", "t1")
+    assert caplog.records and all("\n" not in r.getMessage() for r in caplog.records)
+    assert any("evil\\nINFO" in r.getMessage() for r in caplog.records)
 
 
 async def test_downloads_to_different_paths_do_not_wait_for_each_other(provider):
