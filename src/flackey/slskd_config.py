@@ -196,26 +196,38 @@ def write_credentials(data_dir: Path, username: str, password: str,
     return key_entry["key"]
 
 
-# What slskd must never share out of the library (`shares.filters`: regexes that slskd 0.26.0 matches,
-# unanchored and ignoring case, against the full local path of every folder and file it scans; a folder
-# that matches is not scanned at all). A playlist export names every track by its full path, the owner's
-# user name included, so the M3U files stay off the network wherever they are, and so does the library's
-# own Playlists folder (export.py's PLAYLIST_DIR, which this layer cannot import).
+# What slskd must never share out of the library (`shares.filters`: .NET regexes that slskd 0.26.0
+# matches, unanchored and ignoring case, against the full local path of every folder and file it scans).
+# slskd lists every folder below a share first and then filters each one on its own path, so a folder that
+# matches is left out but the folders inside it are not: a filter has to match those too. A playlist export
+# names every track by its full path, the owner's user name included, so the M3U files stay off the network
+# wherever they are, and so does the library's own Playlists folder (export.py's PLAYLIST_DIR, which this
+# layer cannot import).
 PLAYLIST_FILE_FILTER = r"\.m3u8?$"
 # Files the OS or another app drops next to the music, never the music itself: dot-files and dot-folders
 # (.DS_Store; the AppleDouble `._x.flac` an exFAT drive grows, which carries each file's xattrs, the URL it
 # was downloaded from included; .git; sync markers) and Windows' Thumbs.db / desktop.ini. Only the last
-# part of the path is matched, so a library on a drive under some dot-folder is not hidden whole.
+# part of the path is matched, so a library on a drive under some dot-folder is not hidden whole; what is
+# inside a dot-folder is matched by `hidden_folder_filter`, anchored to the library for the same reason.
 HIDDEN_FILE_FILTER = r"[\\/]\.[^\\/]*$"
 SYSTEM_FILE_FILTER = r"[\\/](thumbs\.db|desktop\.ini)$"
 _FORCED_FILTERS = (PLAYLIST_FILE_FILTER, HIDDEN_FILE_FILTER, SYSTEM_FILE_FILTER)
 _PLAYLIST_DIR_TAIL = r"[\\/]Playlists([\\/]|$)"
+# Any part below the library that starts with a dot. One `.*` before a fixed character: linear.
+_HIDDEN_DIR_TAIL = r"[\\/](.*[\\/])?\."
 
 
 def playlist_dir_filter(library_root: Path) -> str:
     """Anchored to the library, so a library that itself sits under some folder named Playlists is
     still shared."""
     return "^" + re.escape(str(library_root)) + _PLAYLIST_DIR_TAIL
+
+
+def hidden_folder_filter(library_root: PurePath) -> str:
+    """Everything inside a dot-folder at any depth below the library (`.git/objects/...`). On a Mac and
+    Linux slskd already skips those, because .NET counts a dot-name as hidden there; on Windows only the
+    hidden attribute counts, and a `.git` folder copied onto the drive does not have it."""
+    return "^" + re.escape(str(library_root)) + _HIDDEN_DIR_TAIL
 
 
 def _filters(config: dict, path: Path) -> list[str]:
@@ -278,8 +290,10 @@ _APP_SUPPORT = ("library", "appdata")
 # CloudStorage, iCloud Drive in Mobile Documents): a DJ library inside one is an ordinary choice.
 _CLOUD_DRIVES = ("cloudstorage", "mobile documents")
 # Folders that hold everything else the owner keeps. A music folder inside one is fine; the folder itself
-# would share every document in it.
-_EVERYDAY = ("desktop", "documents", "downloads")
+# would share every document in it. Pictures holds the Photos library.
+_EVERYDAY = ("desktop", "documents", "downloads", "movies", "pictures", "videos")
+# APFS and NTFS ignore letter case unless formatted otherwise; the file systems Linux uses count it.
+CASE_INSENSITIVE_DISK = sys.platform in ("darwin", "win32")
 
 
 def _parts_under(path: Path, base: Path) -> tuple[str, ...] | None:
@@ -287,6 +301,43 @@ def _parts_under(path: Path, base: Path) -> tuple[str, ...] | None:
     p = [s.casefold() for s in path.parts]
     b = [s.casefold() for s in base.parts]
     return tuple(p[len(b):]) if p[:len(b)] == b else None
+
+
+def _is_or_holds(root: Path, inner: Path) -> bool:
+    """Whether `inner` is `root` or inside it, however `root` was spelled. Both are resolved, but `resolve`
+    keeps the letter case it was given on a Mac, so `/users/x` is not equal to `/Users/x` as a Path even
+    though the disk opens the same folder for both. Where both exist the disk is asked, which is also right
+    on a drive formatted to count case; for a folder not made yet, the case-folded parts stand in."""
+    try:
+        root_stat = root.stat()
+    except (OSError, ValueError):
+        root_stat = None
+    folded_root = [s.casefold() for s in root.parts]
+    for p in (inner, *inner.parents):
+        if p == root:
+            return True
+        if root_stat is not None:
+            try:
+                if os.path.samestat(p.stat(), root_stat):
+                    return True
+                continue
+            except (OSError, ValueError):
+                pass
+        if CASE_INSENSITIVE_DISK and [s.casefold() for s in p.parts] == folded_root:
+            return True
+    return False
+
+
+def _cloud_drive_rest(below: tuple[str, ...]) -> tuple[str, ...] | None:
+    """The parts below a cloud drive's own top folder, or None when `below` (the parts under the home
+    folder) is not in one. The top of a cloud drive holds everything the owner syncs -- with iCloud's or
+    OneDrive's folder sync on, their Desktop and Documents too -- so it is held to the home folder's rules."""
+    if len(below) > 2 and below[0] == "library" and below[1] in _CLOUD_DRIVES:
+        rest = below[3:]  # past CloudStorage/<provider>, or Mobile Documents/com~apple~CloudDocs
+        return rest[1:] if rest[:1] == ("my drive",) else rest  # Google Drive's own top is one folder down
+    if below and (below[0] == "onedrive" or below[0].startswith("onedrive - ")):  # Windows: ~\OneDrive
+        return below[1:]
+    return None
 
 
 def _inside_temp(root: Path, base: Path) -> bool:
@@ -361,9 +412,9 @@ def unsafe_share_reason(library_root: Path, data_dir: Path, *, drive_rules: bool
     # who already chose one must not be locked out of every settings save by this check.
     root = library_root.expanduser().resolve()
     home = Path.home().resolve()
-    if root == Path(root.anchor) or root == home or home.is_relative_to(root):
+    if root == Path(root.anchor) or _is_or_holds(root, home):
         return "That folder holds your whole home folder. Choose a folder just for your music."
-    if data_dir.expanduser().resolve().is_relative_to(root):
+    if _is_or_holds(root, data_dir.expanduser().resolve()):
         return "That folder holds Flackey's own settings and sign-ins. Choose a folder just for your music."
     if drive_rules:
         reason = drive_or_system_reason(root)
@@ -373,6 +424,9 @@ def unsafe_share_reason(library_root: Path, data_dir: Path, *, drive_rules: bool
     if below and any(part.startswith(".") for part in below):  # ~/.ssh, ~/.config, ~/Music/.secret
         return "That is a hidden folder, where apps keep keys and settings. Choose a folder just for your music."
     if below and len(below) == 1 and below[0] in _EVERYDAY:
+        return "That folder holds more than music. Choose a folder just for your music, or make one inside it."
+    in_cloud = _cloud_drive_rest(below) if below else None
+    if in_cloud is not None and (not in_cloud or (len(in_cloud) == 1 and in_cloud[0] in _EVERYDAY)):
         return "That folder holds more than music. Choose a folder just for your music, or make one inside it."
     if below and below[0] in _APP_SUPPORT:
         cloud = below[0] == "library" and len(below) > 2 and below[1] in _CLOUD_DRIVES
@@ -406,10 +460,30 @@ def _set_share(config: dict, path: Path, library_root: Path, data_dir: Path,
     if str(library_root) not in dirs:
         dirs.append(str(library_root))
     shares["directories"] = dirs
-    # One Playlists filter, for the library as it is now: the one written for a previous folder goes.
-    filters = [f for f in _filters(config, path) if not (f.startswith("^") and f.endswith(_PLAYLIST_DIR_TAIL))]
+    # One Playlists and one dot-folder filter, for the library as it is now: those written for a previous
+    # folder go.
+    filters = [f for f in _filters(config, path)
+               if not (f.startswith("^") and f.endswith((_PLAYLIST_DIR_TAIL, _HIDDEN_DIR_TAIL)))]
     filters.append(playlist_dir_filter(library_root))
+    filters.append(hidden_folder_filter(library_root))
     shares["filters"] = filters
+
+
+def _warn_about_other_shares(config: dict, library_root: Path, data_dir: Path) -> None:
+    """The startup repair's look at the rest of the share. Entries other than the library are the owner's,
+    added by hand, so they stay; one these rules would refuse as the library is named in the log."""
+    shares = config.get("shares")
+    dirs = shares.get("directories") if isinstance(shares, dict) else None
+    for d in dirs if isinstance(dirs, list) else []:
+        if isinstance(d, str) and d != str(library_root) and (reason := unsafe_share_reason(Path(d), data_dir)):
+            log.warning("the Soulseek share %s would not be accepted as a library folder (%s); still sharing "
+                        "it, since it was added by hand", d, reason)
+
+
+def _drop_share(config: dict, library_root: Path) -> None:
+    shares = config.get("shares")
+    if isinstance(shares, dict) and isinstance(shares.get("directories"), list):
+        shares["directories"] = [d for d in shares["directories"] if d != str(library_root)]
 
 
 def write_share(data_dir: Path, library_root: Path, previous: Path | None = None, *,
@@ -422,11 +496,18 @@ def write_share(data_dir: Path, library_root: Path, previous: Path | None = None
     if not path.exists():
         return False
     config = _load_config(path)
+    if saved:
+        _warn_about_other_shares(config, library_root, data_dir)
     try:
         _set_share(config, path, library_root, data_dir, previous, saved=saved)
     except SlskdConfigError:
-        # A refused folder leaves the share as it was, but the listener and key are still pinned: the
-        # startup repair is often the only write a config gets.
+        if saved:
+            # The saved folder breaks a rule that is not one of the whole-drive and system-folder ones
+            # (those only warn for a saved folder, in `_set_share`): it holds the home folder, Flackey's
+            # data or app sign-ins, so it stops being shared rather than staying in the share as it was.
+            _drop_share(config, library_root)
+        # Otherwise a refused folder leaves the share as it was. Either way the listener and key are still
+        # pinned: the startup repair is often the only write a config gets.
         _pin_to_this_machine(config, path)
         _atomic_write(path, config)
         raise
