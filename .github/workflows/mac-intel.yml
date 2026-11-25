@@ -36,6 +36,9 @@ jobs:
           node-version: 22
       - name: Runner is x86_64
         run: test "$(uname -m)" = x86_64
+      - name: nasm for the ffmpeg build
+        # ffmpeg's x86 assembly needs it; on arm64 there is none, so the release job never installs it.
+        run: brew install nasm
       - name: Build
         # No key or collector env: build_app.sh then bakes neither.
         run: packaging/build_app.sh
