@@ -3,6 +3,7 @@ const release = document.querySelector("#release-line");
 // so they work without this script; the release lookup below only adds the version and size.
 const downloads = [
   { link: document.querySelector("#download-mac"), asset: "Flackey.pkg" },
+  { link: document.querySelector("#download-mac-intel"), asset: "Flackey-Intel.pkg" },
   { link: document.querySelector("#download-windows"), asset: "Flackey-Setup.exe" },
 ];
 const notesList = document.querySelector("#release-notes-list");
