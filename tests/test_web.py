@@ -737,6 +737,8 @@ def test_a_packaged_build_without_a_usable_key_opens_no_installer(client, monkey
     """A packaged copy whose release key is gone or mangled cannot verify anything, so it must not fall
     back to opening an unchecked installer -- that is exactly what a broken build would otherwise do."""
     monkeypatch.setattr(flackey.web.update, "sys", types.SimpleNamespace(platform="darwin", frozen=True))
+    # An Apple Silicon copy: an Intel one never reaches the feed (`releases_fit_this_build`).
+    monkeypatch.setattr(flackey.web.update.platform, "machine", lambda: "arm64")
     monkeypatch.setattr("flackey.selfupdate.signature.PUBLIC_KEY_HEX", "" if key == "missing" else "zz12")
     # The autouse keyless stub, swapped back for the real reader of the (now broken) constant.
     monkeypatch.setattr("flackey.selfupdate.signature.baked_public_key", REAL_BAKED_PUBLIC_KEY)
