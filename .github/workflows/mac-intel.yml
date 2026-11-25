@@ -61,7 +61,7 @@ jobs:
             fi
           done < <(find "$app" -type f -print0)
           echo "$n Mach-O files checked"
-          if (( n == 0 || bad != 0 )); then exit 1; fi  # bash 3.2 ignores a failed (( )) under set -e
+          if (( n == 0 || bad != 0 )); then exit 1; fi  # explicit: a bare (( )) here let a failing run pass
           rust="$(find "$app" -name '_rust.abi3.so' | head -1)"
           if otool -L "$rust" | grep -q 'libssl\|libcrypto'; then echo "::error::cryptography links OpenSSL dynamically"; exit 1; fi
           echo "minimum macOS per Mach-O:"
