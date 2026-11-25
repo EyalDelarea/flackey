@@ -414,6 +414,11 @@ jobs:
           shasum -a 256 Flackey-Intel.pkg > Flackey-Intel.pkg.sha256 && cat Flackey-Intel.pkg.sha256
           echo "pkg=$(shasum -a 256 Flackey-Intel.pkg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "zip=$(shasum -a 256 "$zip" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Update helper and swap on x86_64
+        # python-mac proves these on Apple Silicon only; this is the Intel helper the seamless update runs.
+        env:
+          UV_NO_SYNC: "1"
+        run: uv run pytest -q tests/test_update_helper.py tests/test_update_helper_relaunch.py tests/test_update_helper_swap_race.py tests/test_selfupdate_install.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Flackey.installer-intel
