@@ -632,6 +632,12 @@ def server(monkeypatch):
     return use
 
 
+def upload(client, body: dict, headers=None):
+    """Open the dialog (the preview), then press Send with what was typed, the way the page does."""
+    shown = client.post("/api/bug-report/preview", json={k: v for k, v in body.items() if k == "request_id"}).json()
+    return client.post("/api/bug-report/upload", json={**body, "preview_id": shown["preview_id"]}, headers=headers)
+
+
 def test_preview_says_whether_the_report_can_go_to_the_server(app, server, monkeypatch):
     client, _, _, _ = app
     monkeypatch.setattr(report, "collector_target", lambda: None)
@@ -643,7 +649,7 @@ def test_preview_says_whether_the_report_can_go_to_the_server(app, server, monke
 def test_send_uploads_the_zip_it_saved_and_nothing_else(app, server):
     client, settings, revealed, opened = app
     got = server(Collector())
-    res = client.post("/api/bug-report/upload", json={"description": "Window flickers", "screen": "library"},
+    res = upload(client, {"description": "Window flickers", "screen": "library"},
                       headers=APP)
     assert res.status_code == 200
     out = res.json()
@@ -665,7 +671,7 @@ def test_the_upload_carries_no_usage_stats_id_or_secret(app, server):
     settings.telemetry_install_id = "5b0e2c1a-7d3f-4c1e-9a2b-1c2d3e4f5a6b"
     settings.telemetry_install_secret = "s" * 43
     got = server(Collector())
-    client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP)
+    upload(client, {"description": "x"}, headers=APP)
     (req,) = got.seen
     wire = req.content + b"".join(k + v for k, v in req.headers.raw)
     with zipfile.ZipFile(io.BytesIO(req.content)) as zf:
@@ -687,7 +693,7 @@ def test_the_upload_carries_no_usage_stats_id_or_secret(app, server):
 def test_anything_but_stored_offers_email_and_keeps_the_report(app, server, collector, why):
     client, settings, revealed, opened = app
     got = server(collector)
-    out = client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP).json()
+    out = upload(client, {"description": "x"}, headers=APP).json()
     assert out["sent"] is False and why in out["error"]
     assert (settings.data_dir / "bug-reports" / out["file"]).exists(), "the reporter never loses the report"
     assert len(got.seen) == 1, "never retried behind the reporter's back"
@@ -697,15 +703,15 @@ def test_anything_but_stored_offers_email_and_keeps_the_report(app, server, coll
 def test_with_no_server_nothing_is_sent_and_email_is_offered(app, server):
     client, _, _, _ = app
     got = server(Collector(), target=None)
-    out = client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP).json()
+    out = upload(client, {"description": "x"}, headers=APP).json()
     assert out["sent"] is False and got.seen == []
 
 
 def test_upload_needs_the_app_header_and_a_description(app, server):
     client, _, _, _ = app
     got = server(Collector())
-    assert client.post("/api/bug-report/upload", json={"description": "x"}, headers=NOT_FROM_APP).status_code == 403
-    assert client.post("/api/bug-report/upload", json={"description": " "}, headers=APP).status_code == 400
+    assert upload(client, {"description": "x"}, headers=NOT_FROM_APP).status_code == 403
+    assert upload(client, {"description": " "}, headers=APP).status_code == 400
     assert got.seen == []
 
 
@@ -760,3 +766,54 @@ def test_a_report_too_big_for_the_server_loses_its_oldest_log_lines_and_the_prev
     assert log.startswith("[… earlier lines left out …]\n") and log.endswith("the newest line\n")
     rep = build_report(settings, {}, ClientContext(), "x")
     assert len(report.zip_bytes(report.fit_for_upload(rep))) <= 20_000
+
+
+def test_send_uploads_exactly_what_the_preview_showed(app, server):
+    """Review of #289: Send uploads the report the dialog opened with. A log line written after the reporter
+    looked is not in it; only the words they typed are added, to report.txt."""
+    client, settings, _, _ = app
+    got = server(Collector())
+    log = settings.data_dir / "flackey.log"
+    log.write_text("2026-11-25 10:00:00 INFO flackey.worker: before the dialog opened\n", encoding="utf-8")
+    shown = client.post("/api/bug-report/preview", json={"screen": "library"}).json()
+    log.write_text(log.read_text() + "2026-11-25 10:01:00 INFO flackey.worker: AFTER the reporter looked\n",
+                   encoding="utf-8")
+    out = client.post("/api/bug-report/upload", headers=APP, json={
+        "screen": "library", "description": "Window flickers", "preview_id": shown["preview_id"]}).json()
+    assert out["sent"] is True
+    (req,) = got.seen
+    with zipfile.ZipFile(io.BytesIO(req.content)) as zf:
+        sent = {n: zf.read(n).decode() for n in zf.namelist()}
+    previewed = {f["name"]: f["text"] for f in shown["files"]}
+    assert sent.keys() == previewed.keys()
+    for name in previewed.keys() - {"report.txt"}:
+        assert sent[name] == previewed[name], name
+    assert "AFTER the reporter looked" not in "".join(sent.values())
+    assert sent["report.txt"] == previewed["report.txt"].rstrip("\n") + "\n\nWhat went wrong:\nWindow flickers\n"
+
+
+def test_send_without_a_preview_it_knows_sends_nothing(app, server):
+    client, _, _, _ = app
+    got = server(Collector())
+    for pid in (None, "not-one-it-made"):
+        r = client.post("/api/bug-report/upload", headers=APP,
+                        json={"description": "x", **({"preview_id": pid} if pid else {})})
+        assert r.status_code == 409
+    assert got.seen == []
+
+
+def test_a_failure_report_sends_the_failure_as_previewed(app, server):
+    client, settings, _, _ = app
+    got = server(Collector())
+    from flackey.models import RequestKind, RequestState
+
+    store = Store(settings.db_path)
+    rid = store.add_request("Artist - Title", RequestKind.TEXT)
+    store.add_rejection(rid, "cutoff 16000 Hz below 19000: upsampled from a lower bitrate", 320, 16000, None)
+    store.update_request(rid, state=RequestState.REJECTED)
+    shown = client.post("/api/bug-report/preview", json={"request_id": rid}).json()
+    out = client.post("/api/bug-report/upload", headers=APP,
+                      json={"request_id": rid, "preview_id": shown["preview_id"]}).json()
+    assert out["sent"] is True
+    with zipfile.ZipFile(io.BytesIO(got.seen[0].content)) as zf:
+        assert {n: zf.read(n).decode() for n in zf.namelist()} == {f["name"]: f["text"] for f in shown["files"]}

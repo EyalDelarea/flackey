@@ -75,14 +75,15 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
 
   const send = (via: 'gmail' | 'mail') => {
     setBusy(true); setError(null)
-    api.sendBugReport({ ...ctx(), description, steps, via })
+    api.sendBugReport({ ...ctx(), description, steps, via, ...(preview?.preview_id ? { preview_id: preview.preview_id } : {}) })
       .then(setSent)
       .catch(e => setError(getErrorMessage(e, "Couldn't prepare the report. Try again.")))
       .finally(() => setBusy(false))
   }
   const sendToServer = () => {
+    if (!preview?.preview_id) return
     setBusy(true); setError(null); setUploadError(null)
-    api.uploadBugReport({ ...ctx(), description, steps })
+    api.uploadBugReport({ ...ctx(), description, steps, preview_id: preview.preview_id })
       .then(r => { if (r.sent) setUploaded(r); else setUploadError(r.error || "Couldn't send it") })
       .catch(e => setError(getErrorMessage(e, "Couldn't prepare the report. Try again.")))
       .finally(() => setBusy(false))
@@ -96,7 +97,7 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
   const version = summary.get('Flackey')?.split(' ')[0]
   const canSend = !busy && (failure || !!description.trim())
   // Straight to the server when this copy has one, unless it just failed or the reporter picked email.
-  const direct = !!preview?.server && !chooseEmail && !uploadError
+  const direct = !!preview?.server && !!preview.preview_id && !chooseEmail && !uploadError
 
   return (
     <div className="modal-backdrop">

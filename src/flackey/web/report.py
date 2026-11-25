@@ -23,8 +23,11 @@ import logging
 import os
 import platform
 import re
+import secrets
 import sys
+import time
 import zipfile
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
@@ -77,6 +80,9 @@ UPLOAD_MAX = 230 * 1024
 # reporter to email.
 MIN_LOG_CHARS = 2_000
 UPLOAD_PATH = "/v1/bug-report"
+# Previews the server keeps for Send, newest last; an hour is longer than anyone keeps the dialog open.
+SHOWN_MAX = 8
+SHOWN_TTL_S = 3600
 UPLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # Tests hand in an httpx.MockTransport; None is the real network.
 UPLOAD_TRANSPORT: httpx.AsyncBaseTransport | None = None
@@ -472,6 +478,41 @@ def _connection_lines(settings: Settings, status) -> list[tuple[str, str]]:
     return [("Deezer bot (Telegram)", telegram), ("Soulseek", soulseek)]
 
 
+def report_text(summary: list[tuple[str, str]], now: datetime, diagnosis: str | None,
+                failure: FailureRecord | None, description: str, steps: str, redact: Redactor) -> str:
+    """report.txt: the summary, the reporter's own words, and a failure's record."""
+    if failure is None:
+        lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
+    else:
+        # The diagnosis first, so the file read on its own still answers what this is about.
+        lines = [f"Flackey failure report, {now:%Y-%m-%d %H:%M UTC}", f"Diagnosis: {diagnosis}", ""]
+    lines += [f"{k}: {v}" for k, v in summary]
+    if description.strip():
+        lines += ["", "What went wrong:", redact(description.strip())]
+    if steps.strip():
+        lines += ["", "What they were doing:", redact(steps.strip())]
+    if failure is not None:
+        lines += ["", redact(record_text(failure)).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+@dataclass
+class Shown:
+    """The report as the dialog showed it when it opened, before any words were typed: what Send sends."""
+    report: Report          # fitted for upload, report.txt without the reporter's words
+    now: datetime
+    failure: FailureRecord | None
+    at: float               # time.monotonic() when it was shown
+
+    def with_words(self, description: str, steps: str, redact: Redactor) -> Report:
+        """The shown report plus the typed words in report.txt. Every other file is byte for byte what was
+        shown: a log line written since is not in it."""
+        files = dict(self.report.files)
+        files["report.txt"] = report_text(self.report.summary, self.now, self.report.diagnosis, self.failure,
+                                          description, steps, redact)
+        return replace(self.report, files=files)
+
+
 def build_report(settings: Settings, status, client: ClientContext, description: str = "",
                  steps: str = "", redact: Redactor | None = None,
                  now: datetime | None = None, failure: FailureRecord | None = None,
@@ -495,20 +536,7 @@ def build_report(settings: Settings, status, client: ClientContext, description:
     summary = [(k, redact(v)) for k, v in summary]
     diagnosis = diagnose(failure, redact) if failure is not None else None
 
-    files: dict[str, str] = {}
-    if failure is None:
-        lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
-    else:
-        # The diagnosis first, so the file read on its own still answers what this is about.
-        lines = [f"Flackey failure report, {now:%Y-%m-%d %H:%M UTC}", f"Diagnosis: {diagnosis}", ""]
-    lines += [f"{k}: {v}" for k, v in summary]
-    if description.strip():
-        lines += ["", "What went wrong:", redact(description.strip())]
-    if steps.strip():
-        lines += ["", "What they were doing:", redact(steps.strip())]
-    if failure is not None:
-        lines += ["", redact(record_text(failure)).rstrip("\n")]
-    files["report.txt"] = "\n".join(lines) + "\n"
+    files: dict[str, str] = {"report.txt": report_text(summary, now, diagnosis, failure, description, steps, redact)}
     if failure is not None:
         rid = failure.request.id
         files[f"request-{rid}.json"] = redact(record_json(failure))
@@ -685,6 +713,25 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         except KeyError:
             raise HTTPException(404, "That track is no longer in the list.")
 
+    shown: OrderedDict[str, Shown] = OrderedDict()
+
+    def show(body: dict, failure: FailureRecord | None) -> tuple[str, Shown]:
+        now = datetime.now(UTC)
+        report = build_report(settings, status, ClientContext.parse(body), "", "",
+                              Redactor(known_secrets(settings, api_token)), now=now, failure=failure)
+        snap = Shown(fit_for_upload(report), now, failure, time.monotonic())
+        pid = secrets.token_urlsafe(16)
+        shown[pid] = snap
+        while len(shown) > SHOWN_MAX:
+            shown.popitem(last=False)
+        return pid, snap
+
+    def shown_for(body: dict) -> Shown | None:
+        snap = shown.get(str(body.get("preview_id") or ""))
+        if snap is None or time.monotonic() - snap.at > SHOWN_TTL_S:
+            return None
+        return snap
+
     def build(body: dict, failure: FailureRecord | None) -> tuple[Report, Redactor, str, str]:
         description = str(body.get("description") or "")
         steps = str(body.get("steps") or "")
@@ -696,9 +743,11 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
 
     @r.post("/preview")
     async def preview(body: dict) -> dict:
-        """Read-only: what would be sent. A POST only because the page's context is a body."""
-        report, _, _, _ = await asyncio.to_thread(build, body, failure_for(body))
-        return {"summary": [[k, v] for k, v in report.summary],
+        """What would be sent, kept under `preview_id` so Send sends exactly this (plus the typed words). A POST
+        because the page's context is a body."""
+        pid, snap = await asyncio.to_thread(show, body, failure_for(body))
+        report = snap.report
+        return {"preview_id": pid, "summary": [[k, v] for k, v in report.summary],
                 "files": [{"name": n, "text": t} for n, t in report.files.items()],
                 "log_lines": report.log_lines, "diagnosis": report.diagnosis,
                 "server": collector_target() is not None}
@@ -709,10 +758,13 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         whatever happens to the send the reporter still has it, and the page offers their email when it did not
         go. Never opens a window: on success there is nothing left to do."""
         from_the_app(request)
-        failure = failure_for(body)
-        if failure is None and not str(body.get("description") or "").strip():
+        snap = shown_for(body)
+        if snap is None:
+            raise HTTPException(409, "Close this window and open Report a problem again to review the report.")
+        description, steps = str(body.get("description") or ""), str(body.get("steps") or "")
+        if snap.failure is None and not description.strip():
             raise HTTPException(400, "Say a few words about what went wrong first.")
-        report, _, _, _ = await asyncio.to_thread(build, body, failure)
+        report = snap.with_words(description, steps, Redactor(known_secrets(settings, api_token)))
         try:
             path = await asyncio.to_thread(write_zip, report, folder)
             data = await asyncio.to_thread(path.read_bytes)
@@ -731,7 +783,18 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         failure = failure_for(body)
         if failure is None and not str(body.get("description") or "").strip():
             raise HTTPException(400, "Say a few words about what went wrong first.")
-        report, redact, description, steps = await asyncio.to_thread(build, body, failure)
+        snap = shown_for(body)
+        def about(f: FailureRecord | None) -> int | None:
+            return None if f is None else f.request.id
+        if snap is not None and about(snap.failure) != about(failure):
+            snap = None  # shown for another report: build this one fresh
+        if snap is not None:
+            # The email's zip is the shown report too, when the page has one.
+            description, steps = str(body.get("description") or ""), str(body.get("steps") or "")
+            redact = Redactor(known_secrets(settings, api_token))
+            report = snap.with_words(description, steps, redact)
+        else:
+            report, redact, description, steps = await asyncio.to_thread(build, body, failure)
         try:
             path = await asyncio.to_thread(write_zip, report, folder)
         except OSError as e:

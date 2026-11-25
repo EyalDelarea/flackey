@@ -209,7 +209,10 @@ export interface BugContext { screen: string; window: [number, number]; display:
   request_id?: number }
 /** Exactly what a report would carry: `files` are the redacted texts the zip will hold, so the drill-down
     shows the bytes that leave rather than a description of them. */
-export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number
+export interface BugPreview {
+  /** Names this preview on the server: Send sends exactly it, plus the words typed (review of #279). */
+  preview_id?: string
+  summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number
   /** The one-line diagnosis of a failure report; null for a general bug report. */
   diagnosis?: string | null
   /** Whether this copy can send the report to the Flackey server itself (issue #279); email otherwise. */
@@ -276,8 +279,8 @@ export const api = {
   openRelease: () => post<{ ok: boolean; url: string }>('/api/update/release'),
   restartForUpdate: () => post<UpdateDownload>('/api/update/restart'),
   bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
-  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => post<BugSent>('/api/bug-report', body),
-  uploadBugReport: (body: BugContext & { description: string; steps: string }) => post<BugUploaded>('/api/bug-report/upload', body),
+  sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail'; preview_id?: string }) => post<BugSent>('/api/bug-report', body),
+  uploadBugReport: (body: BugContext & { description: string; steps: string; preview_id: string }) => post<BugUploaded>('/api/bug-report/upload', body),
   revealBugReport: () => post<{ ok: boolean }>('/api/bug-report/reveal'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; library_layout: string; auto_update_check: boolean;
     extended_mixes: ExtendedMixes }> = {}) =>

@@ -121,7 +121,7 @@ it('speaks Windows on Windows: File Explorer, no Mac, and the version loses its 
 })
 
 describe('straight to the Flackey server (issue #279)', () => {
-  beforeEach(() => { vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, server: true }) })
+  beforeEach(() => { vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, server: true, preview_id: 'shown-1' }) })
 
   it('sends with one press and says it arrived, without opening any email', async () => {
     vi.spyOn(api, 'uploadBugReport').mockResolvedValue({ sent: true, file: 'flackey-bug-report-1.zip', reference: '0acbd8bf' })
@@ -134,7 +134,7 @@ describe('straight to the Flackey server (issue #279)', () => {
     fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'The QR code never shows' } })
     fireEvent.click(go)
     await waitFor(() => expect(api.uploadBugReport).toHaveBeenCalledWith(expect.objectContaining(
-      { description: 'The QR code never shows', screen: 'download' })))
+      { description: 'The QR code never shows', screen: 'download', preview_id: 'shown-1' })))
     expect(await screen.findByRole('heading', { name: 'Report sent' })).toBeInTheDocument()
     expect(screen.getByText('0acbd8bf')).toBeInTheDocument()
     expect(email).not.toHaveBeenCalled()
@@ -151,7 +151,7 @@ describe('straight to the Flackey server (issue #279)', () => {
     expect(screen.queryByRole('button', { name: 'Send report' })).not.toBeInTheDocument()
     expect(api.uploadBugReport).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Email with Gmail' }))
-    await waitFor(() => expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining({ description: 'Broken', via: 'gmail' })))
+    await waitFor(() => expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining({ description: 'Broken', via: 'gmail', preview_id: 'shown-1' })))
   })
 
   it('lets the reporter pick email instead before sending', async () => {
@@ -171,4 +171,11 @@ describe('straight to the Flackey server (issue #279)', () => {
     expect(await screen.findByText('Could not save the report file. Try again.')).toBeInTheDocument()
     expect(screen.getByLabelText('What went wrong?')).toHaveValue('Broken')
   })
+})
+
+it('offers only email when the server gave no preview to send', async () => {
+  vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, server: true })
+  render(<ReportBugDialog screen="library" onClose={() => {}} />)
+  expect(await screen.findByRole('button', { name: 'Email with Gmail' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Send report' })).not.toBeInTheDocument()
 })
