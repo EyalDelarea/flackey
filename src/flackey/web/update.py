@@ -5,6 +5,7 @@ import datetime as dt
 import errno
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -48,6 +49,11 @@ INSTALLER_COPY_PREFIX = "installer-"
 # At most nine digits a part: far past any real version, and `int` refuses past 4300 of them.
 _VERSION = re.compile(r"v?(\d{1,9})\.(\d{1,9})\.(\d{1,9})", re.ASCII)
 INSTALLER_NAME = "Flackey.pkg"
+# The Intel (x86_64) Mac build's installer and update archive, published beside the Apple Silicon ones.
+# Separate names rather than one asset per release, so the copies already installed -- which look only
+# for `Flackey.pkg` and `Flackey-<version>.zip` -- see exactly what they always did.
+INTEL_INSTALLER_NAME = "Flackey-Intel.pkg"
+INTEL_ARCHIVE_SUFFIX = "-intel"
 # The Windows installer, under the same name on every release so this lookup never has to guess a
 # version into it. Inno Setup builds it; there is no seamless path on Windows yet, so it is the only one.
 WINDOWS_INSTALLER_NAME = "Flackey-Setup.exe"
@@ -155,10 +161,18 @@ def _size_mb(size: int | None) -> str | None:
     return f"{size / 1e6:.1f} MB" if size else None
 
 
+def intel_mac() -> bool:
+    """A packaged Intel (x86_64) Mac build, which installs only the Intel assets: the Apple Silicon app
+    does not open on an Intel Mac. Decided by the build, not the machine, as on Windows: an Intel build
+    run under Rosetta on Apple Silicon reports x86_64 and stays on the Intel line it was installed from.
+    A source checkout is never one; it does not install release assets."""
+    return sys.platform == "darwin" and bool(getattr(sys, "frozen", False)) and platform.machine() == "x86_64"
+
+
 def archive_name(version: str) -> str:
     """Built from the version, not matched by pattern, so somebody else's zip cannot be mistaken
-    for this one."""
-    return f"Flackey-{version}.zip"
+    for this one. `Flackey-<version>-intel.zip` for an Intel build."""
+    return f"Flackey-{version}{INTEL_ARCHIVE_SUFFIX if intel_mac() else ''}.zip"
 
 
 def _release_page(latest: dict | None) -> str | None:
@@ -168,8 +182,10 @@ def _release_page(latest: dict | None) -> str | None:
 def installer_name() -> str:
     """The release asset this system installs from: the `.pkg` on the Mac, `Flackey-Setup.exe` on
     Windows. Also the name the download is saved under, and the one the "open it yourself" message
-    names, so the three can never disagree."""
-    return WINDOWS_INSTALLER_NAME if sys.platform == "win32" else INSTALLER_NAME
+    names, so the three can never disagree. `Flackey-Intel.pkg` for an Intel Mac build."""
+    if sys.platform == "win32":
+        return WINDOWS_INSTALLER_NAME
+    return INTEL_INSTALLER_NAME if intel_mac() else INSTALLER_NAME
 
 
 def open_installer(path: Path) -> None:

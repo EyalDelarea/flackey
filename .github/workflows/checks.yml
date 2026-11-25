@@ -2,8 +2,9 @@
 # of the web UI, and the test suite again on macOS, on Windows, and with real ffmpeg/ffprobe/fpcalc
 # (the audio tests skip without them). The ruff/pytest and web jobs gate two installer builds; the
 # other test jobs run alongside them and gate the release:
-#   - macOS (Flackey.pkg), on a push to main or a version tag, and on a pull request that touches what
-#     the build is made of (packaging/, pyproject.toml, uv.lock, this file);
+#   - macOS (Flackey.pkg for Apple Silicon, Flackey-Intel.pkg for Intel Macs), on a push to main or a
+#     version tag, and on a pull request that touches what the build is made of (packaging/,
+#     pyproject.toml, uv.lock, this file);
 #   - Windows (Flackey-Setup.exe), on every push *and* pull request -- nobody on the project has a
 #     Windows machine, so a PR's artifact, installed in a VM, is how a Windows change gets tried.
 # On a version tag both installers are published together as one GitHub Release: a release when the
@@ -283,6 +284,110 @@ jobs:
             packaging/build/Flackey-*.zip
           if-no-files-found: error
 
+  mac-intel:
+    name: Flackey installer (Intel Mac)
+    # The `mac` job again on GitHub's x86_64 image, so every binary in the bundle (Python, ffmpeg,
+    # ffprobe, fpcalc, the update helper) is x86_64; slskd is fetched at run time for the app's own
+    # architecture. Its assets get their own names (Flackey-Intel.pkg, Flackey-<v>-intel.zip) so the
+    # Apple Silicon copies already installed, which look only for Flackey.pkg and Flackey-<v>.zip, see
+    # exactly what they always did, and web/update.py points Intel copies at these.
+    #
+    # macos-15-intel is the last x86_64 macOS image GitHub offers; GitHub has said x86_64 macOS ends when
+    # the macOS 15 images retire, around fall 2027 (changelog 2025-09-19). After that this job needs another plan.
+    needs: [changes, python, web]
+    if: >-
+      !cancelled() && needs.python.result == 'success' && needs.web.result == 'success' &&
+      (github.event_name == 'push' || needs.changes.outputs.mac_installer == 'true')
+    runs-on: macos-15-intel
+    outputs:
+      pkg_sha256: ${{ steps.digests.outputs.pkg }}
+      zip_sha256: ${{ steps.digests.outputs.zip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: ${{ github.ref_type != 'tag' }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
+          cache-dependency-path: web/package-lock.json
+      - name: Runner is x86_64
+        run: test "$(uname -m)" = x86_64
+      - name: Tag matches the version in the tree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: packaging/check_version.sh "$GITHUB_REF_NAME"
+      - name: nasm for the ffmpeg build
+        # ffmpeg's x86 assembly needs it; the arm64 build has none to assemble.
+        run: brew install nasm
+      - name: Cache helper downloads
+        if: github.ref_type != 'tag'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: packaging/build/helpers
+          # Its own key: the arm64 job's cache holds an arm64 ffmpeg.
+          key: helpers-intel-${{ hashFiles('packaging/fetch_helpers.sh', 'packaging/build_ffmpeg.sh') }}
+      - name: Build
+        # Keys and the stats collector exactly as the `mac` job: only on a tagged release. Never printed.
+        env:
+          FLACKEY_TELEGRAM_API_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_ID || '' }}
+          FLACKEY_TELEGRAM_API_HASH: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEGRAM_API_HASH || '' }}
+          FLACKEY_BUILD_TELEMETRY_URL: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEMETRY_URL || '' }}
+          FLACKEY_BUILD_TELEMETRY_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.TELEMETRY_KEY || '' }}
+        run: packaging/build_app.sh
+      - name: Every Mach-O in the bundle is x86_64 and runs on macOS 12
+        run: |
+          set -euo pipefail
+          app=packaging/build/dist.noindex/Flackey.app
+          bad=0; n=0
+          while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || continue
+            n=$((n + 1))
+            archs="$(lipo -archs "$f")"
+            case " $archs " in *" x86_64 "*) ;; *) echo "::error::$f is $archs"; bad=1 ;; esac
+            minos="$(vtool -arch x86_64 -show-build "$f" 2>/dev/null | awk '/minos/ {print $2; exit}')"
+            [[ -z "$minos" ]] && minos="$(otool -arch x86_64 -l "$f" | awk '/LC_VERSION_MIN_MACOSX/ {getline; getline; print $2; exit}')"
+            if [[ -n "$minos" && "$(printf '%s\n12.0\n' "$minos" | sort -V | tail -1)" != 12.0 && "$minos" != 12.0 ]]; then
+              echo "::error::$f needs macOS $minos"; bad=1
+            fi
+          done < <(find "$app" -type f -print0)
+          echo "$n Mach-O files checked"
+          (( n > 0 && bad == 0 ))
+      - name: Smoke-launch
+        env:
+          SMOKE_EXPECT_KEYS: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: packaging/smoke.sh packaging/build/dist.noindex/Flackey.app
+      - name: Update helper is inside the signed bundle
+        run: |
+          test -x packaging/build/dist.noindex/Flackey.app/Contents/Frameworks/bin/flackey-update-helper
+          codesign --verify --deep --strict packaging/build/dist.noindex/Flackey.app
+      - name: Installer
+        id: digests
+        run: |
+          set -euo pipefail
+          packaging/build_installer.sh
+          cd packaging/build
+          zips=(Flackey-*.zip)
+          (( ${#zips[@]} == 1 )) || { echo "::error::expected one Flackey-*.zip, found ${#zips[@]}"; exit 1; }
+          mv Flackey.pkg Flackey-Intel.pkg
+          zip="${zips[0]%.zip}-intel.zip"
+          mv "${zips[0]}" "$zip"
+          shasum -a 256 Flackey-Intel.pkg > Flackey-Intel.pkg.sha256 && cat Flackey-Intel.pkg.sha256
+          echo "pkg=$(shasum -a 256 Flackey-Intel.pkg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "zip=$(shasum -a 256 "$zip" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Flackey.installer-intel
+          path: |
+            packaging/build/Flackey-Intel.pkg
+            packaging/build/Flackey-Intel.pkg.sha256
+            packaging/build/Flackey-*-intel.zip
+          if-no-files-found: error
+
   windows:
     name: Flackey installer (Windows x64)
     needs: [python, web]
@@ -405,12 +510,13 @@ jobs:
     name: GitHub release
     # The test jobs no installer waits on, too: python-mac is the one that proves the update helper
     # still refuses what it should.
-    needs: [mac, windows, python-audio, python-mac, python-windows]
+    needs: [mac, mac-intel, windows, python-audio, python-mac, python-windows]
     # `mac` needs `changes`, which is skipped on a push; a skipped job anywhere upstream makes the
     # default rule skip this one too, so the expression restates "every need succeeded".
     if: >-
       !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
-      needs.mac.result == 'success' && needs.windows.result == 'success' &&
+      needs.mac.result == 'success' && needs.mac-intel.result == 'success' &&
+      needs.windows.result == 'success' &&
       needs.python-audio.result == 'success' && needs.python-mac.result == 'success' &&
       needs.python-windows.result == 'success'
     runs-on: ubuntu-latest
@@ -455,6 +561,10 @@ jobs:
         with:
           name: Flackey.windows
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: Flackey.installer-intel
+          path: dist
       - name: The artifacts are the bytes the build jobs made
         # The .sha256 files inside the artifacts travel with the bytes they describe, so they prove
         # nothing; the digests come from the build jobs' outputs instead.
@@ -462,16 +572,20 @@ jobs:
           PKG_SHA256: ${{ needs.mac.outputs.pkg_sha256 }}
           ZIP_SHA256: ${{ needs.mac.outputs.zip_sha256 }}
           SETUP_SHA256: ${{ needs.windows.outputs.setup_sha256 }}
+          INTEL_PKG_SHA256: ${{ needs.mac-intel.outputs.pkg_sha256 }}
+          INTEL_ZIP_SHA256: ${{ needs.mac-intel.outputs.zip_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
-          for v in PKG_SHA256 ZIP_SHA256 SETUP_SHA256; do
+          for v in PKG_SHA256 ZIP_SHA256 SETUP_SHA256 INTEL_PKG_SHA256 INTEL_ZIP_SHA256; do
             [[ "${!v}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error title=No build digest::$v is missing."; exit 1; }
           done
           sha256sum --strict -c - <<SUMS
           $PKG_SHA256  dist/Flackey.pkg
           $ZIP_SHA256  dist/Flackey-${GITHUB_REF_NAME#v}.zip
           $SETUP_SHA256  dist/Flackey-Setup.exe
+          $INTEL_PKG_SHA256  dist/Flackey-Intel.pkg
+          $INTEL_ZIP_SHA256  dist/Flackey-${GITHUB_REF_NAME#v}-intel.zip
           SUMS
       - name: Sign the update archive
         # Here rather than in the mac job: this is the only step that needs the private key, and it
@@ -501,9 +615,15 @@ jobs:
           sign dist/Flackey-"${GITHUB_REF_NAME#v}".zip
           sign dist/Flackey.pkg "${GITHUB_REF_NAME#v}"
           sign dist/Flackey-Setup.exe "${GITHUB_REF_NAME#v}"
+          # The Intel pair, with the same key and the same two domains as the Apple Silicon pair. The
+          # version is passed, not read from the name: `Flackey-<v>-intel.zip` would parse as "<v>-intel".
+          sign dist/Flackey-"${GITHUB_REF_NAME#v}"-intel.zip "${GITHUB_REF_NAME#v}"
+          sign dist/Flackey-Intel.pkg "${GITHUB_REF_NAME#v}"
           test -s dist/Flackey-"${GITHUB_REF_NAME#v}".zip.sig
           test -s dist/Flackey.pkg.sig
           test -s dist/Flackey-Setup.exe.sig
+          test -s dist/Flackey-"${GITHUB_REF_NAME#v}"-intel.zip.sig
+          test -s dist/Flackey-Intel.pkg.sig
         shell: bash
       - name: Publish
         env:
@@ -514,12 +634,15 @@ jobs:
           set -euo pipefail
 
           zip="dist/Flackey-${GITHUB_REF_NAME#v}.zip"
+          intel_zip="dist/Flackey-${GITHUB_REF_NAME#v}-intel.zip"
           # Flackey-Setup.exe keeps the same name every release, like Flackey.pkg: it is the name the
           # Windows update check looks for.
           assets=(dist/Flackey.pkg dist/Flackey.pkg.sha256
+                  dist/Flackey-Intel.pkg dist/Flackey-Intel.pkg.sha256
                   dist/Flackey-Setup.exe dist/Flackey-Setup.exe.sha256)
           # Every signed file is mandatory: installed copies refuse an update or installer without one.
-          for f in "$zip" "$zip.sig" dist/Flackey.pkg.sig dist/Flackey-Setup.exe.sig; do
+          for f in "$zip" "$zip.sig" "$intel_zip" "$intel_zip.sig" dist/Flackey.pkg.sig \
+                   dist/Flackey-Intel.pkg.sig dist/Flackey-Setup.exe.sig; do
             [[ -f "$f" ]] || { echo "::error title=Missing asset::$f is missing."; exit 1; }
             assets+=("$f")
           done

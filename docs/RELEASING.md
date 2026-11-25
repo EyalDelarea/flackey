@@ -36,7 +36,10 @@ as what changed for them ("Added X for Y"), not the mechanism.
 3. The tag push runs **`checks`** (`.github/workflows/checks.yml`). After the
    test jobs (ubuntu, macOS, Windows) and the web build pass:
    - `mac` builds `Flackey.app`, smoke-launches it, and packs `Flackey.pkg`
-     plus the seamless-update archive `Flackey-X.Y.Z.zip`;
+     plus the seamless-update archive `Flackey-X.Y.Z.zip` (Apple Silicon);
+   - `mac-intel` does the same on an x86_64 runner (`macos-15-intel`, GitHub's last x86_64 image,
+     expected to retire around fall 2027) and names its output `Flackey-Intel.pkg`
+     and `Flackey-X.Y.Z-intel.zip`;
    - `windows` builds and smoke-launches `Flackey-Setup.exe`;
    - `release` signs and publishes them.
 
@@ -45,20 +48,23 @@ as what changed for them ("Added X for Y"), not the mechanism.
 | Secret | Used by | For |
 | --- | --- | --- |
 | `RELEASE_PAT` | `release` | pushing the bump branch and tag, opening and auto-merging the PR |
-| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | `checks`, build steps of `mac` and `windows` | baked into the app's `build.json` **on tag builds only**; main and PR builds are keyless and ask for keys at setup |
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | `checks`, build steps of `mac`, `mac-intel` and `windows` | baked into the app's `build.json` **on tag builds only**; main and PR builds are keyless and ask for keys at setup |
 | `FLACKEY_UPDATE_SIGNING_KEY` | `checks`, `release` job | Ed25519 private key (64 hex chars) that signs the release |
 
 ## Signing and what the app downloads
 
 `packaging/sign_archive.py` writes a detached Ed25519 signature (`.sig`, hex)
-for `Flackey-X.Y.Z.zip`, `Flackey.pkg` and `Flackey-Setup.exe`. It signs a
+for `Flackey-X.Y.Z.zip`, `Flackey.pkg`, their Intel twins `Flackey-X.Y.Z-intel.zip`
+and `Flackey-Intel.pkg`, and `Flackey-Setup.exe`, all with the same key. It signs a
 message naming the version and file, so a signature can't be replayed onto
 another release or file. `cryptography` is pinned to the version in `uv.lock`.
 A missing key or `.sig` fails the release: installed copies refuse unsigned
 updates.
 
 Release assets: `Flackey.pkg`, `Flackey.pkg.sha256`, `Flackey.pkg.sig`,
-`Flackey-X.Y.Z.zip`, `Flackey-X.Y.Z.zip.sig`, `Flackey-Setup.exe`,
+`Flackey-X.Y.Z.zip`, `Flackey-X.Y.Z.zip.sig`, `Flackey-Intel.pkg`,
+`Flackey-Intel.pkg.sha256`, `Flackey-Intel.pkg.sig`, `Flackey-X.Y.Z-intel.zip`,
+`Flackey-X.Y.Z-intel.zip.sig`, `Flackey-Setup.exe`,
 `Flackey-Setup.exe.sha256`, `Flackey-Setup.exe.sig`.
 
 The in-app updater (`src/flackey/web/update.py`) reads the GitHub releases
@@ -67,7 +73,9 @@ downloads only assets under this repo's releases URL:
 
 - **macOS**: `Flackey-X.Y.Z.zip` and its `.sig` for a seamless in-place
   swap; otherwise `Flackey.pkg`, which it opens only if `Flackey.pkg.sig`
-  verifies.
+  verifies. An Intel build (a packaged x86_64 copy) takes
+  `Flackey-X.Y.Z-intel.zip` and `Flackey-Intel.pkg` instead, and never the
+  Apple Silicon pair; a release without the Intel pair offers it nothing.
 - **Windows**: `Flackey-Setup.exe` and its `.sig`.
 
 ## Pre-releases
