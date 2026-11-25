@@ -60,9 +60,23 @@ jobs:
             echo "$f: $(lipo -archs "$app/$f")"
           done
       - name: Smoke-launch
+        id: smoke
+        # Does not stop the artifact: a failure here is diagnosed below, and the build can still be tried.
+        continue-on-error: true
         env:
           SMOKE_EXPECT_KEYS: "false"
         run: packaging/smoke.sh packaging/build/dist.noindex/Flackey.app
+      - name: Why the smoke launch failed
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          set +e
+          ls -t ~/Library/Logs/DiagnosticReports 2>/dev/null | head -5
+          for r in $(ls -t ~/Library/Logs/DiagnosticReports/Flackey* 2>/dev/null | head -1); do head -80 "$r"; done
+          d="$(mktemp -d)"; mkdir -p "$d/data" "$d/lib"
+          DATA_DIR="$d/data" LIBRARY_ROOT="$d/lib" WEB_PORT=8798 FLACKEY_API_TOKEN=x \
+            packaging/build/dist.noindex/Flackey.app/Contents/MacOS/Flackey > "$d/out.txt" 2>&1 &
+          for _ in $(seq 1 60); do curl -s -m 2 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8798/api/health && break; sleep 2; done
+          tail -60 "$d/out.txt"; tail -60 "$d/data/flackey.log" 2>/dev/null; kill %1 2>/dev/null; true
       - name: Installer
         run: |
           set -euo pipefail
