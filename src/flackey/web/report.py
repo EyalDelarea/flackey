@@ -1,9 +1,11 @@
 """Report a bug from inside the app (issue #33), or one failed track (issue #165).
 
-Gathers the log, version, system release and displays, redacts them into a zip, and opens an email to
-the developer with the report already written, next to the zip in Finder (File Explorer on Windows) for
-the reporter to drag in.
-No token, no server of ours, no account: the reporter's own email is the transport, and they press Send.
+Gathers the log, version, system release and displays, and redacts them into a zip. When the reporter presses
+Send, the zip goes to the Flackey server (issue #279): the same collector a release build sends usage stats to,
+but not part of them -- no install ID, no stats opt-in needed, pressing Send is the consent for that one report.
+Nothing is sent any other way or at any other time, and a refused or failed send is never retried: the reporter
+is offered their own email instead (the earlier transport, still here), with the zip next to it in Finder (File
+Explorer on Windows) to drag in.
 
 The repository is public, so `Redactor` is the security boundary. The preview the page shows and the
 zip that gets written are built by the same `build_report`, so what the reporter reviews is the bytes
@@ -15,22 +17,28 @@ diagnosis line, and the log is narrowed to that request instead of sent whole.""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import platform
 import re
+import secrets
 import sys
+import time
 import zipfile
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path, PurePath, PureWindowsPath
 from urllib.parse import quote, quote_plus, urlencode
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import __version__
+from .. import telemetry as usage
 from ..config import Settings, platform_name
 from ..logsetup import BACKUPS, LOG_FILE
 from ..slskd_config import read_api_key, read_password, read_username, read_web_credentials
@@ -65,6 +73,19 @@ LOG_TAIL_CHARS = 1_000_000
 URL_TEXT_CHARS = 1500
 URL_MAX = 4000
 SUBJECT_CHARS = 80
+# The Flackey server takes a report zip of at most 240 KB (the collector's cap, under the 256 KB its front door
+# allows). This leaves room for both. A typical report is about 100 KB; past this its oldest log lines go first.
+UPLOAD_MAX = 230 * 1024
+# A log is never cut below this to make room: past it, the report goes as is and the server's refusal sends the
+# reporter to email.
+MIN_LOG_CHARS = 2_000
+UPLOAD_PATH = "/v1/bug-report"
+# Previews the server keeps for Send, newest last; an hour is longer than anyone keeps the dialog open.
+SHOWN_MAX = 8
+SHOWN_TTL_S = 3600
+UPLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# Tests hand in an httpx.MockTransport; None is the real network.
+UPLOAD_TRANSPORT: httpx.AsyncBaseTransport | None = None
 SCREENS = {"download": "Download", "library": "Library", "uploads": "Uploads", "settings": "Settings"}
 # Shorter known values are skipped rather than redacted: a four-character Soulseek name like "beat"
 # would take every "beat" in every track title with it, and a secret that short is not one worth hiding.
@@ -408,10 +429,11 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def _cut(text: str) -> str:
-    if len(text) <= LOG_TAIL_CHARS:
+def _cut(text: str, chars: int | None = None) -> str:
+    chars = LOG_TAIL_CHARS if chars is None else chars
+    if len(text) <= chars:
         return text
-    cut = text[-LOG_TAIL_CHARS:]
+    cut = text[-chars:]
     # Start on a whole line, and say that the start is not the start.
     return "[… earlier lines left out …]\n" + cut[cut.find("\n") + 1:]
 
@@ -456,6 +478,41 @@ def _connection_lines(settings: Settings, status) -> list[tuple[str, str]]:
     return [("Deezer bot (Telegram)", telegram), ("Soulseek", soulseek)]
 
 
+def report_text(summary: list[tuple[str, str]], now: datetime, diagnosis: str | None,
+                failure: FailureRecord | None, description: str, steps: str, redact: Redactor) -> str:
+    """report.txt: the summary, the reporter's own words, and a failure's record."""
+    if failure is None:
+        lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
+    else:
+        # The diagnosis first, so the file read on its own still answers what this is about.
+        lines = [f"Flackey failure report, {now:%Y-%m-%d %H:%M UTC}", f"Diagnosis: {diagnosis}", ""]
+    lines += [f"{k}: {v}" for k, v in summary]
+    if description.strip():
+        lines += ["", "What went wrong:", redact(description.strip())]
+    if steps.strip():
+        lines += ["", "What they were doing:", redact(steps.strip())]
+    if failure is not None:
+        lines += ["", redact(record_text(failure)).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+@dataclass
+class Shown:
+    """The report as the dialog showed it when it opened, before any words were typed: what Send sends."""
+    report: Report          # fitted for upload, report.txt without the reporter's words
+    now: datetime
+    failure: FailureRecord | None
+    at: float               # time.monotonic() when it was shown
+
+    def with_words(self, description: str, steps: str, redact: Redactor) -> Report:
+        """The shown report plus the typed words in report.txt. Every other file is byte for byte what was
+        shown: a log line written since is not in it."""
+        files = dict(self.report.files)
+        files["report.txt"] = report_text(self.report.summary, self.now, self.report.diagnosis, self.failure,
+                                          description, steps, redact)
+        return replace(self.report, files=files)
+
+
 def build_report(settings: Settings, status, client: ClientContext, description: str = "",
                  steps: str = "", redact: Redactor | None = None,
                  now: datetime | None = None, failure: FailureRecord | None = None,
@@ -479,20 +536,7 @@ def build_report(settings: Settings, status, client: ClientContext, description:
     summary = [(k, redact(v)) for k, v in summary]
     diagnosis = diagnose(failure, redact) if failure is not None else None
 
-    files: dict[str, str] = {}
-    if failure is None:
-        lines = [f"Flackey bug report, {now:%Y-%m-%d %H:%M UTC}", ""]
-    else:
-        # The diagnosis first, so the file read on its own still answers what this is about.
-        lines = [f"Flackey failure report, {now:%Y-%m-%d %H:%M UTC}", f"Diagnosis: {diagnosis}", ""]
-    lines += [f"{k}: {v}" for k, v in summary]
-    if description.strip():
-        lines += ["", "What went wrong:", redact(description.strip())]
-    if steps.strip():
-        lines += ["", "What they were doing:", redact(steps.strip())]
-    if failure is not None:
-        lines += ["", redact(record_text(failure)).rstrip("\n")]
-    files["report.txt"] = "\n".join(lines) + "\n"
+    files: dict[str, str] = {"report.txt": report_text(summary, now, diagnosis, failure, description, steps, redact)}
     if failure is not None:
         rid = failure.request.id
         files[f"request-{rid}.json"] = redact(record_json(failure))
@@ -558,13 +602,83 @@ def compose_email(report: Report, description: str, steps: str, zip_name: str, r
         limit //= 2
 
 
+def zip_bytes(report: Report) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for name, text in report.files.items():
+            zf.writestr(name, text)
+    return buf.getvalue()
+
+
+def fit_for_upload(report: Report, limit: int | None = None) -> Report:
+    """`report` with its logs cut from the front, the biggest first, until its zip fits the server's cap. Only
+    ever less than the full report, never more, and the preview is built through here too, so what the reporter
+    reviews is what goes. A log is not cut below MIN_LOG_CHARS: a report that still does not fit goes as is."""
+    limit = UPLOAD_MAX if limit is None else limit
+    files = dict(report.files)
+    while len(zip_bytes(replace(report, files=files))) > limit:
+        logs = [n for n in files if ".log" in n and len(files[n]) > MIN_LOG_CHARS]
+        if not logs:
+            break
+        name = max(logs, key=lambda n: len(files[n]))
+        files[name] = _cut(files[name], max(MIN_LOG_CHARS, len(files[name]) // 2))
+    return report if files == report.files else replace(report, files=files)
+
+
+def collector_target() -> tuple[str, str | None] | None:
+    """(the Flackey server's address, the release key) when this copy may send a report there, else None.
+
+    The same address and key the usage-stats client was given -- a release build's own HTTPS collector, or a
+    collector on this computer for development (`telemetry.client.local_url`) -- but not its opt-in: a report
+    is sent only because the reporter pressed Send. None when stats are switched off for this computer
+    (`FLACKEY_TELEMETRY=off`), in the local demo (which never sends), and in a build with no collector."""
+    t = usage.current()
+    if t is None or t.mode != "on" or t.url is None:
+        return None
+    return t.url, t.key
+
+
+@dataclass
+class Upload:
+    sent: bool
+    reference: str | None = None   # the first 8 characters of the server's id for the report
+    error: str | None = None       # why it did not go, in words for the reporter
+
+
+async def upload(data: bytes, url: str, key: str | None) -> Upload:
+    """Send one report zip, once. Only an answer that says it was stored counts as sent: a refusal, an error
+    page from something in between, or no answer at all is reported back, never retried."""
+    headers = {"Content-Type": "application/zip"}
+    if key:
+        headers["X-Flackey-Key"] = key
+    try:
+        async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT, transport=UPLOAD_TRANSPORT) as http:
+            r = await http.post(url + UPLOAD_PATH, content=data, headers=headers)
+    except httpx.HTTPError as e:
+        # The class only, never the address or the key.
+        log.warning("bug report not sent to the Flackey server: %s", type(e).__name__)
+        return Upload(False, error="Couldn't reach the Flackey server")
+    if not 200 <= r.status_code < 300:
+        log.warning("bug report not sent to the Flackey server: HTTP %d", r.status_code)
+        return Upload(False, error=f"The Flackey server didn't take it (HTTP {r.status_code})")
+    try:
+        answer = r.json()
+    except ValueError:
+        answer = None
+    rid = answer.get("id") if isinstance(answer, dict) and answer.get("stored") is True else None
+    if not isinstance(rid, str) or not re.fullmatch(r"[0-9a-fA-F-]{8,36}", rid):
+        log.warning("bug report not sent: the Flackey server answered HTTP %d without storing it", r.status_code)
+        return Upload(False, error="The Flackey server did not keep it")
+    reference = rid[:8].lower()
+    log.info("bug report sent to the Flackey server: %s", reference)
+    return Upload(True, reference=reference)
+
+
 def write_zip(report: Report, folder: Path, now: datetime | None = None) -> Path:
     now = now or datetime.now(UTC)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{REPORT_PREFIX}{now:%Y%m%d-%H%M%S}.zip"
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for name, text in report.files.items():
-            zf.writestr(name, text)
+    path.write_bytes(zip_bytes(report))
     # Old reports are the log as it was then, sitting in the data folder for nobody: keep the newest few,
     # so "Show the file again" still works for the last one and the folder does not grow forever.
     for old in sorted(folder.glob(f"{REPORT_PREFIX}*.zip"))[:-KEEP_REPORTS]:
@@ -599,21 +713,69 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         except KeyError:
             raise HTTPException(404, "That track is no longer in the list.")
 
+    shown: OrderedDict[str, Shown] = OrderedDict()
+
+    def show(body: dict, failure: FailureRecord | None) -> tuple[str, Shown]:
+        now = datetime.now(UTC)
+        report = build_report(settings, status, ClientContext.parse(body), "", "",
+                              Redactor(known_secrets(settings, api_token)), now=now, failure=failure)
+        snap = Shown(fit_for_upload(report), now, failure, time.monotonic())
+        pid = secrets.token_urlsafe(16)
+        shown[pid] = snap
+        while len(shown) > SHOWN_MAX:
+            shown.popitem(last=False)
+        return pid, snap
+
+    def shown_for(body: dict) -> Shown | None:
+        snap = shown.get(str(body.get("preview_id") or ""))
+        if snap is None or time.monotonic() - snap.at > SHOWN_TTL_S:
+            return None
+        return snap
+
     def build(body: dict, failure: FailureRecord | None) -> tuple[Report, Redactor, str, str]:
         description = str(body.get("description") or "")
         steps = str(body.get("steps") or "")
         redact = Redactor(known_secrets(settings, api_token))
         report = build_report(settings, status, ClientContext.parse(body), description, steps, redact,
                               failure=failure)
-        return report, redact, description, steps
+        # The preview, the upload and the email's zip are all this one fitted report.
+        return fit_for_upload(report), redact, description, steps
 
     @r.post("/preview")
     async def preview(body: dict) -> dict:
-        """Read-only: what would be sent. A POST only because the page's context is a body."""
-        report, _, _, _ = await asyncio.to_thread(build, body, failure_for(body))
-        return {"summary": [[k, v] for k, v in report.summary],
+        """What would be sent, kept under `preview_id` so Send sends exactly this (plus the typed words). A POST
+        because the page's context is a body."""
+        pid, snap = await asyncio.to_thread(show, body, failure_for(body))
+        report = snap.report
+        return {"preview_id": pid, "summary": [[k, v] for k, v in report.summary],
                 "files": [{"name": n, "text": t} for n, t in report.files.items()],
-                "log_lines": report.log_lines, "diagnosis": report.diagnosis}
+                "log_lines": report.log_lines, "diagnosis": report.diagnosis,
+                "server": collector_target() is not None}
+
+    @r.post("/upload")
+    async def send_to_server(body: dict, request: Request) -> dict:
+        """The reporter pressed Send: the report goes to the Flackey server, once. The zip is saved first, so
+        whatever happens to the send the reporter still has it, and the page offers their email when it did not
+        go. Never opens a window: on success there is nothing left to do."""
+        from_the_app(request)
+        snap = shown_for(body)
+        if snap is None:
+            raise HTTPException(409, "Close this window and open Report a problem again to review the report.")
+        description, steps = str(body.get("description") or ""), str(body.get("steps") or "")
+        if snap.failure is None and not description.strip():
+            raise HTTPException(400, "Say a few words about what went wrong first.")
+        report = snap.with_words(description, steps, Redactor(known_secrets(settings, api_token)))
+        try:
+            path = await asyncio.to_thread(write_zip, report, folder)
+            data = await asyncio.to_thread(path.read_bytes)
+        except OSError as e:
+            log.warning("could not write the bug report: %s", e)
+            raise HTTPException(500, "Could not save the report file. Try again.")
+        target = collector_target()
+        if target is None:
+            return {"sent": False, "file": path.name, "error": "This copy of Flackey can't send reports itself"}
+        result = await upload(data, *target)
+        return {"sent": result.sent, "file": path.name, "reference": result.reference, "error": result.error}
 
     @r.post("")
     async def send(body: dict, request: Request) -> dict:
@@ -621,7 +783,18 @@ def router(settings: Settings, status, opener: Callable[[Path], None] = reveal_p
         failure = failure_for(body)
         if failure is None and not str(body.get("description") or "").strip():
             raise HTTPException(400, "Say a few words about what went wrong first.")
-        report, redact, description, steps = await asyncio.to_thread(build, body, failure)
+        snap = shown_for(body)
+        def about(f: FailureRecord | None) -> int | None:
+            return None if f is None else f.request.id
+        if snap is not None and about(snap.failure) != about(failure):
+            snap = None  # shown for another report: build this one fresh
+        if snap is not None:
+            # The email's zip is the shown report too, when the page has one.
+            description, steps = str(body.get("description") or ""), str(body.get("steps") or "")
+            redact = Redactor(known_secrets(settings, api_token))
+            report = snap.with_words(description, steps, redact)
+        else:
+            report, redact, description, steps = await asyncio.to_thread(build, body, failure)
         try:
             path = await asyncio.to_thread(write_zip, report, folder)
         except OSError as e:

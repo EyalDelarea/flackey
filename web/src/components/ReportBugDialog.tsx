@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, type BugContext, type BugPreview, type BugSent } from '../api'
+import { api, ApiError, type BugContext, type BugPreview, type BugSent, type BugUploaded } from '../api'
 import CopyButton from './CopyButton'
 import Icon from './Icon'
 import { fileManager, thisComputer, usePlatform } from '../platform'
@@ -9,8 +9,12 @@ const getErrorMessage = (e: unknown, fallback: string): string => e instanceof A
 
 /** Report a bug from inside the app (issue #33). Written for someone who has never filed an issue: what
  *  goes along is said in a few plain lines, and the exact files are one click further for whoever wants
- *  to check. Nothing leaves until they press Send in their own email -- this only writes the email to the
- *  developer and puts the file where they can drag it in.
+ *  to check. Nothing leaves until they press Send.
+ *
+ *  Send goes straight to the Flackey server when this copy has one (issue #279), and only then. When it
+ *  can't -- no server in this build, the server unreachable or refusing -- the reporter's own email is
+ *  offered instead, with what they typed still in the boxes and the zip saved: the report is never lost,
+ *  and never sent again behind their back.
  *
  *  With `requestId` it is "Report this failure" (issue #165): the same dialog and the same send, about one
  *  failed track. The server then adds that track's record and narrows the log to it, and the reporter's
@@ -28,6 +32,9 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState<BugSent | null>(null)
+  const [uploaded, setUploaded] = useState<BugUploaded | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [chooseEmail, setChooseEmail] = useState(false)
   const [revealError, setRevealError] = useState<string | null>(null)
   const failure = requestId != null
   const ctx = (): BugContext => ({ screen, window: [window.innerWidth, window.innerHeight],
@@ -45,7 +52,8 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
   const dialog = useRef<HTMLDivElement>(null)
   // Escape is Cancel, the way it is on a Mac sheet -- but not while there are words in the boxes that one
   // stray key would throw away. Tab stays inside the dialog, and focus goes back where it came from.
-  const typed = !sent && !!(description.trim() || steps.trim())
+  const done = !!sent || !!uploaded?.sent
+  const typed = !done && !!(description.trim() || steps.trim())
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !typed) { onClose(); return }
@@ -67,8 +75,16 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
 
   const send = (via: 'gmail' | 'mail') => {
     setBusy(true); setError(null)
-    api.sendBugReport({ ...ctx(), description, steps, via })
+    api.sendBugReport({ ...ctx(), description, steps, via, ...(preview?.preview_id ? { preview_id: preview.preview_id } : {}) })
       .then(setSent)
+      .catch(e => setError(getErrorMessage(e, "Couldn't prepare the report. Try again.")))
+      .finally(() => setBusy(false))
+  }
+  const sendToServer = () => {
+    if (!preview?.preview_id) return
+    setBusy(true); setError(null); setUploadError(null)
+    api.uploadBugReport({ ...ctx(), description, steps, preview_id: preview.preview_id })
+      .then(r => { if (r.sent) setUploaded(r); else setUploadError(r.error || "Couldn't send it") })
       .catch(e => setError(getErrorMessage(e, "Couldn't prepare the report. Try again.")))
       .finally(() => setBusy(false))
   }
@@ -80,15 +96,24 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
   // "0.1.9 (Mac app)" or "0.1.9 (Windows app)" -> "0.1.9": how it was installed is for the details, not the one-line summary.
   const version = summary.get('Flackey')?.split(' ')[0]
   const canSend = !busy && (failure || !!description.trim())
+  // Straight to the server when this copy has one, unless it just failed or the reporter picked email.
+  const direct = !!preview?.server && !!preview.preview_id && !chooseEmail && !uploadError
 
   return (
     <div className="modal-backdrop">
       <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-labelledby="report-bug-title">
         <div className="modal-head">
-          <h2 id="report-bug-title">{sent ? 'Almost done' : failure ? 'Report this failure' : 'Report a problem'}</h2>
+          <h2 id="report-bug-title">{uploaded?.sent ? 'Report sent' : sent ? 'Almost done' : failure ? 'Report this failure' : 'Report a problem'}</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close"><Icon name="x" size={14} /></button>
         </div>
-        {sent ? (
+        {uploaded?.sent ? (
+          <div className="modal-body">
+            <p>Thank you! The Flackey developer has your report.</p>
+            {uploaded.reference && <p className="muted">If you write about it later, mention
+              reference <strong className="mono">{uploaded.reference}</strong>.</p>}
+            <div className="modal-actions"><button className="btn-primary" autoFocus onClick={onClose}>Done</button></div>
+          </div>
+        ) : sent ? (
           <div className="modal-body">
             <ol className="report-steps">
               <li>An email to the Flackey developer opened with your report already written.</li>
@@ -136,7 +161,8 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
                   : `Flackey's recent activity log (${plural(preview.log_lines, 'line')})`}</li>
               </ul>) : previewError ? <div className="err">{previewError}</div>
                 : <div className="muted">Gathering details…</div>}
-              <p className="faint">Your phone number, email addresses, passwords and {platform === 'mac' ? 'Mac user name' : 'user name'} are taken out of these first.</p>
+              <p className="faint">Your phone number, email addresses, passwords and {platform === 'mac' ? 'Mac user name' : 'user name'} are taken out of these first.
+                {direct && ' The report is kept for 90 days, then deleted.'}</p>
               {preview && <button className="btn-link" aria-expanded={details} onClick={() => setDetails(d => !d)}>
                 {details ? 'Hide details' : "Show everything that's included"}</button>}
               {preview && details && <div className="report-details">
@@ -145,14 +171,26 @@ export default function ReportBugDialog({ screen, requestId, onClose }: { screen
               </div>}
             </div>
             {error && <div className="err">{error}</div>}
-            <div className="modal-actions">
-              <span className="faint">Opens an email to the developer, ready to send.</span>
-              <button className="btn-secondary" onClick={onClose}>Cancel</button>
-              <button className="btn-secondary" onClick={() => send('mail')} disabled={!canSend}>
-                Other email app</button>
-              <button className="btn-primary" onClick={() => send('gmail')} disabled={!canSend}>
-                {busy ? 'Preparing…' : 'Email with Gmail'}</button>
-            </div>
+            {uploadError && <div className="err" role="alert">{uploadError}. Your report is saved on
+              {' '}{thisComputer(platform)}. Send it by email instead.</div>}
+            {direct ? (
+              <div className="modal-actions">
+                <span className="faint">Goes straight to the Flackey developer.{' '}
+                  <button className="btn-link" onClick={() => setChooseEmail(true)}>Use email instead</button></span>
+                <button className="btn-secondary" onClick={onClose}>Cancel</button>
+                <button className="btn-primary" onClick={sendToServer} disabled={!canSend}>
+                  {busy ? 'Sending…' : 'Send report'}</button>
+              </div>
+            ) : (
+              <div className="modal-actions">
+                <span className="faint">Opens an email to the developer, ready to send.</span>
+                <button className="btn-secondary" onClick={onClose}>Cancel</button>
+                <button className="btn-secondary" onClick={() => send('mail')} disabled={!canSend}>
+                  Other email app</button>
+                <button className="btn-primary" onClick={() => send('gmail')} disabled={!canSend}>
+                  {busy ? 'Preparing…' : 'Email with Gmail'}</button>
+              </div>
+            )}
           </div>
         )}
       </div>

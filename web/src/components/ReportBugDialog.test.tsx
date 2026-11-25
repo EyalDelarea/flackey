@@ -119,3 +119,63 @@ it('speaks Windows on Windows: File Explorer, no Mac, and the version loses its 
   fireEvent.click(screen.getByRole('button', { name: 'Email with Gmail' }))
   expect(await screen.findByText(/from the File Explorer window into the email/)).toBeInTheDocument()
 })
+
+describe('straight to the Flackey server (issue #279)', () => {
+  beforeEach(() => { vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, server: true, preview_id: 'shown-1' }) })
+
+  it('sends with one press and says it arrived, without opening any email', async () => {
+    vi.spyOn(api, 'uploadBugReport').mockResolvedValue({ sent: true, file: 'flackey-bug-report-1.zip', reference: '0acbd8bf' })
+    const email = vi.spyOn(api, 'sendBugReport')
+    render(<ReportBugDialog screen="download" onClose={() => {}} />)
+    const go = await screen.findByRole('button', { name: 'Send report' })
+    expect(go).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Email with Gmail' })).not.toBeInTheDocument()
+    expect(screen.getByText(/kept for 90 days, then deleted/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'The QR code never shows' } })
+    fireEvent.click(go)
+    await waitFor(() => expect(api.uploadBugReport).toHaveBeenCalledWith(expect.objectContaining(
+      { description: 'The QR code never shows', screen: 'download', preview_id: 'shown-1' })))
+    expect(await screen.findByRole('heading', { name: 'Report sent' })).toBeInTheDocument()
+    expect(screen.getByText('0acbd8bf')).toBeInTheDocument()
+    expect(email).not.toHaveBeenCalled()
+  })
+
+  it('offers email, keeping the words, when the server did not take it', async () => {
+    vi.spyOn(api, 'uploadBugReport').mockResolvedValue({ sent: false, file: 'flackey-bug-report-1.zip', error: "Couldn't reach the Flackey server" })
+    vi.spyOn(api, 'sendBugReport').mockResolvedValue({ file: 'flackey-bug-report-1.zip', to: 'dev@example.com', subject: 's', body: 'b' })
+    render(<ReportBugDialog screen="library" onClose={() => {}} />)
+    fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'Broken' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Send report' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach the Flackey server.*saved on this Mac.*by email/)
+    expect(screen.getByLabelText('What went wrong?')).toHaveValue('Broken')
+    expect(screen.queryByRole('button', { name: 'Send report' })).not.toBeInTheDocument()
+    expect(api.uploadBugReport).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Email with Gmail' }))
+    await waitFor(() => expect(api.sendBugReport).toHaveBeenCalledWith(expect.objectContaining({ description: 'Broken', via: 'gmail', preview_id: 'shown-1' })))
+  })
+
+  it('lets the reporter pick email instead before sending', async () => {
+    const upload = vi.spyOn(api, 'uploadBugReport')
+    render(<ReportBugDialog screen="library" onClose={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Use email instead' }))
+    expect(screen.getByRole('button', { name: 'Email with Gmail' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Other email app' })).toBeInTheDocument()
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('says so and keeps the words when the report could not even be saved', async () => {
+    vi.spyOn(api, 'uploadBugReport').mockRejectedValue(new ApiError(500, 'Could not save the report file. Try again.'))
+    render(<ReportBugDialog screen="settings" onClose={() => {}} />)
+    fireEvent.change(screen.getByLabelText('What went wrong?'), { target: { value: 'Broken' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Send report' }))
+    expect(await screen.findByText('Could not save the report file. Try again.')).toBeInTheDocument()
+    expect(screen.getByLabelText('What went wrong?')).toHaveValue('Broken')
+  })
+})
+
+it('offers only email when the server gave no preview to send', async () => {
+  vi.spyOn(api, 'bugPreview').mockResolvedValue({ ...preview, server: true })
+  render(<ReportBugDialog screen="library" onClose={() => {}} />)
+  expect(await screen.findByRole('button', { name: 'Email with Gmail' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Send report' })).not.toBeInTheDocument()
+})
