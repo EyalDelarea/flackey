@@ -39,6 +39,14 @@ jobs:
       - name: nasm for the ffmpeg build
         # ffmpeg's x86 assembly needs it; on arm64 there is none, so the release job never installs it.
         run: brew install nasm
+      - name: OpenSSL linked into cryptography
+        # cryptography publishes no x86_64 macOS wheel, so uv builds it from source here. Linked against
+        # Homebrew's libssl.3.dylib it loads whichever libssl.3.dylib the bundle holds -- the Python
+        # runtime's older one -- and fails at import (_SSL_get0_group_name). Static linking avoids that.
+        # Homebrew's OpenSSL targets this runner's macOS (15), which is the floor of this one-off build.
+        run: |
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
       - name: Build
         # No key or collector env: build_app.sh then bakes neither.
         run: packaging/build_app.sh
@@ -56,6 +64,15 @@ jobs:
           done < <(find "$app" -type f -print0)
           echo "$n Mach-O files checked"
           (( n > 0 && bad == 0 ))
+          rust="$(find "$app" -name '_rust.abi3.so' | head -1)"
+          if otool -L "$rust" | grep -q 'libssl\|libcrypto'; then echo "::error::cryptography links OpenSSL dynamically"; exit 1; fi
+          echo "minimum macOS per Mach-O:"
+          find "$app" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || continue
+            m="$(vtool -show-build "$f" 2>/dev/null | awk '/minos/ {print $2; exit}')"
+            [[ -z "$m" ]] && m="$(otool -l "$f" | awk '/LC_VERSION_MIN_MACOSX/ {getline; getline; print $2; exit}')"
+            echo "$m"
+          done | sort -V | uniq -c
           for f in Contents/MacOS/Flackey Contents/Frameworks/bin/{ffmpeg,ffprobe,fpcalc,flackey-update-helper}; do
             echo "$f: $(lipo -archs "$app/$f")"
           done
