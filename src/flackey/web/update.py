@@ -5,6 +5,7 @@ import datetime as dt
 import errno
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -193,8 +194,26 @@ async def latest_release() -> dict:
     return (await check_release())[0]
 
 
+# Releases publish the Mac app for Apple Silicon only, so an Intel (x86_64) build -- the one-off
+# mac-intel.yml makes -- would download an arm64 app over itself that cannot open on an Intel Mac.
+FOREIGN_ARCH_ERROR = ("This Intel copy of Flackey can't update itself. "
+                      "Ask whoever sent it to you for a newer Intel build.")
+
+
+def releases_fit_this_build() -> bool:
+    """Whether the published Mac release runs on the CPU this build was made for. A packaged Mac build
+    that is not arm64 is the Intel one; Windows and a source checkout are unaffected. Under Rosetta an
+    x86_64 build still reports x86_64, so it is refused there too, which keeps one rule for one build."""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return True
+    return platform.machine() == "arm64"
+
+
 async def check_release() -> tuple[dict, str]:
     """`latest_release`, and the `update_step` category of a failed lookup ("" when it worked)."""
+    if not releases_fit_this_build():
+        return ({"ok": False, "current": __version__, "newer": False, "available": False,
+                 "error": FOREIGN_ARCH_ERROR}, "other")
     try:
         async with github_client(FEED_HOSTS, 5) as client:
             res = await client.get(RELEASES_URL)

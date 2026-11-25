@@ -31,11 +31,18 @@ fetch() {
   fi
 }
 
-fetch chromaprint-fpcalc-1.6.1-macos-arm64.tar.gz "$CHROMAPRINT/chromaprint-fpcalc-1.6.1-macos-arm64.tar.gz" 254f23cb2d290069ba1d3d28199414fbf66d2054fc2f6821c2fc62ed39470a95
+# The machine's own architecture: arm64 for the released app, x86_64 for the one-off Intel build
+# (.github/workflows/mac-intel.yml). ffmpeg is compiled for the same machine by build_ffmpeg.sh.
+case "$(uname -m)" in
+  arm64)  FPCALC=chromaprint-fpcalc-1.6.1-macos-arm64;  FPCALC_SHA=254f23cb2d290069ba1d3d28199414fbf66d2054fc2f6821c2fc62ed39470a95 ;;
+  x86_64) FPCALC=chromaprint-fpcalc-1.6.1-macos-x86_64; FPCALC_SHA=0de8947c09dd93c44cece2f5947d408136a3b6692eed726d1f109506500bd773 ;;
+  *) echo "no fpcalc for $(uname -m)" >&2; exit 1 ;;
+esac
+fetch "$FPCALC.tar.gz" "$CHROMAPRINT/$FPCALC.tar.gz" "$FPCALC_SHA"
 
 "$ROOT/packaging/build_ffmpeg.sh" "$BIN"
-tar -xzf "$CACHE/chromaprint-fpcalc-1.6.1-macos-arm64.tar.gz" -C "$CACHE"
-cp "$CACHE/chromaprint-fpcalc-1.6.1-macos-arm64/fpcalc" "$BIN/fpcalc"
+tar -xzf "$CACHE/$FPCALC.tar.gz" -C "$CACHE"
+cp "$CACHE/$FPCALC/fpcalc" "$BIN/fpcalc"
 cat > "$BIN/licenses/README.txt" <<'EOF'
 ffmpeg and ffprobe: FFmpeg built from its unmodified release source, LGPL v2.1 or later. ffmpeg.README
 names the release, where its source is and how it was configured; ffmpeg.LICENSE is the licence.

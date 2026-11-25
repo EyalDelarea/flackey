@@ -1,0 +1,79 @@
+# A one-off Intel (x86_64) build of the Mac app, for someone on an Intel Mac. Manual only: run it from the
+# Actions tab ("Run workflow") on the branch or commit you want. It uploads Flackey.pkg and the .app zip as
+# a workflow artifact and nothing else -- no tag, no release, no update signature, no update manifest.
+#
+# Releases stay Apple Silicon only. The copy this builds refuses in-app updates (web/update.py
+# `releases_fit_this_build`), since every published update is arm64 and would not open on an Intel Mac.
+#
+# Keyless on purpose: the Telegram keys and the usage-stats collector are tag-build secrets and stay that
+# way. The setup screen asks for Telegram keys, and the copy sends no usage stats.
+name: mac intel build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [chore/intel-mac-build]  # TEMPORARY: removed before the PR
+
+permissions:
+  contents: read
+
+jobs:
+  mac-intel:
+    name: Flackey installer (Intel, one-off)
+    # GitHub's x86_64 macOS image (macos-13 was retired in December 2025).
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Runner is x86_64
+        run: test "$(uname -m)" = x86_64
+      - name: Build
+        # No key or collector env: build_app.sh then bakes neither.
+        run: packaging/build_app.sh
+      - name: Every Mach-O in the bundle is x86_64
+        run: |
+          set -euo pipefail
+          app=packaging/build/dist.noindex/Flackey.app
+          bad=0; n=0
+          while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q '^Mach-O'; then
+              n=$((n + 1))
+              archs="$(lipo -archs "$f")"
+              case " $archs " in *" x86_64 "*) ;; *) echo "::error::$f is $archs"; bad=1 ;; esac
+            fi
+          done < <(find "$app" -type f -print0)
+          echo "$n Mach-O files checked"
+          (( n > 0 && bad == 0 ))
+          for f in Contents/MacOS/Flackey Contents/Frameworks/bin/{ffmpeg,ffprobe,fpcalc,flackey-update-helper}; do
+            echo "$f: $(lipo -archs "$app/$f")"
+          done
+      - name: Smoke-launch
+        env:
+          SMOKE_EXPECT_KEYS: "false"
+        run: packaging/smoke.sh packaging/build/dist.noindex/Flackey.app
+      - name: Installer
+        run: |
+          set -euo pipefail
+          packaging/build_installer.sh
+          cd packaging/build
+          mv Flackey.pkg Flackey-intel.pkg
+          for z in Flackey-*.zip; do mv "$z" "${z%.zip}-intel.zip"; done
+          shasum -a 256 Flackey-intel.pkg Flackey-*-intel.zip | tee SHA256SUMS-intel
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Flackey-intel
+          path: |
+            packaging/build/Flackey-intel.pkg
+            packaging/build/Flackey-*-intel.zip
+            packaging/build/SHA256SUMS-intel
+          if-no-files-found: error
+          retention-days: 30
