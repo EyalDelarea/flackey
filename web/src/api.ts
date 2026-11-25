@@ -211,8 +211,13 @@ export interface BugContext { screen: string; window: [number, number]; display:
     shows the bytes that leave rather than a description of them. */
 export interface BugPreview { summary: [string, string][]; files: { name: string; text: string }[]; log_lines: number
   /** The one-line diagnosis of a failure report; null for a general bug report. */
-  diagnosis?: string | null }
+  diagnosis?: string | null
+  /** Whether this copy can send the report to the Flackey server itself (issue #279); email otherwise. */
+  server?: boolean }
 export interface BugSent { file: string; to: string; subject: string; body: string }
+/** The server's answer to Send (issue #279). `sent` only when it said it kept the report; otherwise `error`
+    says why in plain words and the page offers email. The zip is saved either way. */
+export interface BugUploaded { sent: boolean; file: string; reference?: string | null; error?: string | null }
 
 export const api = {
   // Sets the cookie `<audio>`, `<img>` and the event stream ride on, since none of them can send the token.
@@ -272,6 +277,7 @@ export const api = {
   restartForUpdate: () => post<UpdateDownload>('/api/update/restart'),
   bugPreview: (ctx: BugContext) => post<BugPreview>('/api/bug-report/preview', ctx),
   sendBugReport: (body: BugContext & { description: string; steps: string; via: 'gmail' | 'mail' }) => post<BugSent>('/api/bug-report', body),
+  uploadBugReport: (body: BugContext & { description: string; steps: string }) => post<BugUploaded>('/api/bug-report/upload', body),
   revealBugReport: () => post<{ ok: boolean }>('/api/bug-report/reveal'),
   saveSettings: (library_root: string, extra: Partial<{ lossless_filing_format: string; library_layout: string; auto_update_check: boolean;
     extended_mixes: ExtendedMixes }> = {}) =>

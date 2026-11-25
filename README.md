@@ -82,8 +82,9 @@ Once installed, Flackey updates itself from inside the app. Everything from
   playlists together, scrolls on its own, and has a search box to find one.
 - **Signed self-update.** Flackey checks for a new version (you can turn the check off) and installs it
   from inside the app. Every update is checked against an Ed25519 signature before it is installed.
-- **In-app bug reports.** Help › Report a bug (also in the sidebar) opens an email to the developer with
-  your description, plus a zip of the log and system details with personal information redacted.
+- **In-app bug reports.** Help › Report a bug (also in the sidebar) sends your description, plus a zip of
+  the log and system details with personal information redacted, straight to the developer when you press
+  Send. Reports are kept 90 days. If the server can't be reached, it offers an email with the zip instead.
 
 ## 🧰 Run from a checkout
 

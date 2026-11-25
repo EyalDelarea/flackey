@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from flackey import __version__
@@ -15,6 +16,7 @@ from flackey.config import Settings
 from flackey.inbox import Inbox
 from flackey.notify import MemoryNotifier
 from flackey.store import Store
+from flackey.telemetry.client import Telemetry
 from flackey.web import create_app, report
 from flackey.web.report import (
     KEEP_REPORTS,
@@ -599,3 +601,162 @@ def test_the_install_secret_never_reaches_a_bug_report(tmp_path: Path):
     path = write_zip(rep, tmp_path / "out")
     with _zip.ZipFile(path) as z:
         assert all(secret.encode() not in z.read(n) for n in z.namelist())
+
+
+# ---- sending to the Flackey server (issue #279) -----------------------------------------------
+
+COLLECTOR = "https://collector.test"
+
+
+class Collector:
+    """A stand-in for the collector's /v1/bug-report: answers what the test says, records what it got."""
+
+    def __init__(self, status: int = 201, body: dict | None = None, fail: Exception | None = None):
+        self.status, self.fail, self.seen = status, fail, []
+        self.body = {"stored": True, "id": "0acbd8bf-b458-4e00-b4bf-a4314d24060e"} if body is None else body
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.seen.append(request)
+        if self.fail is not None:
+            raise self.fail
+        return httpx.Response(self.status, json=self.body)
+
+
+@pytest.fixture
+def server(monkeypatch):
+    """Point the report at a fake collector with a release key, the way a packaged build is."""
+    def use(collector: Collector, target=(COLLECTOR, "release-key")):
+        monkeypatch.setattr(report, "collector_target", lambda: target)
+        monkeypatch.setattr(report, "UPLOAD_TRANSPORT", httpx.MockTransport(collector))
+        return collector
+    return use
+
+
+def test_preview_says_whether_the_report_can_go_to_the_server(app, server, monkeypatch):
+    client, _, _, _ = app
+    monkeypatch.setattr(report, "collector_target", lambda: None)
+    assert client.post("/api/bug-report/preview", json={}).json()["server"] is False
+    server(Collector())
+    assert client.post("/api/bug-report/preview", json={}).json()["server"] is True
+
+
+def test_send_uploads_the_zip_it_saved_and_nothing_else(app, server):
+    client, settings, revealed, opened = app
+    got = server(Collector())
+    res = client.post("/api/bug-report/upload", json={"description": "Window flickers", "screen": "library"},
+                      headers=APP)
+    assert res.status_code == 200
+    out = res.json()
+    assert out["sent"] is True and out["reference"] == "0acbd8bf"
+    (req,) = got.seen
+    assert str(req.url) == f"{COLLECTOR}/v1/bug-report" and req.method == "POST"
+    assert req.headers["content-type"] == "application/zip"
+    assert req.headers["x-flackey-key"] == "release-key"
+    saved = (settings.data_dir / "bug-reports" / out["file"]).read_bytes()
+    assert req.content == saved, "what leaves is the zip the reporter can still open on disk"
+    with zipfile.ZipFile(io.BytesIO(req.content)) as zf:
+        assert "Window flickers" in zf.read("report.txt").decode()
+        assert "0123456789abcdef" not in "".join(zf.read(n).decode() for n in zf.namelist())
+    assert revealed == [] and opened == [], "no email, no Finder window: it went"
+
+
+def test_the_upload_carries_no_usage_stats_id_or_secret(app, server):
+    client, settings, _, _ = app
+    settings.telemetry_install_id = "5b0e2c1a-7d3f-4c1e-9a2b-1c2d3e4f5a6b"
+    settings.telemetry_install_secret = "s" * 43
+    got = server(Collector())
+    client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP)
+    (req,) = got.seen
+    wire = req.content + b"".join(k + v for k, v in req.headers.raw)
+    with zipfile.ZipFile(io.BytesIO(req.content)) as zf:
+        wire += b"".join(zf.read(n) for n in zf.namelist())
+    assert b"5b0e2c1a" not in wire and b"s" * 43 not in wire
+    assert set(req.headers.keys()) <= {"host", "accept", "accept-encoding", "connection", "user-agent",
+                                       "content-length", "content-type", "x-flackey-key"}
+
+
+@pytest.mark.parametrize(("collector", "why"), [
+    (Collector(status=429, body={"error": "rate_limited"}), "HTTP 429"),
+    (Collector(status=503, body={"error": "stopped"}), "HTTP 503"),
+    (Collector(status=403, body={"error": "bad_key"}), "HTTP 403"),
+    (Collector(status=404, body={}), "HTTP 404"),
+    (Collector(status=202, body={"stop": True}), "did not keep"),
+    (Collector(status=201, body={"stored": False}), "did not keep"),
+    (Collector(fail=httpx.ConnectError("no route")), "Couldn't reach"),
+])
+def test_anything_but_stored_offers_email_and_keeps_the_report(app, server, collector, why):
+    client, settings, revealed, opened = app
+    got = server(collector)
+    out = client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP).json()
+    assert out["sent"] is False and why in out["error"]
+    assert (settings.data_dir / "bug-reports" / out["file"]).exists(), "the reporter never loses the report"
+    assert len(got.seen) == 1, "never retried behind the reporter's back"
+    assert revealed == [] and opened == [], "email is the reporter's choice, offered, not opened"
+
+
+def test_with_no_server_nothing_is_sent_and_email_is_offered(app, server):
+    client, _, _, _ = app
+    got = server(Collector(), target=None)
+    out = client.post("/api/bug-report/upload", json={"description": "x"}, headers=APP).json()
+    assert out["sent"] is False and got.seen == []
+
+
+def test_upload_needs_the_app_header_and_a_description(app, server):
+    client, _, _, _ = app
+    got = server(Collector())
+    assert client.post("/api/bug-report/upload", json={"description": "x"}, headers=NOT_FROM_APP).status_code == 403
+    assert client.post("/api/bug-report/upload", json={"description": " "}, headers=APP).status_code == 400
+    assert got.seen == []
+
+
+def _telemetry(tmp_path: Path, **kw) -> Telemetry:
+    return Telemetry(tmp_path, version="0.8.2", channel="packaged",
+                     platform_fields={"os": "macos", "os_major": "15", "arch": "arm64"}, **kw)
+
+
+def test_the_server_is_the_release_builds_collector_whether_or_not_stats_are_on(tmp_path: Path, monkeypatch):
+    """Pressing Send is the consent for that one report (issue #279): the stats opt-in plays no part."""
+    from flackey import telemetry as usage
+
+    monkeypatch.setattr(usage, "_current", _telemetry(tmp_path, enabled=False, built_url=COLLECTOR, key="k"))
+    assert report.collector_target() == (COLLECTOR, "k")
+    monkeypatch.setattr(usage, "_current", _telemetry(tmp_path, enabled=False, url="http://127.0.0.1:8099"))
+    assert report.collector_target() == ("http://127.0.0.1:8099", None)
+
+
+@pytest.mark.parametrize("kw", [
+    {"mode": "off", "built_url": COLLECTOR},          # FLACKEY_TELEMETRY=off: nothing leaves for us
+    {"mode": "local", "built_url": COLLECTOR},        # the local demo never sends
+    {},                                               # a checkout or a build with no collector
+    {"built_url": "http://not-https.example"},        # refused by build_url
+    {"url": "http://someone-else.example"},           # the environment may only name this computer
+])
+def test_no_server_when_there_is_none_or_sending_is_switched_off(tmp_path: Path, monkeypatch, kw):
+    from flackey import telemetry as usage
+
+    monkeypatch.setattr(usage, "_current", _telemetry(tmp_path, **kw))
+    assert report.collector_target() is None
+
+
+def test_no_server_before_the_stats_client_exists(monkeypatch):
+    from flackey import telemetry as usage
+
+    monkeypatch.setattr(usage, "_current", None)
+    assert report.collector_target() is None
+
+
+def test_a_report_too_big_for_the_server_loses_its_oldest_log_lines_and_the_preview_shows_it(app, monkeypatch):
+    """The preview and the upload are one build: what the reporter reviews is what fits and what goes."""
+    import random
+
+    client, settings, _, _ = app
+    monkeypatch.setattr(report, "UPLOAD_MAX", 20_000)
+    rnd = random.Random(7)
+    lines = "".join(f"2026-09-29 12:{i // 60:02}:{i % 60:02} INFO flackey.worker: {rnd.getrandbits(128):032x}\n"
+                    for i in range(4000))
+    (settings.data_dir / "flackey.log").write_text(lines + "the newest line\n", encoding="utf-8")
+    preview = client.post("/api/bug-report/preview", json={"description": "x"}).json()
+    log = next(f["text"] for f in preview["files"] if f["name"] == "flackey.log")
+    assert log.startswith("[… earlier lines left out …]\n") and log.endswith("the newest line\n")
+    rep = build_report(settings, {}, ClientContext(), "x")
+    assert len(report.zip_bytes(report.fit_for_upload(rep))) <= 20_000
