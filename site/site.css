@@ -482,6 +482,41 @@ p {
   border: 1px solid rgba(0, 0, 0, 0.14);
   font-size: 10.5px;
 }
+/* Intel Macs: the About This Mac line that says which installer to pick */
+.wn-intel {
+  width: 190px;
+  padding: 8px 9px 9px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.3);
+  display: grid;
+  gap: 6px;
+}
+.wn-intel-title {
+  font-weight: 700;
+}
+.wn-intel-row i {
+  font-style: normal;
+  color: rgba(0, 0, 0, 0.45);
+  margin-right: 6px;
+}
+.wn-intel-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #248a3d;
+  font-weight: 600;
+}
+.wn-intel-ok svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 /* Usage stats: the app's question, with its two equal answers and neither picked */
 .wn-stats {
   width: 176px;
@@ -2403,8 +2438,29 @@ h2 {
   color: var(--ink);
   font-weight: 600;
 }
-.download-section .download-intel {
-  margin-top: 2px;
+/* Apple Silicon and Intel side by side; they stack on a phone. */
+.mac-builds {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 18px;
+}
+.mac-build {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 200px;
+}
+.mac-build .button {
+  width: 100%;
+}
+.download-section .download-macos {
+  margin-top: 14px;
+}
+.download-section .download-chip-hint {
+  max-width: 440px;
+  margin-top: 4px;
+  line-height: 1.5;
 }
 /* The one thing everyone hits after downloading, said where they click. */
 .download-section .download-trust {
@@ -2420,6 +2476,12 @@ h2 {
 .download-trust a + a {
   margin-left: 6px;
   white-space: nowrap;
+}
+.download-sums {
+  white-space: nowrap;
+}
+.download-trust .download-sums a {
+  margin-left: 0;
 }
 .download-section .platform-note {
   max-width: 460px;

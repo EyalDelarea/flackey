@@ -152,6 +152,18 @@
         <ul class="wn-grid">
           <li class="wn-card">
             <div class="wn-art" aria-hidden="true">
+              <div class="wn-intel">
+                <span class="wn-intel-title">About This Mac</span>
+                <span class="wn-intel-row"><i>Processor</i>Intel Core i5</span>
+                <span class="wn-intel-ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Flackey runs here</span>
+              </div>
+            </div>
+            <span class="wn-tag">v0.8.3</span>
+            <h3>Runs on Intel Macs</h3>
+            <p>Flackey now has its own installer for Intel Macs, so older Macs on macOS 12 or later can download and update it like any other.</p>
+          </li>
+          <li class="wn-card">
+            <div class="wn-art" aria-hidden="true">
               <div class="wn-finish">
                 <span class="wn-finish-title"><span class="wn-finish-mark"></span>Warm-up finished</span>
                 <span class="wn-finish-sum">9 of 10 tracks filed · 1 missing</span>
@@ -958,21 +970,39 @@
         </div>
         <div class="os-panel" id="os-mac" role="tabpanel" aria-labelledby="os-tab-mac">
           <div class="download-option">
-            <a class="button" id="download-mac" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg"
-              >Download for Mac <span aria-hidden="true">↓</span></a
-            >
-            <p class="download-req"><strong>Apple Silicon only</strong> (M1 or newer) · macOS 12 or newer<span class="download-size"></span></p>
-            <p class="download-req download-intel">Intel Macs are not supported.</p>
+            <!-- Two builds, one per chip. Each button sits in its own block so
+                 site.js finds that block's .download-size for the asset size. -->
+            <div class="mac-builds">
+              <div class="mac-build">
+                <a class="button" id="download-mac" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg"
+                  >Apple Silicon <span aria-hidden="true">↓</span></a
+                >
+                <p class="download-req"><strong>M1 or later</strong><span class="download-size"></span></p>
+              </div>
+              <div class="mac-build">
+                <a class="button" id="download-mac-intel" href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey-Intel.pkg"
+                  >Intel <span aria-hidden="true">↓</span></a
+                >
+                <p class="download-req"><strong>Intel processor</strong><span class="download-size"></span></p>
+              </div>
+            </div>
+            <p class="download-req download-macos">macOS 12 or later, Apple Silicon or Intel</p>
+            <p class="download-req download-chip-hint">
+              Not sure which? Apple menu &gt; <strong>About This Mac</strong>:
+              “Chip” means Apple Silicon, “Processor” means Intel.
+            </p>
             <p class="download-trust">
               The installer isn’t signed with an Apple certificate, so macOS warns
               you once. <a href="#mac-unsigned">Here’s the 30-second fix</a>.
-              <a href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg.sha256">SHA-256 checksum</a>
+              <span class="download-sums">SHA-256 checksums:
+                <a href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey.pkg.sha256">Apple Silicon</a>,
+                <a href="https://github.com/EyalDelarea/flackey/releases/latest/download/Flackey-Intel.pkg.sha256">Intel</a></span>
             </p>
           </div>
           <div class="install">
             <p class="install-head"><span class="install-eyebrow">Please read</span> Installing on a Mac</p>
             <ol>
-              <li>Download and open <strong>Flackey.pkg</strong>.</li>
+              <li>Download and open <strong>Flackey.pkg</strong> (<strong>Flackey-Intel.pkg</strong> on an Intel Mac).</li>
               <li>
                 macOS will block it the first time — see below. This is expected.
               </li>
