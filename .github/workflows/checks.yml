@@ -375,11 +375,34 @@ jobs:
         # will not load on 12 or 13. The lock also has macosx_10_13 wheels; targeting 12.0 selects them.
         # The Build step then runs on this environment as is (UV_NO_SYNC), rather than re-syncing it.
         #
-        # The packages built from source here (cryptography, and two pure-Python sdists) get their build
-        # tools from intel-build-constraints.txt: exact versions, every file hash-checked.
-        env:
-          UV_BUILD_CONSTRAINT: packaging/intel-build-constraints.txt
-        run: uv sync --frozen --group bundle --python-platform x86_64-apple-darwin
+        #
+        # The packages with no x86_64 macOS wheel (cryptography, and two pure-Python sdists) are left out of
+        # the sync and built here by `uv pip install`, because uv sync ignores build constraints. Each sdist
+        # must match uv.lock's hash, and every build tool must be in intel-build-constraints.txt with its
+        # hash (--require-build-hashes), so nothing in these builds resolves fresh at tag time. No cache:
+        # a cached wheel would skip the build and with it the check. The log lists each build tool chosen.
+        run: |
+          set -euo pipefail
+          built=(cryptography pyaes proxy-tools)
+          skip=()
+          for p in "${built[@]}"; do skip+=(--no-install-package "$p"); done
+          uv sync --frozen --group bundle --python-platform x86_64-apple-darwin "${skip[@]}"
+          uv run --no-sync python -I - "${built[@]}" > "$RUNNER_TEMP/sdists.txt" <<'PY'
+          import sys, tomllib
+          lock = {p["name"]: p for p in tomllib.load(open("uv.lock", "rb"))["package"]}
+          for name in sys.argv[1:]:
+              p = lock[name]
+              print(f'{name}=={p["version"]} --hash={p["sdist"]["hash"]}')
+          PY
+          cat "$RUNNER_TEMP/sdists.txt"
+          uv pip install --no-cache --no-deps --require-hashes --require-build-hashes \
+            --no-binary "$(IFS=,; echo "${built[*]}")" \
+            --build-constraint packaging/intel-build-constraints.txt \
+            -r "$RUNNER_TEMP/sdists.txt" -v 2> "$RUNNER_TEMP/builds.log" \
+            || { tail -40 "$RUNNER_TEMP/builds.log"; exit 1; }
+          echo "Build tools used:"
+          grep -oE 'Selecting: [^ ]+' "$RUNNER_TEMP/builds.log" | sort -u
+          grep -E '^ \+ ' "$RUNNER_TEMP/builds.log" || true
       - name: Build
         # Keys and the stats collector exactly as the `mac` job: only on a tagged release. Never printed.
         env:

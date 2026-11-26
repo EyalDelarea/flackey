@@ -1,7 +1,17 @@
-# Build dependencies for the source packages the Intel Mac build compiles (cryptography has no x86_64
-# macOS wheel). Exact versions and every published file's sha256, so nothing in that build resolves fresh
-# at tag time. Used by the mac-intel job in .github/workflows/checks.yml through UV_BUILD_CONSTRAINT.
-# cffi, pycparser and setuptools match uv.lock; maturin is cryptography's build backend.
+# Every build dependency of the packages the Intel Mac build compiles from source, at an exact version
+# with every published file's sha256. The mac-intel job in .github/workflows/checks.yml installs those
+# packages with `uv pip install --build-constraint <this file> --require-build-hashes`, so a build tool
+# missing from this file, or a download whose hash is not listed here, fails the build. (uv sync ignores
+# UV_BUILD_CONSTRAINT, which is why that step does not use sync for them.)
+#
+# What is built, and what it needs (from each sdist's own pyproject.toml / setup.py):
+#   cryptography 50.0.2 (no x86_64 macOS wheel)  maturin>=1.14.1,<2 and cffi>=2.0.0 (cffi needs pycparser);
+#                                                typing-extensions only below Python 3.11, so not here;
+#                                                maturin's build hook also asks for setuptools, and for
+#                                                puccinialin (a Rust installer) only when cargo is missing,
+#                                                which is left out on purpose: the job pins its own Rust
+#   pyaes 1.6.1, proxy-tools 0.1.0 (sdist only)  no pyproject.toml, so the PEP 517 default: setuptools
+# cffi, pycparser and setuptools match uv.lock.
 maturin==1.16.0 \
     --hash=sha256:131fcc17ddb3ccc48aa183d2172ebf994c322b858e1b9694fb8744d783df66f6 \
     --hash=sha256:13e69ca12542999d8c5467131de72a49bb76e4c284b9a45c5783df7c0fcb3a8a \
