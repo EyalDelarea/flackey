@@ -30,7 +30,7 @@ When it finds a longer extended or club mix of a track, it offers it, and one cl
 Get the latest version from **[eyaldelarea.github.io/flackey](https://eyaldelarea.github.io/flackey/)** or the
 [releases page](https://github.com/EyalDelarea/flackey/releases). The setup screen does the rest.
 
-- **Mac** (Apple Silicon, macOS 12 or newer): open `Flackey.pkg`. The installer isn't signed with an Apple
+- **Mac** (macOS 12 or newer): open `Flackey.pkg` on an Apple Silicon Mac, `Flackey-Intel.pkg` on an Intel Mac. The installer isn't signed with an Apple
   Developer ID, so macOS may block it the first time. Open **System Settings › Privacy & Security** and
   click **Open Anyway**, or on macOS 14 and earlier control-click `Flackey.pkg` and choose **Open**.
   Step-by-step: [`packaging/README-for-friends.md`](packaging/README-for-friends.md).

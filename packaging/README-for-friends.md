@@ -8,13 +8,15 @@ On Windows, read [README-windows.md](README-windows.md) instead.
 
 ## Before you start
 
-**An Apple Silicon Mac on macOS 12 or newer.** Flackey is arm64 only. On an Intel Mac it will not launch at all.
+**A Mac on macOS 12 or newer**, Apple Silicon or Intel. To tell which you have: Apple menu › About This Mac.
+It lists a **Chip** (Apple M1 or later: Apple Silicon) or a **Processor** (Intel).
 
 **Nothing else.** The audio tools Flackey uses (ffmpeg and chromaprint) are inside the app; their licences are in the bundle under `Contents/Frameworks/bin/licenses`.
 
 ## Installing it
 
-1. Download `Flackey.pkg` from the [releases page](https://github.com/EyalDelarea/flackey/releases) and open it.
+1. Download `Flackey.pkg` (Apple Silicon) or `Flackey-Intel.pkg` (Intel) from the
+   [releases page](https://github.com/EyalDelarea/flackey/releases) and open it.
 2. Follow the macOS Installer steps. It puts `Flackey.app` in `/Applications`.
 3. Open Flackey from Applications and connect Telegram, Soulseek, or both.
 
@@ -73,5 +75,4 @@ Downloading works either way; sharing back is what needs the port.
 ## Known rough edges
 
 - Not signed with an Apple Developer ID or notarized, so macOS asks for the Open Anyway step above.
-- Apple Silicon only.
 - Closing the window quits the app.
