@@ -322,8 +322,26 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: packaging/check_version.sh "$GITHUB_REF_NAME"
       - name: nasm for the ffmpeg build
-        # ffmpeg's x86 assembly needs it; the arm64 build has none to assemble.
-        run: brew install nasm
+        # ffmpeg's x86 assembly needs it; the arm64 build has none to assemble. Built from the release
+        # tarball, pinned by SHA-256, rather than whatever Homebrew resolves on the day of a tag.
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/nasm-src" prefix="$RUNNER_TEMP/nasm"
+          mkdir -p "$src"
+          curl -fsSL --retry 3 -o "$src/nasm.tar.xz" https://www.nasm.us/pub/nasm/releasebuilds/3.02/nasm-3.02.tar.xz
+          echo "87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d  $src/nasm.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$src/nasm.tar.xz" -C "$src"
+          (cd "$src/nasm-3.02" && ./configure --prefix="$prefix" >/dev/null && make -j"$(sysctl -n hw.ncpu)" >/dev/null && make install >/dev/null)
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/nasm" -v
+      - name: Rust toolchain for cryptography
+        # cryptography is compiled here (no x86_64 macOS wheel) and is what verifies update signatures, so
+        # its compiler is pinned rather than whatever the runner image ships. rustup checks each component
+        # against the release manifest's SHA-256.
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=1.99.1" >> "$GITHUB_ENV"
+          RUSTUP_TOOLCHAIN=1.99.1 rustc --version
       - name: Cache helper downloads
         if: github.ref_type != 'tag'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -356,6 +374,11 @@ jobs:
         # Left to itself uv picks the wheels for this runner's macOS: numpy's macosx_14_0 build, which
         # will not load on 12 or 13. The lock also has macosx_10_13 wheels; targeting 12.0 selects them.
         # The Build step then runs on this environment as is (UV_NO_SYNC), rather than re-syncing it.
+        #
+        # The packages built from source here (cryptography, and two pure-Python sdists) get their build
+        # tools from intel-build-constraints.txt: exact versions, every file hash-checked.
+        env:
+          UV_BUILD_CONSTRAINT: packaging/intel-build-constraints.txt
         run: uv sync --frozen --group bundle --python-platform x86_64-apple-darwin
       - name: Build
         # Keys and the stats collector exactly as the `mac` job: only on a tagged release. Never printed.

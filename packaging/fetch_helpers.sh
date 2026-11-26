@@ -31,8 +31,8 @@ fetch() {
   fi
 }
 
-# The machine's own architecture: arm64 for the released app, x86_64 for the one-off Intel build
-# (.github/workflows/mac-intel.yml). ffmpeg is compiled for the same machine by build_ffmpeg.sh.
+# The machine's own architecture: arm64 on the `mac` job, x86_64 on `mac-intel` (.github/workflows/checks.yml).
+# ffmpeg is compiled for the same machine by build_ffmpeg.sh.
 case "$(uname -m)" in
   arm64)  FPCALC=chromaprint-fpcalc-1.6.1-macos-arm64;  FPCALC_SHA=254f23cb2d290069ba1d3d28199414fbf66d2054fc2f6821c2fc62ed39470a95 ;;
   x86_64) FPCALC=chromaprint-fpcalc-1.6.1-macos-x86_64; FPCALC_SHA=0de8947c09dd93c44cece2f5947d408136a3b6692eed726d1f109506500bd773 ;;
